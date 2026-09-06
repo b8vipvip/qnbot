@@ -114,10 +114,10 @@ namespace Bot.ChromeNs
                 return;
             }
             var aiStartedAt = DateTime.Now;
-            var generationCts = new CancellationTokenSource();
+            // BuyerSessionAgent owns generation lifetime. Link the AI budget directly to that
+            // canonical token instead of polling lease.IsCurrent in a second lifecycle loop.
+            var generationCts = CancellationTokenSource.CreateLinkedTokenSource(lease.CancellationToken);
             generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));
-            var monitorCts = new CancellationTokenSource();
-            var monitor = MonitorLeaseAsync(lease, generationCts, monitorCts.Token);
 
             string answer;
             try
@@ -172,9 +172,6 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                monitorCts.Cancel();
-                try { await monitor.ConfigureAwait(false); } catch { }
-                monitorCts.Dispose();
                 generationCts.Dispose();
             }
 
@@ -325,28 +322,6 @@ namespace Bot.ChromeNs
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
-        }
-
-        private static async Task MonitorLeaseAsync(
-            BuyerMessageBurstLease lease,
-            CancellationTokenSource generationCts,
-            CancellationToken stopToken)
-        {
-            try
-            {
-                while (!stopToken.IsCancellationRequested && !generationCts.IsCancellationRequested)
-                {
-                    if (!lease.IsCurrent)
-                    {
-                        generationCts.Cancel();
-                        return;
-                    }
-                    await Task.Delay(80, stopToken);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
         }
 
         private static string CompactPreview(string value, int max)
@@ -769,7 +744,7 @@ namespace Bot.ChromeNs
                     {
                         if (!response.IsSuccessStatusCode)
                         {
-                            var failedBody = await response.Content.ReadAsStringAsync();
+                            var failedBody = await ReadResponseBodyAsync(response.Content, linked.Token);
                             return Fail(sw, payloadText, "HTTP " + (int)response.StatusCode + " " + Short(failedBody, 300));
                         }
 
@@ -778,7 +753,7 @@ namespace Bot.ChromeNs
                             : (response.Content.Headers.ContentType.MediaType ?? string.Empty);
                         if (mediaType.IndexOf("text/event-stream", StringComparison.OrdinalIgnoreCase) < 0)
                         {
-                            var body = await response.Content.ReadAsStringAsync();
+                            var body = await ReadResponseBodyAsync(response.Content, linked.Token);
                             var answer = ExtractNormalAnswer(body);
                             if (string.IsNullOrWhiteSpace(answer))
                             {
@@ -848,6 +823,36 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 return Fail(sw, payloadText, ex.Message);
+            }
+        }
+
+        private static async Task<string> ReadResponseBodyAsync(HttpContent content, CancellationToken token)
+        {
+            if (content == null) return string.Empty;
+            token.ThrowIfCancellationRequested();
+            using (var stream = await content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                var result = new StringBuilder();
+                var buffer = new char[4096];
+                Task<int> pendingRead = null;
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (pendingRead == null) pendingRead = reader.ReadAsync(buffer, 0, buffer.Length);
+                    var completed = await Task.WhenAny(pendingRead, Task.Delay(120, token)).ConfigureAwait(false);
+                    if (completed != pendingRead)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        continue;
+                    }
+
+                    var read = await pendingRead.ConfigureAwait(false);
+                    pendingRead = null;
+                    if (read <= 0) break;
+                    result.Append(buffer, 0, read);
+                }
+                return result.ToString();
             }
         }
 

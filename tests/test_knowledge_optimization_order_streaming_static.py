@@ -22,7 +22,8 @@ def test_order_auto_reply_uses_mandatory_segment_sender_even_after_manual_takeov
 
 def test_streaming_pipeline_hard_cancels_only_invalid_work_and_allows_relevant_parallel_completion():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs"); formatter = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs"); app = read("src/Bot/App.xaml.cs"); targets = read("src/Directory.Build.targets")
-    assert '["stream"] = true' in pipeline; assert "HttpCompletionOption.ResponseHeadersRead" in pipeline; assert "if (!lease.IsCurrent)" in pipeline; assert "generationCts.Cancel();" in pipeline
+    assert '["stream"] = true' in pipeline; assert "HttpCompletionOption.ResponseHeadersRead" in pipeline; assert "if (!lease.IsCurrent)" in pipeline
+    assert "CreateLinkedTokenSource(lease.CancellationToken)" in pipeline; assert "MonitorLeaseAsync(" not in pipeline; assert "monitorCts" not in pipeline
     assert "普通后续消息和人工回复不取消已派发AI" in pipeline; assert "ParallelReplyRelevanceGate.ShouldSend" in pipeline; assert "买家后续消息明确纠正/取消了前一问题" in pipeline
     assert "internal const int TotalAiBudgetSeconds = 40" in pipeline; assert "CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline
     assert "await lease.ConfirmStableAsync(180)" in pipeline; assert "await qn.SendTextWithRetryAsync" in pipeline; assert "正在流式生成答案" in pipeline

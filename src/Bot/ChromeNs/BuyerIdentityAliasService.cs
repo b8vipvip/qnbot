@@ -11,6 +11,8 @@ namespace Bot.ChromeNs
     /// </summary>
     internal static class BuyerIdentityAliasService
     {
+        private const string CnTaobaoTransportPrefix = "cntaobao";
+
         private sealed class AliasRecord
         {
             public string ShopKey;
@@ -50,6 +52,12 @@ namespace Bot.ChromeNs
             AliasRecord old;
             Aliases.TryGetValue(Key(seller, internalNick), out old);
             if (old == null && display.Length > 0) Aliases.TryGetValue(Key(seller, display), out old);
+            if (old == null)
+            {
+                var canonicalInternal = CanonicalIdentity(internalNick);
+                if (!SameRaw(canonicalInternal, internalNick))
+                    Aliases.TryGetValue(Key(seller, canonicalInternal), out old);
+            }
             var record = old ?? new AliasRecord();
             record.ShopKey = ScopeKey(seller);
             record.Seller = seller;
@@ -58,9 +66,9 @@ namespace Bot.ChromeNs
             if (targetId.Length > 0) record.TargetId = targetId;
             record.UpdatedAt = DateTime.Now;
 
-            Aliases[Key(seller, internalNick)] = record;
-            if (!string.IsNullOrWhiteSpace(record.Display)) Aliases[Key(seller, record.Display)] = record;
-            if (!string.IsNullOrWhiteSpace(record.TargetId)) Aliases[Key(seller, record.TargetId)] = record;
+            StoreAlias(seller, internalNick, record);
+            if (!string.IsNullOrWhiteSpace(record.Display)) StoreAlias(seller, record.Display, record);
+            if (!string.IsNullOrWhiteSpace(record.TargetId)) StoreAlias(seller, record.TargetId, record);
             Cleanup();
         }
 
@@ -103,8 +111,29 @@ namespace Bot.ChromeNs
 
         private static AliasRecord Find(string seller, string value)
         {
+            seller = Clean(seller);
+            value = Clean(value);
             AliasRecord record;
-            return Aliases.TryGetValue(Key(Clean(seller), Clean(value)), out record) ? record : null;
+            if (Aliases.TryGetValue(Key(seller, value), out record)) return record;
+
+            var canonical = CanonicalIdentity(value);
+            if (!SameRaw(canonical, value)
+                && Aliases.TryGetValue(Key(seller, canonical), out record))
+            {
+                return record;
+            }
+            return null;
+        }
+
+        private static void StoreAlias(string seller, string alias, AliasRecord record)
+        {
+            alias = Clean(alias);
+            if (alias.Length == 0 || record == null) return;
+            Aliases[Key(seller, alias)] = record;
+
+            var canonical = CanonicalIdentity(alias);
+            if (!SameRaw(canonical, alias) && canonical.Length > 0)
+                Aliases[Key(seller, canonical)] = record;
         }
 
         private static string Key(string seller, string alias)
@@ -122,7 +151,27 @@ namespace Bot.ChromeNs
 
         private static bool Same(string left, string right)
         {
+            left = Clean(left);
+            right = Clean(right);
+            if (SameRaw(left, right)) return true;
+            return SameRaw(CanonicalIdentity(left), CanonicalIdentity(right));
+        }
+
+        private static bool SameRaw(string left, string right)
+        {
             return string.Equals(Clean(left), Clean(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string CanonicalIdentity(string value)
+        {
+            value = Clean(value);
+            if (value.Length <= CnTaobaoTransportPrefix.Length) return value;
+            if (!value.StartsWith(CnTaobaoTransportPrefix, StringComparison.OrdinalIgnoreCase)) return value;
+
+            // 千牛订单/系统事件可能把 buyer nick 编码成 "cntaobao<displayNick>"，
+            // 而当前会话接口只返回 display nick。该前缀是传输层包装，不属于业务身份。
+            var unwrapped = value.Substring(CnTaobaoTransportPrefix.Length).TrimStart(':', '/', '|', '#', ' ');
+            return unwrapped.Length == 0 ? value : unwrapped;
         }
 
         private static string Clean(string value)
