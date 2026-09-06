@@ -896,12 +896,25 @@ namespace Bot.ChromeNs
                 .Where(m => { var sort = IncomingMessageSafety.GetSortValue(m); return sort > 0 && sort >= threshold; })
                 .OrderBy(IncomingMessageSafety.GetSortValue).ToList();
             if (candidates.Count == 0) return 0;
+            var processed = 0;
             foreach (var message in candidates)
             {
-                await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer, false).ConfigureAwait(false);
+                string claimKey;
+                if (!ConversationIngressRecoveryLedger.TryClaim(seller, message, string.Empty, out claimKey))
+                    continue;
+                try
+                {
+                    await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer, false).ConfigureAwait(false);
+                    processed++;
+                }
+                catch
+                {
+                    ConversationIngressRecoveryLedger.Release(claimKey);
+                    throw;
+                }
                 await Task.Delay(20).ConfigureAwait(false);
             }
-            return candidates.Count;
+            return processed;
         }
     }
 

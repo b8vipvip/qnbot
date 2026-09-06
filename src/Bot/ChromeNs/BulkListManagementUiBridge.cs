@@ -1,3 +1,4 @@
+using Bot.ChatRecord;
 using BotLib;
 using log4net;
 using log4net.Appender;
@@ -98,6 +99,91 @@ namespace Bot.ChromeNs
             if (method == null || method.DeclaringType == typeof(QnVisibleOrderPanelProbeCompatibility)) return false;
             var task = method.Invoke(qn, new object[] { seller, buyer, source, notBefore, requireFresh }) as Task<bool>;
             return task != null && await task.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Single source-of-truth for recovery/reconciliation replay ownership. Live ingress keeps its
+    /// normal business deduplicators; every recovery path must claim a physical message here before
+    /// re-injecting it, so periodic watchdogs cannot repeatedly replay the same remote-history row.
+    /// </summary>
+    internal static class ConversationIngressRecoveryLedger
+    {
+        private const int MaxClaims = 20000;
+        private static readonly TimeSpan ClaimRetention = TimeSpan.FromMinutes(10);
+        private static readonly ConcurrentDictionary<string, DateTime> Claims =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static int _cleanupTick;
+
+        public static bool TryClaim(
+            string seller,
+            QNChatMessage message,
+            string rawFallback,
+            out string claimKey)
+        {
+            claimKey = BuildClaimKey(seller, message, rawFallback);
+            if (claimKey.Length == 0) return true;
+            var now = DateTime.UtcNow;
+            if (!Claims.TryAdd(claimKey, now)) return false;
+            Cleanup(now);
+            return true;
+        }
+
+        public static void Release(string claimKey)
+        {
+            if (string.IsNullOrWhiteSpace(claimKey)) return;
+            DateTime ignored;
+            Claims.TryRemove(claimKey, out ignored);
+        }
+
+        private static string BuildClaimKey(string seller, QNChatMessage message, string rawFallback)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            var messageKey = message == null
+                ? string.Empty
+                : IncomingMessageSafety.BuildMessageKey(message, string.Empty);
+            if (string.IsNullOrWhiteSpace(messageKey) && !string.IsNullOrWhiteSpace(rawFallback))
+                messageKey = "raw:" + StableHash64(rawFallback).ToString("x16");
+            return string.IsNullOrWhiteSpace(messageKey)
+                ? string.Empty
+                : seller + "#" + messageKey;
+        }
+
+        private static ulong StableHash64(string value)
+        {
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            unchecked
+            {
+                foreach (var ch in value ?? string.Empty)
+                {
+                    hash ^= (byte)(ch & 0xff);
+                    hash *= prime;
+                    hash ^= (byte)(ch >> 8);
+                    hash *= prime;
+                }
+            }
+            return hash;
+        }
+
+        private static void Cleanup(DateTime now)
+        {
+            if ((Interlocked.Increment(ref _cleanupTick) & 127) != 0 && Claims.Count <= MaxClaims) return;
+            var cutoff = now - ClaimRetention;
+            foreach (var pair in Claims)
+            {
+                if (pair.Value >= cutoff) continue;
+                DateTime ignored;
+                Claims.TryRemove(pair.Key, out ignored);
+            }
+            var overflow = Claims.Count - MaxClaims;
+            if (overflow <= 0) return;
+            foreach (var pair in Claims.OrderBy(x => x.Value).Take(overflow))
+            {
+                DateTime ignored;
+                Claims.TryRemove(pair.Key, out ignored);
+            }
         }
     }
 
@@ -339,7 +425,22 @@ namespace Bot.ChromeNs
             var unread = await cdp.Invoke<JObject>("im.singlemsg.GetNewMsg", new { ccode = ccode }).ConfigureAwait(false);
             if (HasDispatchableResult(unread))
             {
-                DispatchReceiveNewMsgCompat(cdp, unread.ToString(Formatting.None));
+                var unreadMessages = unread["result"] as JArray;
+                var claimedUnread = ClaimRecoveryMessages(qn, unreadMessages);
+                if (claimedUnread.Messages.Count > 0)
+                {
+                    try
+                    {
+                        var unreadPayload = (JObject)unread.DeepClone();
+                        unreadPayload["result"] = claimedUnread.Messages;
+                        DispatchReceiveNewMsgCompat(cdp, unreadPayload.ToString(Formatting.None));
+                    }
+                    catch
+                    {
+                        ReleaseRecoveryClaims(claimedUnread.ClaimKeys);
+                        throw;
+                    }
+                }
                 return true;
             }
 
@@ -367,10 +468,51 @@ namespace Bot.ChromeNs
             }
             if (recent.Count < 1) return true;
 
-            var payload = new JObject { ["result"] = recent };
-            DispatchReceiveNewMsgCompat(cdp, payload.ToString(Formatting.None));
-            Log.Info("业务入站缓存补偿已回灌最近候选消息: count=" + recent.Count + ", source=conversation-map");
+            var claimedRecent = ClaimRecoveryMessages(qn, recent);
+            if (claimedRecent.Messages.Count < 1) return true;
+            try
+            {
+                var payload = new JObject { ["result"] = claimedRecent.Messages };
+                DispatchReceiveNewMsgCompat(cdp, payload.ToString(Formatting.None));
+                Log.Info("业务入站缓存补偿已回灌新增候选消息: count=" + claimedRecent.Messages.Count + ", source=conversation-map");
+            }
+            catch
+            {
+                ReleaseRecoveryClaims(claimedRecent.ClaimKeys);
+                throw;
+            }
             return true;
+        }
+
+        private sealed class ClaimedRecoveryBatch
+        {
+            public readonly JArray Messages = new JArray();
+            public readonly List<string> ClaimKeys = new List<string>();
+        }
+
+        private static ClaimedRecoveryBatch ClaimRecoveryMessages(QN qn, JArray messages)
+        {
+            var batch = new ClaimedRecoveryBatch();
+            if (messages == null || messages.Count < 1) return batch;
+            var seller = qn == null || qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            foreach (var token in messages)
+            {
+                if (token == null) continue;
+                QNChatMessage model = null;
+                try { model = token.ToObject<QNChatMessage>(); } catch { }
+                string claimKey;
+                if (!ConversationIngressRecoveryLedger.TryClaim(
+                    seller, model, token.ToString(Formatting.None), out claimKey)) continue;
+                batch.Messages.Add(token.DeepClone());
+                if (!string.IsNullOrWhiteSpace(claimKey)) batch.ClaimKeys.Add(claimKey);
+            }
+            return batch;
+        }
+
+        private static void ReleaseRecoveryClaims(IEnumerable<string> claimKeys)
+        {
+            foreach (var claimKey in claimKeys ?? Enumerable.Empty<string>())
+                ConversationIngressRecoveryLedger.Release(claimKey);
         }
 
         private static bool HasDispatchableResult(JObject response)
