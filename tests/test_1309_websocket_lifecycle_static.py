@@ -47,3 +47,16 @@ def test_websocket_startup_never_reports_success_for_failed_setup_or_start():
     start_index = server.index("if (!webSocket.Start())")
     root_index = server.index("_webSocketServer = webSocket;")
     assert setup_index < start_index < root_index < success_index
+
+
+def test_total_ai_budget_hard_stops_non_cooperative_provider_calls():
+    source = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+
+    assert "var answerTask = StreamingBuyerAnswerService.GetAnswerAsync(" in source
+    assert "answer = await AwaitWithCancellationAsync(answerTask, generationCts.Token);" in source
+    assert "private static async Task<T> AwaitWithCancellationAsync<T>" in source
+    assert "var cancelled = Task.Delay(Timeout.Infinite, token);" in source
+    assert "var completed = await Task.WhenAny(task, cancelled).ConfigureAwait(false);" in source
+    assert "TaskContinuationOptions.OnlyOnFaulted" in source
+    assert "token.ThrowIfCancellationRequested();" in source
+    assert "answer = await StreamingBuyerAnswerService.GetAnswerAsync(" not in source
