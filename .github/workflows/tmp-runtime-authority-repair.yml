@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install focused test dependency
+        run: python -m pip install --disable-pip-version-check pytest
       - name: Apply structural repair
         run: python .github/scripts/runtime_authority_repair_20260906.py
       - name: Run focused regression tests
