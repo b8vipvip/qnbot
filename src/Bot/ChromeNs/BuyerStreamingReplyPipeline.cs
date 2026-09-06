@@ -217,12 +217,25 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                burst.SellerNick,
-                burst.BuyerNick,
-                burst.CombinedQuestion,
-                answer);
-            answer = deduplication.Answer;
+            try
+            {
+                var deduplication = ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer,
+                    lease.CancellationToken,
+                    false);
+                answer = deduplication.Answer;
+            }
+            catch (OperationCanceledException)
+            {
+                const string cancelledDuringValidation = "generation在发送前答案校验/去重期间已失效";
+                if (conversationCtl != null) conversationCtl.SetStatus(cancelledDuringValidation, false);
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, cancelledDuringValidation);
+                return;
+            }
 
             if (!await lease.ConfirmStableAsync(180))
             {
@@ -241,6 +254,14 @@ namespace Bot.ChromeNs
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
+                return;
+            }
+
+            if (!lease.MarkReady("streaming_answer_materialized"))
+            {
+                const string invalidAtReady = "generation在答案发布前已终止，迟到答案已丢弃";
+                if (conversationCtl != null) conversationCtl.SetStatus(invalidAtReady, false);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady);
                 return;
             }
 
