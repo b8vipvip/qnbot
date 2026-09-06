@@ -1,15 +1,17 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -116,6 +118,29 @@ namespace Bot.ChromeNs
             return msg;
         }
 
+        private static async Task<string> ReadResponseBodyWithCancellationAsync(
+            HttpContent content,
+            CancellationToken cancellationToken)
+        {
+            if (content == null) return string.Empty;
+            cancellationToken.ThrowIfCancellationRequested();
+            using (var stream = await content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var buffer = new MemoryStream())
+            {
+                var chunk = new byte[8192];
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var read = await stream.ReadAsync(
+                        chunk, 0, chunk.Length, cancellationToken).ConfigureAwait(false);
+                    if (read <= 0) break;
+                    buffer.Write(chunk, 0, read);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                return Encoding.UTF8.GetString(buffer.ToArray());
+            }
+        }
+
         private static JObject CreateMessage(string role, string content)
         {
             return new JObject
@@ -198,9 +223,13 @@ namespace Bot.ChromeNs
                 {
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
                     request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
-                    using (var response = SharedHttp.SendAsync(request, cancellation.Token).GetAwaiter().GetResult())
+                    using (var response = SharedHttp.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellation.Token).GetAwaiter().GetResult())
                     {
-                        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        var body = ReadResponseBodyWithCancellationAsync(
+                            response.Content, cancellation.Token).GetAwaiter().GetResult();
                         sw.Stop();
                         if (!response.IsSuccessStatusCode)
                         {
@@ -304,27 +333,36 @@ namespace Bot.ChromeNs
                 using (var http = new HttpClient())
                 {
                     var effectiveTimeout = timeoutSeconds > 0 ? timeoutSeconds : (endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
-                    http.Timeout = TimeSpan.FromSeconds(effectiveTimeout);
-                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                    http.Timeout = Timeout.InfiniteTimeSpan;
                     http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
                     http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
-                    using (var content = new StringContent(payloadText, Encoding.UTF8, "application/json"))
+                    using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, url))
                     {
-                        var response = cancellationToken.CanBeCanceled ? http.PostAsync(url, content, cancellationToken).GetAwaiter().GetResult() : http.PostAsync(url, content).GetAwaiter().GetResult();
-                        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                        sw.Stop();
-                        if (!response.IsSuccessStatusCode)
+                        deadline.CancelAfter(TimeSpan.FromSeconds(effectiveTimeout));
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                        request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
+                        using (var response = http.SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            deadline.Token).GetAwaiter().GetResult())
                         {
-                            return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
+                            var body = ReadResponseBodyWithCancellationAsync(
+                                response.Content, deadline.Token).GetAwaiter().GetResult();
+                            sw.Stop();
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
+                            }
+                            var answer = ExtractAnswer(body);
+                            if (string.IsNullOrWhiteSpace(answer))
+                            {
+                                return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
+                            }
+                            var ok = new StructuredChatResult { Success = true, Answer = answer.Trim(), Raw = body, LatencyMs = sw.ElapsedMilliseconds };
+                            FillUsage(ok, payloadText, answer, body);
+                            return ok;
                         }
-                        var answer = ExtractAnswer(body);
-                        if (string.IsNullOrWhiteSpace(answer))
-                        {
-                            return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
-                        }
-                        var ok = new StructuredChatResult { Success = true, Answer = answer.Trim(), Raw = body, LatencyMs = sw.ElapsedMilliseconds };
-                        FillUsage(ok, payloadText, answer, body);
-                        return ok;
                     }
                 }
             }

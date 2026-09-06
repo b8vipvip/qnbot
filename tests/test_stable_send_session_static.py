@@ -28,16 +28,21 @@ def test_stale_answer_retry_is_cancelled_and_draft_is_cleared():
     assert "旧答案发送/重试已取消" in qnrpa
     assert "发送前答案时效检查" in qnrpa
     assert "ClearExpectedDraftIfSafeAsync" in qnrpa
+    assert 'SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送")' in qnrpa
 
 
 def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     tracker = text("src/Bot/ChromeNs/ResponseProgressTracker.cs")
-    assert "IsMandatoryOrderAnswer" in tracker
-    assert 'IndexOf("下单自动回复"' in tracker
-    assert "ResponseProgressTracker.IsMandatoryOrderAnswer" in qnrpa
-    assert "下单固定预设受保护" in qnrpa
-    assert qnrpa.index("ResponseProgressTracker.IsMandatoryOrderAnswer") < qnrpa.index("HasBuyerMessageAfter")
+    order = text("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert "internal static class ReliableSendAuthority" in order
+    assert "BeginBusinessCritical(" in order
+    assert "order_action_ledger" in order
+    assert "ReliableSendAuthority.IsProtectedFromBuyerUpdate" in qnrpa
+    assert "业务可靠发送权限受保护" in qnrpa
+    assert qnrpa.index("ReliableSendAuthority.IsProtectedFromBuyerUpdate") < qnrpa.index("HasBuyerMessageAfter")
+    assert "IsMandatoryOrderAnswer" not in tracker
+    assert "ResponseProgressTracker.IsMandatoryOrderAnswer" not in qnrpa
 
 
 def test_delivery_watchdog_starts_only_after_transaction_guards_and_is_shop_bound():

@@ -16,8 +16,11 @@ def test_smart_import_timeout_config_defaults_and_ui():
 
 def test_structured_chat_has_request_level_timeout_and_token():
     assert 'CallStructuredChat(messages, maxTokens, temperature, 0, CancellationToken.None)' in OPENAI
-    assert 'PostAsync(url, content, cancellationToken)' in OPENAI
-    assert 'http.Timeout = TimeSpan.FromSeconds(effectiveTimeout)' in OPENAI
+    assert 'CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)' in OPENAI
+    assert 'deadline.CancelAfter(TimeSpan.FromSeconds(effectiveTimeout))' in OPENAI
+    assert 'HttpCompletionOption.ResponseHeadersRead' in OPENAI
+    assert 'ReadResponseBodyWithCancellationAsync' in OPENAI
+    assert 'http.Timeout = Timeout.InfiniteTimeSpan' in OPENAI
 
 def test_batching_rules_are_encoded():
     assert 'TargetMinChars = 3000' in SERVICE

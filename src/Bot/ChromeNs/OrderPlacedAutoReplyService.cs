@@ -1,4 +1,4 @@
-using Bot.Automation.ChatDeskNs;
+﻿using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
@@ -13,10 +13,86 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
+    /// <summary>
+    /// Async-flow scoped authority for a business side effect that has already been accepted by its
+    /// own durable action ledger. This is intentionally separate from ResponseProgressTracker:
+    /// UI/metrics state can disappear or be recreated and must never decide whether a business
+    /// message keeps its send eligibility. The scope is inherited only by the exact async send call.
+    /// </summary>
+    internal static class ReliableSendAuthority
+    {
+        private sealed class ScopeState
+        {
+            public string Seller;
+            public string Buyer;
+            public string Text;
+            public string Reason;
+            public ScopeState Previous;
+        }
+
+        private sealed class ScopeLease : IDisposable
+        {
+            private readonly ScopeState _state;
+            private readonly ScopeState _previous;
+            private bool _disposed;
+
+            public ScopeLease(ScopeState state, ScopeState previous)
+            {
+                _state = state;
+                _previous = previous;
+            }
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                if (ReferenceEquals(Current.Value, _state)) Current.Value = _previous;
+            }
+        }
+
+        private static readonly AsyncLocal<ScopeState> Current = new AsyncLocal<ScopeState>();
+
+        public static IDisposable BeginBusinessCritical(string seller, string buyer, string text, string reason)
+        {
+            var previous = Current.Value;
+            var state = new ScopeState
+            {
+                Seller = (seller ?? string.Empty).Trim(),
+                Buyer = (buyer ?? string.Empty).Trim(),
+                Text = (text ?? string.Empty).Trim(),
+                Reason = (reason ?? string.Empty).Trim(),
+                Previous = previous
+            };
+            Current.Value = state;
+            return new ScopeLease(state, previous);
+        }
+
+        public static bool IsProtectedFromBuyerUpdate(string seller, string buyer, string text, out string reason)
+        {
+            reason = string.Empty;
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+
+            // Text is intentionally diagnostic rather than the identity key: QN applies the
+            // configured outbound suffix after the order layer opens this async scope. AsyncLocal
+            // already constrains the authority to this one send call, while seller+buyer prevents a
+            // nested send for another conversation from inheriting the privilege.
+            for (var state = Current.Value; state != null; state = state.Previous)
+            {
+                if (!string.Equals(state.Seller, seller, StringComparison.Ordinal)) continue;
+                if (!BuyerIdentityAliasService.AreEquivalent(seller, state.Buyer, buyer)) continue;
+                reason = string.IsNullOrWhiteSpace(state.Reason) ? "business_critical" : state.Reason;
+                return true;
+            }
+            return false;
+        }
+    }
+
     internal sealed class OrderPlacedReplyPlan
     {
         public string Seller { get; set; }
@@ -926,8 +1002,16 @@ namespace Bot.ChromeNs
                 // business rules are different: once a Created/Paid event has reserved a plan,
                 // manual replies must never consume or cancel this configured message.
                 var sendStartedAt = DateTime.Now;
-                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text);
-                var sent = await SendTextWithRetryAsync(plan.Buyer, text, 0);
+                bool sent;
+                using (ReliableSendAuthority.BeginBusinessCritical(
+                    plan.Seller,
+                    plan.Buyer,
+                    text,
+                    plan.IsBuyerFollowUp ? "order_followup_action_ledger" : "order_action_ledger"))
+                {
+                    KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text);
+                    sent = await SendTextWithRetryAsync(plan.Buyer, text, 0);
+                }
                 if (sent) return true;
 
                 // Live seller echo can be lost when the authoritative CDP page reconnects. Before
