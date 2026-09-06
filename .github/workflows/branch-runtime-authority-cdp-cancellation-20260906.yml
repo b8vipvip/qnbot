@@ -24,6 +24,19 @@ jobs:
         run: python -m pip install pytest
       - name: Apply runtime repair
         run: python .github/scripts/runtime_authority_cdp_cancellation_20260906.py
+      - name: Normalize generated regression test
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/test_1296_runtime_authority_cdp_cancellation_static.py')
+          s = p.read_text(encoding='utf-8')
+          bad = '    assert "SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送")" in rpa\n'
+          good = '    assert \'SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送")\' in rpa\n'
+          if bad not in s:
+              raise SystemExit('generated test assertion anchor missing')
+          p.write_text(s.replace(bad, good, 1), encoding='utf-8')
+          PY
       - name: Run focused regression tests
         run: python -m pytest -q tests/test_1296_runtime_authority_cdp_cancellation_static.py tests/test_1272_knowledge_authority_and_turn_lifecycle_static.py
       - name: Commit repair
