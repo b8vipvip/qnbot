@@ -81,7 +81,10 @@ def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_on
     assert "_sessionAgent.CancelAll(seller, buyer, reason)" in burst
     assert "coalescing_buffer_trimmed" in burst
     assert "_sessionAgent.IsCurrent" in burst
-    assert "MarkReady(\"send_barrier_stable\")" in burst
+
+    stable = burst[burst.index("public async Task<bool> ConfirmStableAsync"):burst.index("public bool MarkProcessing")]
+    assert 'MarkReady("send_barrier_stable")' not in stable
+    assert "return IsCurrent && !CancellationToken.IsCancellationRequested;" in stable
 
     # Completion is conditional: timeout/error must become Failed instead of being
     # overwritten as Completed when a replyable pipeline returns without a ready answer.
