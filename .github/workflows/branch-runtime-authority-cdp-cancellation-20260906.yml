@@ -24,11 +24,12 @@ jobs:
         run: python -m pip install pytest
       - name: Apply runtime repair
         run: python .github/scripts/runtime_authority_cdp_cancellation_20260906.py
-      - name: Normalize generated regression test
+      - name: Normalize generated regression test and tracker UI text
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+
           p = Path('tests/test_1296_runtime_authority_cdp_cancellation_static.py')
           s = p.read_text(encoding='utf-8')
           bad = '    assert "SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送")" in rpa\n'
@@ -36,6 +37,24 @@ jobs:
           if bad not in s:
               raise SystemExit('generated test assertion anchor missing')
           p.write_text(s.replace(bad, good, 1), encoding='utf-8')
+
+          tracker_path = Path('src/Bot/ChromeNs/ResponseProgressTracker.cs')
+          tracker = tracker_path.read_text(encoding='utf-8-sig')
+          old = '''                        previous.Control.SetStatus(
+                            previous.AnswerReadyAt == DateTime.MinValue
+                                ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
+                                : (IsMandatoryOrderAnswer(seller, buyer, previous.Answer)
+                                    ? "买家已补充新消息，下单固定预设仍保持优先发送"
+                                    : "买家已补充新消息，上一条答案保留并在发送前检查是否仍相关"),
+                            false);'''
+          new = '''                        previous.Control.SetStatus(
+                            previous.AnswerReadyAt == DateTime.MinValue
+                                ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
+                                : "买家已补充新消息，上一条答案保留；实际发送资格由业务/会话权威层决定",
+                            false);'''
+          if old not in tracker:
+              raise SystemExit('tracker UI authority anchor missing')
+          tracker_path.write_text(tracker.replace(old, new, 1), encoding='utf-8-sig')
           PY
       - name: Run focused regression tests
         run: python -m pytest -q tests/test_1296_runtime_authority_cdp_cancellation_static.py tests/test_1272_knowledge_authority_and_turn_lifecycle_static.py
