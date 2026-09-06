@@ -1,0 +1,43 @@
+name: Temporary V2 terminal authority repair
+
+on:
+  push:
+    branches:
+      - fix/v2-late-answer-generation-authority-20260906
+
+permissions:
+  contents: write
+
+jobs:
+  apply-repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v2-late-answer-generation-authority-20260906
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Apply terminal authority repair
+        run: python .github/scripts/tmp_v2_terminal_authority_repair_20260906.py
+      - name: Run focused regression tests
+        run: python -m pytest -q tests/test_1300_v2_terminal_authority_static.py tests/test_knowledge_optimization_order_streaming_static.py tests/test_stable_send_session_static.py tests/test_smart_import_static.py
+      - name: Commit repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs \
+                  src/Bot/ChromeNs/ReplyDeduplicationService.cs \
+                  src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs \
+                  src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs \
+                  src/Bot/Knowledge/KnowledgeCenterWindow.cs \
+                  tests/test_1300_v2_terminal_authority_static.py
+          if git diff --cached --quiet; then
+            echo 'No repair changes to commit.'
+          else
+            git commit -m 'fix: enforce terminal generation authority for local replies'
+            git push origin HEAD:fix/v2-late-answer-generation-authority-20260906
+          fi
