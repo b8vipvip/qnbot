@@ -268,7 +268,6 @@ namespace Bot.ChromeNs
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-            {
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
                 var evidence = PreSendAnswerValidator.BuildEvidenceText(knowledge);
                 var messages = new JArray
