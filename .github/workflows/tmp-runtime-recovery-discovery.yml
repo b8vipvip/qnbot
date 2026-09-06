@@ -1,0 +1,25 @@
+name: Temporary runtime recovery discovery
+
+on:
+  push:
+    branches:
+      - fix/runtime-lifecycle-identity-recovery-20260906
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate recovery and lifecycle code
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== exact recovery phrase ==='
+          grep -R -n -C 30 --include='*.cs' '检测到连接存活但业务入站漏事件' src || true
+          echo '=== cache recovery phrase ==='
+          grep -R -n -C 30 --include='*.cs' '业务入站缓存补偿' src || true
+          echo '=== missed inbound related ==='
+          grep -R -n -C 15 --include='*.cs' -E '漏事件|主动补回|缓存补偿|conversation-map' src/Bot/ChromeNs || true
