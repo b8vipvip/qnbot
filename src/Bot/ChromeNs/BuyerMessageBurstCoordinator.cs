@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using Bot.ShopScope;
 using BotLib;
 using System;
@@ -196,8 +196,9 @@ namespace Bot.ChromeNs
             {
                 return false;
             }
-            if (!IsCurrent) return false;
-            return MarkReady("send_barrier_stable");
+            // Read-only barrier: lifecycle ownership remains with the actual answer/send path.
+            // A timing probe must never publish Ready before the answer is fully materialized.
+            return IsCurrent && !CancellationToken.IsCancellationRequested;
         }
 
         public bool MarkProcessing(string reason)

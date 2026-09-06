@@ -1,4 +1,4 @@
-using Bot.Automation.ChatDeskNs;
+﻿using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.ChromeNs;
 using BotLib;
@@ -905,7 +905,10 @@ namespace Bot.ChromeNs
                 try
                 {
                     await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer, false).ConfigureAwait(false);
-                    processed++;
+                    // Order/system recovery remains useful, but the bridge's return value means
+                    // "buyer business ingress was actually recovered". Do not count seller echoes
+                    // that downstream dedupe correctly ignores.
+                    if (IsBuyerMessage(message)) processed++;
                 }
                 catch
                 {

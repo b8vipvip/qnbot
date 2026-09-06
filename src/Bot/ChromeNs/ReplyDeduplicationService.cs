@@ -1,4 +1,4 @@
-using Bot.Knowledge;
+﻿using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
@@ -36,9 +36,37 @@ namespace Bot.ChromeNs
             string question,
             string candidateAnswer)
         {
+            return EnsureDistinct(
+                seller, buyer, question, candidateAnswer, CancellationToken.None, false);
+        }
+
+        public static ReplyDeduplicationResult EnsureDistinct(
+            string seller,
+            string buyer,
+            string question,
+            string candidateAnswer,
+            CancellationToken cancellationToken,
+            bool preserveTrustedAnswer)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (preserveTrustedAnswer)
+            {
+                // Knowledge V2 has already made the production-authority decision. Do not run a
+                // hidden AI validator/regenerator here: that would both mutate authoritative facts
+                // and let a "local" reply outlive its BuyerSessionAgent generation.
+                return new ReplyDeduplicationResult
+                {
+                    Answer = BotOutboundMessageFormatter.EnsureAiMarker(candidateAnswer),
+                    PreviousAnswer = string.Empty,
+                    Source = "权威知识V2",
+                    Regenerated = false
+                };
+            }
+
             string aiFailureFallbackAnswer;
             KnowledgeBaseEntry aiFailureFallbackKnowledge;
             double aiFailureFallbackScore;
+            cancellationToken.ThrowIfCancellationRequested();
             var aiFailureFallbackApplied = AiFailureKnowledgeFallbackService.TryResolve(
                 seller,
                 buyer,
@@ -76,8 +104,10 @@ namespace Bot.ChromeNs
                     return BuildBlockedResult("发送前校验要求人工确认：" + validation.Reason);
                 if (validation.Action == AnswerValidationAction.Regenerate)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var repaired = RegenerateInvalidAnswer(
-                        seller, buyer, question, candidateAnswer, knowledge, validation);
+                        seller, buyer, question, candidateAnswer, knowledge, validation,
+                        cancellationToken);
                     repaired = BotFeatureStore.ApplyOutputPolicy(repaired);
                     if (string.IsNullOrWhiteSpace(repaired)
                         || repaired.StartsWith("错误：", StringComparison.Ordinal))
@@ -124,9 +154,10 @@ namespace Bot.ChromeNs
 
             ReplyQualityMetricsService.RecordDuplicateRewrite();
             knowledge = knowledge ?? ResolveKnowledge(seller, buyer, question, result.Answer);
+            cancellationToken.ThrowIfCancellationRequested();
             var regenerated = result.Regenerated
                 ? BuildSafeFallback(question)
-                : Regenerate(seller, buyer, question, previousAnswer, knowledge);
+                : Regenerate(seller, buyer, question, previousAnswer, knowledge, cancellationToken);
             if (string.IsNullOrWhiteSpace(regenerated)
                 || regenerated.StartsWith("错误：", StringComparison.Ordinal)
                 || SameAnswer(previousAnswer, regenerated))
@@ -231,10 +262,12 @@ namespace Bot.ChromeNs
             string question,
             string invalidAnswer,
             KnowledgeBaseEntry knowledge,
-            AnswerValidationResult validation)
+            AnswerValidationResult validation,
+            CancellationToken cancellationToken)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
                 var evidence = PreSendAnswerValidator.BuildEvidenceText(knowledge);
                 var messages = new JArray
@@ -259,10 +292,14 @@ namespace Bot.ChromeNs
                     }
                 };
                 var response = MyOpenAI.CallStructuredChat(
-                    messages, 220, 0.10, 45, CancellationToken.None);
+                    messages, 220, 0.10, 45, cancellationToken);
                 return response != null && response.Success
                     ? (response.Answer ?? string.Empty).Trim()
                     : string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -276,10 +313,12 @@ namespace Bot.ChromeNs
             string buyer,
             string question,
             string previousAnswer,
-            KnowledgeBaseEntry knowledge)
+            KnowledgeBaseEntry knowledge,
+            CancellationToken cancellationToken)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
                 var factBoundary = knowledge == null
                     ? "上一轮答案是当前唯一事实边界，不得增加新的商品承诺或结论。"
@@ -303,10 +342,14 @@ namespace Bot.ChromeNs
                     }
                 };
                 var response = MyOpenAI.CallStructuredChat(
-                    messages, 180, 0.35, 90, CancellationToken.None);
+                    messages, 180, 0.35, 90, cancellationToken);
                 return response != null && response.Success
                     ? (response.Answer ?? string.Empty).Trim()
                     : string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

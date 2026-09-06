@@ -1,4 +1,4 @@
-using Bot.Knowledge;
+﻿using Bot.Knowledge;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -11,8 +11,6 @@ namespace Bot.ChromeNs
 {
     internal static class KnowledgeEngineV2RuntimeBridge
     {
-        private const int MaxDirectReplyAgeSeconds = 55;
-
         private sealed class V2HandlerWrapper
         {
             private readonly QN _qn;
@@ -236,16 +234,6 @@ namespace Bot.ChromeNs
             }
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
-            if ((DateTime.Now - detectedAt).TotalSeconds > MaxDirectReplyAgeSeconds)
-            {
-                Log.ErrorWithMaxCount(
-                    "Knowledge Engine V2迟到结果超过generation绝对年龄，已丢弃且禁止进入Ready/Sending: buyer="
-                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration
-                    + ", ageMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds),
-                    50);
-                return;
-            }
-
             var autoSend = Params.Robot.GetIsAutoReply();
 
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
@@ -260,10 +248,9 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return;
             }
-            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
-                || (DateTime.Now - detectedAt).TotalSeconds > MaxDirectReplyAgeSeconds)
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
-                Log.Info("Knowledge Engine V2稳定性确认后generation失效/超龄，未发布答案: buyer="
+                Log.Info("Knowledge Engine V2稳定性确认后generation失效，未发布答案: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return;
             }
@@ -271,9 +258,31 @@ namespace Bot.ChromeNs
             var ctl = ResponseProgressTracker.BeginAnswer(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt);
             var answer = BotMessageSuffixService.Apply(burst.SellerNick, decision.Answer);
-            var dedup = ReplyDeduplicationService.EnsureDistinct(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer);
+            ReplyDeduplicationResult dedup;
+            try
+            {
+                dedup = ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer,
+                    lease.CancellationToken,
+                    true);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Info("Knowledge Engine V2答案发布前generation已终止，权威本地答案未进入UI/发送: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                return;
+            }
             answer = dedup.Answer;
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                || !lease.MarkReady("knowledge_v2_answer_materialized"))
+            {
+                Log.Info("Knowledge Engine V2答案完成后generation已终止，迟到本地答案已丢弃: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                return;
+            }
             var readyAt = DateTime.Now;
             ctl = ResponseProgressTracker.SetAnswerReady(
                 burst.SellerNick,
@@ -297,6 +306,7 @@ namespace Bot.ChromeNs
 
             if (!autoSend)
             {
+                lease.MarkCompleted("knowledge_v2_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Engine V2本地命中）", true);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
@@ -318,7 +328,29 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await qn.SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            if (!lease.MarkSending("knowledge_v2_send_started"))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：generation在V2发送前已失效");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效");
+                return;
+            }
+
+            bool sendOk;
+            try
+            {
+                sendOk = await qn.SendTextWithRetryAsync(
+                    burst.BuyerNick, answer, 1, lease.CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效");
+                Log.Info("Knowledge Engine V2发送期间generation硬失效，已停止后续UI发送副作用: buyer="
+                    + burst.BuyerNick);
+                return;
+            }
             var failureReason = sendOk || qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason();
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
@@ -348,6 +380,10 @@ namespace Bot.ChromeNs
                         ? "已发送（Knowledge Engine V2本地直答，无AI调用）"
                         : "发送失败：" + failureReason);
             }
+            if (sendOk)
+                lease.MarkCompleted("knowledge_v2_send_completed");
+            else
+                lease.MarkFailed("knowledge_v2_send_failed");
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));

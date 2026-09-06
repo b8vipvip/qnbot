@@ -47,16 +47,21 @@ def test_streaming_pipeline_uses_session_agent_as_terminal_owner():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert 'lease.MarkGenerating("streaming_answer_started")' in pipeline
+    assert 'lease.MarkReady("streaming_answer_materialized")' in pipeline
     assert 'lease.MarkSending("streaming_send_started")' in pipeline
     assert 'lease.MarkCompleted("streaming_send_completed")' in pipeline
     assert 'lease.MarkFailed("streaming_send_failed")' in pipeline
     assert 'lease.MarkCompleted("streaming_answer_generated_only")' in pipeline
-    assert 'return MarkReady("send_barrier_stable");' in coordinator
+    stable = coordinator[coordinator.index("public async Task<bool> ConfirmStableAsync"):coordinator.index("public bool MarkProcessing")]
+    assert 'MarkReady("send_barrier_stable")' not in stable
+    assert "return IsCurrent && !CancellationToken.IsCancellationRequested;" in stable
+
 
 def test_explicit_human_answer_is_not_rewritten_by_ai_organizer():
     learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType)" in learning
     assert "learnedAnswer = safeAnswer;" in learning
+
 
 def test_v2_learning_bridge_skips_already_synchronized_unchanged_entries():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
@@ -64,4 +69,3 @@ def test_v2_learning_bridge_skips_already_synchronized_unchanged_entries():
     assert "public static bool IsPersistedStateSynchronized" in bridge
     assert 'record.Authority >= 0.98' in bridge
     assert 'record.Confidence >= 0.94' in bridge
-
