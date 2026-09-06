@@ -1,4 +1,4 @@
-using BotLib.Extensions;
+﻿using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
 using BotLib;
 using FlaUI.Core.AutomationElements;
@@ -872,14 +872,17 @@ namespace Bot.ChromeNs
 
         private bool VerifyAnswerFreshness(string buyer, string text, DateTime attemptStartedAt, string stage)
         {
-            if (ResponseProgressTracker.IsMandatoryOrderAnswer(SellerNick, buyer, text))
+            string authorityReason;
+            if (ReliableSendAuthority.IsProtectedFromBuyerUpdate(
+                SellerNick, buyer, text, out authorityReason))
             {
-                Log.Info("下单固定预设受保护，买家后续消息不会取消本次优先发送: seller="
-                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage);
+                Log.Info("业务可靠发送权限受保护，买家后续聊天不会取消已由业务动作ledger授权的本次发送: seller="
+                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage
+                    + ", authority=" + authorityReason);
                 return true;
             }
             if (_qn == null || !_qn.HasBuyerMessageAfter(SellerNick, buyer, attemptStartedAt)) return true;
-            SetSendFailure(stage, "买家已发送更新消息，旧答案不会发送");
+            SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送");
             CompleteAttemptLease(buyer, text);
             Log.Info("旧答案发送/重试已取消: seller=" + SellerNick + ", buyer=" + buyer
                 + ", stage=" + stage + ", reason=买家已发送更新消息");

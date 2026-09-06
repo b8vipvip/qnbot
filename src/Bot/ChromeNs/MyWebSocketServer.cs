@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 using BotLib;
@@ -29,7 +30,14 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, string> _sellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _sessionSellers = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _duplicateSellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, WebSocketSession> _liveSessions = new ConcurrentDictionary<string, WebSocketSession>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
+        private const int MaxDuplicateSellerSessions = 3;
+        private static readonly TimeSpan DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4);
+        private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(45);
+        private int _duplicateSessionSweeperStarted;
 
         static MyWebSocketServer()
         {
@@ -70,6 +78,90 @@ namespace Bot.ChromeNs
             return (kind ?? "id") + "#" + hash.ToString("x16").Substring(0, 10);
         }
 
+        private void TouchSession(WebSocketSession session)
+        {
+            if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
+            _liveSessions[session.SessionID] = session;
+            _sessionLastActivityUtc[session.SessionID] = DateTime.UtcNow;
+        }
+
+        private void ScheduleDuplicateSessionClose(string sessionId, string sellerNick, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(sessionId)) return;
+            if (!_closingDuplicateSessions.TryAdd(sessionId, true)) return;
+            Task.Run(() =>
+            {
+                try
+                {
+                    WebSocketSession session;
+                    if (!_liveSessions.TryGetValue(sessionId, out session) || session == null) return;
+                    Log.Info("回收非权威千牛WebSocket页面通道: sellerRef=" + DiagnosticRef("seller", sellerNick)
+                        + ", sessionRef=" + DiagnosticRef("session", sessionId)
+                        + ", reason=" + reason);
+                    session.Close();
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("回收非权威千牛WebSocket页面通道失败: sessionRef="
+                        + DiagnosticRef("session", sessionId) + ", error=" + ex.Message);
+                    bool ignored;
+                    _closingDuplicateSessions.TryRemove(sessionId, out ignored);
+                }
+            });
+        }
+
+        private void EnforceDuplicateSellerSessionCapLocked(string sellerNick)
+        {
+            var active = _duplicateSellerSessions
+                .Where(x => string.Equals(x.Value, sellerNick, StringComparison.Ordinal)
+                    && !_closingDuplicateSessions.ContainsKey(x.Key))
+                .Select(x => x.Key)
+                .OrderBy(x =>
+                {
+                    DateTime last;
+                    return _sessionLastActivityUtc.TryGetValue(x, out last) ? last : DateTime.MinValue;
+                })
+                .ToList();
+            var excess = active.Count - MaxDuplicateSellerSessions;
+            if (excess <= 0) return;
+            foreach (var victim in active.Take(excess))
+                ScheduleDuplicateSessionClose(victim, sellerNick, "duplicate_cap");
+        }
+
+        private void StartDuplicateSessionSweeper()
+        {
+            if (Interlocked.CompareExchange(ref _duplicateSessionSweeperStarted, 1, 0) != 0) return;
+            Task.Run(async () =>
+            {
+                while (true)
+                {
+                    await Task.Delay(DuplicateSessionSweepInterval).ConfigureAwait(false);
+                    try
+                    {
+                        var cutoff = DateTime.UtcNow - DuplicateSessionIdleTimeout;
+                        List<KeyValuePair<string, string>> stale;
+                        lock (_sellerSessionSync)
+                        {
+                            stale = _duplicateSellerSessions
+                                .Where(x => !_closingDuplicateSessions.ContainsKey(x.Key))
+                                .Where(x =>
+                                {
+                                    DateTime last;
+                                    return !_sessionLastActivityUtc.TryGetValue(x.Key, out last) || last < cutoff;
+                                })
+                                .ToList();
+                        }
+                        foreach (var pair in stale)
+                            ScheduleDuplicateSessionClose(pair.Key, pair.Value, "duplicate_idle_timeout");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("千牛重复WebSocket页面通道清理异常: " + ex.Message);
+                    }
+                }
+            });
+        }
+
         private bool TryClaimSellerSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
@@ -93,6 +185,7 @@ namespace Bot.ChromeNs
                     if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
                     {
                         _duplicateSellerSessions[sessionId] = sellerNick;
+                        EnforceDuplicateSellerSessionCapLocked(sellerNick);
                         return false;
                     }
 
@@ -302,6 +395,7 @@ namespace Bot.ChromeNs
                     try
                     {
                         _connectedSessions[session.SessionID] = true;
+                        TouchSession(session);
                         BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
                         Log.Info("千牛注入脚本已连接 Bot WebSocket: sessionRef=" + DiagnosticRef("session", session.SessionID));
                         // Do not allocate a full CDPClient for every injected recent.html/iframe.
@@ -318,6 +412,7 @@ namespace Bot.ChromeNs
                 {
                     try
                     {
+                        TouchSession(session);
                         var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
                         if (wMsg == null || wMsg.Type == "hi") return;
 
@@ -405,6 +500,12 @@ namespace Bot.ChromeNs
                 webSocket.SessionClosed += (session, value) =>
                 {
                     _connectedSessions.TryRemove(session.SessionID, out _);
+                    WebSocketSession ignoredSession;
+                    DateTime ignoredActivity;
+                    bool ignoredClosing;
+                    _liveSessions.TryRemove(session.SessionID, out ignoredSession);
+                    _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
+                    _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
                     ReleaseSellerSession(session.SessionID);
                     BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
                     Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
@@ -428,6 +529,7 @@ namespace Bot.ChromeNs
                 };
                 webSocket.Setup(config);
                 webSocket.Start();
+                StartDuplicateSessionSweeper();
                 BotConnectionDiagnostics.RecordWebSocketServerStarted();
                 Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");
             }

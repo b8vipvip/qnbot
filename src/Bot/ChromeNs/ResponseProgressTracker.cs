@@ -1,4 +1,4 @@
-using Bot.AssistWindow.Widget.Robot;
+﻿using Bot.AssistWindow.Widget.Robot;
 using Bot.Automation.ChatDeskNs;
 using Bot.ShopScope;
 using BotLib;
@@ -71,14 +71,6 @@ namespace Bot.ChromeNs
         {
             return Key(seller, buyer) + "#"
                 + Regex.Replace((answer ?? string.Empty).Trim(), @"\s+", string.Empty);
-        }
-
-        public static bool IsMandatoryOrderAnswer(string seller, string buyer, string answer)
-        {
-            DeliveryUiEntry ui;
-            return DeliveryUi.TryGetValue(DeliveryKey(seller, buyer, answer), out ui)
-                && ui != null
-                && (ui.Source ?? string.Empty).IndexOf("下单自动回复", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static CtlConversation ObserveQuestion(
@@ -388,12 +380,10 @@ namespace Bot.ChromeNs
                     if (previous.Control != null)
                     {
                         previous.Control.SetStatus(
-                            previous.AnswerReadyAt == DateTime.MinValue
-                                ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
-                                : (IsMandatoryOrderAnswer(seller, buyer, previous.Answer)
-                                    ? "买家已补充新消息，下单固定预设仍保持优先发送"
-                                    : "买家已补充新消息，上一条答案保留并在发送前检查是否仍相关"),
-                            false);
+                  previous.AnswerReadyAt == DateTime.MinValue
+                      ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
+                      : "买家已补充新消息，上一条答案保留；实际发送资格由业务/会话权威层决定",
+                  false);
                     }
                 }
                 return;
