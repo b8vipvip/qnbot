@@ -30,7 +30,7 @@ public class QNInject
         private const string languageScriptFileName = "qnbot-language.js";
         private const string embeddedInjectResource = "Bot.Resources.inject.js";
         private const string embeddedLanguageResource = "Bot.Resources.language.js";
-        private const string injectVersionMarker = "20260714-zh-cn-v9";
+        private const string injectVersionMarker = "20260906-zh-cn-ws-retire-v10";
         private const string languageVersionMarker = "20260713-hans-all-pages-v3";
         private const string injectedScriptVersionedSrc = injectedScriptSrc + "?v=" + injectVersionMarker;
         private const string languageScriptVersionedSrc = languageScriptFileName + "?v=" + languageVersionMarker;
