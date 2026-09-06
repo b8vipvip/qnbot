@@ -110,12 +110,16 @@ def test_undersized_log_rotation_requires_real_version_change_and_updater_handof
     assert "检测到真实客户端版本更新，已允许不足1024KiB的活动日志归档一次" in identity
 
 
-def test_knowledge_v2_absolute_age_barrier_precedes_answer_ready():
+def test_knowledge_v2_uses_session_agent_terminal_barrier_before_answer_ready():
     text = read(KNOWLEDGE_V2)
 
-    assert "MaxDirectReplyAgeSeconds = 55" in text
-    age = text.index("(DateTime.Now - detectedAt).TotalSeconds > MaxDirectReplyAgeSeconds")
-    begin = text.index("ResponseProgressTracker.BeginAnswer", age)
-    ready = text.index("ResponseProgressTracker.SetAnswerReady", begin)
-    assert age < begin < ready
-    assert "超过generation绝对年龄，已丢弃且禁止进入Ready/Sending" in text
+    # The old duplicate 55-second V2 age authority caused a split lifecycle. BuyerSessionAgent is
+    # now the only terminal-age owner and the local bridge must publish Ready explicitly only after
+    # the authoritative answer has been fully materialized.
+    assert "MaxDirectReplyAgeSeconds" not in text
+    assert 'lease.MarkReady("knowledge_v2_answer_materialized")' in text
+    mark_ready = text.index('lease.MarkReady("knowledge_v2_answer_materialized")')
+    ready = text.index("ResponseProgressTracker.SetAnswerReady", mark_ready)
+    assert mark_ready < ready
+    assert 'lease.MarkSending("knowledge_v2_send_started")' in text
+    assert "burst.BuyerNick, answer, 1, lease.CancellationToken" in text
