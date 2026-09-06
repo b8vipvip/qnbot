@@ -21,6 +21,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check pytest
       - name: Apply terminal authority repair
         run: python .github/scripts/tmp_v2_terminal_authority_repair_20260906.py
       - name: Run focused regression tests
