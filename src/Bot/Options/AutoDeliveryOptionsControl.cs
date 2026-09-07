@@ -255,6 +255,10 @@ namespace Bot.Options
             var targetSeller = string.IsNullOrWhiteSpace(seller) ? _seller : seller.Trim();
             var enabled = _enabled.IsChecked == true;
             AutoDeliverySettings.Save(targetSeller, enabled, delay);
+            // Move the durable order-event cursor synchronously with the operator's enable/disable
+            // action. Otherwise an order arriving in the ~2s seed timer window could be mistaken for
+            // pre-enable history and skipped.
+            AutoDeliveryOrderEventSeed.MarkConfiguration(targetSeller, enabled);
             AutoDeliveryCoordinator.ReconfigureSeller(targetSeller, enabled, delay);
             _delayMinutes.Text = delay.ToString();
             UpdateSummary(enabled, delay);
