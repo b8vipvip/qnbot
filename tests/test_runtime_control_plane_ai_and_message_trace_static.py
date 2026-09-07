@@ -72,6 +72,9 @@ def test_server_trace_storage_and_admin_query_are_shop_aware():
     assert 'shop_key TEXT NOT NULL' in text
     assert '/api/runtime/v1/message-processing-traces/batch' in text
     assert '/api/admin/message-processing-traces' in text
+    assert '/api/admin/message-processing-conversations' in text
+    assert '/api/admin/message-processing-conversations/detail' in text
+    assert '/api/admin/message-processing-conversations/export' in text
     assert 'bot_client_shop_binding.ensure_binding' in text
     assert '20_000' in text
 
@@ -83,7 +86,11 @@ def test_trace_console_is_visible_and_beijing_time_aware():
     assert 'id="page-message-traces"' in html
     assert 'id="messageTraceTable"' in html
     assert '/static/message-traces.js?v=2' in html
-    assert '/api/admin/message-processing-traces?' in js
+    assert '/api/admin/message-processing-conversations?' in js
+    assert '/api/admin/message-processing-conversations/detail?' in js
+    assert '/api/admin/message-processing-conversations/export?' in js
+    assert 'viewMessageConversation' in js
+    assert '导出所有买家' in js
     assert '查询消息处理日志失败' in js
     assert 'cnTime(' in js
     assert 'traceShopKey' in js
