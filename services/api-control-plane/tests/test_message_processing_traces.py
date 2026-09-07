@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -28,7 +29,7 @@ class FakeControlPlane:
 
     @staticmethod
     def iso_now():
-        return "2026-08-25T08:00:00+00:00"
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     @staticmethod
     def require_admin(request):
@@ -37,7 +38,7 @@ class FakeControlPlane:
         return "admin"
 
 
-def test_runtime_batch_can_be_queried_by_authenticated_admin(tmp_path, monkeypatch):
+def test_runtime_batch_can_be_queried_grouped_and_exported_by_authenticated_admin(tmp_path, monkeypatch):
     cp = FakeControlPlane(tmp_path / "message-traces.db")
     with cp.db() as conn:
         conn.executescript(
@@ -59,6 +60,10 @@ def test_runtime_batch_can_be_queried_by_authenticated_admin(tmp_path, monkeypat
     message_processing_traces.install(cp)
     message_processing_traces.init_db()
 
+    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=15)
+    timestamps = [(base + timedelta(minutes=i)).isoformat() for i in range(3)]
+    beijing_day = (base + timedelta(hours=8)).strftime("%Y-%m-%d")
+
     with TestClient(cp.app) as client:
         uploaded = client.post(
             "/api/runtime/v1/message-processing-traces/batch",
@@ -74,13 +79,37 @@ def test_runtime_batch_can_be_queried_by_authenticated_admin(tmp_path, monkeypat
                         "status": "processing",
                         "summary": "已识别买家消息",
                         "detail": "测试消息",
-                        "occurred_at": "2026-08-25T08:00:00+00:00",
-                    }
+                        "occurred_at": timestamps[0],
+                    },
+                    {
+                        "event_id": "event-2",
+                        "trace_id": "trace-1",
+                        "seller": "seller-a",
+                        "buyer": "buyer-a",
+                        "stage": "answer_ready",
+                        "status": "ready",
+                        "summary": "本地知识答案已就绪",
+                        "detail": "未调用AI",
+                        "duration_ms": 23,
+                        "occurred_at": timestamps[1],
+                    },
+                    {
+                        "event_id": "event-3",
+                        "trace_id": "trace-1",
+                        "seller": "seller-a",
+                        "buyer": "buyer-a",
+                        "stage": "delivery_confirmed",
+                        "status": "success",
+                        "summary": "已确认发送",
+                        "detail": "真实回显已确认",
+                        "duration_ms": 45,
+                        "occurred_at": timestamps[2],
+                    },
                 ]
             },
         )
         assert uploaded.status_code == 200
-        assert uploaded.json()["saved"] == 1
+        assert uploaded.json()["saved"] == 3
 
         unauthenticated = client.get("/api/admin/message-processing-traces")
         assert unauthenticated.status_code == 401
@@ -91,6 +120,46 @@ def test_runtime_batch_can_be_queried_by_authenticated_admin(tmp_path, monkeypat
         )
         assert queried.status_code == 200
         rows = queried.json()
-        assert len(rows) == 1
+        assert len(rows) == 3
         assert rows[0]["shop_key"] == "shop_test"
         assert rows[0]["trace_id"] == "trace-1"
+
+        grouped = client.get(
+            "/api/admin/message-processing-conversations",
+            headers={"X-Test-Admin": "yes"},
+        )
+        assert grouped.status_code == 200
+        conversations = grouped.json()
+        assert len(conversations) == 1
+        assert conversations[0]["buyer"] == "buyer-a"
+        assert conversations[0]["conversation_date"] == beijing_day
+        assert conversations[0]["event_count"] == 3
+        assert conversations[0]["trace_count"] == 1
+        assert conversations[0]["success_count"] == 1
+        assert conversations[0]["failed_count"] == 0
+        assert conversations[0]["latest_status"] == "success"
+
+        detail = client.get(
+            "/api/admin/message-processing-conversations/detail",
+            headers={"X-Test-Admin": "yes"},
+            params={
+                "client_id": 1,
+                "shop_key": "shop_test",
+                "seller": "seller-a",
+                "buyer": "buyer-a",
+                "conversation_date": beijing_day,
+            },
+        )
+        assert detail.status_code == 200
+        detail_events = detail.json()["events"]
+        assert [event["event_id"] for event in detail_events] == ["event-1", "event-2", "event-3"]
+
+        exported = client.get(
+            "/api/admin/message-processing-conversations/export?window=2h",
+            headers={"X-Test-Admin": "yes"},
+        )
+        assert exported.status_code == 200
+        assert exported.headers["content-type"].startswith("text/csv")
+        assert "buyer-a" in exported.text
+        assert "本地知识答案已就绪" in exported.text
+        assert "真实回显已确认" in exported.text
