@@ -163,7 +163,10 @@ namespace Bot.Knowledge
             var sameFactSecond = second != null
                 && string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record),
                     KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal);
-            var effectiveMargin = sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)
+            var safeConsensus = HasSafeDirectConsensus(
+                best, productionMatches, query, threshold, minConfidence, highRisk);
+            var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer))
+                || safeConsensus
                 ? Math.Max(margin, 0.12) : margin;
 
             decision.CanDirectReply = ReplyModeService.IsLocalFirst(seller)
@@ -179,9 +182,108 @@ namespace Bot.Knowledge
             decision.Reason = decision.CanDirectReply
                 ? "V2结构化知识高置信直答：score=" + best.Score.ToString("0.00")
                     + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count
+                    + (safeConsensus ? ", consensus=safe" : string.Empty)
                 : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk);
             Finish(decision, total, decideSw);
             return decision;
+        }
+
+        private static bool HasSafeDirectConsensus(
+            KnowledgeV2Match best,
+            List<KnowledgeV2Match> productionMatches,
+            KnowledgeV2Query query,
+            double threshold,
+            double minConfidence,
+            bool highRisk)
+        {
+            if (best == null || best.Record == null || query == null || highRisk
+                || productionMatches == null || productionMatches.Count < 2
+                || best.Score < threshold || best.ConfidenceScore < minConfidence)
+            {
+                return false;
+            }
+
+            // A short context-only fragment such as “支持吗/这个呢” must not become local-direct
+            // merely because many generic records are similar. Only use consensus once the query
+            // itself carries a concrete business object, or the message is independently complete.
+            if (query.ContextDependent
+                && (query.Entities == null || query.Entities.Count < 1)
+                && string.IsNullOrWhiteSpace(query.Subject))
+            {
+                return false;
+            }
+
+            var close = productionMatches
+                .Where(x => x != null && x.Record != null)
+                .Where(x => best.Score - x.Score < 0.08)
+                .Where(x => x.Score >= threshold && x.ConfidenceScore >= minConfidence)
+                .Take(4)
+                .ToList();
+            if (close.Count < 2) return false;
+
+            foreach (var candidate in close.Skip(1))
+            {
+                if (!candidate.Record.Enabled
+                    || string.Equals(candidate.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Record.Answer))
+                {
+                    return false;
+                }
+
+                if (!SameConsensusScope(best.Record, candidate.Record)) return false;
+                if (HasAnswerPolarityConflict(best.Record.Answer, candidate.Record.Answer)) return false;
+            }
+            return true;
+        }
+
+        private static bool SameConsensusScope(KnowledgeV2Record left, KnowledgeV2Record right)
+        {
+            if (left == null || right == null) return false;
+            var leftPredicate = KnowledgeEngineV2Semantics.NormalizePredicate(left.Predicate);
+            var rightPredicate = KnowledgeEngineV2Semantics.NormalizePredicate(right.Predicate);
+            var leftIntent = KnowledgeEngineV2Semantics.NormalizeIntent(left.Intent);
+            var rightIntent = KnowledgeEngineV2Semantics.NormalizeIntent(right.Intent);
+
+            if (leftPredicate != "general" && rightPredicate != "general"
+                && !string.Equals(leftPredicate, rightPredicate, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            if (leftIntent != "general" && rightIntent != "general"
+                && !string.Equals(leftIntent, rightIntent, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (AnswersEquivalent(left.Answer, right.Answer)) return true;
+            return EntitySimilarity(left.Entities, right.Entities) >= 0.50;
+        }
+
+        private static bool HasAnswerPolarityConflict(string left, string right)
+        {
+            var leftDirection = AnswerDirection(left);
+            var rightDirection = AnswerDirection(right);
+            return leftDirection != 0 && rightDirection != 0 && leftDirection != rightDirection;
+        }
+
+        private static int AnswerDirection(string answer)
+        {
+            var value = KnowledgeEngineV2Semantics.Compact(answer);
+            if (value.Length == 0) return 0;
+            var negative = value.Contains("不支持")
+                || value.Contains("不能使用")
+                || value.Contains("无法使用")
+                || value.Contains("不可以")
+                || value.Contains("不可使用");
+            var positive = value.Contains("可以使用")
+                || value.Contains("支持使用")
+                || value.Contains("可以用于")
+                || value.Contains("适用于")
+                || value.Contains("是电视端")
+                || value.Contains("可以支持");
+            if (negative && !positive) return -1;
+            if (positive && !negative) return 1;
+            return 0;
         }
 
         private static bool IsApprovedProductionMatch(KnowledgeV2Match match)
