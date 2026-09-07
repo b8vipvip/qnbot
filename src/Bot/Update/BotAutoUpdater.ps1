@@ -239,18 +239,32 @@ function Test-LoopbackPortBindable([int]$Port) {
     }
 }
 
-function Get-LoopbackPortOwnerSummary([int]$Port) {
+function Get-LoopbackPortListenerState([int]$Port) {
     try {
         $command = Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue
-        if ($null -eq $command) { return 'owner=unknown' }
+        if ($null -eq $command) {
+            return [pscustomobject]@{ Known = $false; Listeners = @() }
+        }
 
-        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Where-Object {
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Where-Object {
             $_.LocalAddress -eq '127.0.0.1' -or
             $_.LocalAddress -eq '0.0.0.0' -or
             $_.LocalAddress -eq '::1' -or
             $_.LocalAddress -eq '::'
         })
-        if ($listeners.Count -eq 0) { return 'owner=unknown' }
+        return [pscustomobject]@{ Known = $true; Listeners = @($listeners) }
+    }
+    catch {
+        return [pscustomobject]@{ Known = $false; Listeners = @() }
+    }
+}
+
+function Get-LoopbackPortOwnerSummary([int]$Port) {
+    try {
+        $state = Get-LoopbackPortListenerState $Port
+        if (-not [bool]$state.Known) { return 'owner=unknown' }
+        $listeners = @($state.Listeners)
+        if ($listeners.Count -eq 0) { return 'owner=none' }
 
         $parts = @()
         foreach ($entry in $listeners) {
@@ -279,18 +293,37 @@ function Wait-BotWebSocketPortRelease([string]$TargetInstallDir, [int]$Port, [in
         $attempt++
 
         # A stale watchdog or helper can race the first process sweep. Re-scan the target install
-        # immediately before every bind probe so a resurrected old Bot cannot steal the listener
-        # between package replacement and the new process launch.
+        # immediately before every listener probe so a resurrected old Bot cannot retain the
+        # authoritative LISTEN socket between package replacement and the new process launch.
         Stop-BotProcesses $TargetInstallDir
 
-        if (Test-LoopbackPortBindable $Port) {
-            Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port is exclusively bindable after $attempt probe(s)." -ForegroundColor Green
+        $listenerState = Get-LoopbackPortListenerState $Port
+        if ([bool]$listenerState.Known) {
+            if (@($listenerState.Listeners).Count -eq 0) {
+                # Get-NetTCPConnection gives us the authoritative Windows LISTEN state. A strict
+                # ExclusiveAddressUse probe can still fail briefly after shutdown because of
+                # transient TCP endpoint teardown. With no LISTEN owner, do not roll back before the
+                # target process even gets a chance to start; the target's own bounded WebSocket
+                # retry plus explicit startup-health contract remains the final safety authority.
+                if (Test-LoopbackPortBindable $Port) {
+                    Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port has no LISTEN owner and is strictly bindable after $attempt probe(s)." -ForegroundColor Green
+                }
+                else {
+                    Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port has no LISTEN owner; strict exclusive bind probe is still blocked by transient TCP state, so startup health will perform the final bind validation." -ForegroundColor Yellow
+                }
+                return $true
+            }
+        }
+        elseif (Test-LoopbackPortBindable $Port) {
+            # Older Windows environments without Get-NetTCPConnection keep the previous conservative
+            # behavior: only proceed when the strict bind probe itself succeeds.
+            Write-Host "Bot WebSocket handoff ready: listener state unavailable, but 127.0.0.1:$Port is exclusively bindable after $attempt probe(s)." -ForegroundColor Green
             return $true
         }
 
         $owner = Get-LoopbackPortOwnerSummary $Port
         if ($attempt -eq 1 -or $owner -ne $lastOwner -or ($attempt % 5) -eq 0) {
-            Write-Host "Bot WebSocket handoff waiting: 127.0.0.1:$Port is still occupied; $owner; probe=$attempt" -ForegroundColor Yellow
+            Write-Host "Bot WebSocket handoff waiting: 127.0.0.1:$Port still has a LISTEN owner or listener state is unavailable; $owner; probe=$attempt" -ForegroundColor Yellow
             $lastOwner = $owner
         }
         Start-Sleep -Milliseconds ([Math]::Min(1500, 250 + ($attempt * 125)))
@@ -578,7 +611,7 @@ try {
     Write-Step 'Waiting for Bot WebSocket port handoff'
     if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 45)) {
         $portOwner = Get-LoopbackPortOwnerSummary 41010
-        throw "Bot WebSocket port 41010 is still occupied after old Bot shutdown ($portOwner). Automatic rollback will start."
+        throw "Bot WebSocket port 41010 still has a real LISTEN owner after old Bot shutdown ($portOwner). Automatic rollback will start."
     }
 
     Write-Step 'Starting and validating new Bot.exe'
