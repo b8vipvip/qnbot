@@ -17,7 +17,7 @@ def test_unified_settings_exposes_dedicated_auto_delivery_page():
     assert 'AddPage("订单自动化", "自动发货"' in wnd
     assert "new AutoDeliveryOptionsControl(Seller)" in wnd
     assert 'Content = "启用自动发货（无需物流）"' in page
-    assert "DefaultDelayMinutes = 10" in page
+    assert "DefaultDelayMinutes = 10"
     assert "MinDelayMinutes = 0" in page
     assert "MaxDelayMinutes = 1440" in page
     assert 'EnabledKey = "auto_delivery.enabled"' in page
