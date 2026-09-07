@@ -216,7 +216,7 @@ namespace Bot.Options
             };
             flow.Child = new TextBlock
             {
-                Text = "安全确认链：准确订单号 + 待发货 → 点击该订单“发货” → 选择“无需物流” → 点击“确认发货” → 再次核验订单不再待发货。任一步无法唯一确认都会停止，不会猜测点击。",
+                Text = "安全确认链：准确订单号 + 待发货 → 点击该订单“发货” → 选择并核验“无需物流”已选中 → 写入持久防重屏障 → 点击“确认发货” → 再次核验明确显示“已发货 / 交易成功 / 已完成”。任一步无法唯一确认都会停止，不会猜测点击，也不会重复确认。",
                 TextWrapping = TextWrapping.Wrap
             };
             root.Children.Add(flow);
@@ -254,11 +254,23 @@ namespace Bot.Options
 
             var targetSeller = string.IsNullOrWhiteSpace(seller) ? _seller : seller.Trim();
             var enabled = _enabled.IsChecked == true;
-            AutoDeliverySettings.Save(targetSeller, enabled, delay);
-            // Move the durable order-event cursor synchronously with the operator's enable/disable
-            // action. Otherwise an order arriving in the ~2s seed timer window could be mistaken for
-            // pre-enable history and skipped.
-            AutoDeliveryOrderEventSeed.MarkConfiguration(targetSeller, enabled);
+
+            // Enabling is ordered cursor-first, setting-second. That closes the tiny race where an
+            // order could arrive after the setting became visible to the seed timer but before the
+            // non-retroactive cursor was advanced, causing the genuinely new order to be skipped.
+            // Disabling is ordered setting-first so no new irreversible task can enter after the
+            // operator has asked the feature to stop.
+            if (enabled)
+            {
+                AutoDeliveryOrderEventSeed.MarkConfiguration(targetSeller, true);
+                AutoDeliverySettings.Save(targetSeller, true, delay);
+            }
+            else
+            {
+                AutoDeliverySettings.Save(targetSeller, false, delay);
+                AutoDeliveryOrderEventSeed.MarkConfiguration(targetSeller, false);
+            }
+
             AutoDeliveryCoordinator.ReconfigureSeller(targetSeller, enabled, delay);
             _delayMinutes.Text = delay.ToString();
             UpdateSummary(enabled, delay);
@@ -280,7 +292,8 @@ namespace Bot.Options
                 + "1. 当前会话买家与新订单买家一致；\n"
                 + "2. 右侧订单卡片包含完全一致的订单号；\n"
                 + "3. 该订单明确显示“待发货”；\n"
-                + "4. 发货弹窗明确出现“无需物流”和“确认发货”。\n\n"
+                + "4. 发货弹窗明确出现“无需物流”和“确认发货”；\n"
+                + "5. “无需物流”必须读取到已选中状态，确认动作前必须成功写入持久防重屏障。\n\n"
                 + "客服正在输入、会话正在切换或 Bot 正在执行其它任务时会自动延后。实物商品请保持关闭。",
                 "自动发货帮助",
                 MessageBoxButton.OK,
