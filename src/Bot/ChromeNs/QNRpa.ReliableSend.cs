@@ -15,6 +15,14 @@ namespace Bot.ChromeNs
         public string LastSendFailureReason { get; private set; } = string.Empty;
         internal bool LastSendWasCancelled { get; private set; }
 
+        // A burst of send/recovery paths can all request a forced UIA refresh at once. Scanning
+        // the full Qianniu HWND tree concurrently is expensive and the production log showed a
+        // thundering herd of identical successful scans in the same second. Share the in-flight
+        // scan per seller-scoped QNRpa instance; a later force call still starts a fresh scan once
+        // the current one has completed.
+        private readonly object _chatControlsRefreshSync = new object();
+        private Task<bool> _activeChatControlsRefreshTask;
+
         internal void ResetSendFailure()
         {
             LastSendFailureReason = string.Empty;
@@ -102,15 +110,30 @@ namespace Bot.ChromeNs
             return string.IsNullOrWhiteSpace(LastSendFailureReason) ? "未知发送失败" : LastSendFailureReason;
         }
 
-        internal async Task<bool> RefreshChatControlsAsync(bool force)
+        internal Task<bool> RefreshChatControlsAsync(bool force)
         {
-            if (!force
-                && _messageInputTextArea != null
-                && (DateTime.Now - _preUpdateChatBrowserRectTime).TotalSeconds < 3)
+            lock (_chatControlsRefreshSync)
             {
-                return true;
-            }
+                if (!force
+                    && _messageInputTextArea != null
+                    && (DateTime.Now - _preUpdateChatBrowserRectTime).TotalSeconds < 3)
+                {
+                    return Task.FromResult(true);
+                }
 
+                if (_activeChatControlsRefreshTask != null
+                    && !_activeChatControlsRefreshTask.IsCompleted)
+                {
+                    return _activeChatControlsRefreshTask;
+                }
+
+                _activeChatControlsRefreshTask = RefreshChatControlsCoreAsync();
+                return _activeChatControlsRefreshTask;
+            }
+        }
+
+        private async Task<bool> RefreshChatControlsCoreAsync()
+        {
             _preUpdateChatBrowserRectTime = DateTime.Now;
 
             var sellerDesk = ResolveSellerDesk();
@@ -195,7 +218,7 @@ namespace Bot.ChromeNs
                     Log.Exception(ex);
                     return false;
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
         private AutomationElement FindChatInputElement(

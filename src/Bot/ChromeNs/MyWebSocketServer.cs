@@ -35,7 +35,10 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _duplicateRetireCapableSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
+        private readonly object _webSocketStartSync = new object();
         private const int MaxDuplicateSellerSessions = 3;
+        private const int WebSocketStartMaxAttempts = 5;
+        private const int WebSocketStartRetryBaseDelayMs = 250;
         private static readonly TimeSpan DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4);
         private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(45);
         private int _duplicateSessionSweeperStarted;
@@ -415,183 +418,227 @@ namespace Bot.ChromeNs
 
         public void Start()
         {
-            try
+            lock (_webSocketStartSync)
             {
-                var webSocket = new WebSocketServer();
-                webSocket.NewSessionConnected += (session) =>
+                if (_webSocketServer != null)
                 {
-                    try
-                    {
-                        _connectedSessions[session.SessionID] = true;
-                        TouchSession(session);
-                        BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
-                        Log.Info("千牛注入脚本已连接 Bot WebSocket: sessionRef=" + DiagnosticRef("session", session.SessionID));
-                        // Do not allocate a full CDPClient for every injected recent.html/iframe.
-                        // Raw duplicate sockets remain connected so DuplicateCdpInboundRecoveryBridge
-                        // can repair missed inbound events. A command client is created lazily only
-                        // for an authoritative session or a page that emits a real conversation change.
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Exception(ex);
-                    }
-                };
-                webSocket.NewMessageReceived += (session, value) =>
-                {
-                    try
-                    {
-                        TouchSession(session);
-                        var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
-                        if (wMsg == null || wMsg.Type == "hi") return;
-
-                        Log.Info("收到千牛WebSocket事件: type=" + wMsg.Type);
-
-                        if (wMsg.Type == "qnbotStatus")
-                        {
-                            Log.Info("千牛注入状态: " + wMsg.Response);
-                            try
-                            {
-                                var jo = JObject.Parse(wMsg.Response ?? "{}");
-                                var hasLoginId = jo["hasLoginID"] != null && jo["hasLoginID"].Value<bool>();
-                                var hasImsdk = jo["hasImsdk"] != null && jo["hasImsdk"].Value<bool>();
-                                var hasQn = jo["hasQN"] != null && jo["hasQN"].Value<bool>();
-                                var hasVs = jo["hasVs"] != null && jo["hasVs"].Value<bool>();
-                                var supportsDuplicateRetire = jo["duplicateRetire"] != null && jo["duplicateRetire"].Value<bool>();
-                                var loginNick = ReadJsonString(jo, "loginNick");
-                                var conversationNick = ReadJsonString(jo, "conversationNick");
-                                if (supportsDuplicateRetire)
-                                {
-                                    _duplicateRetireCapableSessions[session.SessionID] = true;
-                                }
-                                else
-                                {
-                                    bool ignoredCapability;
-                                    _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
-                                }
-                                BotConnectionDiagnostics.RecordInjectionStatus(true, hasImsdk, hasLoginId, hasQn, hasVs, wMsg.Response);
-                                BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
-                                if (hasLoginId || hasImsdk)
-                                {
-                                    var authoritative = string.IsNullOrWhiteSpace(loginNick)
-                                        || TryClaimSellerSession(loginNick, session.SessionID);
-                                    if (!authoritative)
-                                    {
-                                        // This page is useful as a lightweight raw inbound source but must
-                                        // not start its own full CDP initialization/command pipeline.
-                                        _initialized[session.SessionID] = true;
-                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留为轻量入站补偿通道: sellerRef="
-                                            + DiagnosticRef("seller", loginNick)
-                                            + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
-                                    }
-                                    else if (!_initialized.ContainsKey(session.SessionID))
-                                    {
-                                        // Do not run TryInitSession and TryBindStatusConversation concurrently.
-                                        // A single authoritative initialization already reads the current buyer.
-                                        Task.Run(() => TryInitSession(session, "status"));
-                                        ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
-                                    }
-                                    else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
-                                        && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
-                                    {
-                                        // A previously quarantined page can promote itself after the old owner
-                                        // closes; TryBindStatusConversation lazily creates its CDPClient here.
-                                        Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                BotConnectionDiagnostics.RecordInjectionStatus(false, false, false, false, false, "解析注入状态失败：" + ex.Message);
-                            }
-                        }
-                        else if (wMsg.Type == "imsdkApiScan")
-                        {
-                            Log.Info("IMSDK API鎵弿缁撴灉: " + wMsg.Response);
-                        }
-                        else if (wMsg.Type == "imsdkInvokeTrace")
-                        {
-                            Log.Info("IMSDK璋冪敤璺熻釜: " + wMsg.Response);
-                        }
-                        else if (wMsg.Type == "onConversationChange")
-                        {
-                            // Precise activity evidence may need this physical WebView for future CDP
-                            // commands; create only the lightweight client, without seller initialization.
-                            GetOrCreateClient(session);
-                        }
-                        else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs" || wMsg.Type == "onChatDlgActive")
-                        {
-                            string duplicateSeller;
-                            if (!_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
-                            {
-                                Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));
-                            }
-                        }
-
-                        if (OnRecieveMessage != null)
-                            OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type, wMsg.Response));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Exception(ex);
-                    }
-                };
-                webSocket.SessionClosed += (session, value) =>
-                {
-                    _connectedSessions.TryRemove(session.SessionID, out _);
-                    WebSocketSession ignoredSession;
-                    DateTime ignoredActivity;
-                    bool ignoredClosing;
-                    bool ignoredCapability;
-                    _liveSessions.TryRemove(session.SessionID, out ignoredSession);
-                    _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
-                    _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
-                    _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
-                    ReleaseSellerSession(session.SessionID);
-                    BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
-                    Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
-                        + ", reason=" + value);
-                    CDPClient removed;
-                    bool b;
-                    string statusBinding;
-                    string duplicateSeller;
-                    _clients.TryRemove(session.SessionID, out removed);
-                    CDPClient.ReleaseClosedSession(session.SessionID, Convert.ToString(value), removed);
-                    _initialized.TryRemove(session.SessionID, out b);
-                    _initializing.TryRemove(session.SessionID, out b);
-                    _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
-                    _duplicateSellerSessions.TryRemove(session.SessionID, out duplicateSeller);
-                };
-                var config = new ServerConfig()
-                {
-                    MaxRequestLength = 5 * 1024 * 1024,
-                    Ip = "127.0.0.1",
-                    Port = 41010
-                };
-                if (!webSocket.Setup(config))
-                {
-                    const string setupError = "Bot WebSocket服务启动失败：Setup返回false，127.0.0.1:41010 未建立监听。";
-                    BotConnectionDiagnostics.RecordWebSocketServerError(setupError);
-                    Log.Error(setupError);
+                    BotConnectionDiagnostics.RecordWebSocketServerStarted();
                     return;
                 }
-                if (!webSocket.Start())
+
+                try
                 {
-                    const string startError = "Bot WebSocket服务启动失败：Start返回false，127.0.0.1:41010 未建立监听。";
-                    BotConnectionDiagnostics.RecordWebSocketServerError(startError);
-                    Log.Error(startError);
-                    return;
+                    var webSocket = new WebSocketServer();
+                    webSocket.NewSessionConnected += (session) =>
+                    {
+                        try
+                        {
+                            _connectedSessions[session.SessionID] = true;
+                            TouchSession(session);
+                            BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
+                            Log.Info("千牛注入脚本已连接 Bot WebSocket: sessionRef=" + DiagnosticRef("session", session.SessionID));
+                            // Do not allocate a full CDPClient for every injected recent.html/iframe.
+                            // Raw duplicate sockets remain connected so DuplicateCdpInboundRecoveryBridge
+                            // can repair missed inbound events. A command client is created lazily only
+                            // for an authoritative session or a page that emits a real conversation change.
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Exception(ex);
+                        }
+                    };
+                    webSocket.NewMessageReceived += (session, value) =>
+                    {
+                        try
+                        {
+                            TouchSession(session);
+                            var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
+                            if (wMsg == null || wMsg.Type == "hi") return;
+
+                            Log.Info("收到千牛WebSocket事件: type=" + wMsg.Type);
+
+                            if (wMsg.Type == "qnbotStatus")
+                            {
+                                Log.Info("千牛注入状态: " + wMsg.Response);
+                                try
+                                {
+                                    var jo = JObject.Parse(wMsg.Response ?? "{}");
+                                    var hasLoginId = jo["hasLoginID"] != null && jo["hasLoginID"].Value<bool>();
+                                    var hasImsdk = jo["hasImsdk"] != null && jo["hasImsdk"].Value<bool>();
+                                    var hasQn = jo["hasQN"] != null && jo["hasQN"].Value<bool>();
+                                    var hasVs = jo["hasVs"] != null && jo["hasVs"].Value<bool>();
+                                    var supportsDuplicateRetire = jo["duplicateRetire"] != null && jo["duplicateRetire"].Value<bool>();
+                                    var loginNick = ReadJsonString(jo, "loginNick");
+                                    var conversationNick = ReadJsonString(jo, "conversationNick");
+                                    if (supportsDuplicateRetire)
+                                    {
+                                        _duplicateRetireCapableSessions[session.SessionID] = true;
+                                    }
+                                    else
+                                    {
+                                        bool ignoredCapability;
+                                        _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                                    }
+                                    BotConnectionDiagnostics.RecordInjectionStatus(true, hasImsdk, hasLoginId, hasQn, hasVs, wMsg.Response);
+                                    BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
+                                    if (hasLoginId || hasImsdk)
+                                    {
+                                        var authoritative = string.IsNullOrWhiteSpace(loginNick)
+                                            || TryClaimSellerSession(loginNick, session.SessionID);
+                                        if (!authoritative)
+                                        {
+                                            // This page is useful as a lightweight raw inbound source but must
+                                            // not start its own full CDP initialization/command pipeline.
+                                            _initialized[session.SessionID] = true;
+                                            Log.Info("检测到卖家重复千牛WebSocket页面，保留为轻量入站补偿通道: sellerRef="
+                                                + DiagnosticRef("seller", loginNick)
+                                                + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
+                                        }
+                                        else if (!_initialized.ContainsKey(session.SessionID))
+                                        {
+                                            // Do not run TryInitSession and TryBindStatusConversation concurrently.
+                                            // A single authoritative initialization already reads the current buyer.
+                                            Task.Run(() => TryInitSession(session, "status"));
+                                            ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
+                                        }
+                                        else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
+                                            && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
+                                        {
+                                            // A previously quarantined page can promote itself after the old owner
+                                            // closes; TryBindStatusConversation lazily creates its CDPClient here.
+                                            Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    BotConnectionDiagnostics.RecordInjectionStatus(false, false, false, false, false, "解析注入状态失败：" + ex.Message);
+                                }
+                            }
+                            else if (wMsg.Type == "imsdkApiScan")
+                            {
+                                Log.Info("IMSDK API鎵弿缁撴灉: " + wMsg.Response);
+                            }
+                            else if (wMsg.Type == "imsdkInvokeTrace")
+                            {
+                                Log.Info("IMSDK璋冪敤璺熻釜: " + wMsg.Response);
+                            }
+                            else if (wMsg.Type == "onConversationChange")
+                            {
+                                // Precise activity evidence may need this physical WebView for future CDP
+                                // commands; create only the lightweight client, without seller initialization.
+                                GetOrCreateClient(session);
+                            }
+                            else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs" || wMsg.Type == "onChatDlgActive")
+                            {
+                                string duplicateSeller;
+                                if (!_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                                {
+                                    Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));
+                                }
+                            }
+
+                            if (OnRecieveMessage != null)
+                                OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type, wMsg.Response));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Exception(ex);
+                        }
+                    };
+                    webSocket.SessionClosed += (session, value) =>
+                    {
+                        _connectedSessions.TryRemove(session.SessionID, out _);
+                        WebSocketSession ignoredSession;
+                        DateTime ignoredActivity;
+                        bool ignoredClosing;
+                        bool ignoredCapability;
+                        _liveSessions.TryRemove(session.SessionID, out ignoredSession);
+                        _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
+                        _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
+                        _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                        ReleaseSellerSession(session.SessionID);
+                        BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
+                        Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
+                            + ", reason=" + value);
+                        CDPClient removed;
+                        bool b;
+                        string statusBinding;
+                        string duplicateSeller;
+                        _clients.TryRemove(session.SessionID, out removed);
+                        CDPClient.ReleaseClosedSession(session.SessionID, Convert.ToString(value), removed);
+                        _initialized.TryRemove(session.SessionID, out b);
+                        _initializing.TryRemove(session.SessionID, out b);
+                        _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
+                        _duplicateSellerSessions.TryRemove(session.SessionID, out duplicateSeller);
+                    };
+                    var config = new ServerConfig()
+                    {
+                        MaxRequestLength = 5 * 1024 * 1024,
+                        Ip = "127.0.0.1",
+                        Port = 41010
+                    };
+                    if (!webSocket.Setup(config))
+                    {
+                        const string setupError = "Bot WebSocket服务启动失败：Setup返回false，127.0.0.1:41010 未建立监听。";
+                        BotConnectionDiagnostics.RecordWebSocketServerError(setupError);
+                        Log.Error(setupError);
+                        return;
+                    }
+
+                    var started = false;
+                    Exception lastStartException = null;
+                    for (var attempt = 1; attempt <= WebSocketStartMaxAttempts; attempt++)
+                    {
+                        try
+                        {
+                            if (webSocket.Start())
+                            {
+                                started = true;
+                                if (attempt > 1)
+                                {
+                                    Log.Info("Bot WebSocket服务启动重试成功: 127.0.0.1:41010, attempt=" + attempt);
+                                }
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            lastStartException = ex;
+                        }
+
+                        if (attempt < WebSocketStartMaxAttempts)
+                        {
+                            var retryDelayMs = WebSocketStartRetryBaseDelayMs * (1 << (attempt - 1));
+                            Log.Error("Bot WebSocket服务启动暂时失败，将在短退避后重试: 127.0.0.1:41010, attempt="
+                                + attempt + ", retryInMs=" + retryDelayMs
+                                + (lastStartException == null ? string.Empty : ", error=" + lastStartException.Message));
+                            Thread.Sleep(retryDelayMs);
+                        }
+                    }
+
+                    if (!started)
+                    {
+                        var startError = lastStartException == null
+                            ? "Bot WebSocket服务启动失败：连续" + WebSocketStartMaxAttempts + "次Start返回false，127.0.0.1:41010 未建立监听。"
+                            : "Bot WebSocket服务启动失败：连续" + WebSocketStartMaxAttempts + "次Start未成功，127.0.0.1:41010 未建立监听。最后异常=" + lastStartException.Message;
+                        BotConnectionDiagnostics.RecordWebSocketServerError(startError);
+                        Log.Error(startError);
+                        return;
+                    }
+
+                    // Keep a strong reference to the active server. Without this, the first listener
+                    // can become collectible before any injected page connects during startup races.
+                    _webSocketServer = webSocket;
+                    StartDuplicateSessionSweeper();
+                    BotConnectionDiagnostics.RecordWebSocketServerStarted();
+                    Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");
                 }
-                // Keep a strong reference to the active server. Without this, the first listener
-                // can become collectible before any injected page connects during startup races.
-                _webSocketServer = webSocket;
-                StartDuplicateSessionSweeper();
-                BotConnectionDiagnostics.RecordWebSocketServerStarted();
-                Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");
-            }
-            catch (Exception ex)
-            {
-                BotConnectionDiagnostics.RecordWebSocketServerError(ex.Message);
-                Log.Exception(ex);
+                catch (Exception ex)
+                {
+                    BotConnectionDiagnostics.RecordWebSocketServerError(ex.Message);
+                    Log.Exception(ex);
+                }
             }
         }
     }
