@@ -11,11 +11,8 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Long-lived, independent at-most-once ledger for the irreversible “确认发货” action.
-    ///
-    /// The pending queue is intentionally disposable: disabling the feature, expiry, or a terminal
-    /// result may remove queue records. Confirmation authority therefore must never live only inside
-    /// that queue. This ledger is written BEFORE the confirm click and survives queue removal,
-    /// restart, duplicate order events, feature disable/re-enable, and uncertain UI results.
+    /// The ledger is written BEFORE confirm and survives pending-queue removal, restart, duplicate
+    /// order events, feature disable/re-enable, and uncertain UI results.
     /// </summary>
     internal static class AutoDeliveryConfirmationLedger
     {
@@ -66,6 +63,12 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static bool IsOperational()
+        {
+            Initialize();
+            lock (Sync) return !_failClosed;
+        }
+
         public static bool IsSafeOrderId(string orderId)
         {
             orderId = (orderId ?? string.Empty).Trim();
@@ -92,9 +95,8 @@ namespace Bot.ChromeNs
         }
 
         /// <summary>
-        /// Writes the independent durable barrier. Returns true only for the first successfully
-        /// persisted intent. An existing record returns false by design: an old barrier is evidence
-        /// to deny another confirm click, never permission to repeat it.
+        /// Returns true only for the first successfully persisted intent. An existing record returns
+        /// false by design: a previous barrier denies another confirm, never authorizes a retry.
         /// </summary>
         public static bool TryRecordIntent(string seller, string orderId, DateTime intentAt)
         {
@@ -125,8 +127,6 @@ namespace Bot.ChromeNs
                 TrimLocked();
                 if (SaveLocked()) return true;
 
-                // No confirm click has happened yet. If the durable write failed, remove only the
-                // in-memory addition and permanently fail closed for this process.
                 _state.Records.Remove(record);
                 _failClosed = true;
                 return false;
@@ -148,8 +148,8 @@ namespace Bot.ChromeNs
                     ? "resolved"
                     : resolution.Trim();
                 record.ResolvedAt = DateTime.Now;
-                var minimumRetention = DateTime.Now.Add(Retention);
-                if (record.KeepUntil < minimumRetention) record.KeepUntil = minimumRetention;
+                var keepUntil = DateTime.Now.Add(Retention);
+                if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
                 if (!SaveLocked()) _failClosed = true;
             }
         }
