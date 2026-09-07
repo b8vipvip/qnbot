@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 import bot_client_shop_binding
@@ -12,6 +14,15 @@ import bot_web_console as core
 
 router = APIRouter()
 _cp: Any = None
+_BEIJING_OFFSET_HOURS = 8
+_WINDOW_DELTAS = {
+    "2h": timedelta(hours=2),
+    "6h": timedelta(hours=6),
+    "1d": timedelta(days=1),
+    "3d": timedelta(days=3),
+    "7d": timedelta(days=7),
+    "14d": timedelta(days=14),
+}
 
 
 class TraceEventInput(BaseModel):
@@ -123,6 +134,73 @@ def _cleanup(client_id: int) -> None:
             )
 
 
+def _trace_filters(
+    client_id: int = 0,
+    shop_key: str = "",
+    seller: str = "",
+    buyer: str = "",
+    status: str = "",
+    trace_id: str = "",
+    recent_since: Optional[str] = None,
+) -> Tuple[List[str], List[Any]]:
+    where: List[str] = []
+    values: List[Any] = []
+    if client_id > 0:
+        where.append("t.client_id=?")
+        values.append(client_id)
+    if shop_key.strip():
+        where.append("t.shop_key=?")
+        values.append(shop_key.strip())
+    if seller.strip():
+        where.append("t.seller LIKE ?")
+        values.append("%" + seller.strip() + "%")
+    if buyer.strip():
+        where.append("t.buyer LIKE ?")
+        values.append("%" + buyer.strip() + "%")
+    if status.strip():
+        where.append("t.status=?")
+        values.append(status.strip())
+    if trace_id.strip():
+        where.append("t.trace_id=?")
+        values.append(trace_id.strip())
+    if recent_since:
+        where.append("datetime(t.occurred_at) >= datetime(?)")
+        values.append(recent_since)
+    return where, values
+
+
+def _window_threshold(window: str) -> str:
+    key = (window or "").strip().lower()
+    delta = _WINDOW_DELTAS.get(key)
+    if delta is None:
+        raise HTTPException(
+            status_code=400,
+            detail="时间范围仅支持 2h、6h、1d、3d、7d、14d",
+        )
+    return (datetime.now(timezone.utc) - delta).isoformat(timespec="seconds")
+
+
+def _beijing_day_expr(alias: str = "t") -> str:
+    return (
+        "date(COALESCE(datetime(" + alias + ".occurred_at), "
+        "datetime(" + alias + ".created_at)), '+8 hours')"
+    )
+
+
+def _beijing_time(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        target = parsed.astimezone(timezone(timedelta(hours=_BEIJING_OFFSET_HOURS)))
+        return target.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return text
+
+
 @router.post("/api/runtime/v1/message-processing-traces/batch")
 def runtime_trace_batch(data: TraceBatchInput, request: Request) -> Dict[str, Any]:
     client = core._runtime_client(request)
@@ -181,26 +259,9 @@ def admin_message_processing_traces(
     limit: int = Query(300, ge=1, le=1000),
     _: str = Depends(_require_admin),
 ) -> List[Dict[str, Any]]:
-    where: List[str] = []
-    values: List[Any] = []
-    if client_id > 0:
-        where.append("t.client_id=?")
-        values.append(client_id)
-    if shop_key.strip():
-        where.append("t.shop_key=?")
-        values.append(shop_key.strip())
-    if seller.strip():
-        where.append("t.seller LIKE ?")
-        values.append("%" + seller.strip() + "%")
-    if buyer.strip():
-        where.append("t.buyer LIKE ?")
-        values.append("%" + buyer.strip() + "%")
-    if status.strip():
-        where.append("t.status=?")
-        values.append(status.strip())
-    if trace_id.strip():
-        where.append("t.trace_id=?")
-        values.append(trace_id.strip())
+    # Compatibility/raw audit endpoint. The console now uses the grouped conversation endpoint,
+    # but retaining this route preserves diagnostics and integrations that need every stage event.
+    where, values = _trace_filters(client_id, shop_key, seller, buyer, status, trace_id)
     sql = """
         SELECT t.*, c.name client_name
         FROM bot_message_processing_traces t
@@ -213,3 +274,163 @@ def admin_message_processing_traces(
     with _cp.db() as conn:
         rows = conn.execute(sql, tuple(values)).fetchall()
     return [dict(row) for row in rows]
+
+
+@router.get("/api/admin/message-processing-conversations")
+def admin_message_processing_conversations(
+    client_id: int = Query(0, ge=0),
+    shop_key: str = Query("", max_length=160),
+    seller: str = Query("", max_length=160),
+    buyer: str = Query("", max_length=160),
+    status: str = Query("", max_length=40),
+    trace_id: str = Query("", max_length=80),
+    limit: int = Query(300, ge=1, le=1000),
+    _: str = Depends(_require_admin),
+) -> List[Dict[str, Any]]:
+    where, values = _trace_filters(client_id, shop_key, seller, buyer, status, trace_id)
+    day_expr = _beijing_day_expr("t")
+    filtered_where = " WHERE " + " AND ".join(where) if where else ""
+    sql = f"""
+        WITH grouped AS (
+            SELECT
+                t.client_id,
+                t.shop_key,
+                t.seller,
+                t.buyer,
+                {day_expr} AS conversation_date,
+                MIN(t.occurred_at) AS first_at,
+                MAX(t.occurred_at) AS last_at,
+                COUNT(*) AS event_count,
+                SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) AS failed_count,
+                SUM(CASE WHEN t.status='success' THEN 1 ELSE 0 END) AS success_count,
+                COUNT(DISTINCT t.trace_id) AS trace_count,
+                MAX(t.id) AS latest_id
+            FROM bot_message_processing_traces t
+            {filtered_where}
+            GROUP BY t.client_id, t.shop_key, t.seller, t.buyer, conversation_date
+        )
+        SELECT
+            g.*,
+            c.name AS client_name,
+            latest.trace_id AS latest_trace_id,
+            latest.stage AS latest_stage,
+            latest.status AS latest_status,
+            latest.summary AS latest_summary,
+            latest.detail AS latest_detail
+        FROM grouped g
+        JOIN client_tokens c ON c.id=g.client_id
+        JOIN bot_message_processing_traces latest ON latest.id=g.latest_id
+        WHERE g.conversation_date IS NOT NULL
+        ORDER BY g.latest_id DESC
+        LIMIT ?
+    """
+    values.append(limit)
+    with _cp.db() as conn:
+        rows = conn.execute(sql, tuple(values)).fetchall()
+    return [dict(row) for row in rows]
+
+
+@router.get("/api/admin/message-processing-conversations/detail")
+def admin_message_processing_conversation_detail(
+    client_id: int = Query(..., ge=1),
+    shop_key: str = Query(..., min_length=1, max_length=160),
+    seller: str = Query("", max_length=160),
+    buyer: str = Query(..., min_length=1, max_length=160),
+    conversation_date: str = Query(..., min_length=10, max_length=10),
+    _: str = Depends(_require_admin),
+) -> Dict[str, Any]:
+    try:
+        datetime.strptime(conversation_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="conversation_date 必须为 YYYY-MM-DD")
+
+    day_expr = _beijing_day_expr("t")
+    with _cp.db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT t.*, c.name client_name
+            FROM bot_message_processing_traces t
+            JOIN client_tokens c ON c.id=t.client_id
+            WHERE t.client_id=? AND t.shop_key=? AND t.seller=? AND t.buyer=?
+              AND {day_expr}=?
+            ORDER BY datetime(t.occurred_at) ASC, t.id ASC
+            """,
+            (client_id, shop_key.strip(), seller.strip(), buyer.strip(), conversation_date),
+        ).fetchall()
+    return {
+        "client_id": client_id,
+        "shop_key": shop_key.strip(),
+        "seller": seller.strip(),
+        "buyer": buyer.strip(),
+        "conversation_date": conversation_date,
+        "events": [dict(row) for row in rows],
+    }
+
+
+@router.get("/api/admin/message-processing-conversations/export")
+def admin_message_processing_conversation_export(
+    window: str = Query("1d", max_length=8),
+    client_id: int = Query(0, ge=0),
+    shop_key: str = Query("", max_length=160),
+    seller: str = Query("", max_length=160),
+    buyer: str = Query("", max_length=160),
+    status: str = Query("", max_length=40),
+    _: str = Depends(_require_admin),
+) -> Response:
+    since = _window_threshold(window)
+    where, values = _trace_filters(
+        client_id, shop_key, seller, buyer, status, "", recent_since=since
+    )
+    sql = """
+        SELECT t.*, c.name client_name
+        FROM bot_message_processing_traces t
+        JOIN client_tokens c ON c.id=t.client_id
+    """
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY t.buyer ASC, datetime(t.occurred_at) ASC, t.id ASC"
+    with _cp.db() as conn:
+        rows = [dict(row) for row in conn.execute(sql, tuple(values)).fetchall()]
+
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        [
+            "北京时间",
+            "客户端ID",
+            "客户端名称",
+            "ShopKey",
+            "客服",
+            "买家",
+            "链路ID",
+            "阶段",
+            "状态",
+            "摘要",
+            "详情",
+            "耗时ms",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                _beijing_time(row.get("occurred_at") or row.get("created_at") or ""),
+                row.get("client_id", ""),
+                row.get("client_name", ""),
+                row.get("shop_key", ""),
+                row.get("seller", ""),
+                row.get("buyer", ""),
+                row.get("trace_id", ""),
+                row.get("stage", ""),
+                row.get("status", ""),
+                row.get("summary", ""),
+                row.get("detail", ""),
+                row.get("duration_ms", 0),
+            ]
+        )
+
+    filename = "message-processing-conversations-" + window.lower() + ".csv"
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="' + filename + '"'},
+    )
