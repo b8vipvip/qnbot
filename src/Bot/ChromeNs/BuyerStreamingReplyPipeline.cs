@@ -122,7 +122,7 @@ namespace Bot.ChromeNs
             string answer;
             try
             {
-                answer = await StreamingBuyerAnswerService.GetAnswerAsync(
+                var answerTask = StreamingBuyerAnswerService.GetAnswerAsync(
                     burst.SellerNick,
                     burst.BuyerNick,
                     string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion,
@@ -136,6 +136,11 @@ namespace Bot.ChromeNs
                             conversationCtl.SetProcessing("正在流式生成答案：" + preview);
                         }
                     });
+                // Some legacy synchronous fallbacks run inside Task.Run and cannot be force-stopped
+                // after they begin. Race the whole answer task against the canonical 40-second token
+                // so a non-cooperative provider can never hold the generation until the 55-second
+                // BuyerSessionAgent absolute-age watchdog.
+                answer = await AwaitWithCancellationAsync(answerTask, generationCts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -343,6 +348,26 @@ namespace Bot.ChromeNs
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+        }
+
+        private static async Task<T> AwaitWithCancellationAsync<T>(Task<T> task, CancellationToken token)
+        {
+            if (task == null) throw new ArgumentNullException("task");
+            if (task.IsCompleted) return await task.ConfigureAwait(false);
+
+            var cancelled = Task.Delay(Timeout.Infinite, token);
+            var completed = await Task.WhenAny(task, cancelled).ConfigureAwait(false);
+            if (completed != task)
+            {
+                // Observe a late provider fault without waiting for the non-cooperative call.
+                task.ContinueWith(
+                    t => { var ignored = t.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+                token.ThrowIfCancellationRequested();
+            }
+            return await task.ConfigureAwait(false);
         }
 
         private static string CompactPreview(string value, int max)

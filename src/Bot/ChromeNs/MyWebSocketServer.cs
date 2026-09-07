@@ -33,11 +33,13 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, WebSocketSession> _liveSessions = new ConcurrentDictionary<string, WebSocketSession>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _duplicateRetireCapableSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
         private const int MaxDuplicateSellerSessions = 3;
         private static readonly TimeSpan DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4);
         private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(45);
         private int _duplicateSessionSweeperStarted;
+        private WebSocketServer _webSocketServer;
 
         static MyWebSocketServer()
         {
@@ -88,16 +90,34 @@ namespace Bot.ChromeNs
         private void ScheduleDuplicateSessionClose(string sessionId, string sellerNick, string reason)
         {
             if (string.IsNullOrWhiteSpace(sessionId)) return;
+            bool retireCapable;
+            if (!_duplicateRetireCapableSessions.TryGetValue(sessionId, out retireCapable) || !retireCapable)
+            {
+                return;
+            }
             if (!_closingDuplicateSessions.TryAdd(sessionId, true)) return;
-            Task.Run(() =>
+            Task.Run(async () =>
             {
                 try
                 {
                     WebSocketSession session;
-                    if (!_liveSessions.TryGetValue(sessionId, out session) || session == null) return;
+                    if (!_liveSessions.TryGetValue(sessionId, out session) || session == null)
+                    {
+                        bool missingIgnored;
+                        _closingDuplicateSessions.TryRemove(sessionId, out missingIgnored);
+                        return;
+                    }
                     Log.Info("回收非权威千牛WebSocket页面通道: sellerRef=" + DiagnosticRef("seller", sellerNick)
                         + ", sessionRef=" + DiagnosticRef("session", sessionId)
-                        + ", reason=" + reason);
+                        + ", reason=" + reason + ", retireProtocol=true");
+                    session.Send(JsonConvert.SerializeObject(new
+                    {
+                        method = "retireDuplicate",
+                        reason = reason ?? string.Empty
+                    }));
+                    // Give the injected page a short chance to latch the intentional retirement
+                    // before the server closes the socket. True network failures still reconnect.
+                    await Task.Delay(150).ConfigureAwait(false);
                     session.Close();
                 }
                 catch (Exception ex)
@@ -124,8 +144,16 @@ namespace Bot.ChromeNs
                 .ToList();
             var excess = active.Count - MaxDuplicateSellerSessions;
             if (excess <= 0) return;
-            foreach (var victim in active.Take(excess))
+
+            // Rolling-upgrade safety: legacy injected pages reconnect unconditionally when the
+            // server closes them. Retire only pages that explicitly advertise the new protocol;
+            // older pages remain quarantined until the injection bundle is refreshed.
+            foreach (var victim in active
+                .Where(id => _duplicateRetireCapableSessions.ContainsKey(id))
+                .Take(excess))
+            {
                 ScheduleDuplicateSessionClose(victim, sellerNick, "duplicate_cap");
+            }
         }
 
         private void StartDuplicateSessionSweeper()
@@ -428,8 +456,18 @@ namespace Bot.ChromeNs
                                 var hasImsdk = jo["hasImsdk"] != null && jo["hasImsdk"].Value<bool>();
                                 var hasQn = jo["hasQN"] != null && jo["hasQN"].Value<bool>();
                                 var hasVs = jo["hasVs"] != null && jo["hasVs"].Value<bool>();
+                                var supportsDuplicateRetire = jo["duplicateRetire"] != null && jo["duplicateRetire"].Value<bool>();
                                 var loginNick = ReadJsonString(jo, "loginNick");
                                 var conversationNick = ReadJsonString(jo, "conversationNick");
+                                if (supportsDuplicateRetire)
+                                {
+                                    _duplicateRetireCapableSessions[session.SessionID] = true;
+                                }
+                                else
+                                {
+                                    bool ignoredCapability;
+                                    _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                                }
                                 BotConnectionDiagnostics.RecordInjectionStatus(true, hasImsdk, hasLoginId, hasQn, hasVs, wMsg.Response);
                                 BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
                                 if (hasLoginId || hasImsdk)
@@ -503,9 +541,11 @@ namespace Bot.ChromeNs
                     WebSocketSession ignoredSession;
                     DateTime ignoredActivity;
                     bool ignoredClosing;
+                    bool ignoredCapability;
                     _liveSessions.TryRemove(session.SessionID, out ignoredSession);
                     _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
                     _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
+                    _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
                     ReleaseSellerSession(session.SessionID);
                     BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
                     Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
@@ -527,8 +567,23 @@ namespace Bot.ChromeNs
                     Ip = "127.0.0.1",
                     Port = 41010
                 };
-                webSocket.Setup(config);
-                webSocket.Start();
+                if (!webSocket.Setup(config))
+                {
+                    const string setupError = "Bot WebSocket服务启动失败：Setup返回false，127.0.0.1:41010 未建立监听。";
+                    BotConnectionDiagnostics.RecordWebSocketServerError(setupError);
+                    Log.Error(setupError);
+                    return;
+                }
+                if (!webSocket.Start())
+                {
+                    const string startError = "Bot WebSocket服务启动失败：Start返回false，127.0.0.1:41010 未建立监听。";
+                    BotConnectionDiagnostics.RecordWebSocketServerError(startError);
+                    Log.Error(startError);
+                    return;
+                }
+                // Keep a strong reference to the active server. Without this, the first listener
+                // can become collectible before any injected page connects during startup races.
+                _webSocketServer = webSocket;
                 StartDuplicateSessionSweeper();
                 BotConnectionDiagnostics.RecordWebSocketServerStarted();
                 Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");

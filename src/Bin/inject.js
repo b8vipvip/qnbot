@@ -34,7 +34,7 @@
   try { window.addEventListener("storage", repairIfChanged, true); } catch(e) {}
   setInterval(repairIfChanged, 1000);
 })();
-window.__qnbotInjectVersion = "20260714-zh-cn-v9";
+window.__qnbotInjectVersion = "20260906-zh-cn-ws-retire-v10";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 
@@ -47,6 +47,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   var pending = [];
   var reconnectTimer = null;
   var heartbeatTimer = null;
+  var websocketRetired = false;
   var lastStatusText = "";
   var lastStatusAt = 0;
   var lastActiveText = "";
@@ -259,6 +260,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   function socketOpen() { return window.chatWebsocket && window.chatWebsocket.readyState === WebSocket.OPEN; }
 
   function send(type, response) {
+    if (websocketRetired) return;
     var payload = JSON.stringify({ type: type, response: response || "" });
     if (socketOpen()) {
       try { window.chatWebsocket.send(payload); return; } catch (e) { warn("send failed", e); }
@@ -534,6 +536,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
       imsdkDiscoveryVersion: window.__qnbotImsdkDiscoveryVersion || "",
       imsdkDiscoveryInstalled: !!window.__qnbotImsdkInvokeTraceInstalled,
       imsdkCaptureActive: Date.now() < (window.__qnbotImsdkCaptureUntil || 0),
+      duplicateRetire: true,
       extra: extra || ""
     };
     try { if (login) obj.loginNick = login.nick || login.uid || ""; } catch (e) {}
@@ -552,7 +555,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer) return;
+    if (websocketRetired || reconnectTimer) return;
     reconnectTimer = setTimeout(function () {
       reconnectTimer = null;
       setupWebSocket();
@@ -560,6 +563,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   }
 
   function setupWebSocket() {
+    if (websocketRetired) return;
     var old = window.chatWebsocket;
     if (old && (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING)) return;
     try {
@@ -580,6 +584,17 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
       socket.onmessage = async function (event) {
         try {
           var param = JSON.parse(event.data);
+          if (param.method === "retireDuplicate") {
+            websocketRetired = true;
+            pending.length = 0;
+            if (reconnectTimer) {
+              clearTimeout(reconnectTimer);
+              reconnectTimer = null;
+            }
+            log("websocket retired by Bot", param.reason || "duplicate");
+            try { socket.close(1000, "qnbot-duplicate-retired"); } catch (e) {}
+            return;
+          }
           if (param.method === "execute") {
             try {
               var res = await eval(param.expression);
@@ -594,7 +609,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
       socket.onclose = function () {
         if (window.chatWebsocket === socket) window.chatWebsocket = null;
         clearInterval(heartbeatTimer);
-        scheduleReconnect();
+        if (!websocketRetired) scheduleReconnect();
       };
       socket.onerror = function (e) { warn("websocket error", e); };
     } catch (e) { warn("setupWebSocket failed", e); scheduleReconnect(); }
