@@ -145,19 +145,51 @@ namespace Bot.Knowledge
         private static bool HasConflict(KnowledgeV2Match best, KnowledgeV2Match second)
         {
             if (best == null || second == null || best.Record == null || second.Record == null) return false;
-            if (!string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record),
-                KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal)) return false;
             if (best.Score < 0.78 || second.Score < 0.74) return false;
-            return !AnswersEquivalent(best.Record.Answer, second.Record.Answer);
+            return IsMeaningfulConflictPair(best.Record, second.Record);
         }
 
         private static bool HasAnswerDisagreement(List<KnowledgeV2Record> records)
         {
             records = records ?? new List<KnowledgeV2Record>();
             for (var i = 0; i < records.Count; i++)
+            {
                 for (var j = i + 1; j < records.Count; j++)
-                    if (!AnswersEquivalent(records[i].Answer, records[j].Answer)) return true;
+                {
+                    if (IsMeaningfulConflictPair(records[i], records[j])) return true;
+                }
+            }
             return false;
+        }
+
+        /// <summary>
+        /// The FactKey intentionally groups a broad business scope for retrieval, so two records sharing
+        /// one FactKey are not automatically contradictory. A real conflict must also describe nearly the
+        /// same buyer question and contain incompatible conclusions. This prevents unrelated procedures
+        /// such as “how to bind”, “how to confirm” and “what to do after binding” from appearing as a
+        /// destructive conflict group merely because their answer wording is different.
+        /// </summary>
+        private static bool IsMeaningfulConflictPair(KnowledgeV2Record left, KnowledgeV2Record right)
+        {
+            if (left == null || right == null) return false;
+            if (!string.Equals(KnowledgeEngineV2Semantics.FactKey(left),
+                KnowledgeEngineV2Semantics.FactKey(right), StringComparison.Ordinal)) return false;
+            if (AnswersEquivalent(left.Answer, right.Answer)) return false;
+
+            var questionSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title);
+            if (questionSimilarity < 0.72) return false;
+
+            var leftDirection = AnswerDirection(left.Answer);
+            var rightDirection = AnswerDirection(right.Answer);
+            if (leftDirection != 0 && rightDirection != 0)
+                return leftDirection != rightDirection;
+
+            // Near-identical questions where one answer explicitly says "unsupported/cannot" and the
+            // other answer no longer carries that restriction are still review-worthy. Keep this narrow:
+            // it catches stale-vs-current business rules without turning generic wording differences into conflicts.
+            return questionSimilarity >= 0.86
+                && leftDirection != rightDirection
+                && (leftDirection < 0 || rightDirection < 0);
         }
 
         private static bool AnswersEquivalent(string left, string right)
@@ -181,7 +213,7 @@ namespace Bot.Knowledge
         {
             if (best == null) return "没有候选";
             if (decision.Mode == KnowledgeEngineV2Constants.ModeShadow) return "当前为Shadow模式，只记录V2结果，不发送";
-            if (decision.HasConflict) return "同一适用范围事实键存在答案冲突";
+            if (decision.HasConflict) return "同一明确业务问题存在相互矛盾的生产知识";
             if (highRisk) return "高风险问题继续交给安全/AI链路";
             if (best.Record.Status == "candidate") return "学习候选尚未批准，不能直接发送";
             if (best.Score < threshold) return "结构化匹配分不足：" + best.Score.ToString("0.00") + " < " + threshold.ToString("0.00");

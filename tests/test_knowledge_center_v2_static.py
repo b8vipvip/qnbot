@@ -66,12 +66,15 @@ def test_v2_disable_delete_and_bulk_replace_keep_snapshot_hot():
 def test_conflict_is_scoped_to_same_fact_key():
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
-    assert 'KnowledgeEngineV2Semantics.FactKey(best.Record)' in index
-    assert 'KnowledgeEngineV2Semantics.FactKey(second.Record)' in index
+    assert 'private static bool IsMeaningfulConflictPair' in index
+    assert 'KnowledgeEngineV2Semantics.FactKey(left)' in index
+    assert 'KnowledgeEngineV2Semantics.FactKey(right)' in index
+    assert 'KnowledgeEngineV2Semantics.TextSimilarity(left.Title, right.Title)' in index
 
     # Conflict identity must distinguish otherwise similar facts that apply to
-    # different intents/products/entities/conditions. Subject+predicate alone
-    # caused unrelated product knowledge to suppress valid local answers.
+    # different intents/products/entities/conditions. FactKey remains the broad
+    # business-scope boundary, while the pair helper additionally requires the
+    # buyer questions and conclusions to be genuinely incompatible.
     assert 'var subject = Compact(record.Subject);' in semantics
     assert 'var predicate = NormalizePredicate(record.Predicate);' in semantics
     assert 'var intent = NormalizeIntent(record.Intent);' in semantics
