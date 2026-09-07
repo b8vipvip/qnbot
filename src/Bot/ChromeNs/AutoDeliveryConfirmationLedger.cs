@@ -47,6 +47,7 @@ namespace Bot.ChromeNs
         private const int MaxRecords = 20000;
         private static LedgerState _state;
         private static bool _initialized;
+        private static bool _failClosed;
 
         public static void Initialize()
         {
@@ -56,10 +57,12 @@ namespace Bot.ChromeNs
                 _state = LoadState();
                 CleanupLocked(DateTime.Now);
                 var migrated = MigratePendingConfirmationIntentsLocked();
-                if (migrated || !File.Exists(StatePath())) SaveLocked();
+                if ((migrated || !File.Exists(StatePath())) && !SaveLocked())
+                    _failClosed = true;
                 _initialized = true;
                 Log.Info("自动发货长期确认防重账本已加载: records=" + _state.Records.Count
-                    + ", retentionDays=" + (int)Retention.TotalDays);
+                    + ", retentionDays=" + (int)Retention.TotalDays
+                    + ", failClosed=" + _failClosed);
             }
         }
 
@@ -77,10 +80,11 @@ namespace Bot.ChromeNs
         public static bool HasIntent(string seller, string orderId)
         {
             Initialize();
-            if (!IsSafeOrderId(orderId)) return true; // fail closed for an unsafe irreversible key
+            if (!IsSafeOrderId(orderId)) return true;
             var key = BuildKey(seller, orderId);
             lock (Sync)
             {
+                if (_failClosed) return true;
                 CleanupLocked(DateTime.Now);
                 return _state.Records.Any(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal));
@@ -102,6 +106,7 @@ namespace Bot.ChromeNs
 
             lock (Sync)
             {
+                if (_failClosed) return false;
                 CleanupLocked(DateTime.Now);
                 if (_state.Records.Any(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal))) return false;
@@ -121,8 +126,9 @@ namespace Bot.ChromeNs
                 if (SaveLocked()) return true;
 
                 // No confirm click has happened yet. If the durable write failed, remove only the
-                // in-memory addition and fail closed so the caller cannot proceed to confirmation.
+                // in-memory addition and permanently fail closed for this process.
                 _state.Records.Remove(record);
+                _failClosed = true;
                 return false;
             }
         }
@@ -134,6 +140,7 @@ namespace Bot.ChromeNs
             var key = BuildKey(seller, orderId);
             lock (Sync)
             {
+                if (_failClosed) return;
                 var record = _state.Records.FirstOrDefault(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal));
                 if (record == null) return;
@@ -143,7 +150,7 @@ namespace Bot.ChromeNs
                 record.ResolvedAt = DateTime.Now;
                 var minimumRetention = DateTime.Now.Add(Retention);
                 if (record.KeepUntil < minimumRetention) record.KeepUntil = minimumRetention;
-                SaveLocked();
+                if (!SaveLocked()) _failClosed = true;
             }
         }
 
@@ -198,10 +205,8 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                // Migration failure is logged, but TryRecordIntent remains fail-closed for all new
-                // confirms. Existing queue records also retain ConfirmationIntentAt verification-only
-                // behavior, so failure here does not grant new confirmation authority.
-                Log.ErrorWithMaxCount("迁移自动发货长期确认防重账本失败：" + ex.Message, 10);
+                _failClosed = true;
+                Log.ErrorWithMaxCount("迁移自动发货长期确认防重账本失败；本次运行禁止新的自动确认：" + ex.Message, 10);
             }
             return changed;
         }
@@ -213,30 +218,20 @@ namespace Bot.ChromeNs
                 var path = StatePath();
                 if (!File.Exists(path)) return new LedgerState();
                 var loaded = JsonConvert.DeserializeObject<LedgerState>(File.ReadAllText(path, Encoding.UTF8));
-                if (loaded == null || loaded.Schema != 1) return new LedgerState();
+                if (loaded == null || loaded.Schema != 1)
+                {
+                    _failClosed = true;
+                    Log.ErrorWithMaxCount("自动发货长期确认防重账本结构无效；本次运行禁止新的自动确认。", 10);
+                    return new LedgerState();
+                }
                 if (loaded.Records == null) loaded.Records = new List<ConfirmationRecord>();
                 return loaded;
             }
             catch (Exception ex)
             {
-                // A corrupted confirmation ledger must never silently become an empty permission
-                // store. Keep an in-memory sentinel so HasIntent fails closed for the current run.
+                _failClosed = true;
                 Log.ErrorWithMaxCount("读取自动发货长期确认防重账本失败；本次运行将禁止新的自动确认：" + ex.Message, 10);
-                return new LedgerState
-                {
-                    Records = new List<ConfirmationRecord>
-                    {
-                        new ConfirmationRecord
-                        {
-                            Key = "__corrupt_fail_closed__",
-                            Seller = "*",
-                            OrderId = "0000000000000000",
-                            IntentAt = DateTime.Now,
-                            KeepUntil = DateTime.Now.Add(Retention),
-                            Resolution = "ledger_corrupt_fail_closed"
-                        }
-                    }
-                };
+                return new LedgerState();
             }
         }
 
@@ -251,8 +246,6 @@ namespace Bot.ChromeNs
         private static void TrimLocked()
         {
             if (_state.Records.Count <= MaxRecords) return;
-            // Keep the newest irreversible intents. A 20k cap is far above normal local usage while
-            // still bounding disk growth.
             _state.Records = _state.Records
                 .Where(x => x != null)
                 .OrderByDescending(x => x.IntentAt)
