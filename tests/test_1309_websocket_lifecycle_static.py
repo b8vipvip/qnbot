@@ -56,6 +56,18 @@ def test_websocket_startup_is_idempotent_and_retries_transient_start_failures():
     assert setup_index < retry_index < root_index < success_index
 
 
+def test_uia_control_refreshes_share_one_inflight_scan():
+    source = text("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
+
+    assert "private readonly object _chatControlsRefreshSync = new object();" in source
+    assert "private Task<bool> _activeChatControlsRefreshTask;" in source
+    assert "lock (_chatControlsRefreshSync)" in source
+    assert "&& !_activeChatControlsRefreshTask.IsCompleted" in source
+    assert "return _activeChatControlsRefreshTask;" in source
+    assert "_activeChatControlsRefreshTask = RefreshChatControlsCoreAsync();" in source
+    assert "private async Task<bool> RefreshChatControlsCoreAsync()" in source
+
+
 def test_total_ai_budget_hard_stops_non_cooperative_provider_calls():
     source = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
