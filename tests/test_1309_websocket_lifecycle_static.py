@@ -34,19 +34,26 @@ def test_injection_marker_for_retirement_rollout_matches_embedded_payload():
     assert 'private const string injectVersionMarker = "' + marker + '";' in qn_inject
 
 
-def test_websocket_startup_never_reports_success_for_failed_setup_or_start():
+def test_websocket_startup_is_idempotent_and_retries_transient_start_failures():
     server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
 
     assert "private WebSocketServer _webSocketServer;" in server
+    assert "private readonly object _webSocketStartSync = new object();" in server
+    assert "private const int WebSocketStartMaxAttempts = 5;" in server
+    assert "private const int WebSocketStartRetryBaseDelayMs = 250;" in server
+    assert "lock (_webSocketStartSync)" in server
+    assert "if (_webSocketServer != null)" in server
     assert "if (!webSocket.Setup(config))" in server
-    assert "if (!webSocket.Start())" in server
+    assert "for (var attempt = 1; attempt <= WebSocketStartMaxAttempts; attempt++)" in server
+    assert "if (webSocket.Start())" in server
+    assert "Thread.Sleep(retryDelayMs);" in server
     assert "_webSocketServer = webSocket;" in server
 
-    success_index = server.index('Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010")')
     setup_index = server.index("if (!webSocket.Setup(config))")
-    start_index = server.index("if (!webSocket.Start())")
+    retry_index = server.index("for (var attempt = 1; attempt <= WebSocketStartMaxAttempts; attempt++)")
     root_index = server.index("_webSocketServer = webSocket;")
-    assert setup_index < start_index < root_index < success_index
+    success_index = server.index('Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010")')
+    assert setup_index < retry_index < root_index < success_index
 
 
 def test_total_ai_budget_hard_stops_non_cooperative_provider_calls():
