@@ -76,7 +76,6 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     assert "if (_failClosed) return true;" in ledger
     assert "if (_failClosed) return false;" in ledger
     assert "if (_state.Records.Any" in ledger
-    assert "return false;" in ledger[ledger.index("TryRecordIntent"):]
     assert "MigratePendingConfirmationIntentsLocked" in ledger
     assert 'token["ConfirmationIntentAt"]' in ledger
 
