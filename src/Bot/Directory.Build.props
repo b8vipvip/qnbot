@@ -46,11 +46,12 @@
   </ItemGroup>
 
   <!-- Virtual-goods auto-delivery is code-only UI/runtime and must also be visible to WPF
-       temporary projects. Keep all four pieces together so a partial QN/App type is never omitted. -->
+       temporary projects. Keep all pieces together so a partial QN/App type is never omitted. -->
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Options\AutoDeliveryOptionsControl.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Options\AutoDeliveryOptionsControl.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\VirtualGoodsAutoDelivery.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\AutoDeliveryOrderEventSeed.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\AutoDeliveryConfirmationLedger.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AutoDeliveryAppBootstrap.cs" />
   </ItemGroup>
 
