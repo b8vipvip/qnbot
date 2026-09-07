@@ -221,6 +221,84 @@ function Stop-BotProcesses([string]$TargetInstallDir) {
     Start-Sleep -Milliseconds 700
 }
 
+function Test-LoopbackPortBindable([int]$Port) {
+    $listener = $null
+    try {
+        $listener = New-Object System.Net.Sockets.TcpListener -ArgumentList @([System.Net.IPAddress]::Loopback, [int]$Port)
+        $listener.Server.ExclusiveAddressUse = $true
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $listener) {
+            try { $listener.Stop() } catch { }
+        }
+    }
+}
+
+function Get-LoopbackPortOwnerSummary([int]$Port) {
+    try {
+        $command = Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue
+        if ($null -eq $command) { return 'owner=unknown' }
+
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Where-Object {
+            $_.LocalAddress -eq '127.0.0.1' -or
+            $_.LocalAddress -eq '0.0.0.0' -or
+            $_.LocalAddress -eq '::1' -or
+            $_.LocalAddress -eq '::'
+        })
+        if ($listeners.Count -eq 0) { return 'owner=unknown' }
+
+        $parts = @()
+        foreach ($entry in $listeners) {
+            $ownerPid = [int]$entry.OwningProcess
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
+            if ($null -ne $process) {
+                $parts += "pid=$ownerPid,name=$($process.Name),exe=$($process.ExecutablePath)"
+            }
+            else {
+                $parts += "pid=$ownerPid,name=unknown"
+            }
+        }
+        return ($parts -join '; ')
+    }
+    catch {
+        return 'owner=unknown'
+    }
+}
+
+function Wait-BotWebSocketPortRelease([string]$TargetInstallDir, [int]$Port, [int]$TimeoutSeconds) {
+    $deadline = (Get-Date).AddSeconds([Math]::Max(5, $TimeoutSeconds))
+    $attempt = 0
+    $lastOwner = $null
+
+    while ((Get-Date) -lt $deadline) {
+        $attempt++
+
+        # A stale watchdog or helper can race the first process sweep. Re-scan the target install
+        # immediately before every bind probe so a resurrected old Bot cannot steal the listener
+        # between package replacement and the new process launch.
+        Stop-BotProcesses $TargetInstallDir
+
+        if (Test-LoopbackPortBindable $Port) {
+            Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port is exclusively bindable after $attempt probe(s)." -ForegroundColor Green
+            return $true
+        }
+
+        $owner = Get-LoopbackPortOwnerSummary $Port
+        if ($attempt -eq 1 -or $owner -ne $lastOwner -or ($attempt % 5) -eq 0) {
+            Write-Host "Bot WebSocket handoff waiting: 127.0.0.1:$Port is still occupied; $owner; probe=$attempt" -ForegroundColor Yellow
+            $lastOwner = $owner
+        }
+        Start-Sleep -Milliseconds ([Math]::Min(1500, 250 + ($attempt * 125)))
+    }
+
+    return $false
+}
+
 function Get-PossibleDirectoryBlockers([string]$Path) {
     $needle = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     try {
@@ -495,6 +573,12 @@ try {
     if ([string]::IsNullOrWhiteSpace([string]$installedInfo.version) -or
         ([string]$installedInfo.version -ne $ExpectedVersion)) {
         throw "Installed package version mismatch. Expected $ExpectedVersion, actual $($installedInfo.version)"
+    }
+
+    Write-Step 'Waiting for Bot WebSocket port handoff'
+    if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 45)) {
+        $portOwner = Get-LoopbackPortOwnerSummary 41010
+        throw "Bot WebSocket port 41010 is still occupied after old Bot shutdown ($portOwner). Automatic rollback will start."
     }
 
     Write-Step 'Starting and validating new Bot.exe'
