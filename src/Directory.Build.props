@@ -31,4 +31,7 @@
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs')" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionOcrPriorityService.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionOcrPriorityService.cs')" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BusinessInboundLivenessRecoveryBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BusinessInboundLivenessRecoveryBridge.cs" />
+  </ItemGroup>
 </Project>
