@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
@@ -152,11 +152,6 @@ function Test-BackupComplete([string]$Path) {
 
 function Clear-PreviousUpdaterBackups([string]$BackupRoot) {
     if (-not (Test-Path -LiteralPath $BackupRoot -PathType Container)) { return }
-
-    # The live install is not mutated until the new backup has been completely copied, hashed and
-    # finalized. Therefore old updater snapshots are not needed while creating the next snapshot.
-    # Keeping eight full copies (plus seven days of .partial copies) caused multi-gigabyte user data
-    # to accumulate on every update and eventually fill the system drive.
     foreach ($item in @(Get-ChildItem -LiteralPath $BackupRoot -Directory -Force -ErrorAction SilentlyContinue)) {
         try {
             Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
@@ -202,34 +197,49 @@ function Restore-PersistentData([string]$CompleteBackupDir, [string]$PersistentR
     }
 }
 
-function Get-InstallProcessIds([string]$TargetInstallDir) {
-    $ids = @()
-    # Never terminate unrelated Bot.exe instances from other installations. The handoff PID is
-    # explicit, and additional cleanup is scoped strictly to the target install directory.
-    if ($CurrentPid -gt 0 -and $CurrentPid -ne $PID) {
-        $ids += [int]$CurrentPid
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($TargetInstallDir)) {
+function Test-PathUnderInstallRoot([string]$ExecutablePath, [string]$TargetInstallDir) {
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath) -or [string]::IsNullOrWhiteSpace($TargetInstallDir)) { return $false }
+    try {
         $root = [IO.Path]::GetFullPath($TargetInstallDir).TrimEnd('\') + '\'
-        try {
-            $ids += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-                if ($null -eq $_ -or [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) { return $false }
-                try {
-                    $exe = [IO.Path]::GetFullPath([string]$_.ExecutablePath)
-                    return $exe.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
-                }
-                catch {
-                    return $false
-                }
-            } | ForEach-Object { [int]$_.ProcessId })
-        }
-        catch {
-            Write-Host "Unable to enumerate processes under install directory: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
+        $exe = [IO.Path]::GetFullPath($ExecutablePath)
+        return $exe.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
     }
+    catch {
+        return $false
+    }
+}
 
-    return @($ids | Where-Object { $_ -gt 0 -and $_ -ne $PID } | Sort-Object -Unique)
+# Sensor only. This function never decides whether install mutation is allowed.
+function Get-InstallProcessState([string]$TargetInstallDir) {
+    try {
+        $records = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            if ($null -eq $_ -or [int]$_.ProcessId -eq $PID) { return $false }
+            return Test-PathUnderInstallRoot ([string]$_.ExecutablePath) $TargetInstallDir
+        } | ForEach-Object {
+            [pscustomobject]@{
+                Pid = [int]$_.ProcessId
+                Name = [string]$_.Name
+                ExecutablePath = [string]$_.ExecutablePath
+            }
+        })
+        return [pscustomobject]@{ Known = $true; Processes = @($records) }
+    }
+    catch {
+        return [pscustomobject]@{ Known = $false; Processes = @(); Error = $_.Exception.Message }
+    }
+}
+
+function Get-InstallProcessIds([string]$TargetInstallDir) {
+    $state = Get-InstallProcessState $TargetInstallDir
+    if (-not [bool]$state.Known) { return @() }
+    return @($state.Processes | ForEach-Object { [int]$_.Pid } | Sort-Object -Unique)
+}
+
+function Test-InstallProcessIdAlive([string]$TargetInstallDir, [int]$ProcessId) {
+    if ($ProcessId -le 0 -or $ProcessId -eq $PID) { return $false }
+    $state = Get-InstallProcessState $TargetInstallDir
+    if (-not [bool]$state.Known) { return $false }
+    return @($state.Processes | Where-Object { [int]$_.Pid -eq $ProcessId }).Count -gt 0
 }
 
 function Stop-BotProcesses([string]$TargetInstallDir) {
@@ -237,18 +247,18 @@ function Stop-BotProcesses([string]$TargetInstallDir) {
     foreach ($id in $ids) {
         $process = Get-Process -Id $id -ErrorAction SilentlyContinue
         if ($null -eq $process) { continue }
-        Write-Host "Stopping process PID=$id Name=$($process.ProcessName)"
+        Write-Host "Stopping target-install process PID=$id Name=$($process.ProcessName)"
         Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
     }
 
     $deadline = (Get-Date).AddSeconds(12)
     while ((Get-Date) -lt $deadline) {
-        $alive = @($ids | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) })
-        if ($alive.Count -eq 0) { return }
+        $state = Get-InstallProcessState $TargetInstallDir
+        if ([bool]$state.Known -and @($state.Processes).Count -eq 0) { return }
         Start-Sleep -Milliseconds 300
     }
 
-    foreach ($id in $ids) {
+    foreach ($id in @(Get-InstallProcessIds $TargetInstallDir)) {
         Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Milliseconds 700
@@ -279,6 +289,7 @@ function Stop-BotWatchdogs([string]$TargetInstallDir) {
     }
 }
 
+# Diagnostic sensor only. Exclusive bindability is not allowed to grant or deny handoff readiness.
 function Test-LoopbackPortBindable([int]$Port) {
     $listener = $null
     try {
@@ -297,11 +308,12 @@ function Test-LoopbackPortBindable([int]$Port) {
     }
 }
 
+# Sensor only. The canonical handoff authority below owns the final Ready decision.
 function Get-LoopbackPortListenerState([int]$Port) {
     try {
         $command = Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue
         if ($null -eq $command) {
-            return [pscustomobject]@{ Known = $false; Listeners = @() }
+            return [pscustomobject]@{ Known = $false; Listeners = @(); Error = 'Get-NetTCPConnection unavailable' }
         }
 
         $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Where-Object {
@@ -310,73 +322,132 @@ function Get-LoopbackPortListenerState([int]$Port) {
             $_.LocalAddress -eq '::1' -or
             $_.LocalAddress -eq '::'
         })
-        return [pscustomobject]@{ Known = $true; Listeners = @($listeners) }
+        return [pscustomobject]@{ Known = $true; Listeners = @($listeners); Error = '' }
     }
     catch {
-        return [pscustomobject]@{ Known = $false; Listeners = @() }
+        return [pscustomobject]@{ Known = $false; Listeners = @(); Error = $_.Exception.Message }
     }
 }
 
-function Get-LoopbackPortOwnerSummary([int]$Port) {
+# Resolve one PID without guessing. Known=true/Exists=false means the OS listener row points at a dead PID.
+function Get-LiveProcessStateById([int]$ProcessId) {
+    if ($ProcessId -le 0) {
+        return [pscustomobject]@{ Known = $true; Exists = $false; Process = $null; Error = '' }
+    }
     try {
-        $state = Get-LoopbackPortListenerState $Port
-        if (-not [bool]$state.Known) { return 'owner=unknown' }
-        $listeners = @($state.Listeners)
-        if ($listeners.Count -eq 0) { return 'owner=none' }
-
-        $parts = @()
-        foreach ($entry in $listeners) {
-            $ownerPid = [int]$entry.OwningProcess
-            $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
-            if ($null -ne $process) {
-                $parts += "pid=$ownerPid,name=$($process.Name),exe=$($process.ExecutablePath)"
-            }
-            else {
-                $parts += "pid=$ownerPid,name=unknown"
-            }
+        $records = @(Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop)
+        if ($records.Count -eq 0) {
+            return [pscustomobject]@{ Known = $true; Exists = $false; Process = $null; Error = '' }
         }
-        return ($parts -join '; ')
+        $record = $records[0]
+        return [pscustomobject]@{
+            Known = $true
+            Exists = $true
+            Process = [pscustomobject]@{
+                Pid = [int]$record.ProcessId
+                Name = [string]$record.Name
+                ExecutablePath = [string]$record.ExecutablePath
+            }
+            Error = ''
+        }
     }
     catch {
-        return 'owner=unknown'
+        return [pscustomobject]@{ Known = $false; Exists = $false; Process = $null; Error = $_.Exception.Message }
+    }
+}
+
+# SINGLE AUTHORITY for the updater's port/process handoff state.
+# All sensors feed this function; no caller may independently combine their conditions to decide mutation readiness.
+function Get-BotWebSocketHandoffState([string]$TargetInstallDir, [int]$Port) {
+    $installState = Get-InstallProcessState $TargetInstallDir
+    $listenerState = Get-LoopbackPortListenerState $Port
+    $liveOwners = @()
+    $staleOwnerPids = @()
+    $ownerResolutionKnown = $true
+    $ownerResolutionErrors = @()
+
+    if ([bool]$listenerState.Known) {
+        foreach ($entry in @($listenerState.Listeners)) {
+            $ownerPid = 0
+            try { $ownerPid = [int]$entry.OwningProcess } catch { $ownerPid = 0 }
+            $ownerState = Get-LiveProcessStateById $ownerPid
+            if (-not [bool]$ownerState.Known) {
+                $ownerResolutionKnown = $false
+                $ownerResolutionErrors += "pid=${ownerPid}:$($ownerState.Error)"
+                continue
+            }
+            if (-not [bool]$ownerState.Exists) {
+                $staleOwnerPids += $ownerPid
+                continue
+            }
+            $liveOwners += $ownerState.Process
+        }
+    }
+
+    $liveInstallProcesses = if ([bool]$installState.Known) { @($installState.Processes) } else { @() }
+    $sensorKnown = [bool]$installState.Known -and [bool]$listenerState.Known -and $ownerResolutionKnown
+    $ready = $sensorKnown -and $liveInstallProcesses.Count -eq 0 -and $liveOwners.Count -eq 0
+
+    # Bindability is recorded for diagnosis only. It never participates in $ready.
+    $strictBindable = Test-LoopbackPortBindable $Port
+
+    $parts = @()
+    if (-not [bool]$installState.Known) { $parts += "install-process-state=unknown:$($installState.Error)" }
+    elseif ($liveInstallProcesses.Count -gt 0) {
+        $parts += 'install-processes=' + (($liveInstallProcesses | ForEach-Object { "pid=$($_.Pid),name=$($_.Name)" }) -join ';')
+    }
+    else { $parts += 'install-processes=none' }
+
+    if (-not [bool]$listenerState.Known) { $parts += "listener-state=unknown:$($listenerState.Error)" }
+    elseif ($liveOwners.Count -gt 0) {
+        $parts += 'live-listener-owners=' + (($liveOwners | ForEach-Object { "pid=$($_.Pid),name=$($_.Name),exe=$($_.ExecutablePath)" }) -join ';')
+    }
+    else { $parts += 'live-listener-owners=none' }
+
+    if ($staleOwnerPids.Count -gt 0) {
+        $parts += 'stale-listener-pids=' + (($staleOwnerPids | Sort-Object -Unique) -join ',')
+    }
+    if ($ownerResolutionErrors.Count -gt 0) {
+        $parts += 'owner-resolution-errors=' + ($ownerResolutionErrors -join ';')
+    }
+    $parts += 'strict-bind-diagnostic=' + ($(if ($strictBindable) { 'bindable' } else { 'blocked' }))
+
+    return [pscustomobject]@{
+        Ready = [bool]$ready
+        SensorStateKnown = [bool]$sensorKnown
+        LiveInstallProcesses = @($liveInstallProcesses)
+        LiveListenerOwners = @($liveOwners)
+        StaleListenerPids = @($staleOwnerPids | Sort-Object -Unique)
+        StrictBindableDiagnostic = [bool]$strictBindable
+        Summary = ($parts -join ' | ')
     }
 }
 
 function Wait-BotWebSocketPortRelease([string]$TargetInstallDir, [int]$Port, [int]$TimeoutSeconds) {
     $deadline = (Get-Date).AddSeconds([Math]::Max(5, $TimeoutSeconds))
     $attempt = 0
-    $lastOwner = $null
+    $lastSummary = $null
 
     while ((Get-Date) -lt $deadline) {
         $attempt++
-
-        # The bootstrap already owns crash recovery during an update. Kill the old install watchdog
-        # before each probe so it cannot resurrect the just-stopped Bot while the updater is backing
-        # up or replacing files. Then sweep all processes rooted in the target install again.
         Stop-BotWatchdogs $TargetInstallDir
         Stop-BotProcesses $TargetInstallDir
 
-        $listenerState = Get-LoopbackPortListenerState $Port
-        if ([bool]$listenerState.Known) {
-            if (@($listenerState.Listeners).Count -eq 0) {
-                if (Test-LoopbackPortBindable $Port) {
-                    Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port has no LISTEN owner and is strictly bindable after $attempt probe(s)." -ForegroundColor Green
-                }
-                else {
-                    Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port has no LISTEN owner; strict exclusive bind probe is still blocked by transient TCP state, so startup health will perform the final bind validation." -ForegroundColor Yellow
-                }
-                return $true
+        # There is exactly one yes/no authority. Do not duplicate listener/process decision logic here.
+        $handoff = Get-BotWebSocketHandoffState $TargetInstallDir $Port
+        if ([bool]$handoff.Ready) {
+            if (@($handoff.StaleListenerPids).Count -gt 0) {
+                Write-Host "Bot WebSocket handoff ready: stale OS LISTEN row(s) from dead PID(s) were ignored by the canonical authority; $($handoff.Summary); probe=$attempt" -ForegroundColor Yellow
             }
-        }
-        elseif (Test-LoopbackPortBindable $Port) {
-            Write-Host "Bot WebSocket handoff ready: listener state unavailable, but 127.0.0.1:$Port is exclusively bindable after $attempt probe(s)." -ForegroundColor Green
+            else {
+                Write-Host "Bot WebSocket handoff ready: canonical authority reports no live target-install process and no live LISTEN owner; $($handoff.Summary); probe=$attempt" -ForegroundColor Green
+            }
             return $true
         }
 
-        $owner = Get-LoopbackPortOwnerSummary $Port
-        if ($attempt -eq 1 -or $owner -ne $lastOwner -or ($attempt % 5) -eq 0) {
-            Write-Host "Bot WebSocket handoff waiting: 127.0.0.1:$Port still has a LISTEN owner or listener state is unavailable; $owner; probe=$attempt" -ForegroundColor Yellow
-            $lastOwner = $owner
+        if ($attempt -eq 1 -or $handoff.Summary -ne $lastSummary -or ($attempt % 5) -eq 0) {
+            Write-Host "Bot WebSocket handoff waiting: canonical authority is not ready; $($handoff.Summary); probe=$attempt" -ForegroundColor Yellow
+            $lastSummary = $handoff.Summary
         }
         Start-Sleep -Milliseconds ([Math]::Min(1500, 250 + ($attempt * 125)))
     }
@@ -435,21 +506,14 @@ function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$Healt
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
         $process = Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue
-        if ($null -eq $process) {
-            return $false
-        }
+        if ($null -eq $process) { return $false }
 
         $pathMatches = $false
         try {
-            $pathMatches = $process.Path -and
-                ([IO.Path]::GetFullPath($process.Path) -ieq [IO.Path]::GetFullPath($ExpectedExe))
+            $pathMatches = $process.Path -and ([IO.Path]::GetFullPath($process.Path) -ieq [IO.Path]::GetFullPath($ExpectedExe))
         }
-        catch {
-            $pathMatches = $false
-        }
-        if (-not $pathMatches) {
-            return $false
-        }
+        catch { $pathMatches = $false }
+        if (-not $pathMatches) { return $false }
 
         if (Test-Path -LiteralPath $HealthFile -PathType Leaf) {
             try {
@@ -473,17 +537,11 @@ function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$Healt
 $PackagePath = [IO.Path]::GetFullPath($PackagePath)
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 $ExpectedSha256 = $ExpectedSha256.Trim().ToUpperInvariant()
-if (-not (Test-Path -LiteralPath $PackagePath)) {
-    throw "Update package does not exist: $PackagePath"
-}
-if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) {
-    throw "Refusing to overwrite a Git source repository: $InstallDir"
-}
+if (-not (Test-Path -LiteralPath $PackagePath)) { throw "Update package does not exist: $PackagePath" }
+if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) { throw "Refusing to overwrite a Git source repository: $InstallDir" }
 
 $actualHash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($actualHash -ne $ExpectedSha256) {
-    throw "SHA256 verification failed. Expected $ExpectedSha256, actual $actualHash"
-}
+if ($actualHash -ne $ExpectedSha256) { throw "SHA256 verification failed. Expected $ExpectedSha256, actual $actualHash" }
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $updaterRoot = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater'
@@ -515,15 +573,16 @@ try {
     $updaterMutex = New-Object System.Threading.Mutex($true, 'Global\QianniuAiBotUpdater', [ref]$createdNew)
     if (-not $createdNew) { throw 'Another Qianniu AI Bot updater is already running.' }
     $ownsUpdaterMutex = $true
+
     $stage = 'wait-current-bot-exit'
-    Write-Step "Waiting for Bot.exe PID=$CurrentPid to exit"
+    Write-Step "Waiting for target-install Bot PID=$CurrentPid to exit"
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
-        if ($null -eq (Get-Process -Id $CurrentPid -ErrorAction SilentlyContinue)) { break }
+        if (-not (Test-InstallProcessIdAlive $InstallDir $CurrentPid)) { break }
         Start-Sleep -Milliseconds 350
     }
-    if ($null -ne (Get-Process -Id $CurrentPid -ErrorAction SilentlyContinue)) {
-        Write-Host 'Bot did not exit in time; stopping it now.' -ForegroundColor Yellow
+    if (Test-InstallProcessIdAlive $InstallDir $CurrentPid) {
+        Write-Host 'Target-install Bot did not exit in time; stopping it now.' -ForegroundColor Yellow
         Stop-Process -Id $CurrentPid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
     }
@@ -531,10 +590,10 @@ try {
     Stop-BotProcesses $InstallDir
 
     $stage = 'pre-mutation-port-handoff'
-    Write-Step 'Confirming Bot WebSocket port handoff before any install mutation'
+    Write-Step 'Confirming canonical Bot WebSocket/process handoff before any install mutation'
     if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 60)) {
-        $portOwner = Get-LoopbackPortOwnerSummary 41010
-        throw "Bot WebSocket port 41010 still has a real LISTEN owner before install mutation ($portOwner). Existing program was not replaced."
+        $handoff = Get-BotWebSocketHandoffState $InstallDir 41010
+        throw "Bot WebSocket/process handoff authority is not ready before install mutation ($($handoff.Summary)). Existing program was not replaced."
     }
 
     Write-Step "Preparing Bot update to version $ExpectedVersion"
@@ -550,12 +609,8 @@ try {
     Clear-PreviousUpdaterBackups $backupRoot
 
     [int64]$estimatedBackupBytes = 0
-    if ($oldProgramExisted) {
-        $estimatedBackupBytes += Get-DirectorySizeBytes $InstallDir
-    }
-    foreach ($name in $persistentNames) {
-        $estimatedBackupBytes += Get-DirectorySizeBytes (Join-Path $persistentRoot $name)
-    }
+    if ($oldProgramExisted) { $estimatedBackupBytes += Get-DirectorySizeBytes $InstallDir }
+    foreach ($name in $persistentNames) { $estimatedBackupBytes += Get-DirectorySizeBytes (Join-Path $persistentRoot $name) }
     [int64]$backupHeadroomBytes = 512MB
     [int64]$availableBytes = Get-AvailableBytes $backupRoot
     Write-Host "Rollback snapshot estimate: $(Format-Bytes $estimatedBackupBytes); free space after stale-backup cleanup: $(Format-Bytes $availableBytes)"
@@ -563,9 +618,7 @@ try {
         throw "Insufficient disk space for validated rollback snapshot. Need approximately $(Format-Bytes ($estimatedBackupBytes + $backupHeadroomBytes)), available $(Format-Bytes $availableBytes). Install directory has not been modified."
     }
 
-    if (Test-Path -LiteralPath $partialBackupDir) {
-        Remove-Item -LiteralPath $partialBackupDir -Recurse -Force
-    }
+    if (Test-Path -LiteralPath $partialBackupDir) { Remove-Item -LiteralPath $partialBackupDir -Recurse -Force }
     New-Item -ItemType Directory -Path $partialBackupDir -Force | Out-Null
 
     if ($oldProgramExisted) {
@@ -581,7 +634,6 @@ try {
         $existed = Test-Path -LiteralPath $source -PathType Container
         $persistentEntries += [pscustomobject]@{ name = $name; existed = [bool]$existed }
         if (-not $existed) { continue }
-
         $destination = Join-Path $partialPersistentRoot $name
         Copy-DirectoryContents $source $destination
         Assert-DirectoryCopyMatches $source $destination "persistent/$name"
@@ -597,11 +649,8 @@ try {
     }
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $partialBackupDir 'backup-manifest.json') -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $partialBackupDir '.complete') -Value 'validated' -Encoding ASCII
-
     Move-Item -LiteralPath $partialBackupDir -Destination $backupDir
-    if (-not (Test-BackupComplete $backupDir)) {
-        throw "Backup finalization failed: $backupDir"
-    }
+    if (-not (Test-BackupComplete $backupDir)) { throw "Backup finalization failed: $backupDir" }
     $backupFinalized = $true
     Write-Host "Validated rollback snapshot: $backupDir" -ForegroundColor Green
 
@@ -613,23 +662,15 @@ try {
 
     $packageRoot = $tempDir
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'Bin\Bot.exe'))) {
-        $roots = @(Get-ChildItem -LiteralPath $tempDir -Directory | Where-Object {
-            Test-Path -LiteralPath (Join-Path $_.FullName 'Bin\Bot.exe')
-        })
-        if ($roots.Count -ne 1) {
-            throw 'Invalid package layout: expected exactly one Bin\Bot.exe.'
-        }
+        $roots = @(Get-ChildItem -LiteralPath $tempDir -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'Bin\Bot.exe') })
+        if ($roots.Count -ne 1) { throw 'Invalid package layout: expected exactly one Bin\Bot.exe.' }
         $packageRoot = $roots[0].FullName
     }
 
     $newExe = Join-Path $packageRoot 'Bin\Bot.exe'
-    if (-not (Test-Path -LiteralPath $newExe)) {
-        throw "Package does not contain Bot.exe: $newExe"
-    }
+    if (-not (Test-Path -LiteralPath $newExe)) { throw "Package does not contain Bot.exe: $newExe" }
     $releaseInfoPath = Join-Path $packageRoot 'release-info.json'
-    if (-not (Test-Path -LiteralPath $releaseInfoPath)) {
-        throw 'Package does not contain release-info.json.'
-    }
+    if (-not (Test-Path -LiteralPath $releaseInfoPath)) { throw 'Package does not contain release-info.json.' }
     $releaseInfo = Get-Content -LiteralPath $releaseInfoPath -Raw | ConvertFrom-Json
     if ([string]::IsNullOrWhiteSpace([string]$releaseInfo.version) -or ([string]$releaseInfo.version -ne $ExpectedVersion)) {
         throw "Package version mismatch. Expected $ExpectedVersion, actual $($releaseInfo.version)"
@@ -659,24 +700,19 @@ try {
     Copy-DirectoryContents $packageRoot $InstallDir
 
     $installedExe = Join-Path $InstallDir 'Bin\Bot.exe'
-    if (-not (Test-Path -LiteralPath $installedExe)) {
-        throw 'Installed package validation failed: Bin\Bot.exe was not found.'
-    }
+    if (-not (Test-Path -LiteralPath $installedExe)) { throw 'Installed package validation failed: Bin\Bot.exe was not found.' }
     $installedReleaseInfo = Join-Path $InstallDir 'release-info.json'
-    if (-not (Test-Path -LiteralPath $installedReleaseInfo)) {
-        throw 'Installed package validation failed: release-info.json was not found.'
-    }
+    if (-not (Test-Path -LiteralPath $installedReleaseInfo)) { throw 'Installed package validation failed: release-info.json was not found.' }
     $installedInfo = Get-Content -LiteralPath $installedReleaseInfo -Raw | ConvertFrom-Json
-    if ([string]::IsNullOrWhiteSpace([string]$installedInfo.version) -or
-        ([string]$installedInfo.version -ne $ExpectedVersion)) {
+    if ([string]::IsNullOrWhiteSpace([string]$installedInfo.version) -or ([string]$installedInfo.version -ne $ExpectedVersion)) {
         throw "Installed package version mismatch. Expected $ExpectedVersion, actual $($installedInfo.version)"
     }
 
     $stage = 'post-mutation-port-handoff'
-    Write-Step 'Reconfirming Bot WebSocket port handoff before target start'
+    Write-Step 'Reconfirming the same canonical handoff authority before target start'
     if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 30)) {
-        $portOwner = Get-LoopbackPortOwnerSummary 41010
-        throw "Bot WebSocket port 41010 gained a LISTEN owner during replacement ($portOwner). Automatic rollback will start."
+        $handoff = Get-BotWebSocketHandoffState $InstallDir 41010
+        throw "Bot WebSocket/process handoff authority became not-ready during replacement ($($handoff.Summary)). Automatic rollback will start."
     }
 
     $stage = 'target-startup-health'
@@ -686,9 +722,7 @@ try {
     $newBot = Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe) -PassThru
     Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
     Remove-Item Env:\QIANNIU_BOT_UPDATE_EXPECTED_VERSION -ErrorAction SilentlyContinue
-    if ($null -eq $newBot) {
-        throw 'New Bot.exe process could not be created. Automatic rollback will start.'
-    }
+    if ($null -eq $newBot) { throw 'New Bot.exe process could not be created. Automatic rollback will start.' }
     Write-Host "Started target Bot PID=$($newBot.Id); waiting for the explicit version-bound startup health contract."
     if (-not (Test-BotHealthy $installedExe $newBot.Id $healthFile $ExpectedVersion)) {
         throw "New Bot.exe did not report version-bound database/configuration/service health for $ExpectedVersion. Automatic rollback will start."
@@ -759,12 +793,8 @@ catch {
 finally {
     Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
     Remove-Item Env:\QIANNIU_BOT_UPDATE_EXPECTED_VERSION -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $partialBackupDir) {
-        Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if (Test-Path -LiteralPath $tempDir) {
-        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    if (Test-Path -LiteralPath $partialBackupDir) { Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
     try { Stop-Transcript | Out-Null } catch { }
     if ($ownsUpdaterMutex -and $null -ne $updaterMutex) { try { $updaterMutex.ReleaseMutex() } catch { } }
     if ($null -ne $updaterMutex) { $updaterMutex.Dispose() }
