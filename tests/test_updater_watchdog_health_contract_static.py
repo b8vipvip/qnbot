@@ -11,17 +11,18 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig")
 
 
-def test_updater_stops_target_watchdog_before_port_handoff_and_mutation():
+def test_updater_stops_target_watchdog_before_canonical_handoff_and_mutation():
     text = _read(UPDATER)
     assert "function Stop-BotWatchdogs" in text
     assert "bot-process-watchdog.ps1" in text
     assert "Stop-BotWatchdogs $InstallDir" in text
-    preflight = text.index("Confirming Bot WebSocket port handoff before any install mutation")
+    preflight = text.index("Confirming canonical Bot WebSocket/process handoff before any install mutation")
     backup = text.index("Preparing bounded rollback backup")
     replace = text.index("Replacing program files")
     assert preflight < backup < replace
     assert "Wait-BotWebSocketPortRelease $InstallDir 41010 60" in text
-    assert "Reconfirming Bot WebSocket port handoff before target start" in text
+    assert "Reconfirming the same canonical handoff authority before target start" in text
+    assert "function Get-BotWebSocketHandoffState" in text
 
 
 def test_startup_health_is_bound_to_exact_target_version():
