@@ -39,6 +39,7 @@
         MessagePolicy,
         Diagnostics,
         Compliance,
+        AutoDelivery,
         FeatureSettings
     }
 }

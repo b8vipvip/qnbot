@@ -69,11 +69,13 @@ namespace Bot.Options
             ShopBindingOptionsControl shopBinding = null;
             CtlDataManagement dataManagement = null;
             BotUpdateOptionsControl aboutUpdate = null;
+            AutoDeliveryOptionsControl autoDelivery = null;
 
             RunInShopScope(delegate
             {
                 shopBinding = new ShopBindingOptionsControl(Seller);
                 _featureSettings = new FeatureSettingsOptionsControl(Seller);
+                autoDelivery = new AutoDeliveryOptionsControl(Seller);
                 dataManagement = new CtlDataManagement();
                 aboutUpdate = new BotUpdateOptionsControl();
             });
@@ -89,6 +91,9 @@ namespace Bot.Options
                 OptionEnum.Notifications, "转人工策略");
             AddFeaturePage("回复与通知", "消息策略", "控制语气、长度、禁用词和知识使用方式。",
                 OptionEnum.MessagePolicy, "消息策略");
+
+            AddPage("订单自动化", "自动发货", "虚拟商品待发货订单按设定延迟自动选择“无需物流”并确认发货。",
+                OptionEnum.AutoDelivery, autoDelivery);
 
             AddPage("数据与安全", "数据管理", "备份、恢复和迁移当前店铺的业务数据。",
                 OptionEnum.DataManagement, dataManagement);
