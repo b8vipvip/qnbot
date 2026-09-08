@@ -20,14 +20,17 @@ def test_updater_waits_for_real_websocket_listener_to_release_before_new_bot_sta
     assert "Known = $true; Listeners = @($listeners)" in source
     assert "Known = $false; Listeners = @()" in source
     assert "function Wait-BotWebSocketPortRelease" in source
+    assert "Stop-BotWatchdogs $TargetInstallDir" in source
     assert "Stop-BotProcesses $TargetInstallDir" in source
     assert "Get-LoopbackPortOwnerSummary" in source
 
-    barrier = "Wait-BotWebSocketPortRelease $InstallDir 41010 45"
+    pre_mutation_barrier = "Wait-BotWebSocketPortRelease $InstallDir 41010 60"
+    post_mutation_barrier = "Wait-BotWebSocketPortRelease $InstallDir 41010 30"
     start = "$newBot = Start-Process -FilePath $installedExe"
-    assert barrier in source
+    assert pre_mutation_barrier in source
+    assert post_mutation_barrier in source
     assert start in source
-    assert source.index(barrier) < source.index(start)
+    assert source.index(pre_mutation_barrier) < source.index(post_mutation_barrier) < source.index(start)
 
 
 def test_known_no_listener_does_not_false_rollback_on_strict_bind_probe():
@@ -53,7 +56,9 @@ def test_known_no_listener_does_not_false_rollback_on_strict_bind_probe():
 def test_real_port_listener_failure_is_fail_closed_and_diagnostic():
     source = _source()
 
-    assert "still has a real LISTEN owner after old Bot shutdown" in source
+    assert "still has a real LISTEN owner before install mutation" in source
+    assert "Existing program was not replaced" in source
+    assert "gained a LISTEN owner during replacement" in source
     assert "Automatic rollback will start" in source
     assert "Bot WebSocket handoff ready" in source
     assert "Bot WebSocket handoff waiting" in source

@@ -26,6 +26,8 @@ namespace Bot.UpdateNs
     /// </summary>
     internal static class BotProcessWatchdog
     {
+        private const string UpdateHealthFileEnvironmentVariable = "QIANNIU_BOT_UPDATE_HEALTH_FILE";
+        private const string UpdateExpectedVersionEnvironmentVariable = "QIANNIU_BOT_UPDATE_EXPECTED_VERSION";
         private static readonly object Sync = new object();
         private static bool _initialized;
         private static string _expectedExitMarker = string.Empty;
@@ -74,7 +76,7 @@ namespace Bot.UpdateNs
                     + " -WatchdogLog " + Quote(logPath)
                     + " -InstallKey " + Quote(installKey)
                     + " -WatchdogLockPath " + Quote(watchdogLockPath);
-                var watcher = Process.Start(new ProcessStartInfo
+                var watcherStartInfo = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
                     Arguments = arguments,
@@ -82,7 +84,13 @@ namespace Bot.UpdateNs
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                     WorkingDirectory = runtimeDir
-                });
+                };
+                // The updater startup-health variables are one-shot capabilities for exactly the
+                // replacement Bot process. The watchdog survives that process and must never inherit
+                // them, otherwise a later watchdog recovery can write OK into a stale health file.
+                watcherStartInfo.EnvironmentVariables.Remove(UpdateHealthFileEnvironmentVariable);
+                watcherStartInfo.EnvironmentVariables.Remove(UpdateExpectedVersionEnvironmentVariable);
+                var watcher = Process.Start(watcherStartInfo);
                 if (watcher == null) throw new Exception("无法启动外部守护进程");
 
                 if (Application.Current != null)
@@ -93,7 +101,7 @@ namespace Bot.UpdateNs
                 Log.Info(
                     "Bot外部进程守护已启动：同一安装目录仅允许一个watchdog；已自动清理历史泄漏进程="
                     + cleaned
-                    + "；异常退出将自动重启；正常退出不会误拉起；自动更新退出进入安全交接恢复监控。watchdogPid="
+                    + "；异常退出将自动重启；正常退出不会误拉起；自动更新退出进入安全交接恢复监控；更新健康变量不会泄漏给watchdog。watchdogPid="
                     + watcher.Id
                     + ", installKey=" + installKey);
             }

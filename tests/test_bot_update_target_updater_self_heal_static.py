@@ -27,8 +27,10 @@ def test_auto_updater_only_stops_target_install_and_requires_explicit_health():
     script = read("src/Bot/Update/BotAutoUpdater.ps1")
     assert "$ids += @(Get-Process -Name 'Bot'" not in script
     assert "if ($CurrentPid -gt 0 -and $CurrentPid -ne $PID)" in script
-    assert "Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile)" in script
+    assert "Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile, [string]$ExpectedReleaseVersion)" in script
     assert "[string]$health.status -eq 'OK'" in script
+    assert "[string]$health.release_version -eq $ExpectedReleaseVersion" in script
+    assert "QIANNIU_BOT_UPDATE_EXPECTED_VERSION" in script
     assert "-PassThru" in script
     assert "Installed package version mismatch" in script
 

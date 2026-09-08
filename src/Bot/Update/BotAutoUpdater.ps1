@@ -23,6 +23,39 @@ function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
 }
 
+function Write-UpdateResult(
+    [string]$Path,
+    [string]$Status,
+    [string]$TargetVersion,
+    [string]$Stage,
+    [string]$Detail,
+    [string]$Rollback,
+    [string]$UpdaterLog) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try {
+        $directory = Split-Path -Parent $Path
+        if (-not [string]::IsNullOrWhiteSpace($directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $temporary = $Path + '.tmp'
+        [ordered]@{
+            schema = 1
+            status = $Status
+            target_version = $TargetVersion
+            stage = $Stage
+            detail = $Detail
+            rollback = $Rollback
+            log_path = $UpdaterLog
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporary -Encoding UTF8
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        }
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    }
+    catch { }
+}
+
 function Copy-DirectoryContents([string]$Source, [string]$Destination) {
     if (-not (Test-Path -LiteralPath $Source -PathType Container)) { return }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
@@ -221,6 +254,31 @@ function Stop-BotProcesses([string]$TargetInstallDir) {
     Start-Sleep -Milliseconds 700
 }
 
+function Stop-BotWatchdogs([string]$TargetInstallDir) {
+    if ([string]::IsNullOrWhiteSpace($TargetInstallDir)) { return }
+    $root = [IO.Path]::GetFullPath($TargetInstallDir).TrimEnd('\')
+    try {
+        $watchdogs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            if ($null -eq $_ -or [int]$_.ProcessId -eq $PID) { return $false }
+            $name = [string]$_.Name
+            if ($name -ne 'powershell.exe' -and $name -ne 'pwsh.exe') { return $false }
+            $command = [string]$_.CommandLine
+            if ([string]::IsNullOrWhiteSpace($command)) { return $false }
+            return $command.IndexOf('bot-process-watchdog.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $command.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        })
+        foreach ($watchdog in $watchdogs) {
+            $watchdogPid = [int]$watchdog.ProcessId
+            Write-Host "Stopping update-handoff watchdog PID=$watchdogPid before program replacement."
+            Stop-Process -Id $watchdogPid -Force -ErrorAction SilentlyContinue
+        }
+        if ($watchdogs.Count -gt 0) { Start-Sleep -Milliseconds 500 }
+    }
+    catch {
+        Write-Host "Unable to stop target-install watchdogs: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
 function Test-LoopbackPortBindable([int]$Port) {
     $listener = $null
     try {
@@ -292,19 +350,15 @@ function Wait-BotWebSocketPortRelease([string]$TargetInstallDir, [int]$Port, [in
     while ((Get-Date) -lt $deadline) {
         $attempt++
 
-        # A stale watchdog or helper can race the first process sweep. Re-scan the target install
-        # immediately before every listener probe so a resurrected old Bot cannot retain the
-        # authoritative LISTEN socket between package replacement and the new process launch.
+        # The bootstrap already owns crash recovery during an update. Kill the old install watchdog
+        # before each probe so it cannot resurrect the just-stopped Bot while the updater is backing
+        # up or replacing files. Then sweep all processes rooted in the target install again.
+        Stop-BotWatchdogs $TargetInstallDir
         Stop-BotProcesses $TargetInstallDir
 
         $listenerState = Get-LoopbackPortListenerState $Port
         if ([bool]$listenerState.Known) {
             if (@($listenerState.Listeners).Count -eq 0) {
-                # Get-NetTCPConnection gives us the authoritative Windows LISTEN state. A strict
-                # ExclusiveAddressUse probe can still fail briefly after shutdown because of
-                # transient TCP endpoint teardown. With no LISTEN owner, do not roll back before the
-                # target process even gets a chance to start; the target's own bounded WebSocket
-                # retry plus explicit startup-health contract remains the final safety authority.
                 if (Test-LoopbackPortBindable $Port) {
                     Write-Host "Bot WebSocket handoff ready: 127.0.0.1:$Port has no LISTEN owner and is strictly bindable after $attempt probe(s)." -ForegroundColor Green
                 }
@@ -315,8 +369,6 @@ function Wait-BotWebSocketPortRelease([string]$TargetInstallDir, [int]$Port, [in
             }
         }
         elseif (Test-LoopbackPortBindable $Port) {
-            # Older Windows environments without Get-NetTCPConnection keep the previous conservative
-            # behavior: only proceed when the strict bind probe itself succeeds.
             Write-Host "Bot WebSocket handoff ready: listener state unavailable, but 127.0.0.1:$Port is exclusively bindable after $attempt probe(s)." -ForegroundColor Green
             return $true
         }
@@ -354,6 +406,7 @@ function Clear-DirectoryContentsWithRetry([string]$Path, [int]$MaxAttempts = 24)
     if (-not (Test-Path -LiteralPath $Path)) { return }
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Stop-BotWatchdogs $Path
         Stop-BotProcesses $Path
         $failures = @()
         foreach ($item in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
@@ -378,7 +431,7 @@ function Clear-DirectoryContentsWithRetry([string]$Path, [int]$MaxAttempts = 24)
     throw "Unable to clear install directory contents after $MaxAttempts attempts: $Path. $detail"
 }
 
-function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile) {
+function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile, [string]$ExpectedReleaseVersion) {
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
         $process = Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue
@@ -403,6 +456,7 @@ function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$Healt
                 $health = Get-Content -LiteralPath $HealthFile -Raw | ConvertFrom-Json
                 if ([string]$health.status -eq 'OK' -and
                     [int]$health.pid -eq $ExpectedPid -and
+                    [string]$health.release_version -eq $ExpectedReleaseVersion -and
                     [bool]$health.database_initialized -and
                     [bool]$health.configuration_loaded -and
                     [bool]$health.services_started) {
@@ -443,6 +497,7 @@ $migrationMarker = Join-Path $persistentRoot 'data-migration-v2.done'
 $tempDir = Join-Path $env:TEMP "qianniu-bot-auto-update-$timestamp"
 $logDir = Join-Path $updaterRoot 'logs'
 $logPath = Join-Path $logDir "auto-update-$timestamp.log"
+$resultPath = Join-Path $updaterRoot 'last-update-result.json'
 $oldProgramExisted = Test-Path -LiteralPath $InstallDir -PathType Container
 $oldExe = Join-Path $InstallDir 'Bin\Bot.exe'
 $backupFinalized = $false
@@ -450,6 +505,7 @@ $installMutationStarted = $false
 $healthFile = Join-Path $tempDir 'startup-health.json'
 $updaterMutex = $null
 $ownsUpdaterMutex = $false
+$stage = 'preflight'
 
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 try { Start-Transcript -Path $logPath -Force | Out-Null } catch { }
@@ -459,6 +515,7 @@ try {
     $updaterMutex = New-Object System.Threading.Mutex($true, 'Global\QianniuAiBotUpdater', [ref]$createdNew)
     if (-not $createdNew) { throw 'Another Qianniu AI Bot updater is already running.' }
     $ownsUpdaterMutex = $true
+    $stage = 'wait-current-bot-exit'
     Write-Step "Waiting for Bot.exe PID=$CurrentPid to exit"
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
@@ -470,7 +527,15 @@ try {
         Stop-Process -Id $CurrentPid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
     }
+    Stop-BotWatchdogs $InstallDir
     Stop-BotProcesses $InstallDir
+
+    $stage = 'pre-mutation-port-handoff'
+    Write-Step 'Confirming Bot WebSocket port handoff before any install mutation'
+    if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 60)) {
+        $portOwner = Get-LoopbackPortOwnerSummary 41010
+        throw "Bot WebSocket port 41010 still has a real LISTEN owner before install mutation ($portOwner). Existing program was not replaced."
+    }
 
     Write-Step "Preparing Bot update to version $ExpectedVersion"
     Write-Host "Package: $PackagePath"
@@ -479,12 +544,9 @@ try {
     Write-Host "Persistent root: $persistentRoot (data/global/shops)"
     Write-Host "Log: $logPath"
 
+    $stage = 'rollback-backup'
     Write-Step 'Preparing bounded rollback backup'
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-
-    # Only one updater snapshot is useful: the snapshot for the update that is about to mutate the
-    # install. Old complete copies and failed .partial copies are pure disk growth at this point.
-    # The live install is still intact here, so deleting old snapshots cannot make this update unsafe.
     Clear-PreviousUpdaterBackups $backupRoot
 
     [int64]$estimatedBackupBytes = 0
@@ -543,6 +605,7 @@ try {
     $backupFinalized = $true
     Write-Host "Validated rollback snapshot: $backupDir" -ForegroundColor Green
 
+    $stage = 'package-validation'
     Write-Step 'Extracting and validating package'
     if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -583,14 +646,15 @@ try {
         }
     }
 
+    $stage = 'replace-program'
     Write-Step 'Replacing program files'
     if (-not $backupFinalized -or -not (Test-BackupComplete $backupDir)) {
         throw 'Refusing to replace program files because no finalized validated backup is available.'
     }
+    Stop-BotWatchdogs $InstallDir
+    Stop-BotProcesses $InstallDir
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $installMutationStarted = $true
-    # Keep the install root itself. A shell/helper may retain a transient directory handle
-    # after Bot.exe exits; deleting only children avoids treating that harmless root lock as failure.
     Clear-DirectoryContentsWithRetry $InstallDir
     Copy-DirectoryContents $packageRoot $InstallDir
 
@@ -608,29 +672,35 @@ try {
         throw "Installed package version mismatch. Expected $ExpectedVersion, actual $($installedInfo.version)"
     }
 
-    Write-Step 'Waiting for Bot WebSocket port handoff'
-    if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 45)) {
+    $stage = 'post-mutation-port-handoff'
+    Write-Step 'Reconfirming Bot WebSocket port handoff before target start'
+    if (-not (Wait-BotWebSocketPortRelease $InstallDir 41010 30)) {
         $portOwner = Get-LoopbackPortOwnerSummary 41010
-        throw "Bot WebSocket port 41010 still has a real LISTEN owner after old Bot shutdown ($portOwner). Automatic rollback will start."
+        throw "Bot WebSocket port 41010 gained a LISTEN owner during replacement ($portOwner). Automatic rollback will start."
     }
 
+    $stage = 'target-startup-health'
     Write-Step 'Starting and validating new Bot.exe'
     $env:QIANNIU_BOT_UPDATE_HEALTH_FILE = $healthFile
+    $env:QIANNIU_BOT_UPDATE_EXPECTED_VERSION = $ExpectedVersion
     $newBot = Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe) -PassThru
     Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
+    Remove-Item Env:\QIANNIU_BOT_UPDATE_EXPECTED_VERSION -ErrorAction SilentlyContinue
     if ($null -eq $newBot) {
         throw 'New Bot.exe process could not be created. Automatic rollback will start.'
     }
-    Write-Host "Started target Bot PID=$($newBot.Id); waiting for the explicit startup health contract."
-    if (-not (Test-BotHealthy $installedExe $newBot.Id $healthFile)) {
-        throw 'New Bot.exe did not report database/configuration/service health. Automatic rollback will start.'
+    Write-Host "Started target Bot PID=$($newBot.Id); waiting for the explicit version-bound startup health contract."
+    if (-not (Test-BotHealthy $installedExe $newBot.Id $healthFile $ExpectedVersion)) {
+        throw "New Bot.exe did not report version-bound database/configuration/service health for $ExpectedVersion. Automatic rollback will start."
     }
 
+    $stage = 'completed'
     Write-Step "Update to $ExpectedVersion completed successfully"
     Write-Host "Current program: $installedExe" -ForegroundColor Green
     Write-Host "Rollback snapshot retained: $backupDir"
     Write-Host 'Persistent user data remains under %LocalAppData%\QianniuAiBot (data/global/shops).'
     Write-Host 'Updater storage policy: one validated rollback snapshot only; failed .partial snapshots are removed immediately.'
+    Write-UpdateResult $resultPath 'success' $ExpectedVersion $stage 'Target version passed version-bound startup health.' 'not-needed' $logPath
 }
 catch {
     $failure = $_
@@ -649,6 +719,7 @@ catch {
     }
     else {
         try {
+            Stop-BotWatchdogs $InstallDir
             Stop-BotProcesses $InstallDir
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
             Clear-DirectoryContentsWithRetry $InstallDir
@@ -673,6 +744,9 @@ catch {
         Start-Process -FilePath $oldExe -WorkingDirectory (Split-Path -Parent $oldExe)
     }
 
+    $rollbackText = if ($rollbackSucceeded) { 'completed' } else { 'failed' }
+    Write-UpdateResult $resultPath 'failed' $ExpectedVersion $stage $failure.Exception.Message $rollbackText $logPath
+
     if ($rollbackSucceeded) {
         Write-Host "Rollback completed safely. Log: $logPath" -ForegroundColor Yellow
     }
@@ -684,6 +758,7 @@ catch {
 }
 finally {
     Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
+    Remove-Item Env:\QIANNIU_BOT_UPDATE_EXPECTED_VERSION -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $partialBackupDir) {
         Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue
     }
