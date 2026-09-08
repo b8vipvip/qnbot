@@ -19,12 +19,12 @@ def test_updater_has_one_canonical_websocket_handoff_authority():
     assert "$handoff = Get-BotWebSocketHandoffState $TargetInstallDir $Port" in source
     assert "if ([bool]$handoff.Ready)" in source
 
-    # Both mutation barriers consume the same authority through the same waiter.
+    # Every mutation/start barrier consumes the same authority through the same waiter.
     pre = "Wait-BotWebSocketPortRelease $InstallDir 41010 60"
-    post = "Wait-BotWebSocketPortRelease $InstallDir 41010 30"
+    commit = "Wait-BotWebSocketPortRelease $InstallDir 41010 30"
     start = "$newBot = Start-Process -FilePath $installedExe"
-    assert pre in source and post in source and start in source
-    assert source.index(pre) < source.index(post) < source.index(start)
+    assert pre in source and commit in source and start in source
+    assert source.index(pre) < source.index(commit) < source.index(start)
 
 
 def test_stale_listener_pid_is_diagnostic_not_a_second_veto():
@@ -37,7 +37,7 @@ def test_stale_listener_pid_is_diagnostic_not_a_second_veto():
     assert "if (-not [bool]$ownerState.Exists)" in authority
     assert "$staleOwnerPids += $ownerPid" in authority
     assert "$liveOwners += $ownerState.Process" in authority
-    assert "$ready = $sensorKnown -and $liveInstallProcesses.Count -eq 0 -and $liveOwners.Count -eq 0" in authority
+    assert "$ready = $sensorKnown -and @($liveInstallProcesses).Count -eq 0 -and @($liveWatchdogs).Count -eq 0 -and @($liveOwners).Count -eq 0" in authority
     assert "stale-listener-pids=" in authority
     assert "StrictBindableDiagnostic" in authority
 
@@ -48,7 +48,7 @@ def test_unknown_sensor_or_live_owner_fails_closed_but_bind_probe_is_diagnostic_
     waiter_start = source.index("function Wait-BotWebSocketPortRelease")
     authority = source[authority_start:waiter_start]
 
-    assert "$sensorKnown = [bool]$installState.Known -and [bool]$listenerState.Known -and $ownerResolutionKnown" in authority
+    assert "$sensorKnown = [bool]$installState.Known -and [bool]$watchdogState.Known -and [bool]$listenerState.Known -and $ownerResolutionKnown" in authority
     assert "$ready = $sensorKnown -and" in authority
     assert "$strictBindable = Test-LoopbackPortBindable $Port" in authority
     assert "Bindability is recorded for diagnosis only. It never participates in $ready." in authority
@@ -56,13 +56,22 @@ def test_unknown_sensor_or_live_owner_fails_closed_but_bind_probe_is_diagnostic_
     assert "strictBindable" not in ready_line
 
 
+def test_watchdog_is_a_sensor_inside_the_same_authority_not_an_independent_decider():
+    source = _source()
+    authority_start = source.index("function Get-BotWebSocketHandoffState")
+    waiter_start = source.index("function Wait-BotWebSocketPortRelease")
+    authority = source[authority_start:waiter_start]
+    waiter = source[waiter_start:source.index("function Clear-DirectoryContentsWithRetry")]
+
+    assert "Get-WatchdogState $TargetInstallDir" in authority
+    assert "@($liveWatchdogs).Count -eq 0" in authority
+    assert "Stop-BotWatchdogs $TargetInstallDir" in waiter
+    assert "Actuators above never decide readiness" in waiter
+
+
 def test_current_pid_is_never_blindly_killed_after_pid_reuse():
     source = _source()
-    process_start = source.index("function Get-InstallProcessIds")
-    process_end = source.index("function Stop-BotProcesses")
-    process_logic = source[process_start:process_end]
-
-    assert "$ids += [int]$CurrentPid" not in process_logic
+    assert "$ids += [int]$CurrentPid" not in source
     assert "Test-PathUnderInstallRoot" in source
     assert "Test-InstallProcessIdAlive $InstallDir $CurrentPid" in source
     assert "Stop-Process -Id $CurrentPid" in source
@@ -73,7 +82,7 @@ def test_current_pid_is_never_blindly_killed_after_pid_reuse():
 def test_live_foreign_listener_still_blocks_and_startup_health_remains_version_bound():
     source = _source()
     assert "$liveOwners += $ownerState.Process" in source
-    assert "$liveOwners.Count -eq 0" in source
+    assert "@($liveOwners).Count -eq 0" in source
     assert "QIANNIU_BOT_UPDATE_EXPECTED_VERSION" in source
     assert "release_version -eq $ExpectedReleaseVersion" in source
     assert "Target version passed version-bound startup health." in source
