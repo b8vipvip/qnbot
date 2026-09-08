@@ -26,7 +26,10 @@ def test_target_updater_syntax_is_validated_before_handoff_ack():
 def test_auto_updater_only_stops_target_install_and_requires_explicit_health():
     script = read("src/Bot/Update/BotAutoUpdater.ps1")
     assert "$ids += @(Get-Process -Name 'Bot'" not in script
-    assert "if ($CurrentPid -gt 0 -and $CurrentPid -ne $PID)" in script
+    assert "$ids += [int]$CurrentPid" not in script
+    assert "function Test-PathUnderInstallRoot" in script
+    assert "function Test-InstallProcessIdAlive" in script
+    assert "if (Test-InstallProcessIdAlive $InstallDir $CurrentPid)" in script
     assert "Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile, [string]$ExpectedReleaseVersion)" in script
     assert "[string]$health.status -eq 'OK'" in script
     assert "[string]$health.release_version -eq $ExpectedReleaseVersion" in script
