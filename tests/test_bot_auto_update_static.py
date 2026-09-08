@@ -40,7 +40,6 @@ def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallback
     assert "notification_mode" in server_push
     assert "StreamingResponse" in server_push
     assert "bot_update_push.router" in bootstrap
-    # Version discovery remains unchanged: server metadata first, GitHub metadata fallback.
     assert "/api/public/v1/bot-update/latest" in code
     assert "ServiceMetadataTimeoutSeconds = 6" in code
     assert "https://api.github.com/repos/b8vipvip/qnbot/releases/latest" in code
@@ -169,11 +168,13 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
     assert "ExpectedSha256" in script
     assert "release-info.json" in script
     assert "Preparing bounded rollback backup" in script
-    assert "Starting automatic rollback" in script
     assert "Test-BotHealthy" in script
     assert "database_initialized" in script
-    assert "Persistent user data remains" in script
     assert "Clear-PreviousUpdaterBackups $backupRoot" in script
+    assert "Restore-PersistentData $backupDir $persistentRoot" in script
+    assert "$rollbackSucceeded = $true" in script
+    assert "Start-Process -FilePath $oldExe" in script
+    assert "Write-UpdateResult $resultPath 'failed'" in script
     assert "Select-Object -Skip 8" not in script
 
 
@@ -191,8 +192,9 @@ def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_
     assert "$backupFinalized = $true" in script
     assert "$installMutationStarted = $false" in script
     assert "$installMutationStarted = $true" in script
-    assert "Install directory was not modified; destructive rollback is skipped." in script
-    assert "No .partial backup will be used." in script
+    assert "$backupUsable = $backupFinalized -and (Test-BackupComplete $backupDir)" in script
+    assert "if (-not $installMutationStarted)" in script
+    assert "elseif ($backupUsable)" in script
     assert "Restore-PersistentData $backupDir $persistentRoot" in script
     finalized_guard = script.index("if (-not $backupFinalized -or -not (Test-BackupComplete $backupDir))")
     mutation_flag = script.index("$installMutationStarted = $true")
@@ -200,17 +202,18 @@ def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_
     assert finalized_guard < mutation_flag < destructive_clear
 
 
-def test_updaters_keep_locked_install_root_and_retry_only_child_cleanup():
+def test_updaters_keep_install_root_and_clear_only_children():
     auto = read("src/Bot/Update/BotAutoUpdater.ps1")
     manual = read("scripts/update-bot.ps1")
     for script in (auto, manual):
         assert "Clear-DirectoryContentsWithRetry" in script
-        assert "Get-InstallProcessIds" in script
         assert "Get-CimInstance Win32_Process" in script
-        assert "Install files are still busy; retry" in script
-        assert "Get-PossibleDirectoryBlockers" in script
         assert "Clear-DirectoryContentsWithRetry $InstallDir" in script
         assert "Remove-Item -LiteralPath $InstallDir -Recurse -Force" not in script
+    assert "Get-InstallProcessState" in auto
+    assert "Stop-BotProcesses" in auto
+    assert "Get-InstallProcessIds" in manual
+    assert "Get-PossibleDirectoryBlockers" in manual
 
 
 def test_settings_page_and_startup_are_wired():
