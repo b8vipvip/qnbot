@@ -44,7 +44,7 @@
        build workspace; it never runs on an end-user machine. -->
   <Target Name="ApplyRecoverableQianniuInjectV11"
           BeforeTargets="PrepareResources;CoreCompile"
-          Condition="'$(OS)' == 'Windows_NT' and Exists('$(MSBuildThisFileDirectory)..\scripts\apply-recoverable-inject-v11.ps1')">
+          Condition="'$(OS)' == 'Windows_NT' and Exists('$(MSBuildProjectDirectory)\Common\QNInject.cs') and Exists('$(MSBuildThisFileDirectory)..\scripts\apply-recoverable-inject-v11.ps1')">
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\apply-recoverable-inject-v11.ps1&quot;" />
   </Target>
 </Project>
