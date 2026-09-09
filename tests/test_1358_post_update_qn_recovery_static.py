@@ -23,11 +23,11 @@ def test_restart_authority_requires_fresh_success_for_exact_current_version():
 
 def test_normal_startup_does_not_restart_qianniu_and_delegates_only_after_bounded_retries():
     text = read(STARTUP)
-    assert 'RetryDelaySeconds = { 3, 5, 8, 12 }' in text
-    assert text.index('for (var attempt = 0; attempt < RetryDelaySeconds.Length; attempt++)') < text.index('PostUpdateQianniuRecovery.TryRecoverAsync')
+    assert 'var delays = new[] { 2000, 3500, 5500, 8000, 11000 }' in text
+    assert text.index('for (var attempt = 0; attempt < delays.Length; attempt++)') < text.index('PostUpdateQianniuRecovery.TryRecoverAsync')
     assert 'Process.Kill' not in text
     assert 'Process.Start' not in text
-    assert '不会自动重启千牛以保护登录态' in text
+    assert '不会自动重启千牛，避免破坏登录态' in text
 
 
 def test_post_update_recovery_restarts_qianniu_once_and_restores_remembered_login():
@@ -57,7 +57,7 @@ def test_language_status_reconciles_from_qninject_active_resource_authority():
     assert 'typeof(QNInject).GetMethod("GetActiveResourceZip"' in text
     assert '20260713-hans-all-pages-v3' in text
     assert 'BotConnectionDiagnostics.RecordLanguageStatus(true' in text
-    assert '清除早期“待安全修复”临时状态' in text
+    assert '清除早期‘待安全修复’临时状态' in text
     assert 'QnLanguageStatusReconciler.TryReconcile();' in startup
 
 
