@@ -23,14 +23,16 @@ namespace Bot.ChromeNs
     internal static class QnStartupConnectionSelfHeal
     {
         private const int WebSocketPort = 41010;
+        private const int MaxPostRestartLoginAttempts = 8;
+        private const string PrimaryLoginButtonName = "登录";
         private static readonly TimeSpan DegradedRetryDelay = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PostUpdateGracePeriod = TimeSpan.FromSeconds(25);
         private static readonly TimeSpan PostUpdateHealthWait = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan PostRestartRecoveryTimeout = TimeSpan.FromSeconds(120);
+        private static readonly TimeSpan PostRestartLoginRetryInterval = TimeSpan.FromSeconds(6);
         private static readonly TimeSpan RecoveryPollDelay = TimeSpan.FromMilliseconds(1800);
         private static readonly string[] MainWorkbenchProcessNames = { "AliWorkbench", "new_AliWorkbench" };
         private static readonly string[] RestartCleanupProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender" };
-        private static readonly string[] LoginButtonNames = { "登录", "立即登录", "登录千牛", "进入千牛" };
         private static readonly string[] ReceptionEntryNames = { "接待台", "千牛接待台", "接待中心", "客服接待", "消息接待" };
         private static int _started;
 
@@ -286,7 +288,8 @@ namespace Bot.ChromeNs
         private static async Task<bool> WaitForInjectionAndRestoreUiAsync()
         {
             var until = DateTime.UtcNow + PostRestartRecoveryTimeout;
-            var loginInvoked = false;
+            var loginAttempts = 0;
+            var lastLoginAttemptAt = DateTime.MinValue;
             var historyConfirmed = false;
             var receptionInvoked = false;
             var cycle = 0;
@@ -294,10 +297,14 @@ namespace Bot.ChromeNs
             while (DateTime.UtcNow < until)
             {
                 cycle++;
+
+                // Injection health is always checked before any UI action. If Qianniu has already
+                // restored its page, post-update UI automation stops immediately.
                 var snapshot = BotConnectionDiagnostics.GetSnapshot();
                 if (snapshot != null && snapshot.WebSocketSessionCount > 0)
                 {
-                    Log.Info("更新后千牛恢复完成：重启后注入WebSocket已连接，cycle=" + cycle);
+                    Log.Info("更新后千牛恢复完成：重启后注入WebSocket已连接，cycle=" + cycle
+                        + ", loginAttempts=" + loginAttempts);
                     return true;
                 }
 
@@ -312,7 +319,11 @@ namespace Bot.ChromeNs
 
                 try
                 {
-                    DriveQianniuSavedSessionUi(ref loginInvoked, ref historyConfirmed, ref receptionInvoked);
+                    DriveQianniuSavedSessionUi(
+                        ref loginAttempts,
+                        ref lastLoginAttemptAt,
+                        ref historyConfirmed,
+                        ref receptionInvoked);
                 }
                 catch (Exception ex)
                 {
@@ -325,14 +336,15 @@ namespace Bot.ChromeNs
             Log.Error("更新后千牛恢复：已执行唯一一次千牛重启，但在 "
                 + (int)PostRestartRecoveryTimeout.TotalSeconds
                 + " 秒内仍未建立注入连接；不会重复重启，转入低频等待。"
-                + " loginInvoked=" + loginInvoked
+                + " loginAttempts=" + loginAttempts
                 + ", historyConfirmed=" + historyConfirmed
                 + ", receptionInvoked=" + receptionInvoked);
             return false;
         }
 
         private static void DriveQianniuSavedSessionUi(
-            ref bool loginInvoked,
+            ref int loginAttempts,
+            ref DateTime lastLoginAttemptAt,
             ref bool historyConfirmed,
             ref bool receptionInvoked)
         {
@@ -388,15 +400,28 @@ namespace Bot.ChromeNs
                             continue;
                         }
 
-                        // Do not select another account and never type credentials. Clicking the
-                        // exact login action leaves Qianniu's own saved/default account selection
-                        // and credential store as the sole login authority.
-                        if (!loginInvoked
-                            && TryClickExactNamedElement(descendants, LoginButtonNames, "默认账号登录"))
+                        // Qianniu v9 can expose the visible primary login action as a custom/text
+                        // UIA element. A successful Invoke is therefore not proof that the page
+                        // transitioned. Keep the retry bounded and evidence-driven: only the exact
+                        // primary text “登录” is eligible, never account selectors or alternate login
+                        // entries, and stop immediately once injection health returns.
+                        var now = DateTime.UtcNow;
+                        var loginRetryDue = loginAttempts < MaxPostRestartLoginAttempts
+                            && (lastLoginAttemptAt == DateTime.MinValue
+                                || now - lastLoginAttemptAt >= PostRestartLoginRetryInterval);
+                        if (loginRetryDue)
                         {
-                            loginInvoked = true;
-                            Log.Info("更新后千牛恢复：已使用千牛当前默认/历史账号执行登录按钮；未读取、填写或修改账号密码。");
-                            continue;
+                            bool candidateFound;
+                            var clicked = TryClickPrimaryLoginButton(window, descendants, out candidateFound);
+                            if (candidateFound)
+                            {
+                                loginAttempts++;
+                                lastLoginAttemptAt = now;
+                                Log.Info("更新后千牛恢复：主登录按钮触发结果=" + clicked
+                                    + ", attempt=" + loginAttempts + "/" + MaxPostRestartLoginAttempts
+                                    + "；仅使用千牛已选中的历史账号，不读取、填写、修改或切换账号凭据。");
+                                if (clicked) continue;
+                            }
                         }
 
                         if (!receptionInvoked
@@ -423,6 +448,81 @@ namespace Bot.ChromeNs
                 .Select(group => group.First())
                 .OrderBy(process => process.Id)
                 .ToArray();
+        }
+
+        private static bool TryClickPrimaryLoginButton(
+            Window window,
+            AutomationElement[] descendants,
+            out bool candidateFound)
+        {
+            candidateFound = false;
+            if (window == null || descendants == null) return false;
+
+            // Exact equality deliberately excludes “单账号登录”, “添加账号” and any other
+            // account-management action. Qianniu owns which saved account is selected.
+            var candidates = descendants
+                .Where(element => element != null
+                    && string.Equals(SafeName(element), PrimaryLoginButtonName, StringComparison.Ordinal))
+                .Select(element => new { Element = element, Rect = SafeBoundingRectangle(element) })
+                .Where(item => item.Rect.Width > 1 && item.Rect.Height > 1)
+                .ToArray();
+
+            if (candidates.Length == 0) return false;
+            candidateFound = true;
+
+            // Custom-rendered pages can expose both a text child and its button parent with the
+            // same name. They point at the same visual action. Prefer the lowest visible candidate,
+            // which is the primary bottom login action in the v9 saved-account page; width breaks
+            // ties in favour of the clickable container. No fixed screen coordinates are used.
+            var candidate = candidates
+                .OrderByDescending(item => item.Rect.Top + item.Rect.Height / 2)
+                .ThenByDescending(item => item.Rect.Width * item.Rect.Height)
+                .First();
+
+            try
+            {
+                window.Focus();
+                Thread.Sleep(120);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("更新后千牛恢复：激活千牛登录窗口失败，仍尝试元素级点击: " + ex.Message, 10);
+            }
+
+            try
+            {
+                candidate.Element.AsButton().Invoke();
+                Log.Info("更新后千牛恢复UI操作成功: stage=千牛v9主登录, name="
+                    + PrimaryLoginButtonName + ", method=Invoke");
+                return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var rect = candidate.Rect;
+                Mouse.Click(new System.Drawing.Point(
+                    rect.Left + rect.Width / 2,
+                    rect.Top + rect.Height / 2));
+                Log.Info("更新后千牛恢复UI操作成功: stage=千牛v9主登录, name="
+                    + PrimaryLoginButtonName + ", method=focused-bounded-coordinate");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("更新后千牛恢复UI操作失败: stage=千牛v9主登录, name="
+                    + PrimaryLoginButtonName + ", " + ex.Message, 10);
+                return false;
+            }
+        }
+
+        private static System.Drawing.Rectangle SafeBoundingRectangle(AutomationElement element)
+        {
+            if (element == null) return System.Drawing.Rectangle.Empty;
+            try { return element.BoundingRectangle; }
+            catch { return System.Drawing.Rectangle.Empty; }
         }
 
         private static bool TryClickExactNamedElement(
@@ -476,10 +576,10 @@ namespace Bot.ChromeNs
 
         private static bool WindowLooksLikeLogin(string windowName, AutomationElement[] descendants)
         {
-            if ((windowName ?? string.Empty).IndexOf("登录", StringComparison.Ordinal) >= 0) return true;
+            if ((windowName ?? string.Empty).IndexOf(PrimaryLoginButtonName, StringComparison.Ordinal) >= 0) return true;
             if (descendants == null) return false;
-            return descendants.Any(element => LoginButtonNames.Any(
-                allowed => string.Equals(SafeName(element), allowed, StringComparison.Ordinal)));
+            return descendants.Any(element => string.Equals(
+                SafeName(element), PrimaryLoginButtonName, StringComparison.Ordinal));
         }
 
         private static bool IsReceptionWindowName(string windowName)
