@@ -146,6 +146,8 @@ def test_post_update_recovery_waits_before_single_restart_and_never_handles_cred
     assert repair.count("await TryRestartQianniuOnceAsync()") == 1
     assert "宽限期内注入已自行恢复，已取消千牛重启" in repair
     assert "保留千牛自己的账号、密码和默认账号选择" in repair
-    assert "未读取、填写或修改账号密码" in repair
+    assert "不读取、填写、修改或切换账号凭据" in repair
+    assert 'private const string PrimaryLoginButtonName = "登录";' in repair
+    assert '"登录", "立即登录", "登录千牛", "进入千牛"' not in repair
     assert 'WindowContainsText(windowName, descendants, "是否需要打开之前的消息")' in repair
     assert 'new[] { "确认" }' in repair
