@@ -16,9 +16,9 @@ def test_v11_qninject_migration_never_kills_running_qianniu():
     script = (ROOT / "scripts/apply-recoverable-inject-v11.ps1").read_text(encoding="utf-8")
     assert "不关闭、不Kill、不重启千牛" in script
     assert "局部页面重新加载" in script
-    assert "KillWorkbenchProcesses();" in script  # required old fragment is replaced, not executed
-    replacement = script.split("'running Qianniu migration'", 1)[0].rsplit("@'", 1)[-1]
-    assert "KillWorkbenchProcesses();" not in replacement
+    assert "Legacy destructive QNInject migration remains" in script
+    assert "需要先退出千牛后注入插件" in script  # detection-only legacy signature
+    assert "KillWorkbenchProcesses();" not in script
 
 
 def test_windows_build_applies_v11_before_resources_and_compile_without_bot_targets_file():
