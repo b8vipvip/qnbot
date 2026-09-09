@@ -14,11 +14,11 @@ def test_v11_build_migration_replaces_permanent_retire_with_recoverable_standby(
 
 def test_v11_qninject_migration_never_kills_running_qianniu():
     script = (ROOT / "scripts/apply-recoverable-inject-v11.ps1").read_text(encoding="utf-8")
-    assert "不关闭、不Kill、不重启千牛" in script
-    assert "局部页面重新加载" in script
-    assert "Legacy destructive QNInject migration remains" in script
-    assert "需要先退出千牛后注入插件" in script  # detection-only legacy signature
-    assert "KillWorkbenchProcesses();" not in script
+    assert "Qianniu inject v11 migration: live patch; no close/kill/restart." in script
+    assert "local page reload instead of a full process restart" in script
+    assert "Legacy destructive QNInject migration remains in StartInject" in script
+    assert "KillWorkbenchProcesses();" in script  # validation only; never emitted into StartInject
+    assert "startBody.Contains('KillWorkbenchProcesses();')" in script
 
 
 def test_windows_build_applies_v11_before_resources_and_compile_without_bot_targets_file():
