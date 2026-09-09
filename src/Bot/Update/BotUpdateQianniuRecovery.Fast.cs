@@ -7,15 +7,16 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using Bot.ChromeNs;
 using Bot.Common;
+using Bot.UpdateNs;
+using BotLib;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 using Newtonsoft.Json.Linq;
 
-namespace Bot.Update
+namespace Bot.ChromeNs
 {
     internal static class PostUpdateQianniuRecovery
     {
@@ -46,10 +47,7 @@ namespace Bot.Update
             }
 
             var evidence = await WaitForFreshSuccessfulUpdateAsync(injectionReady).ConfigureAwait(false);
-            if (evidence == null)
-            {
-                return result;
-            }
+            if (evidence == null) return result;
 
             result.Eligible = true;
             if (!TryConsumeEvidence(evidence, out var consumeMessage))
@@ -58,7 +56,7 @@ namespace Bot.Update
                 return result;
             }
 
-            Log.Warn("[Bot][PostUpdateQnRecovery] 已确认本次为真实更新后的恢复场景；先给予千牛注入最后的自然恢复宽限。 version=" + evidence.TargetVersion);
+            Log.ErrorWithMaxCount("[PostUpdateQnRecovery] 已确认真实更新后的恢复场景；先给予千牛注入最后自然恢复宽限。 version=" + evidence.TargetVersion, 5);
             var graceUntil = DateTime.UtcNow + NaturalRecoveryGrace;
             while (DateTime.UtcNow < graceUntil)
             {
@@ -81,7 +79,7 @@ namespace Bot.Update
             result.AttemptedRestart = true;
             try
             {
-                Log.Warn("[Bot][PostUpdateQnRecovery] 更新后注入仍未恢复，执行一次受控千牛重启。 exe=" + executable);
+                Log.ErrorWithMaxCount("[PostUpdateQnRecovery] 更新后注入仍未恢复，执行一次受控千牛重启。", 5);
                 StopQianniuProcesses();
                 await Task.Delay(1800).ConfigureAwait(false);
                 Process.Start(new ProcessStartInfo
@@ -93,7 +91,7 @@ namespace Bot.Update
             }
             catch (Exception ex)
             {
-                Log.Error("[Bot][PostUpdateQnRecovery] 千牛重启失败：" + ex.Message);
+                Log.ErrorWithMaxCount("[PostUpdateQnRecovery] 千牛重启失败：" + ex.Message, 5);
                 result.Message = "千牛重启失败：" + ex.Message;
                 return result;
             }
@@ -111,19 +109,16 @@ namespace Bot.Update
                 }
 
                 TryConfirmRestorePreviousMessages();
-
                 if ((DateTime.UtcNow - lastLoginClick) >= TimeSpan.FromSeconds(8) && TryClickRememberedAccountLogin())
                 {
                     lastLoginClick = DateTime.UtcNow;
-                    Log.Info("[Bot][PostUpdateQnRecovery] 已点击千牛历史记住密码账号登录按钮。等待千牛恢复会话。");
+                    Log.Info("[PostUpdateQnRecovery] 已点击千牛历史记住密码账号的登录按钮。");
                 }
-
                 if ((DateTime.UtcNow - lastReceptionClick) >= TimeSpan.FromSeconds(10) && TryOpenReceptionWindow())
                 {
                     lastReceptionClick = DateTime.UtcNow;
-                    Log.Info("[Bot][PostUpdateQnRecovery] 已尝试打开千牛接待/聊天窗口。");
+                    Log.Info("[PostUpdateQnRecovery] 已尝试打开千牛接待/聊天窗口。");
                 }
-
                 await Task.Delay(1500).ConfigureAwait(false);
             }
 
@@ -166,7 +161,7 @@ namespace Bot.Update
             {
                 var root = UpdateStartupHealthService.GetUpdaterRoot();
                 var candidates = new[] { Path.Combine(root, ResultFileName), Path.Combine(root, ReportedResultFileName) };
-                var currentVersion = NormalizeVersion(BotVersionInfo.GetVersion());
+                var currentVersion = NormalizeVersion(BotUpdateService.CurrentVersion);
                 foreach (var path in candidates)
                 {
                     if (!File.Exists(path)) continue;
@@ -198,7 +193,7 @@ namespace Bot.Update
             }
             catch (Exception ex)
             {
-                Log.Warn("[Bot][PostUpdateQnRecovery] 读取 updater 成功证据失败：" + ex.Message);
+                Log.ErrorWithMaxCount("[PostUpdateQnRecovery] 读取 updater 成功证据失败：" + ex.Message, 5);
             }
             return null;
         }
@@ -243,7 +238,7 @@ namespace Bot.Update
             catch (Exception ex)
             {
                 message = "无法持久化更新后千牛恢复去重标记；为避免循环重启，未自动重启千牛：" + ex.Message;
-                Log.Warn("[Bot][PostUpdateQnRecovery] " + message);
+                Log.ErrorWithMaxCount("[PostUpdateQnRecovery] " + message, 5);
                 return false;
             }
         }
@@ -275,7 +270,7 @@ namespace Bot.Update
             {
                 try
                 {
-                    var path = process.MainModule?.FileName;
+                    var path = process.MainModule == null ? string.Empty : process.MainModule.FileName;
                     if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) return path;
                 }
                 catch { }
@@ -395,14 +390,14 @@ namespace Bot.Update
             }
             catch (Exception ex)
             {
-                Log.Warn("[Bot][PostUpdateQnRecovery] UI 自动恢复动作失败 name=" + exactName + " error=" + ex.Message);
+                Log.ErrorWithMaxCount("[PostUpdateQnRecovery] UI 自动恢复动作失败 name=" + exactName + " error=" + ex.Message, 10);
             }
             return false;
         }
 
         private static string SafeName(AutomationElement element)
         {
-            try { return element?.Properties.Name.ValueOrDefault ?? string.Empty; }
+            try { return element == null ? string.Empty : (element.Properties.Name.ValueOrDefault ?? string.Empty); }
             catch { return string.Empty; }
         }
 
@@ -428,15 +423,16 @@ namespace Bot.Update
             try
             {
                 var method = typeof(QNInject).GetMethod("GetActiveResourceZip", BindingFlags.Static | BindingFlags.NonPublic);
-                var activeZip = method?.Invoke(null, null) as string;
+                var activeZip = method == null ? null : method.Invoke(null, null) as string;
                 if (string.IsNullOrWhiteSpace(activeZip) || !File.Exists(activeZip)) return;
 
-                using (var zip = ZipFile.OpenRead(activeZip))
+                using (var stream = File.OpenRead(activeZip))
+                using (var zip = new ZipArchive(stream, ZipArchiveMode.Read, false))
                 {
                     var entry = zip.GetEntry(LanguageMarkerEntry) ?? zip.GetEntry(LanguageMarkerEntry.TrimStart('.', '/'));
                     if (entry == null)
                     {
-                        BotConnectionDiagnostics.RecordLanguageStatus(false, "当前千牛语言资源未发现最新简体中文标记，等待安全修复。");
+                        BotConnectionDiagnostics.RecordLanguageStatus(false, "语言：待安全修复", "当前千牛语言资源未发现最新简体中文标记，等待安全修复。");
                         return;
                     }
                     using (var reader = new StreamReader(entry.Open()))
@@ -444,19 +440,19 @@ namespace Bot.Update
                         var marker = (reader.ReadToEnd() ?? string.Empty).Trim();
                         if (string.Equals(marker, LanguageMarkerValue, StringComparison.Ordinal))
                         {
-                            BotConnectionDiagnostics.RecordLanguageStatus(true, "已由当前千牛资源包确认简体中文语言标记为最新。");
-                            Log.Info("[Bot][Language] 当前活动千牛资源已确认简体中文标记最新，清除早期“待安全修复”临时状态。");
+                            BotConnectionDiagnostics.RecordLanguageStatus(true, "语言：简体中文 ✓", "已由当前千牛资源包确认简体中文语言标记为最新。");
+                            Log.Info("当前活动千牛资源已确认简体中文标记最新，清除早期‘待安全修复’临时状态。");
                         }
                         else
                         {
-                            BotConnectionDiagnostics.RecordLanguageStatus(false, "当前千牛语言资源标记不是最新版本，等待安全修复。");
+                            BotConnectionDiagnostics.RecordLanguageStatus(false, "语言：待安全修复", "当前千牛语言资源标记不是最新版本，等待安全修复。");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                Log.Warn("[Bot][Language] 语言状态终态核对失败，保留现有安全状态：" + ex.Message);
+                Log.ErrorWithMaxCount("语言状态终态核对失败，保留现有安全状态：" + ex.Message, 5);
             }
         }
     }
