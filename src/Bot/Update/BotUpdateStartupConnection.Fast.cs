@@ -1,11 +1,6 @@
 using Bot.UpdateNs;
 using BotLib;
-using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Input;
-using FlaUI.UIA3;
 using System;
-using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -17,23 +12,18 @@ namespace Bot.ChromeNs
     /// <summary>
     /// Repairs the narrow startup case where the Bot process is healthy but the local
     /// 127.0.0.1:41010 listener or Qianniu injected page is not yet available.
-    /// Normal startup is non-destructive. A single controlled Qianniu restart is allowed only
-    /// for a verified updater-launched target process after its startup health acknowledgement.
+    ///
+    /// Automatic Bot updates must preserve the already logged-in Qianniu process and session.
+    /// Recovery therefore owns only the Bot listener and waiting/retry policy. It never closes,
+    /// kills, restarts, focuses, clicks, or otherwise drives Qianniu UI.
     /// </summary>
     internal static class QnStartupConnectionSelfHeal
     {
         private const int WebSocketPort = 41010;
-        private const int MaxPostRestartLoginAttempts = 8;
-        private const string PrimaryLoginButtonName = "登录";
         private static readonly TimeSpan DegradedRetryDelay = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan PostUpdateGracePeriod = TimeSpan.FromSeconds(25);
         private static readonly TimeSpan PostUpdateHealthWait = TimeSpan.FromSeconds(15);
-        private static readonly TimeSpan PostRestartRecoveryTimeout = TimeSpan.FromSeconds(120);
-        private static readonly TimeSpan PostRestartLoginRetryInterval = TimeSpan.FromSeconds(6);
-        private static readonly TimeSpan RecoveryPollDelay = TimeSpan.FromMilliseconds(1800);
-        private static readonly string[] MainWorkbenchProcessNames = { "AliWorkbench", "new_AliWorkbench" };
-        private static readonly string[] RestartCleanupProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender" };
-        private static readonly string[] ReceptionEntryNames = { "接待台", "千牛接待台", "接待中心", "客服接待", "消息接待" };
+        private static readonly TimeSpan PostUpdateReconnectWindow = TimeSpan.FromSeconds(120);
         private static int _started;
 
         public static void Start()
@@ -43,13 +33,15 @@ namespace Bot.ChromeNs
             var postUpdateLaunchAuthorized = UpdateStartupHealthService.IsPostUpdateLaunchAuthorized();
             if (postUpdateLaunchAuthorized)
             {
-                Log.Info("千牛启动连接自恢复识别到真实更新目标进程；仅在健康确认后允许一次受控千牛恢复。");
+                Log.Info("千牛启动连接自恢复识别到真实更新目标进程；更新后仅恢复Bot监听并等待原千牛注入重连，不自动重启千牛。");
             }
             Task.Run(() => RunAsync(postUpdateLaunchAuthorized));
         }
 
         private static async Task RunAsync(bool postUpdateLaunchAuthorized)
         {
+            // Keep the quick startup recovery for the common race where the new Bot process has not
+            // yet rebound 41010 or the existing Qianniu WebView needs a few seconds to reconnect.
             var delays = new[] { 2000, 3500, 5500, 8000, 11000 };
             for (var attempt = 0; attempt < delays.Length; attempt++)
             {
@@ -62,6 +54,7 @@ namespace Bot.ChromeNs
                         Log.Info("千牛启动连接自恢复完成：注入WebSocket已连接，attempt=" + (attempt + 1));
                         return;
                     }
+
                     if (!IsLoopbackListenerActive())
                     {
                         Log.Error("千牛启动连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务，attempt=" + (attempt + 1));
@@ -91,11 +84,11 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    Log.Error("更新后千牛恢复未获得启动健康确认；拒绝重启千牛并回落到无破坏性低频等待。");
+                    Log.Error("更新后连接恢复未获得启动健康确认；保持原千牛进程与登录态并回落到无破坏性低频等待。");
                 }
             }
 
-            Log.Error("千牛启动连接进入降级恢复：Bot进程保持运行，注入脚本仍未连接；普通启动或未获得更新健康授权时不会自动重启千牛。后续每30秒低频检测并自动恢复。"
+            Log.Error("千牛启动连接进入降级恢复：Bot进程保持运行；保护当前千牛进程与登录态，不自动重启千牛。后续每30秒低频检测并自动恢复。"
                 + " ws=" + (finalSnapshot == null ? string.Empty : finalSnapshot.WebSocketStatus)
                 + ", injection=" + (finalSnapshot == null ? string.Empty : finalSnapshot.InjectionStatus));
             await RunDegradedRecoveryAsync().ConfigureAwait(false);
@@ -116,29 +109,41 @@ namespace Bot.ChromeNs
 
         private static async Task<bool> RunPostUpdateRecoveryAsync()
         {
-            Log.Info("更新后千牛恢复进入有限宽限期：等待注入页面自行恢复 " + (int)PostUpdateGracePeriod.TotalSeconds + " 秒；若自行恢复则取消千牛重启。");
+            Log.Info("更新后连接恢复进入有限宽限期：等待原千牛注入页面自行重连 "
+                + (int)PostUpdateGracePeriod.TotalSeconds
+                + " 秒；自动更新不会关闭或重启千牛。");
+
             if (await WaitForInjectionAsync(PostUpdateGracePeriod, "post-update-grace").ConfigureAwait(false))
             {
-                Log.Info("更新后千牛恢复：宽限期内注入已自行恢复，已取消千牛重启。");
+                Log.Info("更新后连接恢复：宽限期内原千牛注入已自行重连；千牛进程和登录态保持不变。");
                 return true;
             }
 
             if (!IsLoopbackListenerActive())
             {
-                Log.Error("更新后千牛恢复：Bot 41010监听仍未就绪，先恢复Bot WebSocket，拒绝把Bot端故障误判为千牛故障。");
-                try { MyWebSocketServer.WSocketSvrInst.Start(); } catch (Exception ex) { Log.Exception(ex); }
-                if (await WaitForInjectionAsync(TimeSpan.FromSeconds(10), "post-update-listener-retry").ConfigureAwait(false)) return true;
-                if (!IsLoopbackListenerActive()) return false;
+                Log.Error("更新后连接恢复：Bot 41010监听仍未就绪，先恢复Bot WebSocket；不会把Bot端监听故障转换为千牛重启。");
+                try { MyWebSocketServer.WSocketSvrInst.Start(); }
+                catch (Exception ex) { Log.Exception(ex); }
+
+                if (await WaitForInjectionAsync(TimeSpan.FromSeconds(10), "post-update-listener-retry").ConfigureAwait(false))
+                {
+                    Log.Info("更新后连接恢复：41010恢复后原千牛注入已重新连接；未重启千牛。");
+                    return true;
+                }
             }
 
-            Log.Error("更新后千牛恢复：Bot WS已监听但注入在有限宽限期内仍未连接，执行唯一一次受控千牛重启。本次授权仅来自已通过健康确认的真实版本更新。 ");
-            var restarted = await TryRestartQianniuOnceAsync().ConfigureAwait(false);
-            if (!restarted)
+            Log.Error("更新后Bot WS已恢复但原千牛注入尚未重连；为保护已登录千牛会话，不执行千牛重启、不操作登录界面。"
+                + " 继续等待 " + (int)PostUpdateReconnectWindow.TotalSeconds + " 秒。");
+
+            if (await WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session").ConfigureAwait(false))
             {
-                Log.Error("更新后千牛恢复：无法安全完成千牛重启，停止破坏性动作并回落低频等待。");
-                return false;
+                Log.Info("更新后连接恢复完成：原千牛注入在保护窗口内重新连接；未重启千牛。");
+                return true;
             }
-            return await WaitForInjectionAndRestoreUiAsync().ConfigureAwait(false);
+
+            Log.Error("更新后千牛注入在 " + (int)PostUpdateReconnectWindow.TotalSeconds
+                + " 秒内仍未重连；保持原千牛进程与登录态，转入低频等待，不重启千牛、不操作登录界面。");
+            return false;
         }
 
         private static async Task<bool> WaitForInjectionAsync(TimeSpan timeout, string stage)
@@ -148,6 +153,7 @@ namespace Bot.ChromeNs
             {
                 var snapshot = BotConnectionDiagnostics.GetSnapshot();
                 if (snapshot != null && snapshot.WebSocketSessionCount > 0) return true;
+
                 if (!IsLoopbackListenerActive())
                 {
                     try { MyWebSocketServer.WSocketSvrInst.Start(); }
@@ -159,337 +165,6 @@ namespace Bot.ChromeNs
                 await Task.Delay(1000).ConfigureAwait(false);
             }
             return false;
-        }
-
-        private static async Task<bool> TryRestartQianniuOnceAsync()
-        {
-            var executablePath = CaptureWorkbenchExecutablePath();
-            if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
-            {
-                Log.Error("更新后千牛恢复：无法从当前千牛进程取得可执行文件路径；不会猜测路径或启动其它程序。");
-                return false;
-            }
-
-            Log.Info("更新后千牛恢复：准备受控重启千牛，exe=" + executablePath);
-            TryCloseWorkbenchWindows();
-            await Task.Delay(2500).ConfigureAwait(false);
-            KillRemainingWorkbenchProcesses();
-            await Task.Delay(1200).ConfigureAwait(false);
-
-            try
-            {
-                var workingDirectory = Path.GetDirectoryName(executablePath);
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = executablePath,
-                    WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? AppDomain.CurrentDomain.BaseDirectory : workingDirectory,
-                    UseShellExecute = true
-                };
-                var process = Process.Start(startInfo);
-                Log.Info("更新后千牛恢复：千牛已重新启动；保留千牛自己的账号、密码和默认账号选择，不读取也不改写登录凭据。 pid=" + (process == null ? 0 : process.Id));
-                return process != null;
-            }
-            catch (Exception ex)
-            {
-                Log.Exception(ex, "PostUpdateQianniuRestart");
-                return false;
-            }
-        }
-
-        private static string CaptureWorkbenchExecutablePath()
-        {
-            foreach (var name in MainWorkbenchProcessNames)
-            {
-                Process[] processes;
-                try { processes = Process.GetProcessesByName(name); } catch { continue; }
-                foreach (var process in processes.OrderBy(p => p.Id))
-                {
-                    try
-                    {
-                        var path = process.MainModule == null ? string.Empty : process.MainModule.FileName;
-                        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) return path;
-                    }
-                    catch { }
-                }
-            }
-            return string.Empty;
-        }
-
-        private static void TryCloseWorkbenchWindows()
-        {
-            foreach (var name in MainWorkbenchProcessNames)
-            {
-                Process[] processes;
-                try { processes = Process.GetProcessesByName(name); } catch { continue; }
-                foreach (var process in processes)
-                {
-                    try
-                    {
-                        if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.ErrorWithMaxCount("更新后千牛恢复：请求正常关闭千牛窗口失败: " + ex.Message, 5);
-                    }
-                }
-            }
-        }
-
-        private static void KillRemainingWorkbenchProcesses()
-        {
-            foreach (var name in RestartCleanupProcessNames)
-            {
-                Process[] processes;
-                try { processes = Process.GetProcessesByName(name); } catch { continue; }
-                foreach (var process in processes)
-                {
-                    try
-                    {
-                        if (process.HasExited) continue;
-                        process.Kill();
-                        process.WaitForExit(3000);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.ErrorWithMaxCount("更新后千牛恢复：结束残留千牛进程失败: process=" + name + ", " + ex.Message, 10);
-                    }
-                }
-            }
-        }
-
-        private static async Task<bool> WaitForInjectionAndRestoreUiAsync()
-        {
-            var until = DateTime.UtcNow + PostRestartRecoveryTimeout;
-            var loginAttempts = 0;
-            var lastLoginAttemptAt = DateTime.MinValue;
-            var historyConfirmed = false;
-            var receptionInvoked = false;
-            var cycle = 0;
-
-            while (DateTime.UtcNow < until)
-            {
-                cycle++;
-                var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                if (snapshot != null && snapshot.WebSocketSessionCount > 0)
-                {
-                    Log.Info("更新后千牛恢复完成：重启后注入WebSocket已连接，cycle=" + cycle + ", loginAttempts=" + loginAttempts);
-                    return true;
-                }
-
-                if (!IsLoopbackListenerActive())
-                {
-                    try { MyWebSocketServer.WSocketSvrInst.Start(); }
-                    catch (Exception ex)
-                    {
-                        Log.ErrorWithMaxCount("更新后千牛恢复：重启后41010监听恢复失败: " + ex.Message, 10);
-                    }
-                }
-
-                try
-                {
-                    DriveQianniuSavedSessionUi(ref loginAttempts, ref lastLoginAttemptAt, ref historyConfirmed, ref receptionInvoked);
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("更新后千牛恢复UI检查失败: " + ex.Message, 20);
-                }
-                await Task.Delay(RecoveryPollDelay).ConfigureAwait(false);
-            }
-
-            Log.Error("更新后千牛恢复：已执行唯一一次千牛重启，但在 " + (int)PostRestartRecoveryTimeout.TotalSeconds
-                + " 秒内仍未建立注入连接；不会重复重启，转入低频等待。"
-                + " loginAttempts=" + loginAttempts + ", historyConfirmed=" + historyConfirmed + ", receptionInvoked=" + receptionInvoked);
-            return false;
-        }
-
-        private static void DriveQianniuSavedSessionUi(ref int loginAttempts, ref DateTime lastLoginAttemptAt, ref bool historyConfirmed, ref bool receptionInvoked)
-        {
-            using (var automation = new UIA3Automation())
-            {
-                foreach (var process in GetMainWorkbenchProcesses())
-                {
-                    FlaUI.Core.Application application;
-                    try { application = FlaUI.Core.Application.Attach(process.Id); } catch { continue; }
-                    Window[] windows;
-                    try { windows = application.GetAllTopLevelWindows(automation); } catch { continue; }
-
-                    foreach (var window in windows)
-                    {
-                        if (window == null) continue;
-                        var windowName = SafeName(window);
-                        AutomationElement[] descendants;
-                        try { descendants = window.FindAllDescendants(); } catch { descendants = new AutomationElement[0]; }
-
-                        if (!historyConfirmed && WindowContainsText(windowName, descendants, "是否需要打开之前的消息"))
-                        {
-                            if (TryClickExactNamedElement(descendants, new[] { "确认" }, "恢复之前的消息确认"))
-                            {
-                                historyConfirmed = true;
-                                Log.Info("更新后千牛恢复：检测到“是否需要打开之前的消息？”并只点击了明确的“确认”。");
-                                continue;
-                            }
-                        }
-
-                        if (IsReceptionWindowName(windowName))
-                        {
-                            receptionInvoked = true;
-                            continue;
-                        }
-
-                        var now = DateTime.UtcNow;
-                        var loginRetryDue = loginAttempts < MaxPostRestartLoginAttempts
-                            && (lastLoginAttemptAt == DateTime.MinValue || now - lastLoginAttemptAt >= PostRestartLoginRetryInterval);
-                        if (loginRetryDue)
-                        {
-                            bool candidateFound;
-                            var clicked = TryClickPrimaryLoginButton(window, descendants, out candidateFound);
-
-                            // Field run 1.1.1369 proved the custom-rendered v9 saved-account page can
-                            // expose no UIA Name=登录 at all (loginAttempts stayed 0 for 120 seconds).
-                            // Only inside this updater-authorized, post-restart recovery scope, use a
-                            // compact saved-account-window fallback. It never selects an account.
-                            if (!candidateFound)
-                            {
-                                clicked = QnSavedAccountLoginFallback.TryClickSavedAccountLoginFallback(window, descendants);
-                                candidateFound = clicked;
-                            }
-
-                            if (candidateFound)
-                            {
-                                loginAttempts++;
-                                lastLoginAttemptAt = now;
-                                Log.Info("更新后千牛恢复：主登录按钮触发结果=" + clicked
-                                    + ", attempt=" + loginAttempts + "/" + MaxPostRestartLoginAttempts
-                                    + "；仅使用千牛已选中的历史账号，不读取、填写、修改或切换账号凭据。");
-                                if (clicked) continue;
-                            }
-                        }
-
-                        if (!receptionInvoked && !WindowLooksLikeLogin(windowName, descendants)
-                            && TryClickExactNamedElement(descendants, ReceptionEntryNames, "打开接待窗口"))
-                        {
-                            receptionInvoked = true;
-                            Log.Info("更新后千牛恢复：已点击明确的接待入口，等待千牛恢复接待聊天WebView与注入连接。");
-                        }
-                    }
-                }
-            }
-        }
-
-        private static Process[] GetMainWorkbenchProcesses()
-        {
-            return MainWorkbenchProcessNames
-                .SelectMany(name => { try { return Process.GetProcessesByName(name); } catch { return new Process[0]; } })
-                .GroupBy(process => process.Id)
-                .Select(group => group.First())
-                .OrderBy(process => process.Id)
-                .ToArray();
-        }
-
-        private static bool TryClickPrimaryLoginButton(Window window, AutomationElement[] descendants, out bool candidateFound)
-        {
-            candidateFound = false;
-            if (window == null || descendants == null) return false;
-            var candidates = descendants
-                .Where(element => element != null && string.Equals(SafeName(element), PrimaryLoginButtonName, StringComparison.Ordinal))
-                .Select(element => new { Element = element, Rect = SafeBoundingRectangle(element) })
-                .Where(item => item.Rect.Width > 1 && item.Rect.Height > 1)
-                .ToArray();
-            if (candidates.Length == 0) return false;
-            candidateFound = true;
-            var candidate = candidates
-                .OrderByDescending(item => item.Rect.Top + item.Rect.Height / 2)
-                .ThenByDescending(item => item.Rect.Width * item.Rect.Height)
-                .First();
-
-            try { window.Focus(); Thread.Sleep(120); }
-            catch (Exception ex) { Log.ErrorWithMaxCount("更新后千牛恢复：激活千牛登录窗口失败，仍尝试元素级点击: " + ex.Message, 10); }
-            try
-            {
-                candidate.Element.AsButton().Invoke();
-                Log.Info("更新后千牛恢复UI操作成功: stage=千牛v9主登录, name=" + PrimaryLoginButtonName + ", method=Invoke");
-                return true;
-            }
-            catch { }
-            try
-            {
-                var rect = candidate.Rect;
-                Mouse.Click(new System.Drawing.Point(rect.Left + rect.Width / 2, rect.Top + rect.Height / 2));
-                Log.Info("更新后千牛恢复UI操作成功: stage=千牛v9主登录, name=" + PrimaryLoginButtonName + ", method=focused-bounded-coordinate");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("更新后千牛恢复UI操作失败: stage=千牛v9主登录, name=" + PrimaryLoginButtonName + ", " + ex.Message, 10);
-                return false;
-            }
-        }
-
-        private static System.Drawing.Rectangle SafeBoundingRectangle(AutomationElement element)
-        {
-            if (element == null) return System.Drawing.Rectangle.Empty;
-            try { return element.BoundingRectangle; } catch { return System.Drawing.Rectangle.Empty; }
-        }
-
-        private static bool TryClickExactNamedElement(AutomationElement[] descendants, string[] allowedNames, string stage)
-        {
-            if (descendants == null || allowedNames == null) return false;
-            foreach (var element in descendants)
-            {
-                if (element == null) continue;
-                var name = SafeName(element);
-                if (!allowedNames.Any(allowed => string.Equals(name, allowed, StringComparison.Ordinal))) continue;
-                try
-                {
-                    element.AsButton().Invoke();
-                    Log.Info("更新后千牛恢复UI操作成功: stage=" + stage + ", name=" + name + ", method=Invoke");
-                    return true;
-                }
-                catch { }
-                try
-                {
-                    var rect = element.BoundingRectangle;
-                    if (rect.Width <= 1 || rect.Height <= 1) continue;
-                    Mouse.Click(new System.Drawing.Point(rect.Left + rect.Width / 2, rect.Top + rect.Height / 2));
-                    Log.Info("更新后千牛恢复UI操作成功: stage=" + stage + ", name=" + name + ", method=bounded-coordinate");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("更新后千牛恢复UI操作失败: stage=" + stage + ", name=" + name + ", " + ex.Message, 10);
-                }
-            }
-            return false;
-        }
-
-        private static bool WindowContainsText(string windowName, AutomationElement[] descendants, string text)
-        {
-            if ((windowName ?? string.Empty).IndexOf(text, StringComparison.Ordinal) >= 0) return true;
-            if (descendants == null) return false;
-            foreach (var element in descendants)
-                if (SafeName(element).IndexOf(text, StringComparison.Ordinal) >= 0) return true;
-            return false;
-        }
-
-        private static bool WindowLooksLikeLogin(string windowName, AutomationElement[] descendants)
-        {
-            if ((windowName ?? string.Empty).IndexOf(PrimaryLoginButtonName, StringComparison.Ordinal) >= 0) return true;
-            if (descendants == null) return false;
-            return descendants.Any(element => string.Equals(SafeName(element), PrimaryLoginButtonName, StringComparison.Ordinal));
-        }
-
-        private static bool IsReceptionWindowName(string windowName)
-        {
-            windowName = (windowName ?? string.Empty).Trim();
-            return windowName.IndexOf("千牛接待台", StringComparison.Ordinal) >= 0
-                || windowName.IndexOf("接待中心", StringComparison.Ordinal) >= 0
-                || windowName.IndexOf("客服接待", StringComparison.Ordinal) >= 0;
-        }
-
-        private static string SafeName(AutomationElement element)
-        {
-            if (element == null) return string.Empty;
-            try { return (element.Name ?? string.Empty).Trim(); } catch { return string.Empty; }
         }
 
         private static async Task RunDegradedRecoveryAsync()
@@ -507,15 +182,17 @@ namespace Bot.ChromeNs
                         Log.Info("千牛降级连接自恢复完成：注入WebSocket重新连接，cycle=" + cycle);
                         return;
                     }
+
                     if (!IsLoopbackListenerActive())
                     {
                         Log.ErrorWithMaxCount("千牛降级连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务。 cycle=" + cycle, 20);
                         MyWebSocketServer.WSocketSvrInst.Start();
                         continue;
                     }
+
                     if (cycle == 1 || cycle % 20 == 0)
                     {
-                        Log.Info("千牛降级连接仍在等待注入页面：不会继续/重复重启千牛。 cycle=" + cycle
+                        Log.Info("千牛降级连接仍在等待原注入页面：保护千牛进程与登录态，不会自动重启或操作登录界面。 cycle=" + cycle
                             + ", ws=" + (snapshot == null ? string.Empty : snapshot.WebSocketStatus)
                             + ", injection=" + (snapshot == null ? string.Empty : snapshot.InjectionStatus));
                     }
@@ -533,7 +210,9 @@ namespace Bot.ChromeNs
             {
                 return IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
                     .Any(endpoint => endpoint.Port == WebSocketPort
-                        && (IPAddress.IsLoopback(endpoint.Address) || endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any)));
+                        && (IPAddress.IsLoopback(endpoint.Address)
+                            || endpoint.Address.Equals(IPAddress.Any)
+                            || endpoint.Address.Equals(IPAddress.IPv6Any)));
             }
             catch { return false; }
         }
