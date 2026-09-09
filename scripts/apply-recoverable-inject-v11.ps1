@@ -31,21 +31,8 @@ if ($inject.Contains('websocketRetired')) { throw 'Permanent websocketRetired st
 
 $qn = [IO.File]::ReadAllText($qnPath).Replace("`r`n", "`n")
 $qn = Replace-Required $qn "private const string injectVersionMarker = `"$oldMarker`";" "private const string injectVersionMarker = `"$newMarker`";" 'QNInject marker'
-$qn = Replace-Required $qn @'
-                if (IsWorkbenchRunning())
-                {
-                    if (MessageBox.Show("检测到千牛正在运行。需要先退出千牛后注入插件，是否现在关闭千牛并继续？", "提示", MessageBoxButton.YesNo)
-                        == MessageBoxResult.No)
-                    {
-                        return;
-                    }
-                    else
-                    {
-                        KillWorkbenchProcesses();
-                    }
-                    await Task.Delay(3000);
-                }
-'@ @'
+
+$runningReplacement = @'
                 if (IsWorkbenchRunning())
                 {
                     // v11 migration is non-destructive: update the on-disk WebView payload without
@@ -53,21 +40,16 @@ $qn = Replace-Required $qn @'
                     // page can consume v11 after a local page reload instead of a full Qianniu restart.
                     Log.Info("检测到千牛正在运行：执行无破坏注入升级，不关闭、不Kill、不重启千牛。marker=" + injectVersionMarker);
                 }
-'@ 'running Qianniu migration'
-$qn = Replace-Required $qn @'
-                if (success == needInjectPaths.Count)
-                {
-                    MessageBox.Show("千牛插件注入成功，请重新启动千牛!!");
-                }
-                else if (success > 0)
-                {
-                    MessageBox.Show("千牛插件部分注入成功，请重新启动千牛后检查连接状态。");
-                }
-                else
-                {
-                    MessageBox.Show("千牛插件注入失败!!");
-                }
-'@ @'
+'@
+if ($qn.Contains('需要先退出千牛后注入插件')) {
+    $runningPattern = '(?ms)^                if \(IsWorkbenchRunning\(\)\)\n                \{.*?^                    await Task\.Delay\(3000\);\n                \}'
+    $updated = [regex]::Replace($qn, $runningPattern, $runningReplacement, 1)
+    if ($updated -eq $qn) { throw 'Required patch fragment missing: running Qianniu migration' }
+    $qn = $updated
+}
+if (-not $qn.Contains('执行无破坏注入升级，不关闭、不Kill、不重启千牛')) { throw 'QNInject non-destructive migration marker missing' }
+
+$resultReplacement = @'
                 if (success == needInjectPaths.Count)
                 {
                     Log.Info("千牛注入升级已写入磁盘：无需重启千牛；当前仍运行旧脚本的WebView在局部页面重新加载后切换到 " + injectVersionMarker);
@@ -80,7 +62,15 @@ $qn = Replace-Required $qn @'
                 {
                     Log.Error("千牛注入升级失败：保持千牛运行，不自动重启；等待后续无破坏重试。 marker=" + injectVersionMarker);
                 }
-'@ 'migration result'
+'@
+if ($qn.Contains('千牛插件注入成功，请重新启动千牛!!')) {
+    $resultPattern = '(?ms)^                if \(success == needInjectPaths\.Count\)\n                \{\n                    MessageBox\.Show\("千牛插件注入成功，请重新启动千牛!!"\);.*?^                    MessageBox\.Show\("千牛插件注入失败!!"\);\n                \}'
+    $updated = [regex]::Replace($qn, $resultPattern, $resultReplacement, 1)
+    if ($updated -eq $qn) { throw 'Required patch fragment missing: migration result' }
+    $qn = $updated
+}
+if ($qn.Contains('需要先退出千牛后注入插件') -or $qn.Contains('千牛插件注入成功，请重新启动千牛!!')) { throw 'Legacy destructive QNInject migration remains' }
+if (-not $qn.Contains('千牛注入升级已写入磁盘')) { throw 'QNInject migration result marker missing' }
 [IO.File]::WriteAllText($qnPath, $qn, (New-Object Text.UTF8Encoding($true)))
 
 Write-Host "Applied recoverable Qianniu inject migration: $newMarker"
