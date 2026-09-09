@@ -1,0 +1,1 @@
+Policy: Bot automatic updates must not restart Qianniu. Preserve the existing logged-in Qianniu process, repair Bot listener 41010, and wait for the injected WebView to reconnect. Cross-process login automation is not part of automatic update recovery.
