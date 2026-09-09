@@ -4,28 +4,19 @@ HELPER = Path("src/Bot/Update/BotUpdateSavedAccountLoginFallback.Fast.cs")
 SOURCE = Path("src/Bot/Update/BotUpdateStartupConnection.Fast.cs")
 
 
-def test_custom_rendered_login_fallback_is_wired_into_bounded_recovery():
+def test_custom_rendered_login_helper_is_not_wired_into_auto_update_recovery():
     helper = HELPER.read_text(encoding="utf-8-sig")
     source = SOURCE.read_text(encoding="utf-8-sig")
+    # Keep the old helper available for a future explicitly initiated/manual recovery path, but the
+    # automatic updater must never use it because field Windows Server rejects cross-process input.
     assert "TryClickSavedAccountLoginFallback" in helper
-    assert "saved-account-relative" in helper
-    assert "compactLoginGeometry" in helper
-    assert "QnSavedAccountLoginFallback.TryClickSavedAccountLoginFallback(window, descendants)" in source
-    assert "MaxPostRestartLoginAttempts = 8" in source
-    assert "PostRestartLoginRetryInterval = TimeSpan.FromSeconds(6)" in source
+    assert "QnSavedAccountLoginFallback.TryClickSavedAccountLoginFallback" not in source
+    assert "Mouse.Click" not in source
+    assert "FlaUI" not in source
+    assert "不操作登录界面" in source
 
 
-def test_focus_access_denied_does_not_suppress_coordinate_click():
-    helper = HELPER.read_text(encoding="utf-8-sig")
-    focus = helper.index("window.Focus()")
-    focus_error = helper.index("激活千牛v9自绘登录窗口失败，继续尝试屏幕坐标点击")
-    coordinate_click = helper.index("Mouse.Click(point)")
-    assert focus < focus_error < coordinate_click
-    assert "屏幕坐标点击失败" in helper
-    assert "ex.GetType().Name" in helper
-
-
-def test_fallback_never_selects_or_mutates_credentials():
+def test_legacy_helper_remains_credential_safe_while_unreferenced():
     helper = HELPER.read_text(encoding="utf-8-sig")
     assert "单账号登录" in helper
     assert "添加账号" in helper
