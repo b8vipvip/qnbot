@@ -1,0 +1,7 @@
+1.1.1376 field evidence summary
+- Bot 41010 initially failed to bind, then startup self-heal restored it.
+- Post-update recovery waited 25 seconds, then restarted an already-running Qianniu.
+- New Qianniu stopped at the saved-account login page.
+- Coordinate login attempts failed with Win32Exception: Access denied.
+- Injection/QN remained unavailable for hours.
+Decision: automatic Bot updates preserve the existing Qianniu process/login and never drive login UI.
