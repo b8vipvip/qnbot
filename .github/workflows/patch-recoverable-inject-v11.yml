@@ -18,7 +18,7 @@ jobs:
           ref: fix/recoverable-inject-v11-20260909
           fetch-depth: 0
       - name: Patch injection lifecycle
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
