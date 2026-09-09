@@ -15,52 +15,12 @@ function Replace-Required([string]$Text, [string]$Old, [string]$New, [string]$Na
 $inject = [IO.File]::ReadAllText($injectPath).Replace("`r`n", "`n")
 $inject = Replace-Required $inject "window.__qnbotInjectVersion = `"$oldMarker`";" "window.__qnbotInjectVersion = `"$newMarker`";" 'inject marker'
 $inject = Replace-Required $inject '  var websocketRetired = false;' '  var websocketStandbyUntil = 0;' 'retired state'
-$inject = Replace-Required $inject @'
-    if (websocketRetired) return;
-    var payload = JSON.stringify({ type: type, response: response || "" });
-'@ @'
-    var payload = JSON.stringify({ type: type, response: response || "" });
-'@ 'send retired guard'
-$inject = Replace-Required $inject @'
-  function scheduleReconnect() {
-    if (websocketRetired || reconnectTimer) return;
-    reconnectTimer = setTimeout(function () {
-      reconnectTimer = null;
-      setupWebSocket();
-    }, 3000);
-  }
-
-  function setupWebSocket() {
-    if (websocketRetired) return;
-    var old = window.chatWebsocket;
-'@ @'
-  function scheduleReconnect(delayMs) {
-    if (reconnectTimer) return;
-    var delay = Math.max(1000, Number(delayMs) || 3000);
-    if (websocketStandbyUntil > Date.now()) {
-      delay = Math.max(delay, websocketStandbyUntil - Date.now());
-    }
-    reconnectTimer = setTimeout(function () {
-      reconnectTimer = null;
-      setupWebSocket();
-    }, delay);
-  }
-
-  function setupWebSocket() {
-    if (websocketStandbyUntil > Date.now()) {
-      scheduleReconnect(websocketStandbyUntil - Date.now());
-      return;
-    }
-    var old = window.chatWebsocket;
-'@ 'reconnect lifecycle'
-$inject = Replace-Required $inject @'
-        window.chatWebsocket = socket;
-        log("websocket connected");
-'@ @'
-        window.chatWebsocket = socket;
-        websocketStandbyUntil = 0;
-        log("websocket connected", "recoverable-standby-v11");
-'@ 'onopen resync'
+$inject = Replace-Required $inject "    if (websocketRetired) return;`n    var payload = JSON.stringify({ type: type, response: response || `"`" });" '    var payload = JSON.stringify({ type: type, response: response || "" });' 'send retired guard'
+$inject = Replace-Required $inject '  function scheduleReconnect() {' '  function scheduleReconnect(delayMs) {' 'reconnect signature'
+$inject = Replace-Required $inject '    if (websocketRetired || reconnectTimer) return;' "    if (reconnectTimer) return;`n    var delay = Math.max(1000, Number(delayMs) || 3000);`n    if (websocketStandbyUntil > Date.now()) {`n      delay = Math.max(delay, websocketStandbyUntil - Date.now());`n    }" 'reconnect lease'
+$inject = Replace-Required $inject "    }, 3000);`n  }`n`n  function setupWebSocket() {" "    }, delay);`n  }`n`n  function setupWebSocket() {" 'reconnect delay'
+$inject = Replace-Required $inject "  function setupWebSocket() {`n    if (websocketRetired) return;`n    var old = window.chatWebsocket;" "  function setupWebSocket() {`n    if (websocketStandbyUntil > Date.now()) {`n      scheduleReconnect(websocketStandbyUntil - Date.now());`n      return;`n    }`n    var old = window.chatWebsocket;" 'setup standby lease'
+$inject = Replace-Required $inject "        window.chatWebsocket = socket;`n        log(`"websocket connected`");" "        window.chatWebsocket = socket;`n        websocketStandbyUntil = 0;`n        log(`"websocket connected`", `"recoverable-standby-v11`");" 'onopen resync'
 $inject = Replace-Required $inject @'
           if (param.method === "retireDuplicate") {
             websocketRetired = true;
