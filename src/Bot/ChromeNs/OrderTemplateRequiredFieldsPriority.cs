@@ -6,11 +6,11 @@ using System.Threading;
 namespace Bot
 {
     /// <summary>
-    /// Keep the V2 required-order-field handler ahead of legacy order consumers.  Several Qianniu
+    /// Keep the V2 required-order-field handler ahead of legacy order consumers. Several Qianniu
     /// pages emit the same messageCenterNotify frame at almost the same time; if an older consumer
     /// runs first it can reserve/render the sparse card before V2 has a chance to query the exact
-    /// trade.  The QN event is a normal multicast delegate, so ordering it inside the declaring
-    /// partial class is deterministic and does not weaken any order/send dedupe guard.
+    /// trade. The App bootstrap is retained for compatibility, while every QN instance below also
+    /// starts the guard so legacy startup ordering can never silently skip it.
     /// </summary>
     public partial class App
     {
@@ -30,10 +30,11 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
-                // Existing V2 attaches on a 1ms bootstrap timer. Re-check for a short period and
-                // then at low frequency so later QN instances/subscribers keep the same ordering.
-                _timer = new Timer(_ => ReorderAll(), null, 5, 500);
-                Log.Info("订单模板字段补全优先级守卫已启动：V2 必填字段补全固定先于旧订单消费者。");
+                // Reorder aggressively during runtime startup and keep a low-cost guard afterwards.
+                // The field handler itself owns/dedupes the plan before doing any async enrichment,
+                // therefore being first prevents a sparse legacy consumer from sending {sku} empty.
+                _timer = new Timer(_ => ReorderAll(), null, 1, 100);
+                Log.Info("订单模板字段补全优先级守卫已启动：V2 必填字段补全固定先于旧订单消费者；每个QN实例均强制启用。");
             }
             return new object();
         }
@@ -57,6 +58,12 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        // Do not rely only on App's static field initializer. Field evidence from 1.1.1369 showed
+        // the V2 service running while this priority bootstrap never logged. Initializing from every
+        // actual QN object makes the ordering guard part of the business-session lifecycle itself.
+        private readonly object _orderRequiredFieldsPriorityInstanceBootstrap =
+            OrderTemplateRequiredFieldsPriority.InitializeForApp();
+
         private readonly object _orderRequiredFieldsEventOrderSync = new object();
         private bool _orderRequiredFieldsHandlerPriorityLogged;
 
@@ -67,32 +74,36 @@ namespace Bot.ChromeNs
                 var chain = EvMessageNotity;
                 if (chain == null) return;
                 var handlers = chain.GetInvocationList();
-                if (handlers.Length < 2) return;
+                if (handlers.Length < 1) return;
 
                 var required = handlers.FirstOrDefault(d =>
                     d != null
                     && d.Method != null
                     && d.Method.DeclaringType == typeof(OrderTemplateRequiredFieldsV2)
                     && string.Equals(d.Method.Name, "OnMessageNotify", StringComparison.Ordinal));
-                if (required == null || ReferenceEquals(handlers[0], required)) return;
+                if (required == null) return;
 
-                var ordered = handlers
-                    .Where(d => d != null && !ReferenceEquals(d, required))
-                    .Prepend(required)
-                    .ToArray();
-
-                EvMessageNotity = null;
-                foreach (var handler in ordered)
+                if (!ReferenceEquals(handlers[0], required))
                 {
-                    EvMessageNotity += (EventHandler<MessageNotifyEventArgs>)handler;
+                    var ordered = handlers
+                        .Where(d => d != null && !ReferenceEquals(d, required))
+                        .Prepend(required)
+                        .ToArray();
+
+                    EvMessageNotity = null;
+                    foreach (var handler in ordered)
+                    {
+                        EvMessageNotity += (EventHandler<MessageNotifyEventArgs>)handler;
+                    }
+                    handlers = ordered;
                 }
 
                 if (!_orderRequiredFieldsHandlerPriorityLogged)
                 {
                     _orderRequiredFieldsHandlerPriorityLogged = true;
-                    Log.Info("订单模板字段 V2 已提升为 messageCenterNotify 第一消费者: seller="
+                    Log.Info("订单模板字段 V2 已确认成为 messageCenterNotify 第一消费者: seller="
                         + (Seller == null ? string.Empty : Seller.Nick)
-                        + ", handlers=" + ordered.Length);
+                        + ", handlers=" + handlers.Length);
                 }
             }
         }
