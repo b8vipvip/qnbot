@@ -48,7 +48,9 @@ def test_post_update_login_does_not_read_write_or_switch_credentials():
     assert ".SetText(" not in login_helper
     assert ".Enter(" not in login_helper
     assert "Password" not in login_helper
-    assert "Select(" not in login_helper
+    assert "AsComboBox(" not in login_helper
+    assert "SelectItem(" not in login_helper
+    assert "Keyboard.Type" not in login_helper
     assert "Process.Start" not in login_helper
 
 
