@@ -94,6 +94,6 @@ def test_vision_followup_keeps_generation_cancellation_and_tolerates_small_clock
     assert "elapsed >= TimeSpan.FromSeconds(-SourceClockSkewToleranceSeconds)" in vision
     assert "elapsed = TimeSpan.Zero;" in vision
     assert "ResolveSessionAgent(lease)" in vision
-    assert 'GetField(\n                    "_sessionAgent"' in vision
+    assert 'GetField("_sessionAgent"' in vision
     assert "SessionGeneration = source.SessionGeneration" in vision
     assert "SemanticContinuationContext = source.SemanticContinuationContext" in vision
