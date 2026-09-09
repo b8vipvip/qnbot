@@ -35,42 +35,50 @@ $qn = Replace-Required $qn "private const string injectVersionMarker = `"$oldMar
 $runningReplacement = @'
                 if (IsWorkbenchRunning())
                 {
-                    // v11 migration is non-destructive: update the on-disk WebView payload without
-                    // terminating the already logged-in Qianniu process. A currently loaded v10
-                    // page can consume v11 after a local page reload instead of a full Qianniu restart.
-                    Log.Info("检测到千牛正在运行：执行无破坏注入升级，不关闭、不Kill、不重启千牛。marker=" + injectVersionMarker);
+                    // v11 is non-destructive. Patch the on-disk WebView payload without
+                    // terminating the logged-in Qianniu process. A loaded v10 page can
+                    // consume v11 after a local page reload instead of a full process restart.
+                    Log.Info("Qianniu inject v11 migration: live patch; no close/kill/restart. marker=" + injectVersionMarker);
                 }
 '@
-if ($qn.Contains('需要先退出千牛后注入插件')) {
+if (-not $qn.Contains('Qianniu inject v11 migration: live patch; no close/kill/restart.')) {
     $runningPattern = '(?ms)^                if \(IsWorkbenchRunning\(\)\)\n                \{.*?^                    await Task\.Delay\(3000\);\n                \}'
     $updated = [regex]::Replace($qn, $runningPattern, $runningReplacement, 1)
     if ($updated -eq $qn) { throw 'Required patch fragment missing: running Qianniu migration' }
     $qn = $updated
 }
-if (-not $qn.Contains('执行无破坏注入升级，不关闭、不Kill、不重启千牛')) { throw 'QNInject non-destructive migration marker missing' }
 
 $resultReplacement = @'
                 if (success == needInjectPaths.Count)
                 {
-                    Log.Info("千牛注入升级已写入磁盘：无需重启千牛；当前仍运行旧脚本的WebView在局部页面重新加载后切换到 " + injectVersionMarker);
+                    Log.Info("Qianniu inject v11 written to disk; no process restart required. A loaded v10 WebView switches after local page reload. marker=" + injectVersionMarker);
                 }
                 else if (success > 0)
                 {
-                    Log.Error("千牛注入仅部分升级成功：保持千牛运行，不自动重启；等待后续无破坏重试。 success=" + success + ", total=" + needInjectPaths.Count);
+                    Log.Error("Qianniu inject v11 partial migration; keep Qianniu running and retry non-destructively. success=" + success + ", total=" + needInjectPaths.Count);
                 }
                 else
                 {
-                    Log.Error("千牛注入升级失败：保持千牛运行，不自动重启；等待后续无破坏重试。 marker=" + injectVersionMarker);
+                    Log.Error("Qianniu inject v11 migration failed; keep Qianniu running and retry non-destructively. marker=" + injectVersionMarker);
                 }
 '@
-if ($qn.Contains('千牛插件注入成功，请重新启动千牛!!')) {
-    $resultPattern = '(?ms)^                if \(success == needInjectPaths\.Count\)\n                \{\n                    MessageBox\.Show\("千牛插件注入成功，请重新启动千牛!!"\);.*?^                    MessageBox\.Show\("千牛插件注入失败!!"\);\n                \}'
+if (-not $qn.Contains('Qianniu inject v11 written to disk; no process restart required.')) {
+    $resultPattern = '(?ms)^                if \(success == needInjectPaths\.Count\)\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}\n                else if \(success > 0\)\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}\n                else\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}'
     $updated = [regex]::Replace($qn, $resultPattern, $resultReplacement, 1)
     if ($updated -eq $qn) { throw 'Required patch fragment missing: migration result' }
     $qn = $updated
 }
-if ($qn.Contains('需要先退出千牛后注入插件') -or $qn.Contains('千牛插件注入成功，请重新启动千牛!!')) { throw 'Legacy destructive QNInject migration remains' }
-if (-not $qn.Contains('千牛注入升级已写入磁盘')) { throw 'QNInject migration result marker missing' }
+
+$start = $qn.IndexOf('public static async Task StartInject()')
+$end = $qn.IndexOf('private static string FindInstallPath()', $start)
+if ($start -lt 0 -or $end -le $start) { throw 'Cannot locate QNInject.StartInject for safety validation' }
+$startBody = $qn.Substring($start, $end - $start)
+if ($startBody.Contains('KillWorkbenchProcesses();')) { throw 'Legacy destructive QNInject migration remains in StartInject' }
+if ($startBody.Contains('MessageBox.Show(') -and $startBody.Contains('success == needInjectPaths.Count')) {
+    # The early install/resource error dialogs are allowed; the success/restart result block is not.
+    $resultStart = $startBody.IndexOf('if (success == needInjectPaths.Count)')
+    if ($resultStart -ge 0 -and $startBody.Substring($resultStart).Contains('MessageBox.Show(')) { throw 'Legacy restart result dialog remains in StartInject' }
+}
 [IO.File]::WriteAllText($qnPath, $qn, (New-Object Text.UTF8Encoding($true)))
 
 Write-Host "Applied recoverable Qianniu inject migration: $newMarker"
