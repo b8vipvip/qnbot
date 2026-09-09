@@ -1,0 +1,1 @@
+Bot automatic update recovery does not own Qianniu process lifetime or login UI.

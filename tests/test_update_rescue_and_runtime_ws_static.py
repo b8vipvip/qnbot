@@ -124,7 +124,8 @@ def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
 
     degraded = repair[repair.index("private static async Task RunDegradedRecoveryAsync()"):]
     assert "TryRestartQianniuOnceAsync" not in degraded
-    assert "不会继续/重复重启千牛" in degraded
+    assert "保护千牛进程与登录态" in degraded
+    assert "不会自动重启或操作登录界面" in degraded
 
 
 def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker():
@@ -139,15 +140,16 @@ def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker()
     assert "千牛注入已是最新版本" in qn_inject
 
 
-def test_post_update_recovery_waits_before_single_restart_and_never_handles_credentials():
+def test_post_update_recovery_preserves_qianniu_and_never_handles_login_ui():
     repair = read("src/Bot/Update/BotUpdateStartupConnection.Fast.cs")
 
     assert "PostUpdateGracePeriod = TimeSpan.FromSeconds(25)" in repair
-    assert repair.count("await TryRestartQianniuOnceAsync()") == 1
-    assert "宽限期内注入已自行恢复，已取消千牛重启" in repair
-    assert "保留千牛自己的账号、密码和默认账号选择" in repair
-    assert "不读取、填写、修改或切换账号凭据" in repair
-    assert 'private const string PrimaryLoginButtonName = "登录";' in repair
-    assert '"登录", "立即登录", "登录千牛", "进入千牛"' not in repair
-    assert 'WindowContainsText(windowName, descendants, "是否需要打开之前的消息")' in repair
-    assert 'new[] { "确认" }' in repair
+    assert "PostUpdateReconnectWindow = TimeSpan.FromSeconds(120)" in repair
+    assert 'WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session")' in repair
+    assert "TryRestartQianniuOnceAsync" not in repair
+    assert "Process.Start" not in repair
+    assert "PrimaryLoginButtonName" not in repair
+    assert "WindowContainsText" not in repair
+    assert "Mouse.Click" not in repair
+    assert "保持原千牛进程与登录态" in repair
+    assert "不重启千牛、不操作登录界面" in repair
