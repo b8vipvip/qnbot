@@ -118,8 +118,13 @@ def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
     assert "GetActiveTcpListeners" in repair
     assert "MyWebSocketServer.WSocketSvrInst.Start();" in repair
     assert "WebSocketSessionCount > 0" in repair
-    assert "未自动重启千牛" in repair
+    assert "UpdateStartupHealthService.IsPostUpdateLaunchAuthorized()" in repair
+    assert "UpdateStartupHealthService.IsPostUpdateStartupReady()" in repair
     assert "QianniuRecoveryManager.RequestRecover" not in repair
+
+    degraded = repair[repair.index("private static async Task RunDegradedRecoveryAsync()"):]
+    assert "TryRestartQianniuOnceAsync" not in degraded
+    assert "不会继续/重复重启千牛" in degraded
 
 
 def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker():
@@ -132,3 +137,15 @@ def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker()
     assert "WebSocketSessionCount > 0" in repair
     assert "needInjectPaths.Count < 1" in qn_inject
     assert "千牛注入已是最新版本" in qn_inject
+
+
+def test_post_update_recovery_waits_before_single_restart_and_never_handles_credentials():
+    repair = read("src/Bot/Update/BotUpdateStartupConnection.Fast.cs")
+
+    assert "PostUpdateGracePeriod = TimeSpan.FromSeconds(25)" in repair
+    assert repair.count("await TryRestartQianniuOnceAsync()") == 1
+    assert "宽限期内注入已自行恢复，已取消千牛重启" in repair
+    assert "保留千牛自己的账号、密码和默认账号选择" in repair
+    assert "未读取、填写或修改账号密码" in repair
+    assert 'WindowContainsText(windowName, descendants, "是否需要打开之前的消息")' in repair
+    assert 'new[] { "确认" }' in repair
