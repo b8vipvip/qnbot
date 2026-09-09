@@ -58,9 +58,12 @@ def test_post_update_qianniu_restart_is_single_shot_and_has_bounded_grace():
 
 def test_saved_login_and_history_dialog_automation_is_narrowly_scoped():
     source = _read(RECOVERY)
-    assert '"登录", "立即登录", "登录千牛", "进入千牛"' in source
+    assert 'private const string PrimaryLoginButtonName = "登录";' in source
+    assert '"登录", "立即登录", "登录千牛", "进入千牛"' not in source
+    assert "MaxPostRestartLoginAttempts = 8" in source
+    assert "PostRestartLoginRetryInterval = TimeSpan.FromSeconds(6)" in source
     assert "保留千牛自己的账号、密码和默认账号选择" in source
-    assert "未读取、填写或修改账号密码" in source
+    assert "不读取、填写、修改或切换账号凭据" in source
     assert 'WindowContainsText(windowName, descendants, "是否需要打开之前的消息")' in source
     assert 'new[] { "确认" }' in source
     assert "只点击了明确的“确认”" in source
