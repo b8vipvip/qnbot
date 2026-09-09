@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_recent_image_caption_is_opt_in_and_rejects_incident_messages():
     src = (ROOT / "src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs").read_text(encoding="utf-8")
     assert "internal static bool IsLikelyImageCaption" in src
-    assert r'@"^\\d{5,20}$"' in src
+    assert r'@"^\d{5,20}$"' in src
     for token in ["充值", "充这个", "人工", "投诉", "不满意"]:
         assert token in src
     for anchor in ["截图", "页面", "界面", "显示", "提示", "报错"]:
