@@ -1,0 +1,5 @@
+Release validation trigger
+
+Requested: 2026-09-09T19:39:00+08:00
+Purpose: verify Bot auto-update can complete without restarting Qianniu and recover WebSocket/CDP authority automatically.
+Expected release: next Windows x64 release-build run number after 1385.
