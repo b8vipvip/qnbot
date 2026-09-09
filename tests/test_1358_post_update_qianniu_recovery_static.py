@@ -59,6 +59,6 @@ def test_recovery_repairs_only_bot_listener_then_degrades_without_qianniu_restar
     assert "MyWebSocketServer.WSocketSvrInst.Start()" in source
     assert "RunDegradedRecoveryAsync" in source
     degraded = source[source.index("private static async Task RunDegradedRecoveryAsync()") :]
-    assert "不自动重启或操作登录界面" in degraded
+    assert "不会自动重启或操作登录界面" in degraded
     assert "Process." not in degraded
     assert "Mouse.Click" not in degraded
