@@ -20,7 +20,7 @@ def test_language_startup_gate_uses_qninject_as_single_version_authority():
     assert "语言：简体中文 ✓" in source
 
 
-def test_post_update_restart_capability_is_version_bound_and_health_acknowledged():
+def test_post_update_capability_is_version_bound_and_health_acknowledged():
     health = _read(HEALTH)
     assert "IsPostUpdateLaunchAuthorized" in health
     assert "IsPostUpdateStartupReady" in health
@@ -32,47 +32,33 @@ def test_post_update_restart_capability_is_version_bound_and_health_acknowledged
     assert file_move < ready
 
 
-def test_normal_startup_never_enters_destructive_qianniu_recovery():
+def test_normal_and_post_update_startup_are_non_destructive_to_qianniu():
     source = _read(RECOVERY)
     assert "var postUpdateLaunchAuthorized = UpdateStartupHealthService.IsPostUpdateLaunchAuthorized();" in source
-    assert "if (postUpdateLaunchAuthorized)" in source
     assert "UpdateStartupHealthService.IsPostUpdateStartupReady()" in source
+    assert "TryRestartQianniuOnceAsync" not in source
+    assert "Process.Start" not in source
+    assert "Process.GetProcessesByName" not in source
+    assert "FlaUI" not in source
+    assert "Mouse.Click" not in source
+    assert "不自动重启千牛" in source
+    assert "不操作登录界面" in source
 
-    post_update_call = source.index("RunPostUpdateRecoveryAsync()")
-    authorization_guard = source.rfind("if (postUpdateLaunchAuthorized)", 0, post_update_call)
-    assert authorization_guard >= 0
 
-    degraded = source[source.index("private static async Task RunDegradedRecoveryAsync()") :]
-    assert "TryRestartQianniuOnceAsync" not in degraded
-    assert "不会继续/重复重启千牛" in degraded
-
-
-def test_post_update_qianniu_restart_is_single_shot_and_has_bounded_grace():
+def test_post_update_preserves_session_and_has_bounded_reconnect_window():
     source = _read(RECOVERY)
     assert "PostUpdateGracePeriod = TimeSpan.FromSeconds(25)" in source
-    assert "PostRestartRecoveryTimeout = TimeSpan.FromSeconds(120)" in source
-    assert source.count("await TryRestartQianniuOnceAsync()") == 1
-    assert "宽限期内注入已自行恢复，已取消千牛重启" in source
-    assert "已执行唯一一次千牛重启" in source
+    assert "PostUpdateReconnectWindow = TimeSpan.FromSeconds(120)" in source
+    assert 'WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session")' in source
+    assert "为保护已登录千牛会话，不执行千牛重启、不操作登录界面" in source
+    assert "保持原千牛进程与登录态" in source
 
 
-def test_saved_login_and_history_dialog_automation_is_narrowly_scoped():
+def test_recovery_repairs_only_bot_listener_then_degrades_without_qianniu_restart():
     source = _read(RECOVERY)
-    assert 'private const string PrimaryLoginButtonName = "登录";' in source
-    assert '"登录", "立即登录", "登录千牛", "进入千牛"' not in source
-    assert "MaxPostRestartLoginAttempts = 8" in source
-    assert "PostRestartLoginRetryInterval = TimeSpan.FromSeconds(6)" in source
-    assert "保留千牛自己的账号、密码和默认账号选择" in source
-    assert "不读取、填写、修改或切换账号凭据" in source
-    assert 'WindowContainsText(windowName, descendants, "是否需要打开之前的消息")' in source
-    assert 'new[] { "确认" }' in source
-    assert "只点击了明确的“确认”" in source
-    assert "SetText(" not in source
-
-
-def test_recovery_restores_reception_entry_before_giving_up_without_repeat_restart():
-    source = _read(RECOVERY)
-    assert '"接待台", "千牛接待台", "接待中心", "客服接待", "消息接待"' in source
-    assert "TryClickExactNamedElement(descendants, ReceptionEntryNames" in source
-    assert "等待千牛恢复接待聊天WebView与注入连接" in source
-    assert "转入低频等待" in source
+    assert "MyWebSocketServer.WSocketSvrInst.Start()" in source
+    assert "RunDegradedRecoveryAsync" in source
+    degraded = source[source.index("private static async Task RunDegradedRecoveryAsync()") :]
+    assert "不自动重启或操作登录界面" in degraded
+    assert "Process." not in degraded
+    assert "Mouse.Click" not in degraded
