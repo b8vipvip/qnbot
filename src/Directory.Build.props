@@ -37,4 +37,14 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WebSocketPageLifecycleGuard.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WebSocketPageLifecycleGuard.cs" />
   </ItemGroup>
+
+  <!-- Build-time migration keeps the released Bot.exe and embedded Qianniu payload on the same
+       recoverable v11 protocol without adding src/Bot/Directory.Build.targets (legacy WPF temp
+       projects intentionally require that file to remain absent). The script only mutates the CI/
+       build workspace; it never runs on an end-user machine. -->
+  <Target Name="ApplyRecoverableQianniuInjectV11"
+          BeforeTargets="PrepareResources;CoreCompile"
+          Condition="'$(OS)' == 'Windows_NT' and Exists('$(MSBuildThisFileDirectory)..\scripts\apply-recoverable-inject-v11.ps1')">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\apply-recoverable-inject-v11.ps1&quot;" />
+  </Target>
 </Project>
