@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using BotLib.Extensions;
 using Bot.ControllerNs;
 using System;
@@ -6,13 +6,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Bot.Common.Db;
 using Bot.Common;
 using BotLib.Wpf.Extensions;
 using Bot.ChromeNs;
-using ICSharpCode.SharpZipLib.Zip;
 
 namespace Bot
 {
@@ -54,11 +52,11 @@ namespace Bot
     /// Startup must never destroy a live Qianniu WebView just to re-apply files that are already
     /// current. The legacy repair service is still used when Qianniu is closed, but a running
     /// workbench is inspected read-only and either accepted or marked for deferred repair.
+    /// QNInject.IsInjected is the single version authority for both injection and language files;
+    /// this gate must not carry a second set of version markers that can become stale.
     /// </summary>
     internal static class LanguageStartupSafetyGate
     {
-        private const string InjectVersionMarker = "20260714-zh-cn-v9";
-        private const string LanguageVersionMarker = "20260713-hans-all-pages-v3";
         private const string WebuiRelativePath = @"Resources\newWebui\webui.zip";
         private static readonly string[] WorkbenchProcessNames =
         {
@@ -77,18 +75,18 @@ namespace Bot
             if (TryGetActiveResourceZip(out activeZip, out discovery)
                 && ActiveResourceHasCurrentMarkers(activeZip))
             {
-                Log.Info("语言启动安全检查：运行中的千牛资源已是当前版本，跳过自动修复，不关闭WebView。 path=" + activeZip);
+                Log.Info("语言启动安全检查：运行中的千牛资源已由QNInject权威扫描确认为当前版本，跳过自动修复，不关闭WebView。 path=" + activeZip);
                 return new LanguageRepairResult
                 {
                     IsOk = true,
                     Repaired = false,
                     CurrentLanguage = "zh-CN",
                     StatusText = "语言：简体中文 ✓",
-                    Detail = "运行中的千牛资源包含当前简体中文与注入标记；启动未修改WebView。"
+                    Detail = "运行中的千牛资源已通过QNInject完整扫描，注入与简体中文资源均为当前版本；启动未修改WebView。"
                 };
             }
 
-            var detail = "检测到千牛正在运行，但当前活动 webui 资源尚未确认包含最新语言/注入标记；"
+            var detail = "检测到千牛正在运行，但当前活动 webui 资源尚未通过QNInject权威扫描；"
                 + "为保护登录态，本次启动不关闭WebView、不清缓存、不覆盖资源，待千牛关闭后再安全修复。"
                 + (string.IsNullOrWhiteSpace(discovery) ? string.Empty : " " + discovery);
             Log.ErrorWithMaxCount("语言启动安全检查已延后破坏性修复：" + detail, 5);
@@ -225,29 +223,21 @@ namespace Bot
             if (string.IsNullOrWhiteSpace(zipPath) || !File.Exists(zipPath)) return false;
             try
             {
-                using (var stream = File.Open(zipPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (var zip = new ZipFile(stream))
-                {
-                    return ZipContainsMarker(zip, "web_chat-packer/qnbot-inject.js", InjectVersionMarker)
-                        && ZipContainsMarker(zip, "web_chat-packer/qnbot-language.js", LanguageVersionMarker);
-                }
+                var newWebuiDirectory = Path.GetDirectoryName(zipPath);
+                var resourceDirectory = string.IsNullOrWhiteSpace(newWebuiDirectory)
+                    ? null
+                    : Directory.GetParent(newWebuiDirectory);
+                if (resourceDirectory == null) return false;
+
+                var ready = QNInject.IsInjected(resourceDirectory.FullName);
+                Log.Info("语言启动安全检查复用QNInject权威扫描: ready=" + ready
+                    + ", resourcePath=" + resourceDirectory.FullName);
+                return ready;
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("语言启动安全检查读取活动webui失败：" + ex.Message, 5);
                 return false;
-            }
-        }
-
-        private static bool ZipContainsMarker(ZipFile zip, string entryName, string marker)
-        {
-            var entry = zip.GetEntry(entryName);
-            if (entry == null || !entry.IsFile) return false;
-            using (var input = zip.GetInputStream(entry))
-            using (var reader = new StreamReader(input, Encoding.UTF8, true))
-            {
-                var text = reader.ReadToEnd();
-                return text.IndexOf(marker, StringComparison.Ordinal) >= 0;
             }
         }
     }
