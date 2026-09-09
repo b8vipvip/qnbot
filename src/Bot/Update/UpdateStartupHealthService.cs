@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Bot.Common;
@@ -12,6 +13,46 @@ namespace Bot.UpdateNs
     {
         private const string HealthFileEnvironmentVariable = "QIANNIU_BOT_UPDATE_HEALTH_FILE";
         private const string ExpectedVersionEnvironmentVariable = "QIANNIU_BOT_UPDATE_EXPECTED_VERSION";
+        private static int _postUpdateLaunchAuthorized;
+        private static int _postUpdateStartupReady;
+
+        /// <summary>
+        /// Returns true only for the one-shot process launched by the updater for the expected
+        /// target version. Normal Bot startup has no updater capability and can never authorize
+        /// destructive Qianniu recovery.
+        /// </summary>
+        internal static bool IsPostUpdateLaunchAuthorized()
+        {
+            if (Volatile.Read(ref _postUpdateLaunchAuthorized) != 0) return true;
+
+            try
+            {
+                var expectedVersion = (Environment.GetEnvironmentVariable(ExpectedVersionEnvironmentVariable) ?? string.Empty).Trim();
+                var currentVersion = (BotUpdateService.CurrentVersion ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(expectedVersion)
+                    || !string.Equals(expectedVersion, currentVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                Interlocked.Exchange(ref _postUpdateLaunchAuthorized, 1);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// A post-update Qianniu restart is permitted only after this exact target process has
+        /// written the updater health acknowledgement. This prevents a candidate process from
+        /// disturbing Qianniu before the updater has accepted the new Bot runtime as healthy.
+        /// </summary>
+        internal static bool IsPostUpdateStartupReady()
+        {
+            return Volatile.Read(ref _postUpdateStartupReady) != 0;
+        }
 
         internal static void ReportReady()
         {
@@ -34,6 +75,7 @@ namespace Bot.UpdateNs
                 return;
             }
 
+            var postUpdateAuthorized = IsPostUpdateLaunchAuthorized();
             try
             {
                 // Reassert database readiness at the point where configuration and startup
@@ -57,6 +99,10 @@ namespace Bot.UpdateNs
                 File.WriteAllText(temporary, JsonConvert.SerializeObject(payload));
                 if (File.Exists(path)) File.Delete(path);
                 File.Move(temporary, path);
+                if (postUpdateAuthorized)
+                {
+                    Interlocked.Exchange(ref _postUpdateStartupReady, 1);
+                }
                 Log.Info("更新启动健康检查返回OK: version=" + currentVersion + ", path=" + path);
             }
             catch (Exception ex)
