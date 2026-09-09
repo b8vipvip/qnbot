@@ -21,8 +21,9 @@ def test_v11_qninject_migration_never_kills_running_qianniu():
     assert "KillWorkbenchProcesses();" not in replacement
 
 
-def test_windows_build_applies_v11_before_resources_and_compile():
-    targets = (ROOT / "src/Bot/Directory.Build.targets").read_text(encoding="utf-8")
-    assert 'BeforeTargets="PrepareResources;CoreCompile"' in targets
-    assert "apply-recoverable-inject-v11.ps1" in targets
-    assert "'$(OS)' == 'Windows_NT'" in targets
+def test_windows_build_applies_v11_before_resources_and_compile_without_bot_targets_file():
+    props = (ROOT / "src/Directory.Build.props").read_text(encoding="utf-8")
+    assert 'BeforeTargets="PrepareResources;CoreCompile"' in props
+    assert "apply-recoverable-inject-v11.ps1" in props
+    assert "'$(OS)' == 'Windows_NT'" in props
+    assert not (ROOT / "src/Bot/Directory.Build.targets").exists()
