@@ -21,35 +21,9 @@ $inject = Replace-Required $inject '    if (websocketRetired || reconnectTimer) 
 $inject = Replace-Required $inject "    }, 3000);`n  }`n`n  function setupWebSocket() {" "    }, delay);`n  }`n`n  function setupWebSocket() {" 'reconnect delay'
 $inject = Replace-Required $inject "  function setupWebSocket() {`n    if (websocketRetired) return;`n    var old = window.chatWebsocket;" "  function setupWebSocket() {`n    if (websocketStandbyUntil > Date.now()) {`n      scheduleReconnect(websocketStandbyUntil - Date.now());`n      return;`n    }`n    var old = window.chatWebsocket;" 'setup standby lease'
 $inject = Replace-Required $inject "        window.chatWebsocket = socket;`n        log(`"websocket connected`");" "        window.chatWebsocket = socket;`n        websocketStandbyUntil = 0;`n        log(`"websocket connected`", `"recoverable-standby-v11`");" 'onopen resync'
-$inject = Replace-Required $inject @'
-          if (param.method === "retireDuplicate") {
-            websocketRetired = true;
-            pending.length = 0;
-            if (reconnectTimer) {
-              clearTimeout(reconnectTimer);
-              reconnectTimer = null;
-            }
-            log("websocket retired by Bot", param.reason || "duplicate");
-            try { socket.close(1000, "qnbot-duplicate-retired"); } catch (e) {}
-            return;
-          }
-'@ @'
-          if (param.method === "retireDuplicate") {
-            // Compatibility with older Bot builds: duplicate pages enter a short standby
-            // lease instead of becoming permanently retired. A later Bot restart or lease
-            // expiry must always allow this still-live WebView to reconnect and re-elect.
-            websocketStandbyUntil = Date.now() + 15000;
-            pending.length = 0;
-            if (reconnectTimer) {
-              clearTimeout(reconnectTimer);
-              reconnectTimer = null;
-            }
-            log("websocket standby requested by Bot", param.reason || "duplicate");
-            try { socket.close(1000, "qnbot-duplicate-standby"); } catch (e) {}
-            scheduleReconnect(15000);
-            return;
-          }
-'@ 'duplicate standby compatibility'
+$inject = Replace-Required $inject '            websocketRetired = true;' '            websocketStandbyUntil = Date.now() + 15000;' 'duplicate standby state'
+$inject = Replace-Required $inject '            log("websocket retired by Bot", param.reason || "duplicate");' '            log("websocket standby requested by Bot", param.reason || "duplicate");' 'duplicate standby log'
+$inject = Replace-Required $inject '            try { socket.close(1000, "qnbot-duplicate-retired"); } catch (e) {}' "            try { socket.close(1000, `"qnbot-duplicate-standby`"); } catch (e) {}`n            scheduleReconnect(15000);" 'duplicate standby reconnect'
 $inject = Replace-Required $inject '        if (!websocketRetired) scheduleReconnect();' '        scheduleReconnect();' 'onclose reconnect'
 $inject = Replace-Required $inject '      duplicateRetire: true,' "      duplicateRetire: false,`n      recoverableStandby: true," 'status capability'
 if ($inject.Contains('websocketRetired')) { throw 'Permanent websocketRetired state remains after v11 patch' }
