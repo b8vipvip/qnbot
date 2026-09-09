@@ -29,7 +29,7 @@ def test_startup_language_repair_is_non_destructive_while_qianniu_is_running():
     assert "StopQianniu" not in gate
 
 
-def test_injection_self_heal_stays_alive_in_degraded_mode_without_repeating_qianniu_restart():
+def test_injection_self_heal_stays_alive_in_degraded_mode_without_qianniu_restart():
     repair = read("src/Bot/Update/BotUpdateStartupConnection.Fast.cs")
 
     assert "RunDegradedRecoveryAsync" in repair
@@ -38,21 +38,26 @@ def test_injection_self_heal_stays_alive_in_degraded_mode_without_repeating_qian
     assert "while (true)" in degraded
     assert "WebSocketSessionCount > 0" in degraded
     assert "MyWebSocketServer.WSocketSvrInst.Start();" in degraded
-    assert "不会继续/重复重启千牛" in degraded
+    assert "保护千牛进程与登录态" in degraded
+    assert "不会自动重启或操作登录界面" in degraded
     assert "TryRestartQianniuOnceAsync" not in degraded
     assert "process.Kill" not in degraded
     assert "QianniuRecoveryManager.RequestRecover" not in repair
     assert "KillQianniu" not in repair
 
 
-def test_post_update_qianniu_restart_is_narrowly_authorized_and_single_shot():
+def test_post_update_recovery_is_version_bound_but_non_destructive():
     repair = read("src/Bot/Update/BotUpdateStartupConnection.Fast.cs")
     health = read("src/Bot/Update/UpdateStartupHealthService.cs")
 
     assert "UpdateStartupHealthService.IsPostUpdateLaunchAuthorized()" in repair
     assert "UpdateStartupHealthService.IsPostUpdateStartupReady()" in repair
-    assert repair.count("await TryRestartQianniuOnceAsync()") == 1
-    assert "宽限期内注入已自行恢复，已取消千牛重启" in repair
+    assert "PostUpdateReconnectWindow = TimeSpan.FromSeconds(120)" in repair
+    assert 'WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session")' in repair
+    assert "TryRestartQianniuOnceAsync" not in repair
+    assert "Process.Start" not in repair
+    assert "不自动重启千牛" in repair
+    assert "不操作登录界面" in repair
     assert "IsPostUpdateLaunchAuthorized" in health
     assert "IsPostUpdateStartupReady" in health
     assert "QIANNIU_BOT_UPDATE_EXPECTED_VERSION" in health
@@ -102,8 +107,6 @@ def test_qnbot_status_logging_redacts_identity_and_coalesces_repeated_state():
     log = read("src/BotLib/Log.cs")
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
 
-    # The server still supplies the full status object to the centralized diagnostic normalizer;
-    # the logging layer is therefore the privacy boundary and must never return that raw JSON.
     assert 'Log.Info("千牛注入状态: " + wMsg.Response)' in server
     assert 'text.IndexOf("千牛注入状态:"' in log
     assert "return NormalizeInjectionStatus(text);" in log
@@ -123,7 +126,6 @@ def test_qnbot_status_logging_redacts_identity_and_coalesces_repeated_state():
     assert 'summary += text' not in status
     assert 'return text' not in status
 
-    # Keep the operational state needed for support without logging nick values.
     assert 'ReadBooleanStatus(payload, "hasLoginID")' in status
     assert 'ReadBooleanStatus(payload, "hasImsdk")' in status
     assert 'ReadBooleanStatus(payload, "hasQN")' in status
