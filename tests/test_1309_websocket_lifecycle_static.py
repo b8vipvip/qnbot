@@ -7,25 +7,28 @@ def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_duplicate_websocket_retirement_is_capability_gated():
+def test_duplicate_websocket_pages_are_standby_not_permanently_retired():
     server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    guard = text("src/Bot/ChromeNs/WebSocketPageLifecycleGuard.cs")
     inject = text("src/Bin/inject.js")
 
     assert "_duplicateRetireCapableSessions" in server
     assert 'jo["duplicateRetire"]' in server
-    assert 'method = "retireDuplicate"' in server
-    assert ".Where(id => _duplicateRetireCapableSessions.ContainsKey(id))" in server
-    assert "await Task.Delay(150).ConfigureAwait(false);" in server
+    assert 'method = "retireDuplicate"' not in server
+    assert 'physicalClose=false' in server
+    assert '保持在线standby，不物理关闭' in server
+    assert 'method = "retireDuplicate"' not in guard
+    assert 'Session.Close()' not in guard
 
+    # Keep compatibility with already-loaded v10 pages. They still understand the old command,
+    # but the new server/guard never sends it, so normal Bot restarts cannot permanently retire them.
     assert "var websocketRetired = false;" in inject
     assert "duplicateRetire: true" in inject
     assert 'param.method === "retireDuplicate"' in inject
-    assert "websocketRetired = true;" in inject
-    assert "if (websocketRetired) return;" in inject
     assert "if (!websocketRetired) scheduleReconnect();" in inject
 
 
-def test_injection_marker_for_retirement_rollout_matches_embedded_payload():
+def test_injection_marker_for_existing_payload_remains_consistent():
     inject = text("src/Bin/inject.js")
     qn_inject = text("src/Bot/Common/QNInject.cs")
     marker = "20260906-zh-cn-ws-retire-v10"
