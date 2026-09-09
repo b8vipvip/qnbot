@@ -10,7 +10,7 @@ def source() -> str:
     return GUARD.read_text(encoding="utf-8-sig")
 
 
-def test_inert_qianniu_pages_retire_only_with_explicit_protocol_and_no_business_surface():
+def test_inert_qianniu_pages_become_recoverable_standby_without_physical_close():
     text = source()
     assert 'InertPageGrace = TimeSpan.FromSeconds(20)' in text
     assert 'ReadBool(status, "duplicateRetire")' in text
@@ -18,16 +18,19 @@ def test_inert_qianniu_pages_retire_only_with_explicit_protocol_and_no_business_
     assert 'ReadBool(status, "hasQN")' in text
     assert 'ReadBool(status, "hasVs")' in text
     assert 'ReadBool(status, "hasLoginID")' in text
-    assert 'reason = "no_business_surface"' in text
-    assert 'current.Session.Close();' in text
-    assert '回收无业务能力千牛WebSocket页面通道' in text
+    assert 'ScheduleStandbyObservation' in text
+    assert 'physicalClose=false' in text
+    assert '保持为轻量standby，不关闭通道' in text
+    assert 'method = "retireDuplicate"' not in text
+    assert 'current.Session.Close();' not in text
 
 
-def test_business_capability_cancels_pending_inert_page_retirement():
+def test_business_capability_cancels_pending_inert_standby_observation():
     text = source()
-    observe = text[text.index("private static void ObserveStatus"):text.index("private static void ScheduleRetirement")]
-    assert 'if (!retireCapable || businessCapable)' in observe
+    observe = text[text.index("private static void ObserveStatus"):text.index("private static void ScheduleStandbyObservation")]
+    assert 'if (businessCapable)' in observe
     assert 'InertCandidates.TryRemove(sessionId, out ignored)' in observe
+    assert 'StandbyLogged.TryRemove(sessionId, out standbyIgnored)' in observe
     assert 'InertCandidates.GetOrAdd' in observe
 
 

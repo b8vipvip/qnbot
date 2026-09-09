@@ -16,8 +16,9 @@ def test_websocket_server_keeps_one_authoritative_cdp_session_per_seller():
     assert "TryClaimSellerSession" in source
     assert "ReleaseSellerSession" in source
     assert "重复千牛CDP" in source or "重复千牛WebSocket" in source
-    assert "Do not run TryInitSession and TryBindStatusConversation concurrently" in source
     assert "ShouldRefreshStatusBinding" in source
+    assert "var wasAuthoritative" in source
+    assert "千牛standby页面接管权威会话，强制重建客服/CDP绑定" in source
 
     # Both assignment points must be protected by the authoritative-session claim.
     assert source.count("qn.CDP = cdp;") == 2
@@ -39,10 +40,11 @@ def test_knowledge_cloud_hash_matches_server_sorted_json_and_avoids_repeat_apply
     assert "json.dumps" in server
 
 
-def test_restart_recovery_does_not_reinitialize_same_status_binding_forever():
+def test_restart_recovery_does_not_reinitialize_same_authority_forever_but_rebinds_on_promotion():
     source = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     assert "_lastStatusBindings" in source
     assert "ShouldRefreshStatusBinding" in source
-    assert "_initialized.ContainsKey(session.SessionID)" in source
+    assert "var wasInitialized = _initialized.ContainsKey(session.SessionID);" in source
     assert "Task.Run(() => TryInitSession(session, \"status\"))" in source
+    assert "else if (!wasAuthoritative && !string.IsNullOrWhiteSpace(loginNick))" in source
     assert "Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick))" in source

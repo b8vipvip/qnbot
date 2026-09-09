@@ -24,14 +24,14 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Field logs from 1.1.1362 proved that Qianniu can keep dozens of injected recent.html
-    /// sockets alive even though only one page owns the business CDP. Some of those pages never
-    /// acquire _vs/imsdk/QN/login data, so MyWebSocketServer cannot assign a seller and its
-    /// seller-scoped duplicate cap cannot retire them.
+    /// sockets alive even though only one page owns the business CDP. Some pages never acquire
+    /// _vs/imsdk/QN/login data. These pages are intentionally kept as lightweight standby sockets:
+    /// closing them used to send retireDuplicate, which permanently disabled their JS reconnect
+    /// loop until the whole Qianniu WebView was reloaded.
     ///
-    /// This guard deliberately does not choose CDP ownership and does not process buyer messages.
-    /// It only retires pages that explicitly advertise the safe retire protocol and remain a
-    /// proven non-business surface for a bounded grace period. A page that later acquires any
-    /// business capability is removed from the retirement candidates immediately.
+    /// This guard does not choose CDP ownership and does not process buyer messages. It observes
+    /// inert pages for diagnostics only. A page that later acquires business capability immediately
+    /// leaves standby state and remains eligible for normal authority election.
     ///
     /// A second field-log failure mode is a real receiveNewMsg arriving first on a non-authoritative
     /// page while the 12-second liveness timer is still asleep. In that case we request a debounced
@@ -50,6 +50,8 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan ImmediateProbeDebounce = TimeSpan.FromMilliseconds(900);
         private static readonly ConcurrentDictionary<string, InertCandidate> InertCandidates =
             new ConcurrentDictionary<string, InertCandidate>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, byte> StandbyLogged =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, string> SessionSellers =
             new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> NextImmediateProbeAt =
@@ -63,7 +65,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
-                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面有界退役；重复页实时入站触发现有历史权威快速核对。");
+                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面保持可恢复standby；重复页实时入站触发现有历史权威快速核对。");
             }
             return new object();
         }
@@ -101,16 +103,21 @@ namespace Bot.ChromeNs
             var seller = Convert.ToString(status["loginNick"] ?? string.Empty).Trim();
             if (seller.Length > 0) SessionSellers[sessionId] = seller;
 
-            var retireCapable = ReadBool(status, "duplicateRetire");
+            // duplicateRetire remains readable for rolling-upgrade diagnostics, but it no longer
+            // grants permission to physically close a page. A server restart must always be able
+            // to reuse an already loaded WebView without requiring a Qianniu restart.
+            var legacyRetireCapable = ReadBool(status, "duplicateRetire");
             var businessCapable = ReadBool(status, "hasImsdk")
                 || ReadBool(status, "hasQN")
                 || ReadBool(status, "hasVs")
                 || ReadBool(status, "hasLoginID");
 
-            if (!retireCapable || businessCapable)
+            if (businessCapable)
             {
                 InertCandidate ignored;
+                byte standbyIgnored;
                 InertCandidates.TryRemove(sessionId, out ignored);
+                StandbyLogged.TryRemove(sessionId, out standbyIgnored);
                 return;
             }
 
@@ -122,11 +129,11 @@ namespace Bot.ChromeNs
             candidate.Session = session;
             if (DateTime.UtcNow - candidate.StartedAtUtc < InertPageGrace)
             {
-                ScheduleRetirement(sessionId, candidate);
+                ScheduleStandbyObservation(sessionId, candidate, legacyRetireCapable);
             }
         }
 
-        private static void ScheduleRetirement(string sessionId, InertCandidate candidate)
+        private static void ScheduleStandbyObservation(string sessionId, InertCandidate candidate, bool legacyRetireCapable)
         {
             Task.Run(async () =>
             {
@@ -141,30 +148,15 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                // A later qnbotStatus with any business capability removes this candidate. Reaching
-                // here therefore proves the page stayed inert throughout the complete grace window.
                 InertCandidate removed;
                 if (!InertCandidates.TryRemove(sessionId, out removed)) return;
-                try
-                {
-                    Log.Info("回收无业务能力千牛WebSocket页面通道: sessionRef="
-                        + MyWebSocketServer.DiagnosticRef("session", sessionId)
-                        + ", graceSeconds=" + (int)InertPageGrace.TotalSeconds
-                        + ", evidence=duplicateRetire+noLogin+noImsdk+noQN+noVs");
-                    current.Session.Send(JsonConvert.SerializeObject(new
-                    {
-                        method = "retireDuplicate",
-                        reason = "no_business_surface"
-                    }));
-                    await Task.Delay(150).ConfigureAwait(false);
-                    current.Session.Close();
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("回收无业务能力千牛WebSocket页面通道失败: sessionRef="
-                        + MyWebSocketServer.DiagnosticRef("session", sessionId)
-                        + ", error=" + ex.Message);
-                }
+                if (!StandbyLogged.TryAdd(sessionId, 0)) return;
+
+                Log.Info("无业务能力千牛WebSocket页面保持为轻量standby，不关闭通道: sessionRef="
+                    + MyWebSocketServer.DiagnosticRef("session", sessionId)
+                    + ", graceSeconds=" + (int)InertPageGrace.TotalSeconds
+                    + ", legacyRetireCapable=" + legacyRetireCapable
+                    + ", evidence=noLogin+noImsdk+noQN+noVs, physicalClose=false");
             });
         }
 

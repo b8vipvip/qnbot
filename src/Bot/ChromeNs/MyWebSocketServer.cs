@@ -34,6 +34,7 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _duplicateRetireCapableSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _standbyLoggedSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
         private readonly object _webSocketStartSync = new object();
         private const int MaxDuplicateSellerSessions = 3;
@@ -93,44 +94,18 @@ namespace Bot.ChromeNs
         private void ScheduleDuplicateSessionClose(string sessionId, string sellerNick, string reason)
         {
             if (string.IsNullOrWhiteSpace(sessionId)) return;
-            bool retireCapable;
-            if (!_duplicateRetireCapableSessions.TryGetValue(sessionId, out retireCapable) || !retireCapable)
-            {
-                return;
-            }
-            if (!_closingDuplicateSessions.TryAdd(sessionId, true)) return;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    WebSocketSession session;
-                    if (!_liveSessions.TryGetValue(sessionId, out session) || session == null)
-                    {
-                        bool missingIgnored;
-                        _closingDuplicateSessions.TryRemove(sessionId, out missingIgnored);
-                        return;
-                    }
-                    Log.Info("回收非权威千牛WebSocket页面通道: sellerRef=" + DiagnosticRef("seller", sellerNick)
-                        + ", sessionRef=" + DiagnosticRef("session", sessionId)
-                        + ", reason=" + reason + ", retireProtocol=true");
-                    session.Send(JsonConvert.SerializeObject(new
-                    {
-                        method = "retireDuplicate",
-                        reason = reason ?? string.Empty
-                    }));
-                    // Give the injected page a short chance to latch the intentional retirement
-                    // before the server closes the socket. True network failures still reconnect.
-                    await Task.Delay(150).ConfigureAwait(false);
-                    session.Close();
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("回收非权威千牛WebSocket页面通道失败: sessionRef="
-                        + DiagnosticRef("session", sessionId) + ", error=" + ex.Message);
-                    bool ignored;
-                    _closingDuplicateSessions.TryRemove(sessionId, out ignored);
-                }
-            });
+            WebSocketSession session;
+            if (!_liveSessions.TryGetValue(sessionId, out session) || session == null) return;
+            if (!_standbyLoggedSessions.TryAdd(sessionId, true)) return;
+
+            // A duplicate page is now a recoverable standby lease, never a permanently retired
+            // WebView. Closing it used to latch websocketRetired=true in the injected page, so a
+            // later Bot restart could not recover until the user restarted Qianniu. Keep the raw
+            // socket online; full CDP ownership remains quarantined by TryClaimSellerSession.
+            Log.Info("非权威千牛WebSocket页面保持在线standby，不物理关闭: sellerRef="
+                + DiagnosticRef("seller", sellerNick)
+                + ", sessionRef=" + DiagnosticRef("session", sessionId)
+                + ", reason=" + reason + ", physicalClose=false");
         }
 
         private void EnforceDuplicateSellerSessionCapLocked(string sellerNick)
@@ -148,14 +123,14 @@ namespace Bot.ChromeNs
             var excess = active.Count - MaxDuplicateSellerSessions;
             if (excess <= 0) return;
 
-            // Rolling-upgrade safety: legacy injected pages reconnect unconditionally when the
-            // server closes them. Retire only pages that explicitly advertise the new protocol;
-            // older pages remain quarantined until the injection bundle is refreshed.
+            // The old retire capability remains useful to identify pages from the modern injection
+            // bundle, but excess pages are only demoted to lightweight standby. They stay connected
+            // so they can participate in a later authority election after a Bot restart/session loss.
             foreach (var victim in active
                 .Where(id => _duplicateRetireCapableSessions.ContainsKey(id))
                 .Take(excess))
             {
-                ScheduleDuplicateSessionClose(victim, sellerNick, "duplicate_cap");
+                ScheduleDuplicateSessionClose(victim, sellerNick, "duplicate_cap_standby");
             }
         }
 
@@ -183,7 +158,7 @@ namespace Bot.ChromeNs
                                 .ToList();
                         }
                         foreach (var pair in stale)
-                            ScheduleDuplicateSessionClose(pair.Key, pair.Value, "duplicate_idle_timeout");
+                            ScheduleDuplicateSessionClose(pair.Key, pair.Value, "duplicate_idle_standby");
                     }
                     catch (Exception ex)
                     {
@@ -272,7 +247,7 @@ namespace Bot.ChromeNs
                 {
                     string removed;
                     _sellerSessions.TryRemove(sellerNick, out removed);
-                    Log.Info("卖家权威千牛CDP会话已释放，等待在线页面自动接管: sellerRef="
+                    Log.Info("卖家权威千牛CDP会话已释放，等待在线standby页面自动接管: sellerRef="
                         + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 }
                 BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
@@ -483,6 +458,9 @@ namespace Bot.ChromeNs
                                     BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
                                     if (hasLoginId || hasImsdk)
                                     {
+                                        var wasInitialized = _initialized.ContainsKey(session.SessionID);
+                                        var wasAuthoritative = !string.IsNullOrWhiteSpace(loginNick)
+                                            && IsAuthoritativeSellerSession(loginNick, session.SessionID);
                                         var authoritative = string.IsNullOrWhiteSpace(loginNick)
                                             || TryClaimSellerSession(loginNick, session.SessionID);
                                         if (!authoritative)
@@ -490,22 +468,31 @@ namespace Bot.ChromeNs
                                             // This page is useful as a lightweight raw inbound source but must
                                             // not start its own full CDP initialization/command pipeline.
                                             _initialized[session.SessionID] = true;
-                                            Log.Info("检测到卖家重复千牛WebSocket页面，保留为轻量入站补偿通道: sellerRef="
+                                            Log.Info("检测到卖家重复千牛WebSocket页面，保留为可恢复standby入站补偿通道: sellerRef="
                                                 + DiagnosticRef("seller", loginNick)
                                                 + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
                                         }
-                                        else if (!_initialized.ContainsKey(session.SessionID))
+                                        else if (!wasInitialized)
                                         {
-                                            // Do not run TryInitSession and TryBindStatusConversation concurrently.
-                                            // A single authoritative initialization already reads the current buyer.
+                                            // First authority for this physical WebView still performs the complete
+                                            // initialization so version/tray/buyer state are populated once.
                                             Task.Run(() => TryInitSession(session, "status"));
                                             ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
+                                        }
+                                        else if (!wasAuthoritative && !string.IsNullOrWhiteSpace(loginNick))
+                                        {
+                                            // A standby page just won authority after the previous owner vanished.
+                                            // Rebind unconditionally even when seller/buyer text is unchanged; the old
+                                            // status cache must never block ownership recovery.
+                                            ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
+                                            Log.Info("千牛standby页面接管权威会话，强制重建客服/CDP绑定: sellerRef="
+                                                + DiagnosticRef("seller", loginNick)
+                                                + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                                            Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
                                         }
                                         else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
                                             && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
                                         {
-                                            // A previously quarantined page can promote itself after the old owner
-                                            // closes; TryBindStatusConversation lazily creates its CDPClient here.
                                             Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
                                         }
                                     }
@@ -553,10 +540,12 @@ namespace Bot.ChromeNs
                         DateTime ignoredActivity;
                         bool ignoredClosing;
                         bool ignoredCapability;
+                        bool ignoredStandbyLog;
                         _liveSessions.TryRemove(session.SessionID, out ignoredSession);
                         _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
                         _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
                         _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                        _standbyLoggedSessions.TryRemove(session.SessionID, out ignoredStandbyLog);
                         ReleaseSellerSession(session.SessionID);
                         BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
                         Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
