@@ -46,26 +46,47 @@ namespace Bot.ChromeNs
                 && rect.Height >= 470 && rect.Height <= 650;
             if (!hasMarker && !compactLoginGeometry) return false;
 
+            // Field run 1.1.1374 proved that UIA Window.Focus() can fail with Access Denied on the
+            // custom-rendered login window even though the window rectangle is readable. Focus is
+            // therefore best-effort only. A focus failure must never suppress the screen-coordinate
+            // click, because Mouse.Click uses desktop input rather than the UIA focus pattern.
             try
             {
                 window.Focus();
                 Thread.Sleep(150);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount(
+                    "更新后千牛恢复：激活千牛v9自绘登录窗口失败，继续尝试屏幕坐标点击: type="
+                    + ex.GetType().Name + ", " + ex.Message,
+                    10);
+            }
 
-                // Blue primary 登录 button occupies the lower-right content band on the v9 saved-
-                // account page. Use window-relative coordinates rather than machine-fixed pixels.
-                // Ratios are intentionally centred inside the button and outside 单账号登录/添加账号.
-                var point = new System.Drawing.Point(
-                    rect.Left + (int)Math.Round(rect.Width * 0.70),
-                    rect.Top + (int)Math.Round(rect.Height * 0.84));
+            // Blue primary 登录 button occupies the lower-right content band on the v9 saved-
+            // account page. Use window-relative coordinates rather than machine-fixed pixels.
+            // Ratios are intentionally centred inside the button and outside 单账号登录/添加账号.
+            var point = new System.Drawing.Point(
+                rect.Left + (int)Math.Round(rect.Width * 0.70),
+                rect.Top + (int)Math.Round(rect.Height * 0.84));
+
+            try
+            {
                 Mouse.Click(point);
                 Log.Info("更新后千牛恢复UI操作成功: stage=千牛v9主登录, method=saved-account-relative"
                     + ", markerEvidence=" + hasMarker
-                    + ", window=" + rect.Width + "x" + rect.Height);
+                    + ", window=" + rect.Width + "x" + rect.Height
+                    + ", click=" + point.X + "," + point.Y);
                 return true;
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("更新后千牛恢复自绘登录页兜底点击失败: " + ex.Message, 10);
+                Log.ErrorWithMaxCount(
+                    "更新后千牛恢复自绘登录页屏幕坐标点击失败: type="
+                    + ex.GetType().Name + ", " + ex.Message
+                    + ", window=" + rect.Width + "x" + rect.Height
+                    + ", click=" + point.X + "," + point.Y,
+                    10);
                 return false;
             }
         }
