@@ -1,0 +1,1 @@
+Non-destructive recovery preserves Qianniu and only repairs Bot 41010 plus waits for WebView injection reconnect.
