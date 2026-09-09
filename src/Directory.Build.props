@@ -34,4 +34,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BusinessInboundLivenessRecoveryBridge.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BusinessInboundLivenessRecoveryBridge.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WebSocketPageLifecycleGuard.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WebSocketPageLifecycleGuard.cs" />
+  </ItemGroup>
 </Project>
