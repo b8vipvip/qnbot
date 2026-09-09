@@ -7,9 +7,9 @@ $oldMarker = '20260906-zh-cn-ws-retire-v10'
 $newMarker = '20260909-ws-recoverable-standby-v11'
 
 function Replace-Required([string]$Text, [string]$Old, [string]$New, [string]$Name) {
+    if ($Text.Contains($Old)) { return $Text.Replace($Old, $New) }
     if ($Text.Contains($New)) { return $Text }
-    if (-not $Text.Contains($Old)) { throw "Required patch fragment missing: $Name" }
-    return $Text.Replace($Old, $New)
+    throw "Required patch fragment missing: $Name"
 }
 
 $inject = [IO.File]::ReadAllText($injectPath).Replace("`r`n", "`n")
