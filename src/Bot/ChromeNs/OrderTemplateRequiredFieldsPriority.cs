@@ -97,7 +97,7 @@ namespace Bot.ChromeNs
                     _orderRequiredFieldsHandlerPriorityLogged = true;
                     // Keep both stable diagnostics because field evidence tooling and regression
                     // tests consume them independently when proving that V2 owns the sparse event.
-                    Log.Info("订单模板字段 V2 已提升为 messageCenterNotify 第一消费者；V2 已确认为 messageCenterNotify 第一消费者: seller="
+                    Log.Info("订单模板字段 V2 已提升为 messageCenterNotify 第一消费者；V2 已确认成为 messageCenterNotify 第一消费者: seller="
                         + (Seller == null ? string.Empty : Seller.Nick)
                         + ", handlers=" + handlers.Length
                         + ", instanceBootstrap=true");
