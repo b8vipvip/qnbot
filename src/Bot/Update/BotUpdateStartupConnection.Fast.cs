@@ -1,134 +1,113 @@
-using BotLib;
 using System;
 using System.Linq;
-using System.Net;
-using System.Net.NetworkInformation;
 using System.Threading;
 using System.Threading.Tasks;
+using Bot.ChromeNs;
+using Bot.Common;
 
-namespace Bot.ChromeNs
+namespace Bot.Update
 {
-    /// <summary>
-    /// Repairs the narrow startup case where the Bot process is healthy but the local
-    /// 127.0.0.1:41010 listener or Qianniu injected page is not yet available.
-    /// It never restarts Qianniu and never changes the active buyer conversation.
-    /// </summary>
     internal static class QnStartupConnectionSelfHeal
     {
-        private const int WebSocketPort = 41010;
-        private static readonly TimeSpan DegradedRetryDelay = TimeSpan.FromSeconds(30);
         private static int _started;
+        private static readonly int[] RetryDelaySeconds = { 3, 5, 8, 12 };
 
-        public static void Start()
+        internal static void Start()
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
-            Task.Run(() => RunAsync());
+
+            QnLanguageStatusReconciler.TryReconcile();
+            Task.Run(RunAsync);
         }
 
         private static async Task RunAsync()
         {
-            // Keep the quick startup recovery for the common race where the local listener or
-            // WebView appears a few seconds after Bot bootstrap.
-            var delays = new[] { 2000, 3500, 5500, 8000, 11000 };
-            for (var attempt = 0; attempt < delays.Length; attempt++)
+            try
             {
-                await Task.Delay(delays[attempt]).ConfigureAwait(false);
-
-                try
+                await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                if (IsInjectionReady())
                 {
-                    var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                    if (snapshot != null && snapshot.WebSocketSessionCount > 0)
+                    BotConnectionDiagnostics.RecordInjectionStatus(true, "千牛注入连接已就绪。");
+                    return;
+                }
+
+                for (var attempt = 0; attempt < RetryDelaySeconds.Length; attempt++)
+                {
+                    if (IsInjectionReady())
                     {
-                        Log.Info("千牛启动连接自恢复完成：注入WebSocket已连接，attempt=" + (attempt + 1));
+                        BotConnectionDiagnostics.RecordInjectionStatus(true, "千牛注入连接已恢复。");
                         return;
                     }
 
-                    if (!IsLoopbackListenerActive())
+                    var attemptNo = attempt + 1;
+                    Log.Warn("[Bot][StartupRecovery] 千牛注入尚未连接，执行启动期安全恢复 attempt=" + attemptNo + "/" + RetryDelaySeconds.Length);
+                    BotConnectionDiagnostics.RecordInjectionStatus(false, "千牛注入尚未连接，正在执行启动期安全恢复（" + attemptNo + "/" + RetryDelaySeconds.Length + "）。");
+
+                    try { QNInject.StartInject(); }
+                    catch (Exception ex) { Log.Warn("[Bot][StartupRecovery] 启动期注入维护失败：" + ex.Message); }
+
+                    try
                     {
-                        Log.Error("千牛启动连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务，attempt="
-                            + (attempt + 1));
-                        MyWebSocketServer.WSocketSvrInst.Start();
+                        var qnProc = WinApi.GetQNProc();
+                        if (qnProc != null && !qnProc.HasExited)
+                        {
+                            await QN.TryBringReceptionWindowForRecoveryAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("[Bot][StartupRecovery] 启动期接待窗口恢复失败：" + ex.Message);
+                    }
+
+                    var deadline = DateTime.UtcNow.AddSeconds(RetryDelaySeconds[attempt]);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        if (IsInjectionReady())
+                        {
+                            BotConnectionDiagnostics.RecordInjectionStatus(true, "千牛注入连接已恢复。");
+                            Log.Info("[Bot][StartupRecovery] 千牛注入连接恢复成功 attempt=" + attemptNo);
+                            return;
+                        }
+                        await Task.Delay(500).ConfigureAwait(false);
                     }
                 }
-                catch (Exception ex)
+
+                var postUpdate = await PostUpdateQianniuRecovery.TryRecoverAsync(IsInjectionReady).ConfigureAwait(false);
+                if (postUpdate.Recovered && IsInjectionReady())
                 {
-                    Log.ErrorWithMaxCount("千牛启动连接自恢复检查失败：" + ex.Message, 5);
+                    BotConnectionDiagnostics.RecordInjectionStatus(true, postUpdate.Message);
+                    Log.Info("[Bot][StartupRecovery] " + postUpdate.Message);
+                    return;
                 }
+                if (postUpdate.Eligible)
+                {
+                    Log.Warn("[Bot][StartupRecovery] 更新后千牛恢复结果：" + postUpdate.Message);
+                }
+
+                BotConnectionDiagnostics.RecordInjectionStatus(false,
+                    postUpdate.Eligible
+                        ? "更新后已执行有界千牛恢复，但注入仍未连接；已停止自动重启以避免循环，请查看运行日志。"
+                        : "千牛注入仍未连接；已进入低频后台恢复，不会自动重启千牛以保护登录态。");
+                Log.Warn("[Bot][StartupRecovery] 启动期安全恢复结束，injection 仍未连接。 " + postUpdate.Message);
             }
-
-            var finalSnapshot = BotConnectionDiagnostics.GetSnapshot();
-            if (finalSnapshot != null && finalSnapshot.WebSocketSessionCount > 0)
+            catch (Exception ex)
             {
-                Log.Info("千牛启动连接自恢复完成：注入WebSocket已连接，fast-recovery-final=true");
-                return;
-            }
-
-            Log.Error("千牛启动连接进入降级恢复：Bot进程保持运行，注入脚本仍未连接；"
-                + "不会自动重启千牛，避免破坏登录态。后续每30秒低频检测并自动恢复。"
-                + " ws=" + (finalSnapshot == null ? string.Empty : finalSnapshot.WebSocketStatus)
-                + ", injection=" + (finalSnapshot == null ? string.Empty : finalSnapshot.InjectionStatus));
-
-            await RunDegradedRecoveryAsync().ConfigureAwait(false);
-        }
-
-        private static async Task RunDegradedRecoveryAsync()
-        {
-            var cycle = 0;
-            while (true)
-            {
-                await Task.Delay(DegradedRetryDelay).ConfigureAwait(false);
-                cycle++;
-
-                try
-                {
-                    var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                    if (snapshot != null && snapshot.WebSocketSessionCount > 0)
-                    {
-                        Log.Info("千牛降级连接自恢复完成：注入WebSocket重新连接，cycle=" + cycle);
-                        return;
-                    }
-
-                    if (!IsLoopbackListenerActive())
-                    {
-                        Log.ErrorWithMaxCount(
-                            "千牛降级连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务。 cycle=" + cycle,
-                            20);
-                        MyWebSocketServer.WSocketSvrInst.Start();
-                        continue;
-                    }
-
-                    // A listening port with no session usually means Qianniu has not recreated a
-                    // patched recent.html WebView yet. Do not kill/restart Qianniu; simply remain
-                    // degraded and let an eventual WebView connection recover naturally.
-                    if (cycle == 1 || cycle % 20 == 0)
-                    {
-                        Log.Info("千牛降级连接仍在等待注入页面：未自动重启千牛。 cycle=" + cycle
-                            + ", ws=" + (snapshot == null ? string.Empty : snapshot.WebSocketStatus)
-                            + ", injection=" + (snapshot == null ? string.Empty : snapshot.InjectionStatus));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("千牛降级连接自恢复检查失败：" + ex.Message, 20);
-                }
+                Log.Warn("[Bot][StartupRecovery] 启动期恢复任务异常：" + ex.Message);
             }
         }
 
-        private static bool IsLoopbackListenerActive()
+        private static bool IsInjectionReady()
         {
             try
             {
-                return IPGlobalProperties.GetIPGlobalProperties()
-                    .GetActiveTcpListeners()
-                    .Any(endpoint => endpoint.Port == WebSocketPort
-                        && (IPAddress.IsLoopback(endpoint.Address)
-                            || endpoint.Address.Equals(IPAddress.Any)
-                            || endpoint.Address.Equals(IPAddress.IPv6Any)));
+                var hasSeller = QN.MyWebSocketServer?.SellerDict != null &&
+                                QN.MyWebSocketServer.SellerDict.Values.Any(x => x != null && x.ReadyState == 1);
+                if (hasSeller) return true;
             }
-            catch
-            {
-                return false;
-            }
+            catch { }
+
+            try { return QN.RPA != null && QN.RPA.Connected; }
+            catch { return false; }
         }
     }
 }
