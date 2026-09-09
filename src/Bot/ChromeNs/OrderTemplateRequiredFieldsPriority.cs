@@ -30,9 +30,6 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
-                // Reorder aggressively during runtime startup and keep a low-cost guard afterwards.
-                // The field handler itself owns/dedupes the plan before doing any async enrichment,
-                // therefore being first prevents a sparse legacy consumer from sending {sku} empty.
                 _timer = new Timer(_ => ReorderAll(), null, 1, 100);
                 Log.Info("订单模板字段补全优先级守卫已启动：V2 必填字段补全固定先于旧订单消费者；每个QN实例均强制启用。");
             }
@@ -58,9 +55,6 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
-        // Do not rely only on App's static field initializer. Field evidence from 1.1.1369 showed
-        // the V2 service running while this priority bootstrap never logged. Initializing from every
-        // actual QN object makes the ordering guard part of the business-session lifecycle itself.
         private readonly object _orderRequiredFieldsPriorityInstanceBootstrap =
             OrderTemplateRequiredFieldsPriority.InitializeForApp();
 
@@ -101,9 +95,10 @@ namespace Bot.ChromeNs
                 if (!_orderRequiredFieldsHandlerPriorityLogged)
                 {
                     _orderRequiredFieldsHandlerPriorityLogged = true;
-                    Log.Info("订单模板字段 V2 已确认成为 messageCenterNotify 第一消费者: seller="
+                    Log.Info("订单模板字段 V2 已提升为 messageCenterNotify 第一消费者: seller="
                         + (Seller == null ? string.Empty : Seller.Nick)
-                        + ", handlers=" + handlers.Length);
+                        + ", handlers=" + handlers.Length
+                        + ", instanceBootstrap=true");
                 }
             }
         }
