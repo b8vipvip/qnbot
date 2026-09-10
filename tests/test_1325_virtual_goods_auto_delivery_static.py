@@ -85,11 +85,11 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     assert enqueue < has_intent < queue_lookup
 
     persist = runtime.index("public static bool TryPersistConfirmationIntent")
-    local_consumed = runtime.index("if (live.ConfirmationIntentAt.HasValue) return false;", persist)
+    local_consumed = runtime.index("live.ConfirmationIntentAt.HasValue", persist)
     durable_write = runtime.index("AutoDeliveryConfirmationLedger.TryRecordIntent", local_consumed)
     assert persist < local_consumed < durable_write
-    assert "independent ledger is deliberately NOT rolled back" in runtime
     assert "AutoDeliveryConfirmationLedger.Remove" not in runtime
+    assert "AutoDeliveryConfirmationLedger.HasIntent(seller, orderId)" in runtime[persist:durable_write]
 
 
 def test_auto_delivery_only_declares_success_on_explicit_done_status():
@@ -115,8 +115,15 @@ def test_auto_delivery_respects_shared_human_and_bot_activity_guards():
     assert "TryGetInputboxEmptyAsync" in runtime
     assert "IsKnownBotOwnedDraftAsync" in runtime
     assert "await _sendGate.WaitAsync()" in runtime
-    assert "using (BotActivityCoordinator.Begin(" in runtime
-    assert 'verificationOnly ? "虚拟商品自动发货只读复核" : "虚拟商品自动发货"' in runtime
+    assert 'using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer))' in runtime
+
+    # Read-only verification and non-candidates must terminate before foreground focus/navigation.
+    method = runtime[runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+                     runtime.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")]
+    verification_stop = method.index("if (verificationOnly)")
+    focus = method.index("BotActivityCoordinator.IsSafeToAutoFocus", verification_stop)
+    open_chat = method.index("OpenChat(expectedBuyer)", focus)
+    assert verification_stop < focus < open_chat
 
 
 def test_delayed_jobs_and_order_event_cursor_are_durable_and_non_retroactive():

@@ -418,10 +418,14 @@ namespace Bot.ChromeNs
 
                 try
                 {
-                    if (Desk.Inst != null)
+                    // Desk.Inst is replaced/disposed during startup reconciliation. Snapshot it once;
+                    // checking Desk.Inst and then dereferencing it again creates a classic TOCTOU null
+                    // race that was observed in the 1.1.1406 field log.
+                    var desk = Desk.Inst;
+                    if (desk != null)
                     {
-                        if (_seller != null && !string.IsNullOrWhiteSpace(_seller.Nick)) Desk.Inst.ChangeSeller(_seller.Nick);
-                        if (Buyer != null && !string.IsNullOrWhiteSpace(Buyer.Nick)) Desk.Inst.ChangeBuyer(Buyer.Nick);
+                        if (_seller != null && !string.IsNullOrWhiteSpace(_seller.Nick)) desk.ChangeSeller(_seller.Nick);
+                        if (Buyer != null && !string.IsNullOrWhiteSpace(Buyer.Nick)) desk.ChangeBuyer(Buyer.Nick);
                     }
                 }
                 catch (Exception ex)

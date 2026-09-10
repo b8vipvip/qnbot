@@ -8,6 +8,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -37,6 +39,13 @@ namespace Bot.ChromeNs
     /// page while the 12-second liveness timer is still asleep. In that case we request a debounced
     /// run of the existing remote-history reconciliation authority. The normal message ledger and
     /// ProcessIncomingMessageAsync remain the only side-effect/reply owners.
+    ///
+    /// 1.1.1406 field logs then proved that 40+ standby pages can mirror the exact same payload and
+    /// drive thousands of duplicate observations. Seller-level debounce alone is not enough because
+    /// a long-running probe releases the gate and the same mirrored payload can immediately arm the
+    /// next probe. Therefore the reconciliation trigger is also coalesced by a privacy-safe payload
+    /// fingerprint. This never suppresses the real inbound event; it only suppresses redundant
+    /// expensive CDP/history probes for an already-observed duplicate payload.
     /// </summary>
     internal static class WebSocketPageLifecycleGuard
     {
@@ -48,6 +57,8 @@ namespace Bot.ChromeNs
 
         private static readonly TimeSpan InertPageGrace = TimeSpan.FromSeconds(20);
         private static readonly TimeSpan ImmediateProbeDebounce = TimeSpan.FromMilliseconds(900);
+        private static readonly TimeSpan DuplicateProbeFingerprintWindow = TimeSpan.FromMinutes(2);
+        private const int MaxDuplicateProbeFingerprints = 2048;
         private static readonly ConcurrentDictionary<string, InertCandidate> InertCandidates =
             new ConcurrentDictionary<string, InertCandidate>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> StandbyLogged =
@@ -58,6 +69,9 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> ImmediateProbeRunning =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> RecentDuplicateProbePayloads =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static long _duplicateProbePayloadsSuppressed;
         private static int _initialized;
 
         public static object InitializeForApp()
@@ -65,7 +79,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
-                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面保持可恢复standby；重复页实时入站触发现有历史权威快速核对。");
+                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面保持可恢复standby；重复页实时入站按payload指纹合并后触发现有历史权威快速核对。");
             }
             return new object();
         }
@@ -91,6 +105,12 @@ namespace Bot.ChromeNs
             // The authoritative CDP receives the normal event directly. Only a physical duplicate
             // page is evidence that a prompt history reconciliation may be needed.
             if (MyWebSocketServer.WSocketSvrInst.IsAuthoritativeSellerSession(seller, sessionId)) return;
+
+            // IMPORTANT: this is only a reconciliation-probe gate. The actual receiveNewMsg has
+            // already continued through the normal server/duplicate-forwarding path and remains
+            // protected by the authoritative business ledger. Never use this fingerprint map as a
+            // buyer-message delivery deduplicator.
+            if (!TryClaimDuplicateProbePayload(seller, e.Type, e.Value)) return;
             RequestImmediateHistoryProbe(seller, sessionId);
         }
 
@@ -198,6 +218,58 @@ namespace Bot.ChromeNs
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
                 return sellers.Count == 1 ? sellers[0] : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool TryClaimDuplicateProbePayload(string seller, string type, string response)
+        {
+            var now = DateTime.UtcNow;
+            var fingerprint = BuildDuplicateProbeFingerprint(seller, type, response);
+            if (fingerprint.Length == 0) return true;
+
+            DateTime seenAt;
+            if (RecentDuplicateProbePayloads.TryGetValue(fingerprint, out seenAt)
+                && now - seenAt <= DuplicateProbeFingerprintWindow)
+            {
+                var suppressed = Interlocked.Increment(ref _duplicateProbePayloadsSuppressed);
+                if (suppressed <= 5 || suppressed % 100 == 0)
+                {
+                    Log.Info("重复千牛standby实时入站已按payload指纹合并，不重复触发CDP历史核对: sellerRef="
+                        + MyWebSocketServer.DiagnosticRef("seller", seller)
+                        + ", suppressedTotal=" + suppressed);
+                }
+                return false;
+            }
+
+            RecentDuplicateProbePayloads[fingerprint] = now;
+            if (RecentDuplicateProbePayloads.Count > MaxDuplicateProbeFingerprints)
+            {
+                var cutoff = now - DuplicateProbeFingerprintWindow;
+                foreach (var pair in RecentDuplicateProbePayloads.ToArray())
+                {
+                    if (pair.Value >= cutoff) continue;
+                    DateTime ignored;
+                    RecentDuplicateProbePayloads.TryRemove(pair.Key, out ignored);
+                }
+            }
+            return true;
+        }
+
+        private static string BuildDuplicateProbeFingerprint(string seller, string type, string response)
+        {
+            try
+            {
+                var input = (seller ?? string.Empty).Trim() + "\n"
+                    + (type ?? string.Empty).Trim() + "\n" + (response ?? string.Empty);
+                using (var sha = SHA256.Create())
+                {
+                    var digest = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
+                    return Convert.ToBase64String(digest);
+                }
             }
             catch
             {
