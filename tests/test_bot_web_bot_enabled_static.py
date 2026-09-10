@@ -23,7 +23,8 @@ def test_web_page_exposes_independent_bot_master_switch():
     assert 'id="botEnabledHint"' in page
     assert "启用 Bot" in page
     assert "关闭后 Bot 不再参与消息处理" in page
-    assert 'src="/static/bot-web-bot-enabled.js?v=1"' in page
+    assert 'src="/static/bot-web-bot-enabled.js?v=2"' in page
+    assert 'script.src = "/static/bot-web-auto-reply-rules.js?v=2"' in script
     assert 'api("/api/bot-web/bot-enabled")' in script
     assert 'method: "PUT"' in script
     assert 'enabled: $("botEnabled").checked' in script

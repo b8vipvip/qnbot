@@ -124,7 +124,7 @@
 (() => {
   if (document.querySelector('script[data-bot-web-auto-reply-rules]')) return;
   const script = document.createElement("script");
-  script.src = "/static/bot-web-auto-reply-rules.js?v=1";
+  script.src = "/static/bot-web-auto-reply-rules.js?v=2";
   script.dataset.botWebAutoReplyRules = "1";
   document.body.appendChild(script);
 })();
