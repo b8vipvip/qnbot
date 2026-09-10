@@ -4,6 +4,7 @@ using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -28,38 +29,22 @@ namespace Bot.ChromeNs
 
         public static AutoDeliveryAttemptResult Deferred(string reason)
         {
-            return new AutoDeliveryAttemptResult
-            {
-                Outcome = AutoDeliveryAttemptOutcome.Deferred,
-                Reason = reason ?? string.Empty
-            };
+            return new AutoDeliveryAttemptResult { Outcome = AutoDeliveryAttemptOutcome.Deferred, Reason = reason ?? string.Empty };
         }
 
         public static AutoDeliveryAttemptResult Completed(string reason)
         {
-            return new AutoDeliveryAttemptResult
-            {
-                Outcome = AutoDeliveryAttemptOutcome.Completed,
-                Reason = reason ?? string.Empty
-            };
+            return new AutoDeliveryAttemptResult { Outcome = AutoDeliveryAttemptOutcome.Completed, Reason = reason ?? string.Empty };
         }
 
         public static AutoDeliveryAttemptResult Terminal(string reason)
         {
-            return new AutoDeliveryAttemptResult
-            {
-                Outcome = AutoDeliveryAttemptOutcome.TerminalNoAction,
-                Reason = reason ?? string.Empty
-            };
+            return new AutoDeliveryAttemptResult { Outcome = AutoDeliveryAttemptOutcome.TerminalNoAction, Reason = reason ?? string.Empty };
         }
 
         public static AutoDeliveryAttemptResult Uncertain(string reason)
         {
-            return new AutoDeliveryAttemptResult
-            {
-                Outcome = AutoDeliveryAttemptOutcome.ConfirmationUncertain,
-                Reason = reason ?? string.Empty
-            };
+            return new AutoDeliveryAttemptResult { Outcome = AutoDeliveryAttemptOutcome.ConfirmationUncertain, Reason = reason ?? string.Empty };
         }
     }
 
@@ -75,10 +60,6 @@ namespace Bot.ChromeNs
             public DateTime ExpiresAt { get; set; }
             public int Attempts { get; set; }
             public int ConfirmationUncertainCount { get; set; }
-
-            // This queue-local field makes an in-flight record read-only after restart. It is NOT
-            // the source of truth for at-most-once semantics; the independent confirmation ledger
-            // survives queue removal and permanently denies a second confirm for the same order.
             public DateTime? ConfirmationIntentAt { get; set; }
         }
 
@@ -107,9 +88,6 @@ namespace Bot.ChromeNs
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-
-            // Initialize/migrate the independent durable barrier before the disposable queue can be
-            // cleaned or reconfigured. Old queue-local ConfirmationIntentAt values are migrated here.
             AutoDeliveryConfirmationLedger.Initialize();
             lock (Sync)
             {
@@ -117,33 +95,24 @@ namespace Bot.ChromeNs
                 CleanupExpiredLocked(DateTime.Now);
                 SaveStateLocked();
             }
-
             _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
-            Log.Info("虚拟商品自动发货协调器已启动：准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending="
-                + PendingCount());
+            Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
         }
 
         public static void Enqueue(OrderSnapshot snapshot)
         {
-            if (snapshot == null
-                || string.IsNullOrWhiteSpace(snapshot.Seller)
-                || string.IsNullOrWhiteSpace(snapshot.Buyer)
-                || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
-
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller) || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
             Initialize();
             if (!AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId))
             {
-                Log.ErrorWithMaxCount("自动发货拒绝非安全订单号：仅允许16-24位纯数字真实订单号。orderId="
-                    + (snapshot.OrderId ?? string.Empty), 20);
+                Log.ErrorWithMaxCount("自动发货拒绝非安全订单号：仅允许16-24位纯数字真实订单号。orderId=" + (snapshot.OrderId ?? string.Empty), 20);
                 return;
             }
             if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
             {
-                Log.Info("自动发货订单已有长期确认防重记录，拒绝重新入队: seller=" + snapshot.Seller
-                    + ", orderId=" + snapshot.OrderId + ", repeatConfirm=false");
+                Log.Info("自动发货订单已有长期确认防重记录，拒绝重新入队: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", repeatConfirm=false");
                 return;
             }
-
             var cfg = AutoDeliverySettings.Load(snapshot.Seller);
             if (cfg == null || !cfg.Enabled) return;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return;
@@ -153,15 +122,10 @@ namespace Bot.ChromeNs
             var due = anchor.AddMinutes(cfg.DelayMinutes);
             if (due < now) due = now;
             var key = BuildKey(snapshot.Seller, snapshot.OrderId);
-
             lock (Sync)
             {
-                // Re-check under the queue mutation path. The ledger has its own lock and is always
-                // consulted before a new disposable queue record is granted action eligibility.
                 if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) return;
-
-                var existing = _state.Pending.FirstOrDefault(x => x != null
-                    && string.Equals(x.Key, key, StringComparison.Ordinal));
+                var existing = _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
                 if (existing == null)
                 {
                     existing = new PendingRecord
@@ -177,10 +141,7 @@ namespace Bot.ChromeNs
                         ConfirmationIntentAt = null
                     };
                     _state.Pending.Add(existing);
-                    Log.Info("虚拟商品自动发货任务已入队: seller=" + snapshot.Seller
-                        + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId
-                        + ", delayMinutes=" + cfg.DelayMinutes
-                        + ", due=" + due.ToString("yyyy-MM-dd HH:mm:ss"));
+                    Log.Info("虚拟商品自动发货任务已入队: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", delayMinutes=" + cfg.DelayMinutes + ", due=" + due.ToString("yyyy-MM-dd HH:mm:ss"));
                 }
                 else
                 {
@@ -188,15 +149,10 @@ namespace Bot.ChromeNs
                     var refreshedAnchor = ResolveAnchor(existing.Snapshot, now);
                     existing.DueAt = refreshedAnchor.AddMinutes(cfg.DelayMinutes);
                     if (existing.DueAt < now) existing.DueAt = now;
-                    if (!existing.ConfirmationIntentAt.HasValue && existing.NextAttemptAt < existing.DueAt)
-                        existing.NextAttemptAt = existing.DueAt;
+                    if (!existing.ConfirmationIntentAt.HasValue && existing.NextAttemptAt < existing.DueAt) existing.NextAttemptAt = existing.DueAt;
                     existing.ExpiresAt = now.Add(MaxPendingAge);
-                    Log.Info("虚拟商品自动发货任务已用新订单状态刷新: seller=" + snapshot.Seller
-                        + ", orderId=" + snapshot.OrderId
-                        + ", due=" + existing.DueAt.ToString("yyyy-MM-dd HH:mm:ss")
-                        + ", confirmationIntent=" + existing.ConfirmationIntentAt.HasValue);
+                    Log.Info("虚拟商品自动发货任务已用新订单状态刷新: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", due=" + existing.DueAt.ToString("yyyy-MM-dd HH:mm:ss") + ", confirmationIntent=" + existing.ConfirmationIntentAt.HasValue);
                 }
-
                 CleanupExpiredLocked(now);
                 SaveStateLocked();
             }
@@ -210,32 +166,21 @@ namespace Bot.ChromeNs
             if (seller.Length == 0) return;
             delayMinutes = AutoDeliverySettings.Clamp(delayMinutes);
             var now = DateTime.Now;
-
             lock (Sync)
             {
                 if (!enabled)
                 {
-                    var removed = _state.Pending.RemoveAll(x => x != null
-                        && string.Equals(
-                            (x.Snapshot == null ? string.Empty : x.Snapshot.Seller) ?? string.Empty,
-                            seller,
-                            StringComparison.Ordinal));
-                    if (removed > 0)
-                    {
-                        Log.Info("关闭自动发货后已取消该店铺未执行任务，但长期确认防重账本保留: seller="
-                            + seller + ", count=" + removed);
-                    }
+                    var removed = _state.Pending.RemoveAll(x => x != null && string.Equals((x.Snapshot == null ? string.Empty : x.Snapshot.Seller) ?? string.Empty, seller, StringComparison.Ordinal));
+                    if (removed > 0) Log.Info("关闭自动发货后已取消该店铺未执行任务，但长期确认防重账本保留: seller=" + seller + ", count=" + removed);
                 }
                 else
                 {
-                    foreach (var record in _state.Pending.Where(x => x != null && x.Snapshot != null
-                        && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)))
+                    foreach (var record in _state.Pending.Where(x => x != null && x.Snapshot != null && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)))
                     {
                         var anchor = ResolveAnchor(record.Snapshot, now);
                         record.DueAt = anchor.AddMinutes(delayMinutes);
                         if (record.DueAt < now) record.DueAt = now;
-                        if (!record.ConfirmationIntentAt.HasValue)
-                            record.NextAttemptAt = record.DueAt;
+                        if (!record.ConfirmationIntentAt.HasValue) record.NextAttemptAt = record.DueAt;
                     }
                 }
                 SaveStateLocked();
@@ -243,29 +188,17 @@ namespace Bot.ChromeNs
             if (enabled) ScheduleWorker();
         }
 
-        /// <summary>
-        /// First-write-only authority for the irreversible confirm click. A pre-existing ledger
-        /// record always returns false; it is evidence to deny a second click, never permission to
-        /// repeat one. The independent ledger is persisted first, then the queue-local read-only flag.
-        /// </summary>
         public static bool TryPersistConfirmationIntent(string seller, string orderId)
         {
             Initialize();
             seller = (seller ?? string.Empty).Trim();
             orderId = (orderId ?? string.Empty).Trim();
             if (seller.Length == 0 || !AutoDeliveryConfirmationLedger.IsSafeOrderId(orderId)) return false;
-
             var key = BuildKey(seller, orderId);
             lock (Sync)
             {
                 var live = FindLiveRecordLocked(key);
-                if (live == null || live.Snapshot == null) return false;
-
-                // Queue-local intent already means the confirm authority has been consumed.
-                if (live.ConfirmationIntentAt.HasValue) return false;
-
-                // If a long-lived record already exists (possibly from a previous queue record),
-                // force this stale record into read-only mode and deny the click.
+                if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue) return false;
                 if (AutoDeliveryConfirmationLedger.HasIntent(seller, orderId))
                 {
                     live.ConfirmationIntentAt = DateTime.Now;
@@ -273,12 +206,9 @@ namespace Bot.ChromeNs
                     SaveStateLocked();
                     return false;
                 }
-
                 var now = DateTime.Now;
                 if (!AutoDeliveryConfirmationLedger.TryRecordIntent(seller, orderId, now))
                 {
-                    // If the durable write raced with another path, treat the resulting ledger as a
-                    // consumed authority and make this queue record read-only. Never retry confirm.
                     if (AutoDeliveryConfirmationLedger.HasIntent(seller, orderId))
                     {
                         live.ConfirmationIntentAt = now;
@@ -287,22 +217,14 @@ namespace Bot.ChromeNs
                     }
                     return false;
                 }
-
                 live.ConfirmationIntentAt = now;
                 live.NextAttemptAt = now.Add(UncertainRetryDelay);
                 if (!SaveStateLocked())
                 {
-                    // The independent ledger is deliberately NOT rolled back. No confirm click has
-                    // happened yet, and keeping the barrier fails closed across process restart.
-                    Log.Error("自动发货队列防重标记持久化失败；长期账本已保留，拒绝确认发货: seller="
-                        + seller + ", orderId=" + orderId);
+                    Log.Error("自动发货队列防重标记持久化失败；长期账本已保留，拒绝确认发货: seller=" + seller + ", orderId=" + orderId);
                     return false;
                 }
-
-                Log.Info("自动发货确认动作长期防重屏障已写入: seller=" + seller
-                    + ", orderId=" + orderId
-                    + ", at=" + now.ToString("yyyy-MM-dd HH:mm:ss.fff")
-                    + ", repeatConfirm=false");
+                Log.Info("自动发货确认动作长期防重屏障已写入: seller=" + seller + ", orderId=" + orderId + ", at=" + now.ToString("yyyy-MM-dd HH:mm:ss.fff") + ", repeatConfirm=false");
                 return true;
             }
         }
@@ -324,21 +246,16 @@ namespace Bot.ChromeNs
                     lock (Sync)
                     {
                         CleanupExpiredLocked(now);
-                        record = _state.Pending
-                            .Where(x => x != null && x.Snapshot != null && x.NextAttemptAt <= now)
-                            .OrderBy(x => x.NextAttemptAt)
-                            .FirstOrDefault();
+                        record = _state.Pending.Where(x => x != null && x.Snapshot != null && x.NextAttemptAt <= now).OrderBy(x => x.NextAttemptAt).FirstOrDefault();
                         if (record == null)
                         {
                             SaveStateLocked();
                             return;
                         }
-
                         record.NextAttemptAt = now.Add(RetryDelay);
                         record.Attempts++;
                         SaveStateLocked();
                     }
-
                     await ProcessRecordAsync(record).ConfigureAwait(false);
                     await Task.Delay(100).ConfigureAwait(false);
                 }
@@ -363,49 +280,34 @@ namespace Bot.ChromeNs
                 RemoveRecord(record, "功能已关闭");
                 return;
             }
-
             var qn = QN.FindExistingBySellerNick(snapshot.Seller);
             if (qn == null)
             {
                 DeferRecord(record, RetryDelay, "当前店铺千牛会话尚未连接");
                 return;
             }
-
-            var verificationOnly = record.ConfirmationIntentAt.HasValue
-                || AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId);
+            var verificationOnly = record.ConfirmationIntentAt.HasValue || AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId);
             AutoDeliveryAttemptResult result;
             try
             {
-                result = await qn.TryExecuteVirtualGoodsAutoDeliveryAsync(snapshot, verificationOnly)
-                    .ConfigureAwait(false);
+                result = await qn.TryExecuteVirtualGoodsAutoDeliveryAsync(snapshot, verificationOnly).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                result = verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message)
-                    : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
+                result = verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message) : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
             }
-            if (result == null)
-            {
-                result = verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核未返回结果")
-                    : AutoDeliveryAttemptResult.Deferred("未返回执行结果");
-            }
+            if (result == null) result = verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核未返回结果") : AutoDeliveryAttemptResult.Deferred("未返回执行结果");
 
             switch (result.Outcome)
             {
                 case AutoDeliveryAttemptOutcome.Completed:
-                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
-                        AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "completed");
+                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "completed");
                     RemoveRecord(record, "已确认完成：" + result.Reason);
                     break;
-
                 case AutoDeliveryAttemptOutcome.TerminalNoAction:
-                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
-                        AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "terminal:" + result.Reason);
+                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "terminal:" + result.Reason);
                     RemoveRecord(record, "订单无需再执行：" + result.Reason);
                     break;
-
                 case AutoDeliveryAttemptOutcome.ConfirmationUncertain:
                     var stop = false;
                     lock (Sync)
@@ -417,40 +319,20 @@ namespace Bot.ChromeNs
                         {
                             _state.Pending.Remove(live);
                             stop = true;
-                            Log.Error("自动发货确认结果连续不确定，已停止队列任务；长期防重账本仍保留且不会重复确认: seller="
-                                + snapshot.Seller + ", buyer=" + snapshot.Buyer
-                                + ", orderId=" + snapshot.OrderId
-                                + ", reason=" + result.Reason);
+                            Log.Error("自动发货确认结果连续不确定，已停止队列任务；长期防重账本仍保留且不会重复确认: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", reason=" + result.Reason);
                         }
                         else
                         {
                             live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
-                            Log.Info("自动发货确认后状态暂未确定，进入只读复核等待: seller="
-                                + snapshot.Seller + ", orderId=" + snapshot.OrderId
-                                + ", uncertain=" + live.ConfirmationUncertainCount + "/5"
-                                + ", next=" + live.NextAttemptAt.ToString("HH:mm:ss")
-                                + ", reason=" + result.Reason + ", repeatConfirm=false");
+                            Log.Info("自动发货确认后状态暂未确定，进入只读复核等待: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", uncertain=" + live.ConfirmationUncertainCount + "/5, next=" + live.NextAttemptAt.ToString("HH:mm:ss") + ", reason=" + result.Reason + ", repeatConfirm=false");
                         }
                         SaveStateLocked();
                     }
-                    if (stop && AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
-                    {
-                        AutoDeliveryConfirmationLedger.MarkResolved(
-                            snapshot.Seller,
-                            snapshot.OrderId,
-                            "manual_review_required");
-                    }
+                    if (stop && AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "manual_review_required");
                     break;
-
                 default:
-                    if (IsConversationNavigationChurnReason(result.Reason))
-                    {
-                        DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason);
-                    }
-                    else
-                    {
-                        DeferRecord(record, RetryDelay, result.Reason);
-                    }
+                    if (IsConversationNavigationChurnReason(result.Reason)) DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason);
+                    else DeferRecord(record, RetryDelay, result.Reason);
                     break;
             }
         }
@@ -458,7 +340,8 @@ namespace Bot.ChromeNs
         private static bool IsConversationNavigationChurnReason(string reason)
         {
             reason = reason ?? string.Empty;
-            return reason.IndexOf("右侧订单面板尚未找到唯一准确订单卡片", StringComparison.Ordinal) >= 0
+            return reason.IndexOf("静默预检", StringComparison.Ordinal) >= 0
+                || reason.IndexOf("右侧订单面板尚未找到唯一准确订单卡片", StringComparison.Ordinal) >= 0
                 || reason.IndexOf("无法确认已切换到订单买家会话", StringComparison.Ordinal) >= 0
                 || reason.IndexOf("执行前买家会话发生变化", StringComparison.Ordinal) >= 0;
         }
@@ -470,29 +353,21 @@ namespace Bot.ChromeNs
                 DeferRecord(record, delay, reason);
                 return;
             }
-
             var seller = (record.Snapshot.Seller ?? string.Empty).Trim();
             var next = DateTime.Now.Add(delay);
             var deferred = 0;
             lock (Sync)
             {
-                foreach (var live in _state.Pending.Where(x => x != null && x.Snapshot != null
-                    && !x.ConfirmationIntentAt.HasValue
-                    && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
+                foreach (var live in _state.Pending.Where(x => x != null && x.Snapshot != null && !x.ConfirmationIntentAt.HasValue && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
                 {
                     if (live.NextAttemptAt < next) live.NextAttemptAt = next;
                     deferred++;
                 }
                 SaveStateLocked();
             }
-
             if (record.Attempts == 1 || record.Attempts % 8 == 0)
             {
-                Log.Info("虚拟商品自动发货会话导航失败，已对同店铺待处理任务统一退避，避免多个订单反复切换前台买家: seller="
-                    + seller + ", orderId=" + record.Snapshot.OrderId
-                    + ", deferred=" + deferred
-                    + ", retryAfterSeconds=" + (int)delay.TotalSeconds
-                    + ", reason=" + (reason ?? string.Empty));
+                Log.Info("虚拟商品自动发货静默预检/会话导航暂缓，已对同店铺待处理任务统一退避，避免多个订单反复切换前台买家: seller=" + seller + ", orderId=" + record.Snapshot.OrderId + ", deferred=" + deferred + ", retryAfterSeconds=" + (int)delay.TotalSeconds + ", reason=" + (reason ?? string.Empty));
             }
         }
 
@@ -506,13 +381,7 @@ namespace Bot.ChromeNs
                 live.NextAttemptAt = DateTime.Now.Add(delay);
                 SaveStateLocked();
             }
-
-            if (record.Attempts == 1 || record.Attempts % 8 == 0)
-            {
-                Log.Info("虚拟商品自动发货暂缓: seller=" + record.Snapshot.Seller
-                    + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId
-                    + ", reason=" + (reason ?? string.Empty));
-            }
+            if (record.Attempts == 1 || record.Attempts % 8 == 0) Log.Info("虚拟商品自动发货暂缓: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", reason=" + (reason ?? string.Empty));
         }
 
         private static void RemoveRecord(PendingRecord record, string reason)
@@ -523,42 +392,27 @@ namespace Bot.ChromeNs
                 if (live != null) _state.Pending.Remove(live);
                 SaveStateLocked();
             }
-            Log.Info("虚拟商品自动发货任务结束: seller=" + record.Snapshot.Seller
-                + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId
-                + ", detail=" + (reason ?? string.Empty)
-                + ", longLedgerPreserved="
-                + AutoDeliveryConfirmationLedger.HasIntent(record.Snapshot.Seller, record.Snapshot.OrderId));
+            Log.Info("虚拟商品自动发货任务结束: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", detail=" + (reason ?? string.Empty) + ", longLedgerPreserved=" + AutoDeliveryConfirmationLedger.HasIntent(record.Snapshot.Seller, record.Snapshot.OrderId));
         }
 
         private static PendingRecord FindLiveRecordLocked(string key)
         {
-            return _state.Pending.FirstOrDefault(x => x != null
-                && string.Equals(x.Key, key, StringComparison.Ordinal));
+            return _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
         }
 
         private static int PendingCount()
         {
-            lock (Sync)
-            {
-                return _state == null || _state.Pending == null ? 0 : _state.Pending.Count;
-            }
+            lock (Sync) { return _state == null || _state.Pending == null ? 0 : _state.Pending.Count; }
         }
 
         private static void CleanupExpiredLocked(DateTime now)
         {
             if (_state == null) _state = new StateDocument();
             if (_state.Pending == null) _state.Pending = new List<PendingRecord>();
-            var expired = _state.Pending
-                .Where(x => x == null || x.Snapshot == null || x.ExpiresAt <= now)
-                .ToList();
+            var expired = _state.Pending.Where(x => x == null || x.Snapshot == null || x.ExpiresAt <= now).ToList();
             foreach (var item in expired)
             {
-                if (item != null && item.Snapshot != null)
-                {
-                    Log.Info("虚拟商品自动发货队列任务已过期并停止；长期确认防重账本不受影响: seller="
-                        + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId
-                        + ", confirmationIntent=" + item.ConfirmationIntentAt.HasValue);
-                }
+                if (item != null && item.Snapshot != null) Log.Info("虚拟商品自动发货队列任务已过期并停止；长期确认防重账本不受影响: seller=" + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId + ", confirmationIntent=" + item.ConfirmationIntentAt.HasValue);
                 _state.Pending.Remove(item);
             }
         }
@@ -566,7 +420,6 @@ namespace Bot.ChromeNs
         private static DateTime ResolveAnchor(OrderSnapshot snapshot, DateTime fallback)
         {
             if (snapshot == null) return fallback;
-            // The setting is “new order + N minutes”, so creation time is authoritative when present.
             if (snapshot.CreatedAt.HasValue) return snapshot.CreatedAt.Value;
             if (snapshot.PaidAt.HasValue) return snapshot.PaidAt.Value;
             return snapshot.EventTime == DateTime.MinValue ? fallback : snapshot.EventTime;
@@ -574,16 +427,12 @@ namespace Bot.ChromeNs
 
         private static string BuildKey(string seller, string orderId)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
-                + "#" + (orderId ?? string.Empty).Trim();
+            return (seller ?? string.Empty).Trim().ToLowerInvariant() + "#" + (orderId ?? string.Empty).Trim();
         }
 
         private static string StatePath()
         {
-            var root = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QianniuAiBot",
-                "data");
+            var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QianniuAiBot", "data");
             Directory.CreateDirectory(root);
             return Path.Combine(root, "virtual-goods-auto-delivery-queue.json");
         }
@@ -613,31 +462,14 @@ namespace Bot.ChromeNs
             {
                 var path = StatePath();
                 temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllText(
-                    temp,
-                    JsonConvert.SerializeObject(_state, Formatting.Indented),
-                    new UTF8Encoding(false));
+                File.WriteAllText(temp, JsonConvert.SerializeObject(_state, Formatting.Indented), new UTF8Encoding(false));
                 if (File.Exists(path))
                 {
-                    try
-                    {
-                        File.Replace(temp, path, null, true);
-                    }
-                    catch (PlatformNotSupportedException)
-                    {
-                        File.Copy(temp, path, true);
-                        File.Delete(temp);
-                    }
-                    catch (IOException)
-                    {
-                        File.Copy(temp, path, true);
-                        File.Delete(temp);
-                    }
+                    try { File.Replace(temp, path, null, true); }
+                    catch (PlatformNotSupportedException) { File.Copy(temp, path, true); File.Delete(temp); }
+                    catch (IOException) { File.Copy(temp, path, true); File.Delete(temp); }
                 }
-                else
-                {
-                    File.Move(temp, path);
-                }
+                else File.Move(temp, path);
                 return true;
             }
             catch (Exception ex)
@@ -647,11 +479,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(temp) && File.Exists(temp)) File.Delete(temp);
-                }
-                catch { }
+                try { if (!string.IsNullOrWhiteSpace(temp) && File.Exists(temp)) File.Delete(temp); } catch { }
             }
         }
 
@@ -678,111 +506,89 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        private enum AutoDeliveryPreflightKind
+        {
+            Deferred = 0,
+            Candidate = 1,
+            Completed = 2,
+            Terminal = 3
+        }
+
+        private sealed class AutoDeliveryPreflightResult
+        {
+            public AutoDeliveryPreflightKind Kind { get; set; }
+            public string Reason { get; set; }
+        }
+
+        private sealed class AutoDeliveryBuyerIdentityCacheEntry
+        {
+            public string SecurityBuyerUid { get; set; }
+            public DateTime ExpiresAtUtc { get; set; }
+        }
+
+        private static readonly ConcurrentDictionary<string, AutoDeliveryBuyerIdentityCacheEntry> AutoDeliveryBuyerIdentityCache =
+            new ConcurrentDictionary<string, AutoDeliveryBuyerIdentityCacheEntry>(StringComparer.Ordinal);
+        private static readonly TimeSpan AutoDeliveryBuyerIdentityCacheTtl = TimeSpan.FromMinutes(20);
+
         private sealed class AutoDeliveryDomState
         {
-            [JsonProperty("found")]
-            public bool Found { get; set; }
-            [JsonProperty("pending")]
-            public bool Pending { get; set; }
-            [JsonProperty("done")]
-            public bool Done { get; set; }
-            [JsonProperty("terminal")]
-            public bool Terminal { get; set; }
-            [JsonProperty("status")]
-            public string Status { get; set; }
-            [JsonProperty("shipButton")]
-            public bool ShipButton { get; set; }
-            [JsonProperty("clicked")]
-            public bool Clicked { get; set; }
+            [JsonProperty("found")] public bool Found { get; set; }
+            [JsonProperty("pending")] public bool Pending { get; set; }
+            [JsonProperty("done")] public bool Done { get; set; }
+            [JsonProperty("terminal")] public bool Terminal { get; set; }
+            [JsonProperty("status")] public string Status { get; set; }
+            [JsonProperty("shipButton")] public bool ShipButton { get; set; }
+            [JsonProperty("clicked")] public bool Clicked { get; set; }
         }
 
         private sealed class AutoDeliveryModalState
         {
-            [JsonProperty("found")]
-            public bool Found { get; set; }
-            [JsonProperty("noLogistics")]
-            public bool NoLogistics { get; set; }
-            [JsonProperty("confirm")]
-            public bool Confirm { get; set; }
-            [JsonProperty("selected")]
-            public bool Selected { get; set; }
-            [JsonProperty("clicked")]
-            public bool Clicked { get; set; }
+            [JsonProperty("found")] public bool Found { get; set; }
+            [JsonProperty("noLogistics")] public bool NoLogistics { get; set; }
+            [JsonProperty("confirm")] public bool Confirm { get; set; }
+            [JsonProperty("selected")] public bool Selected { get; set; }
+            [JsonProperty("clicked")] public bool Clicked { get; set; }
         }
 
-        internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync(
-            OrderSnapshot snapshot,
-            bool verificationOnly)
+        internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync(OrderSnapshot snapshot, bool verificationOnly)
         {
-            if (snapshot == null || !AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId))
-                return AutoDeliveryAttemptResult.Terminal("订单号不是16-24位纯数字安全格式");
-
+            if (snapshot == null || !AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId)) return AutoDeliveryAttemptResult.Terminal("订单号不是16-24位纯数字安全格式");
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0 || !DirectOrderIdentityResolver.IdentityEquals(seller, snapshot.Seller))
-                return AutoDeliveryAttemptResult.Deferred("当前客服与任务店铺不一致");
-            if (!AutoDeliverySettings.Load(seller).Enabled)
-                return AutoDeliveryAttemptResult.Terminal("自动发货已关闭");
-            if (cdp == null || rpa == null)
-                return verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核时千牛控制通道尚未连接")
-                    : AutoDeliveryAttemptResult.Deferred("千牛控制通道尚未连接");
+            if (seller.Length == 0 || !DirectOrderIdentityResolver.IdentityEquals(seller, snapshot.Seller)) return AutoDeliveryAttemptResult.Deferred("当前客服与任务店铺不一致");
+            if (!AutoDeliverySettings.Load(seller).Enabled) return AutoDeliveryAttemptResult.Terminal("自动发货已关闭");
+            if (cdp == null || rpa == null) return verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核时千牛控制通道尚未连接") : AutoDeliveryAttemptResult.Deferred("千牛控制通道尚未连接");
+            if (AutoDeliveryConfirmationLedger.HasIntent(seller, snapshot.OrderId)) verificationOnly = true;
 
-            // The long-lived ledger is authoritative even if the caller somehow supplied a stale
-            // queue record without its local ConfirmationIntentAt flag.
-            if (AutoDeliveryConfirmationLedger.HasIntent(seller, snapshot.OrderId))
-                verificationOnly = true;
+            if (_sendGate.CurrentCount < 1 || _incomingMessageGate.CurrentCount < 1 || _backgroundRecoveryGate.CurrentCount < 1)
+                return verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核等待当前消息/发送任务完成") : AutoDeliveryAttemptResult.Deferred("当前正在处理消息、发送或后台恢复任务");
 
-            if (_sendGate.CurrentCount < 1
-                || _incomingMessageGate.CurrentCount < 1
-                || _backgroundRecoveryGate.CurrentCount < 1)
-            {
-                return verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核等待当前消息/发送任务完成")
-                    : AutoDeliveryAttemptResult.Deferred("当前正在处理消息、发送或后台恢复任务");
-            }
+            // Phase A: this is deliberately before every input-box/current-buyer/OpenChat operation.
+            // The trade/contact APIs execute inside the already-injected WebView but do not change the
+            // visible Qianniu conversation. If evidence is absent or ambiguous we defer silently.
+            var preflight = await TrySilentAutoDeliveryPreflightAsync(snapshot).ConfigureAwait(false);
+            if (preflight.Kind == AutoDeliveryPreflightKind.Completed) return AutoDeliveryAttemptResult.Completed(preflight.Reason);
+            if (preflight.Kind == AutoDeliveryPreflightKind.Terminal) return AutoDeliveryAttemptResult.Terminal(preflight.Reason);
+            if (preflight.Kind != AutoDeliveryPreflightKind.Candidate) return verificationOnly ? AutoDeliveryAttemptResult.Uncertain(preflight.Reason) : AutoDeliveryAttemptResult.Deferred(preflight.Reason);
+            if (verificationOnly)
+                return AutoDeliveryAttemptResult.Uncertain("静默预检确认订单仍未发货，但确认权限此前已消费；保持只读，不切换前台买家且绝不再次确认发货");
 
             string activityReason;
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason))
-            {
-                return verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核等待人工操作结束：" + activityReason)
-                    : AutoDeliveryAttemptResult.Deferred(activityReason);
-            }
-
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason)) return AutoDeliveryAttemptResult.Deferred(activityReason);
             var input = await TryGetInputboxEmptyAsync().ConfigureAwait(false);
-            if (!input.Success)
-            {
-                return verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核暂时无法确认客服输入框状态")
-                    : AutoDeliveryAttemptResult.Deferred("暂时无法确认客服输入框状态");
-            }
+            if (!input.Success) return AutoDeliveryAttemptResult.Deferred("暂时无法确认客服输入框状态");
             if (!input.Empty)
             {
-                if (!(await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false)))
-                    BotActivityCoordinator.MarkHumanInteraction(seller, "自动发货前检测到客服输入内容");
-                return verificationOnly
-                    ? AutoDeliveryAttemptResult.Uncertain("只读复核等待客服输入结束")
-                    : AutoDeliveryAttemptResult.Deferred("客服输入框存在未发送内容");
+                if (!(await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))) BotActivityCoordinator.MarkHumanInteraction(seller, "自动发货前检测到客服输入内容");
+                return AutoDeliveryAttemptResult.Deferred("客服输入框存在未发送内容");
             }
 
             var expectedBuyer = (snapshot.Buyer ?? string.Empty).Trim();
-            if (expectedBuyer.Length == 0)
-                return AutoDeliveryAttemptResult.Terminal("订单缺少买家身份");
-
+            if (expectedBuyer.Length == 0) return AutoDeliveryAttemptResult.Terminal("订单缺少买家身份");
             var currentBuyer = await TryGetCurrentBuyerAsync().ConfigureAwait(false);
             if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer))
             {
-                if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason))
-                {
-                    return verificationOnly
-                        ? AutoDeliveryAttemptResult.Uncertain("只读复核等待人工操作结束：" + activityReason)
-                        : AutoDeliveryAttemptResult.Deferred(activityReason);
-                }
-
-                Log.Info((verificationOnly ? "虚拟商品自动发货只读复核" : "虚拟商品自动发货")
-                    + "准备切换目标买家: seller=" + seller
-                    + ", targetBuyer=" + expectedBuyer + ", currentBuyer=" + currentBuyer
-                    + ", orderId=" + snapshot.OrderId);
+                if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason)) return AutoDeliveryAttemptResult.Deferred(activityReason);
+                Log.Info("虚拟商品自动发货静默预检已命中安全候选，现仅为实际发货切换一次目标买家: seller=" + seller + ", targetBuyer=" + expectedBuyer + ", currentBuyer=" + currentBuyer + ", orderId=" + snapshot.OrderId);
                 OpenChat(expectedBuyer);
                 var focused = false;
                 for (var attempt = 0; attempt < 24; attempt++)
@@ -796,118 +602,44 @@ namespace Bot.ChromeNs
                         break;
                     }
                 }
-                if (!focused)
-                {
-                    return verificationOnly
-                        ? AutoDeliveryAttemptResult.Uncertain("只读复核无法确认已切换到订单买家会话")
-                        : AutoDeliveryAttemptResult.Deferred("无法确认已切换到订单买家会话");
-                }
+                if (!focused) return AutoDeliveryAttemptResult.Deferred("无法确认已切换到订单买家会话");
             }
 
             await _sendGate.WaitAsync().ConfigureAwait(false);
-            using (BotActivityCoordinator.Begin(
-                verificationOnly ? "虚拟商品自动发货只读复核" : "虚拟商品自动发货",
-                seller,
-                expectedBuyer))
+            using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer))
             {
                 try
                 {
                     currentBuyer = await TryGetCurrentBuyerAsync().ConfigureAwait(false);
-                    if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer))
-                    {
-                        return verificationOnly
-                            ? AutoDeliveryAttemptResult.Uncertain("只读复核前买家会话发生变化")
-                            : AutoDeliveryAttemptResult.Deferred("执行前买家会话发生变化");
-                    }
-
+                    if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer)) return AutoDeliveryAttemptResult.Deferred("执行前买家会话发生变化");
                     input = await TryGetInputboxEmptyAsync().ConfigureAwait(false);
-                    if (!input.Success || !input.Empty)
-                    {
-                        return verificationOnly
-                            ? AutoDeliveryAttemptResult.Uncertain("只读复核时客服输入框不为空或状态不可确认")
-                            : AutoDeliveryAttemptResult.Deferred("执行前客服输入框不为空或状态不可确认");
-                    }
+                    if (!input.Success || !input.Empty) return AutoDeliveryAttemptResult.Deferred("执行前客服输入框不为空或状态不可确认");
 
-                    var before = await ReadOrderStateAsync(snapshot.OrderId, false).ConfigureAwait(false);
-                    if (before == null || !before.Found)
-                    {
-                        return verificationOnly
-                            ? AutoDeliveryAttemptResult.Uncertain("只读复核尚未找到唯一准确订单卡片")
-                            : AutoDeliveryAttemptResult.Deferred("当前买家右侧订单面板尚未找到唯一准确订单卡片");
-                    }
-                    if (before.Done)
-                        return AutoDeliveryAttemptResult.Completed("订单已显示为“" + (before.Status ?? "已发货") + "”");
-                    if (before.Terminal)
-                        return AutoDeliveryAttemptResult.Terminal("订单当前状态为“" + (before.Status ?? "终态") + "”");
-                    if (verificationOnly)
-                    {
-                        return AutoDeliveryAttemptResult.Uncertain(
-                            "确认权限此前已消费；当前只读状态=" + (before.Status ?? "未识别")
-                            + "，长期账本禁止再次点击发货或确认发货");
-                    }
-                    if (!before.Pending)
-                        return AutoDeliveryAttemptResult.Deferred("订单当前不是待发货状态：" + (before.Status ?? "状态未识别"));
-                    if (!before.ShipButton)
-                        return AutoDeliveryAttemptResult.Deferred("已确认待发货订单，但未唯一找到该订单的“发货”动作");
+                    // Phase B: after the single committed navigation, wait briefly for the right-side
+                    // order panel to render and then revalidate the exact order. Silent API evidence is
+                    // never enough to authorize an irreversible click on its own.
+                    var before = await WaitForOrderStateAsync(snapshot.OrderId, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                    if (before == null || !before.Found) return AutoDeliveryAttemptResult.Deferred("当前买家右侧订单面板尚未找到唯一准确订单卡片");
+                    if (before.Done) return AutoDeliveryAttemptResult.Completed("订单已显示为“" + (before.Status ?? "已发货") + "”");
+                    if (before.Terminal) return AutoDeliveryAttemptResult.Terminal("订单当前状态为“" + (before.Status ?? "终态") + "”");
+                    if (!before.Pending) return AutoDeliveryAttemptResult.Deferred("订单当前不是待发货状态：" + (before.Status ?? "状态未识别"));
+                    if (!before.ShipButton) return AutoDeliveryAttemptResult.Deferred("已确认待发货订单，但未唯一找到该订单的“发货”动作");
 
                     var shipClick = await ReadOrderStateAsync(snapshot.OrderId, true).ConfigureAwait(false);
-                    if (shipClick == null
-                        || !shipClick.Found
-                        || !shipClick.Pending
-                        || !shipClick.ShipButton
-                        || !shipClick.Clicked)
-                    {
-                        return AutoDeliveryAttemptResult.Deferred("发货动作点击前的二次订单校验未通过");
-                    }
+                    if (shipClick == null || !shipClick.Found || !shipClick.Pending || !shipClick.ShipButton || !shipClick.Clicked) return AutoDeliveryAttemptResult.Deferred("发货动作点击前的二次订单校验未通过");
 
                     await Task.Delay(500).ConfigureAwait(false);
                     var noLogistics = await ReadModalStateAsync("select").ConfigureAwait(false);
-                    if (noLogistics == null
-                        || !noLogistics.Found
-                        || !noLogistics.NoLogistics
-                        || !noLogistics.Confirm
-                        || !noLogistics.Clicked)
-                    {
-                        return AutoDeliveryAttemptResult.Uncertain(
-                            "发货弹窗未能唯一确认“无需物流”和“确认发货”，已停止后续点击");
-                    }
-
-                    // click() returning true is not selection evidence. Re-read the live modal and
-                    // require the no-logistics radio/checkbox to report a selected state.
+                    if (noLogistics == null || !noLogistics.Found || !noLogistics.NoLogistics || !noLogistics.Confirm || !noLogistics.Clicked) return AutoDeliveryAttemptResult.Uncertain("发货弹窗未能唯一确认“无需物流”和“确认发货”，已停止后续点击");
                     await Task.Delay(350).ConfigureAwait(false);
                     var selected = await ReadModalStateAsync("verify").ConfigureAwait(false);
-                    if (selected == null
-                        || !selected.Found
-                        || !selected.NoLogistics
-                        || !selected.Confirm
-                        || !selected.Selected)
-                    {
-                        return AutoDeliveryAttemptResult.Uncertain(
-                            "已点击“无需物流”，但未读取到其选中状态；不会点击确认发货");
-                    }
+                    if (selected == null || !selected.Found || !selected.NoLogistics || !selected.Confirm || !selected.Selected) return AutoDeliveryAttemptResult.Uncertain("已点击“无需物流”，但未读取到其选中状态；不会点击确认发货");
 
-                    // Independent, long-lived, first-write-only barrier BEFORE the irreversible click.
-                    if (!AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.Seller, snapshot.OrderId))
-                    {
-                        return AutoDeliveryAttemptResult.Uncertain(
-                            "确认发货权限已被长期防重账本消费或无法安全持久化；不会点击确认发货");
-                    }
-
+                    if (!AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.Seller, snapshot.OrderId)) return AutoDeliveryAttemptResult.Uncertain("确认发货权限已被长期防重账本消费或无法安全持久化；不会点击确认发货");
                     var confirm = await ReadModalStateAsync("confirm").ConfigureAwait(false);
-                    if (confirm == null
-                        || !confirm.Found
-                        || !confirm.NoLogistics
-                        || !confirm.Confirm
-                        || !confirm.Selected
-                        || !confirm.Clicked)
-                    {
-                        return AutoDeliveryAttemptResult.Uncertain(
-                            "长期防重屏障已写入，但无法在“无需物流”仍选中的条件下唯一提交确认；后续只读复核");
-                    }
+                    if (confirm == null || !confirm.Found || !confirm.NoLogistics || !confirm.Confirm || !confirm.Selected || !confirm.Clicked) return AutoDeliveryAttemptResult.Uncertain("长期防重屏障已写入，但无法在“无需物流”仍选中的条件下唯一提交确认；后续只读复核");
 
-                    Log.Info("虚拟商品自动发货已提交一次确认动作，开始只读核验真实订单状态: seller="
-                        + seller + ", buyer=" + expectedBuyer + ", orderId=" + snapshot.OrderId
-                        + ", repeatConfirm=false");
+                    Log.Info("虚拟商品自动发货已提交一次确认动作，开始只读核验真实订单状态: seller=" + seller + ", buyer=" + expectedBuyer + ", orderId=" + snapshot.OrderId + ", repeatConfirm=false");
                     for (var attempt = 0; attempt < 16; attempt++)
                     {
                         await Task.Delay(500).ConfigureAwait(false);
@@ -915,52 +647,108 @@ namespace Bot.ChromeNs
                         if (after == null) continue;
                         if (after.Found && after.Done)
                         {
-                            Log.Info("虚拟商品自动发货已真实确认: seller=" + seller
-                                + ", buyer=" + expectedBuyer + ", orderId=" + snapshot.OrderId
-                                + ", status=" + after.Status);
+                            Log.Info("虚拟商品自动发货已真实确认: seller=" + seller + ", buyer=" + expectedBuyer + ", orderId=" + snapshot.OrderId + ", status=" + after.Status);
                             return AutoDeliveryAttemptResult.Completed("确认后的订单状态=" + after.Status);
                         }
-                        if (after.Found && after.Terminal)
-                            return AutoDeliveryAttemptResult.Terminal("确认后订单进入状态=" + after.Status);
+                        if (after.Found && after.Terminal) return AutoDeliveryAttemptResult.Terminal("确认后订单进入状态=" + after.Status);
                     }
-
-                    return AutoDeliveryAttemptResult.Uncertain(
-                        "已点击确认发货，但8秒内尚未读到“已发货/交易成功/已完成”等确定状态；长期账本保证后续只读复核且绝不重复确认");
+                    return AutoDeliveryAttemptResult.Uncertain("已点击确认发货，但8秒内尚未读到“已发货/交易成功/已完成”等确定状态；长期账本保证后续只读复核且绝不重复确认");
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("虚拟商品自动发货执行异常: seller=" + seller
-                        + ", orderId=" + snapshot.OrderId
-                        + ", verificationOnly=" + verificationOnly
-                        + ", error=" + ex.Message);
-                    return verificationOnly
-                        ? AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message)
-                        : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
+                    Log.Info("虚拟商品自动发货执行异常: seller=" + seller + ", orderId=" + snapshot.OrderId + ", verificationOnly=false, error=" + ex.Message);
+                    return AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
                 }
-                finally
-                {
-                    _sendGate.Release();
-                }
+                finally { _sendGate.Release(); }
             }
+        }
+
+        private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync(OrderSnapshot snapshot)
+        {
+            var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+            var buyer = snapshot == null ? string.Empty : (snapshot.Buyer ?? string.Empty).Trim();
+            var orderId = snapshot == null ? string.Empty : (snapshot.OrderId ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || orderId.Length == 0)
+                return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检缺少店铺、买家或订单号");
+
+            string securityBuyerUid;
+            try { securityBuyerUid = await ResolveAutoDeliverySecurityBuyerUidAsync(seller, buyer).ConfigureAwait(false); }
+            catch (Exception ex) { return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检解析买家身份失败：" + ex.Message); }
+            if (string.IsNullOrWhiteSpace(securityBuyerUid)) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检无法唯一解析买家加密身份，不切换聊天窗口");
+
+            DbEntity.ZnkfTradeQueryResponse response;
+            try { response = await GetBuyerTrades(securityBuyerUid, orderId).ConfigureAwait(false); }
+            catch (Exception ex) { return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检交易查询失败：" + ex.Message); }
+            var orders = response == null || response.data == null || response.data.orders == null ? new List<DbEntity.ZnkfTrade>() : response.data.orders.Where(x => x != null).ToList();
+            var exact = orders.Where(x => TradeContainsExactOrder(x, orderId)).ToList();
+            if (exact.Count == 0) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检未找到准确订单，不切换聊天窗口");
+            if (exact.Count != 1) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检发现多个准确订单候选，拒绝切换聊天窗口");
+
+            var trade = exact[0];
+            var parentMatch = string.Equals((trade.bizOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal);
+            var items = (trade.itemList ?? new List<DbEntity.ZnkfTradeItem>()).Where(x => x != null && (parentMatch || string.Equals((x.bizOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal) || string.Equals((x.subOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal))).ToList();
+            if (trade.consignTime.HasValue) return Preflight(AutoDeliveryPreflightKind.Completed, "静默预检确认订单已有发货时间，无需切换聊天窗口");
+            if (trade.endTime.HasValue || items.Any(x => x.endTime.HasValue)) return Preflight(AutoDeliveryPreflightKind.Terminal, "静默预检确认订单已结束，无需切换聊天窗口");
+            if (trade.riskOrder || trade.underInquiry || items.Any(x => x.underInquiry)) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检检测到风险/审核状态，保持后台等待且不切换聊天窗口");
+            if (items.Any(x => x.refundStatus != 0)) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检检测到退款状态，保持后台等待且不切换聊天窗口");
+            var paid = trade.payTime.HasValue || items.Any(x => x.payTime.HasValue);
+            if (!paid) return Preflight(AutoDeliveryPreflightKind.Deferred, "静默预检尚未取得已付款证据，不切换聊天窗口");
+
+            Log.Info("虚拟商品自动发货静默预检命中候选: sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", seller) + ", buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", buyer) + ", orderId=" + orderId + ", paid=true, consigned=false, terminal=false, foregroundChanged=false");
+            return Preflight(AutoDeliveryPreflightKind.Candidate, "静默预检确认准确订单已付款且未发货，可进入一次前台最终复核");
+        }
+
+        private async Task<string> ResolveAutoDeliverySecurityBuyerUidAsync(string seller, string buyer)
+        {
+            var key = (seller ?? string.Empty).Trim().ToLowerInvariant() + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+            AutoDeliveryBuyerIdentityCacheEntry cached;
+            if (AutoDeliveryBuyerIdentityCache.TryGetValue(key, out cached) && cached != null && cached.ExpiresAtUtc > DateTime.UtcNow && !string.IsNullOrWhiteSpace(cached.SecurityBuyerUid)) return cached.SecurityBuyerUid;
+
+            var response = await SearchBuyerUser(buyer).ConfigureAwait(false);
+            var accounts = response == null || response.Data == null || response.Data.Data == null ? new List<DbEntity.Response.Account>() : response.Data.Data.Where(x => x != null).ToList();
+            var matching = accounts.Where(x => string.Equals((x.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal) || BuyerIdentityAliasService.AreEquivalent(seller, (x.Nick ?? string.Empty).Trim(), buyer)).ToList();
+            var secureIds = matching.Select(x => (x.EncryptAccountId ?? string.Empty).Trim()).Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+            if (secureIds.Count != 1) return string.Empty;
+            AutoDeliveryBuyerIdentityCache[key] = new AutoDeliveryBuyerIdentityCacheEntry { SecurityBuyerUid = secureIds[0], ExpiresAtUtc = DateTime.UtcNow.Add(AutoDeliveryBuyerIdentityCacheTtl) };
+            return secureIds[0];
+        }
+
+        private static bool TradeContainsExactOrder(DbEntity.ZnkfTrade trade, string orderId)
+        {
+            if (trade == null) return false;
+            orderId = (orderId ?? string.Empty).Trim();
+            if (string.Equals((trade.bizOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal)) return true;
+            return (trade.itemList ?? new List<DbEntity.ZnkfTradeItem>()).Any(x => x != null && (string.Equals((x.bizOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal) || string.Equals((x.subOrderId ?? string.Empty).Trim(), orderId, StringComparison.Ordinal)));
+        }
+
+        private static AutoDeliveryPreflightResult Preflight(AutoDeliveryPreflightKind kind, string reason)
+        {
+            return new AutoDeliveryPreflightResult { Kind = kind, Reason = reason ?? string.Empty };
+        }
+
+        private async Task<AutoDeliveryDomState> WaitForOrderStateAsync(string orderId, TimeSpan maxWait)
+        {
+            var deadline = DateTime.UtcNow.Add(maxWait < TimeSpan.Zero ? TimeSpan.Zero : maxWait);
+            AutoDeliveryDomState state = null;
+            do
+            {
+                state = await ReadOrderStateAsync(orderId, false).ConfigureAwait(false);
+                if (state != null && state.Found) return state;
+                if (DateTime.UtcNow >= deadline) break;
+                await Task.Delay(250).ConfigureAwait(false);
+            } while (DateTime.UtcNow < deadline);
+            return state;
         }
 
         private async Task<AutoDeliveryDomState> ReadOrderStateAsync(string orderId, bool clickShip)
         {
-            var raw = await cdp.EvaluateExpressionAsync(
-                BuildOrderStateExpression(orderId, clickShip),
-                clickShip ? "唯一准确订单待发货校验并点击发货" : "读取唯一准确订单发货状态")
-                .ConfigureAwait(false);
+            var raw = await cdp.EvaluateExpressionAsync(BuildOrderStateExpression(orderId, clickShip), clickShip ? "唯一准确订单待发货校验并点击发货" : "读取唯一准确订单发货状态").ConfigureAwait(false);
             return ParseEvaluationResult<AutoDeliveryDomState>(raw);
         }
 
         private async Task<AutoDeliveryModalState> ReadModalStateAsync(string action)
         {
-            var raw = await cdp.EvaluateExpressionAsync(
-                BuildDeliveryModalExpression(action),
-                action == "confirm" ? "确认无需物流发货"
-                    : action == "verify" ? "核验无需物流已选中"
-                    : "选择无需物流发货")
-                .ConfigureAwait(false);
+            var raw = await cdp.EvaluateExpressionAsync(BuildDeliveryModalExpression(action), action == "confirm" ? "确认无需物流发货" : action == "verify" ? "核验无需物流已选中" : "选择无需物流发货").ConfigureAwait(false);
             return ParseEvaluationResult<AutoDeliveryModalState>(raw);
         }
 
@@ -973,30 +761,18 @@ namespace Bot.ChromeNs
                 try
                 {
                     var token = JToken.Parse(value);
-                    if (token.Type == JTokenType.String)
-                    {
-                        value = token.ToString().Trim();
-                        continue;
-                    }
+                    if (token.Type == JTokenType.String) { value = token.ToString().Trim(); continue; }
                     var obj = token as JObject;
                     if (obj != null)
                     {
                         var nested = obj.SelectToken("result.value") ?? obj.SelectToken("value");
-                        if (nested != null && nested.Type != JTokenType.Null)
-                        {
-                            value = nested.ToString().Trim();
-                            continue;
-                        }
+                        if (nested != null && nested.Type != JTokenType.Null) { value = nested.ToString().Trim(); continue; }
                     }
                     return token.ToObject<T>();
                 }
-                catch
-                {
-                    break;
-                }
+                catch { break; }
             }
-            try { return JsonConvert.DeserializeObject<T>(value); }
-            catch { return null; }
+            try { return JsonConvert.DeserializeObject<T>(value); } catch { return null; }
         }
 
         private static string BuildOrderStateExpression(string orderId, bool clickShip)
