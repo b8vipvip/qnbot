@@ -77,6 +77,7 @@ namespace Bot.ChromeNs
 
         private static readonly object Sync = new object();
         private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan SilentPreflightRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan UncertainRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan MaxPendingAge = TimeSpan.FromHours(24);
@@ -331,17 +332,25 @@ namespace Bot.ChromeNs
                     if (stop && AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.Seller, snapshot.OrderId, "manual_review_required");
                     break;
                 default:
-                    if (IsConversationNavigationChurnReason(result.Reason)) DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason);
-                    else DeferRecord(record, RetryDelay, result.Reason);
+                    if (IsSilentPreflightReason(result.Reason))
+                        DeferRecord(record, SilentPreflightRetryDelay, result.Reason);
+                    else if (IsConversationNavigationChurnReason(result.Reason))
+                        DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason);
+                    else
+                        DeferRecord(record, RetryDelay, result.Reason);
                     break;
             }
+        }
+
+        private static bool IsSilentPreflightReason(string reason)
+        {
+            return (reason ?? string.Empty).IndexOf("静默预检", StringComparison.Ordinal) >= 0;
         }
 
         private static bool IsConversationNavigationChurnReason(string reason)
         {
             reason = reason ?? string.Empty;
-            return reason.IndexOf("静默预检", StringComparison.Ordinal) >= 0
-                || reason.IndexOf("右侧订单面板尚未找到唯一准确订单卡片", StringComparison.Ordinal) >= 0
+            return reason.IndexOf("右侧订单面板尚未找到唯一准确订单卡片", StringComparison.Ordinal) >= 0
                 || reason.IndexOf("无法确认已切换到订单买家会话", StringComparison.Ordinal) >= 0
                 || reason.IndexOf("执行前买家会话发生变化", StringComparison.Ordinal) >= 0;
         }
@@ -367,7 +376,7 @@ namespace Bot.ChromeNs
             }
             if (record.Attempts == 1 || record.Attempts % 8 == 0)
             {
-                Log.Info("虚拟商品自动发货静默预检/会话导航暂缓，已对同店铺待处理任务统一退避，避免多个订单反复切换前台买家: seller=" + seller + ", orderId=" + record.Snapshot.OrderId + ", deferred=" + deferred + ", retryAfterSeconds=" + (int)delay.TotalSeconds + ", reason=" + (reason ?? string.Empty));
+                Log.Info("虚拟商品自动发货会话导航失败，已对同店铺待处理任务统一退避，避免多个候选订单反复切换前台买家: seller=" + seller + ", orderId=" + record.Snapshot.OrderId + ", deferred=" + deferred + ", retryAfterSeconds=" + (int)delay.TotalSeconds + ", reason=" + (reason ?? string.Empty));
             }
         }
 
