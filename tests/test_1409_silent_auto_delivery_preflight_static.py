@@ -70,3 +70,14 @@ def test_silent_preflight_failures_back_off_without_foreground_oscillation():
     assert "DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason)" in src
     assert "静默预检未找到准确订单，不切换聊天窗口" in src
     assert "静默预检尚未取得已付款证据，不切换聊天窗口" in src
+
+
+def test_silent_preflight_is_fail_closed_and_final_ui_revalidation_remains_authoritative():
+    src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    assert "paid=true, consigned=false, terminal=false, foregroundChanged=false" in src
+    assert "Silent API evidence is" in src
+    assert "never enough to authorize an irreversible click on its own" in src
+    assert "if (!before.Pending)" in src
+    assert "if (!before.ShipButton)" in src
+    assert "ReadOrderStateAsync(snapshot.OrderId, true)" in src
+    assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent" in src
