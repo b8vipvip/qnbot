@@ -63,7 +63,7 @@ def test_complete_snapshot_wins_before_sparse_synthetic_message():
 def test_existing_template_placeholders_still_read_snapshot_fields():
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
 
-    assert '.Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)' in order
+    assert '.Replace("{sku}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)' in order
     assert '.Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())' in order
     assert '.Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))' in order
 

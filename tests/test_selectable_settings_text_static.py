@@ -1,10 +1,10 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "src" / "Bot" / "App.xaml.cs"
 ORDER_SERVICE = ROOT / "src" / "Bot" / "ChromeNs" / "OrderPlacedAutoReplyService.cs"
 QN = ROOT / "src" / "Bot" / "ChromeNs" / "QN.cs"
+V2 = ROOT / "src" / "Bot" / "ChromeNs" / "OrderTemplateRequiredFieldsV2.cs"
 
 
 def source(path: Path) -> str:
@@ -49,10 +49,11 @@ def test_placeholder_buttons_copy_exact_token_with_feedback():
     assert "TimeSpan.FromMilliseconds(900)" in text
 
 
-def test_order_help_exposes_current_ui_placeholders_and_keeps_legacy_spec_runtime_alias():
+def test_order_help_exposes_canonical_sku_only():
     app = source(APP)
     service = source(ORDER_SERVICE)
     qn = source(QN)
+    v2 = source(V2)
 
     ui_placeholders = (
         "{客服}",
@@ -78,7 +79,6 @@ def test_order_help_exposes_current_ui_placeholders_and_keeps_legacy_spec_runtim
         "{时间}",
         "{商品}",
         "{sku}",
-        "{规格}",
         "{数量}",
         "{金额}",
         "{实付}",
@@ -88,9 +88,13 @@ def test_order_help_exposes_current_ui_placeholders_and_keeps_legacy_spec_runtim
     for placeholder in runtime_replacements:
         assert f'.Replace("{placeholder}"' in service
 
+    old_token = "{" + "规格" + "}"
+    assert old_token not in app
+    assert old_token not in service
+    assert old_token not in v2
     assert 'const string segmentToken = "{分段符}";' in qn
     order_ui_block = app.split("OrderPlaceholders", 1)[1].split("};", 1)[0]
-    assert '"{规格}"' not in order_ui_block
+    assert '"{sku}"' in order_ui_block
 
 
 def test_replacement_preserves_common_wpf_layout_metadata():

@@ -22,7 +22,11 @@ def test_order_template_hint_is_owned_by_clickable_caret_insertion_ui():
     ):
         assert f'"{token}"' in APP
         assert f'"{token}"' in V2
-    assert '"{规格}"' not in APP.split("OrderPlaceholders", 1)[1].split("};", 1)[0]
+    old_token = "{" + "规格" + "}"
+    order_ui_block = APP.split("OrderPlaceholders", 1)[1].split("};", 1)[0]
+    assert '"{sku}"' in order_ui_block
+    assert old_token not in APP
+    assert old_token not in V2
     assert "new Hyperlink(new Run(token))" in V2
     assert "link.Click += delegate { InsertAtCaret(target, token); };" in V2
 

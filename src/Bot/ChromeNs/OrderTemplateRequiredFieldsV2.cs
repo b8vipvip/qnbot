@@ -28,7 +28,7 @@ namespace Bot
     /// <summary>
     /// 统一接管需要订单字段的下单模板。先尽力查询交易详情；部分字段缺失时保留并发送
     /// 已取得的其他字段，只有模板所需动态字段全部缺失时才阻止空壳消息并释放发送占位。
-    /// 新模板统一使用 {sku}，旧 {规格} 只作为兼容别名。
+    /// 订单模板统一使用唯一 SKU 占位符 {sku}。
     /// </summary>
     public partial class App
     {
@@ -59,6 +59,9 @@ namespace Bot.ChromeNs
             public bool BuyerRemarkFound;
             public bool BuyerSearchAttempted;
             public int TradeQueryAttempts;
+            public int TradeItemCount;
+            public int SkuItemCount;
+            public bool PayloadSkuRecoveryAttempted;
             public string Error;
         }
 
@@ -120,7 +123,7 @@ namespace Bot.ChromeNs
                 OrderTemplateSkuUiMigration.Initialize();
                 // 本桥接替代旧的两个 10ms 补全桥接；1ms 仅用于尽早绑定，不在回调中忙等。
                 _timer = new Timer(_ => Attach(), null, 0, 1);
-                Log.Info("订单模板字段完整性 V2 已启动：新占位符={sku}，部分字段保留发送，全部缺失时禁止空壳消息。");
+                Log.Info("订单模板字段完整性 V2 已启动：唯一SKU占位符={sku}；缺失字段仅诊断，不阻断自动发送。");
             }
             return new object();
         }
@@ -278,13 +281,10 @@ namespace Bot.ChromeNs
             string inflightKey,
             string source)
         {
-            var probe = new EnrichmentProbe();
-            var blocked = false;
             try
             {
-                using (BotActivityCoordinator.Begin("订单模板必填字段补全V2", plan.Seller, plan.Buyer))
+                using (BotActivityCoordinator.Begin("订单模板字段发送V2", plan.Seller, plan.Buyer))
                 {
-                    probe = await TryEnrichFromTradeApiAsync(qn, plan);
                     var snapshot = plan.Snapshot;
                     if (snapshot != null)
                     {
@@ -293,36 +293,23 @@ namespace Bot.ChromeNs
                         plan.EventTime = snapshot.EventTime;
                     }
 
+                    // Missing dynamic fields are optional enhancements. Never wait for a trade
+                    // query before the configured automatic reply. Render missing values as empty
+                    // strings and continue through the existing safe send pipeline immediately.
+                    var preSendProbe = new EnrichmentProbe();
+                    UpdateProbe(preSendProbe, snapshot);
                     var missing = MissingRequiredFields(plan.Config, snapshot);
                     var present = PresentRequiredFields(plan.Config, snapshot);
-                    var missingReasons = BuildMissingReasons(plan.Config, snapshot, probe);
-
-                    // 部分字段缺失时仍发送已经取得的字段；只有模板要求的订单字段全部缺失时，
-                    // 才阻止只剩“订单：”之类的空壳消息；绝不发送“订单：”空模板。
-                    // 此时释放占位，后续付款通知可重新创建计划并再次查询。
-                    blocked = missing.Count > 0 && present.Count == 0;
-                    if (blocked && HasKnownNonOrderTemplateField(plan.Config, plan))
-                    {
-                        // 订单号、买家、客服或时间等其他模板字段有值时，也属于可发送的部分结果。
-                        blocked = false;
-                    }
-                    LogProbe(plan, probe, blocked, missing, present, missingReasons, source);
-
-                    if (blocked)
-                    {
-                        OrderPlacedAutoReplyService.Complete(plan, false);
-                        Log.Info("blocked_blank_template=true, orderId=" + plan.OrderId
-                            + ", missing=" + string.Join(",", missing)
-                            + ", missing_reason=" + string.Join("|", missingReasons));
-                        return;
-                    }
+                    var missingReasons = BuildMissingReasons(plan.Config, snapshot, preSendProbe);
+                    LogProbe(plan, preSendProbe, false, missing, present, missingReasons, source + "->preSend");
 
                     if (missing.Count > 0)
                     {
                         Log.Info("order_template_partial_send=true, orderId=" + plan.OrderId
                             + ", present=" + string.Join(",", present)
                             + ", missing=" + string.Join(",", missing)
-                            + ", missing_reason=" + string.Join("|", missingReasons));
+                            + ", missing_reason=" + string.Join("|", missingReasons)
+                            + ", field_lookup_policy=post_send_nonblocking");
                     }
 
                     if (snapshot != null)
@@ -331,13 +318,38 @@ namespace Bot.ChromeNs
                         OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
                         qn.EnqueueNewOrderAttention(snapshot);
                     }
+
                     await qn.ProcessOrderTemplateRequiredFieldsPlanAsync(plan);
+
+                    // Probe only after the send path has completed. This can enrich cached state and
+                    // explain why SKU was missing, but it has no authority to delay, cancel or retry
+                    // the already-decided automatic reply.
+                    if (missing.Count > 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var postProbe = await TryEnrichFromTradeApiAsync(qn, plan).ConfigureAwait(false);
+                                var afterMissing = MissingRequiredFields(plan.Config, plan.Snapshot);
+                                var afterPresent = PresentRequiredFields(plan.Config, plan.Snapshot);
+                                var afterReasons = BuildMissingReasons(plan.Config, plan.Snapshot, postProbe);
+                                LogProbe(plan, postProbe, false, afterMissing, afterPresent, afterReasons,
+                                    source + "->postSendProbe");
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Info("订单模板字段 post-send probe 失败，不影响已执行自动回复: "
+                                    + Safe(ex.Message, 300));
+                            }
+                        });
+                    }
                 }
             }
             catch (Exception ex)
             {
                 OrderPlacedAutoReplyService.Complete(plan, false);
-                Log.ErrorWithMaxCount("订单模板字段 V2 查询或发送失败：" + Safe(ex.Message, 300), 10);
+                Log.ErrorWithMaxCount("订单模板字段 V2 发送失败：" + Safe(ex.Message, 300), 10);
             }
             finally
             {
@@ -356,13 +368,9 @@ namespace Bot.ChromeNs
 
             var securityBuyerUid = GetCachedBuyerSecurityId(plan.Seller, plan.Buyer);
             probe.BuyerSecurityIdFound = !string.IsNullOrWhiteSpace(securityBuyerUid);
-            var missingAtStart = MissingRequiredFields(plan.Config, snapshot);
-            var needsStructuredFields = missingAtStart.Contains("sku") || missingAtStart.Contains("buyer_remark");
-            // Never hold the mandatory order reply for the old 18.5-second cumulative ladder.
-            // SKU/buyer remark get a short bounded eventual-consistency window; other fields query once.
-            var delays = needsStructuredFields
-                ? new[] { 0, 250, 500, 1000, 1500 }
-                : new[] { 0 };
+            // One immediate best-effort lookup only. Missing SKU/other fields must never create
+            // a retry-delay ladder or pause the automatic-send task waiting for eventual consistency.
+            var delays = new[] { 0 };
 
             for (var attempt = 0; attempt < delays.Length; attempt++)
             {
@@ -387,6 +395,10 @@ namespace Bot.ChromeNs
 
                     if (trade == null) continue;
                     probe.TradeFound = true;
+                    var tradeItems = (trade.itemList ?? new List<ZnkfTradeItem>()).Where(x => x != null).ToList();
+                    probe.TradeItemCount = tradeItems.Count;
+                    probe.SkuItemCount = tradeItems.Count(x => !string.IsNullOrWhiteSpace(x.sku));
+                    probe.PayloadSkuRecoveryAttempted = probe.SkuItemCount == 0;
                     MergeTrade(snapshot, trade);
                     UpdateProbe(probe, snapshot);
                     var remaining = MissingRequiredFields(plan.Config, snapshot);
@@ -437,6 +449,10 @@ namespace Bot.ChromeNs
                 + " total_found=" + probe.TotalFound.ToString().ToLowerInvariant()
                 + " buyer_search_attempted=" + probe.BuyerSearchAttempted.ToString().ToLowerInvariant()
                 + " trade_query_attempts=" + probe.TradeQueryAttempts
+                + " trade_item_count=" + probe.TradeItemCount
+                + " sku_item_count=" + probe.SkuItemCount
+                + " payload_sku_recovery_attempted=" + probe.PayloadSkuRecoveryAttempted.ToString().ToLowerInvariant()
+                + " non_blocking=true"
                 + " blocked_blank_template=" + blocked.ToString().ToLowerInvariant()
                 + " present=" + string.Join(",", present ?? new List<string>())
                 + " missing=" + string.Join(",", missing ?? new List<string>())
@@ -453,7 +469,7 @@ namespace Bot.ChromeNs
             var present = new List<string>();
             if (cfg == null || snapshot == null) return present;
             var template = cfg.OrderPlacedReplyText ?? string.Empty;
-            if ((template.Contains("{sku}") || template.Contains("{规格}"))
+            if (template.Contains("{sku}")
                 && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
             if (template.Contains("{买家备注}") && !string.IsNullOrWhiteSpace(snapshot.BuyerRemark)) present.Add("buyer_remark");
             if (template.Contains("{数量}") && snapshot.Quantity > 0) present.Add("quantity");
@@ -504,6 +520,10 @@ namespace Bot.ChromeNs
                         default: reason = "field_unavailable"; break;
                     }
                 }
+                else if (probe.TradeQueryAttempts == 0)
+                {
+                    reason = "not_queried_before_send";
+                }
                 else if (!string.IsNullOrWhiteSpace(probe.Error))
                 {
                     reason = "trade_query_error_after_" + probe.TradeQueryAttempts + "_attempts";
@@ -524,7 +544,6 @@ namespace Bot.ChromeNs
             if (cfg == null || !cfg.EnableOrderPlacedReply) return false;
             var template = cfg.OrderPlacedReplyText ?? string.Empty;
             return template.Contains("{sku}")
-                || template.Contains("{规格}")
                 || template.Contains("{数量}")
                 || template.Contains("{金额}")
                 || template.Contains("{实付}")
@@ -541,7 +560,7 @@ namespace Bot.ChromeNs
             if (cfg == null) return missing;
             var template = cfg.OrderPlacedReplyText ?? string.Empty;
 
-            if ((template.Contains("{sku}") || template.Contains("{规格}"))
+            if (template.Contains("{sku}")
                 && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText)))
             {
                 missing.Add("sku");
@@ -1082,43 +1101,9 @@ namespace Bot.ChromeNs
 
     internal static class OrderTemplateSkuUiMigration
     {
-        private static readonly ConditionalWeakTable<FeatureSettingsWindow, object> Enhanced =
-            new ConditionalWeakTable<FeatureSettingsWindow, object>();
         private static readonly ConditionalWeakTable<TextBlock, object> EnhancedHints =
             new ConditionalWeakTable<TextBlock, object>();
         private static int _initialized;
-
-        public static void Initialize()
-        {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EventManager.RegisterClassHandler(
-                typeof(FeatureSettingsWindow),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnLoaded),
-                true);
-            EventManager.RegisterClassHandler(
-                typeof(TextBlock),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnTextBlockLoaded),
-                true);
-            EventManager.RegisterClassHandler(
-                typeof(TextBox),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnTextBoxLoaded),
-                true);
-        }
-
-        private static void OnLoaded(object sender, RoutedEventArgs e)
-        {
-            var window = sender as FeatureSettingsWindow;
-            if (window == null) return;
-            object marker;
-            if (Enhanced.TryGetValue(window, out marker)) return;
-            Enhanced.Add(window, new object());
-
-            window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => Rewrite(window)));
-            window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => Rewrite(window)));
-        }
 
         private static readonly string[] OrderTemplateTokens =
         {
@@ -1126,17 +1111,14 @@ namespace Bot.ChromeNs
             "{数量}", "{金额}", "{实付}", "{订单状态}", "{买家备注}", "{分段符}"
         };
 
-        private static void OnTextBoxLoaded(object sender, RoutedEventArgs e)
+        public static void Initialize()
         {
-            var box = sender as TextBox;
-            if (box == null) return;
-            if ((box.Text ?? string.Empty).Contains("{规格}"))
-            {
-                var caret = box.SelectionStart;
-                box.Text = box.Text.Replace("{规格}", "{sku}");
-                box.SelectionStart = Math.Min(caret, box.Text.Length);
-                box.ToolTip = "新模板统一使用 {sku}；旧 {规格} 仍兼容。";
-            }
+            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            EventManager.RegisterClassHandler(
+                typeof(TextBlock),
+                FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(OnTextBlockLoaded),
+                true);
         }
 
         private static void OnTextBlockLoaded(object sender, RoutedEventArgs e)
@@ -1225,37 +1207,6 @@ namespace Bot.ChromeNs
             catch { }
             try { return VisualTreeHelper.GetParent(value); }
             catch { return null; }
-        }
-
-        private static void Rewrite(DependencyObject root)
-        {
-            if (root == null) return;
-            foreach (var child in LogicalChildren(root))
-            {
-                var box = child as TextBox;
-                if (box != null && (box.Text ?? string.Empty).Contains("{规格}"))
-                {
-                    box.Text = box.Text.Replace("{规格}", "{sku}");
-                    box.ToolTip = "新模板统一使用 {sku}；旧 {规格} 仍兼容。";
-                }
-
-                var text = child as TextBlock;
-                if (text != null && (text.Text ?? string.Empty).Contains("{规格}"))
-                {
-                    text.Text = text.Text.Replace("{规格}", "{sku}");
-                }
-
-                var button = child as Button;
-                if (button != null)
-                {
-                    var content = Convert.ToString(button.Content) ?? string.Empty;
-                    if (content.Contains("{规格}")) button.Content = content.Replace("{规格}", "{sku}");
-                    var tag = Convert.ToString(button.Tag) ?? string.Empty;
-                    if (tag.Contains("{规格}")) button.Tag = tag.Replace("{规格}", "{sku}");
-                }
-
-                Rewrite(child);
-            }
         }
 
         private static DependencyObject[] LogicalChildren(DependencyObject root)

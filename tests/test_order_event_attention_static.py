@@ -51,4 +51,4 @@ def test_order_summary_ui_and_settings_are_wired():
 def test_order_http_payload_and_templates_include_structured_fields():
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     for field in ['payload["itemId"]', 'payload["itemTitle"]', 'payload["skuId"]', 'payload["skuText"]', 'payload["quantity"]', 'payload["totalAmount"]', 'payload["paidAmount"]', 'payload["tradeStatus"]', 'payload["isPaid"]']: assert field in order
-    for placeholder in ["{商品}", "{规格}", "{数量}", "{金额}", "{实付}", "{订单状态}"]: assert placeholder in order
+    for placeholder in ["{商品}", "{sku}", "{数量}", "{金额}", "{实付}", "{订单状态}"]: assert placeholder in order

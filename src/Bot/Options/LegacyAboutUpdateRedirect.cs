@@ -74,7 +74,7 @@ namespace Bot.ChromeNs
     /// <summary>
     /// 千牛部分订单负载不会提供单一 skuText，而是把规格拆成：
     /// pName/vName、propertyName/propertyValue、name/value 等属性对。
-    /// 右侧订单面板能组合显示 SKU，但旧解析器只读取单一字段，因此 {规格} 为空。
+    /// 右侧订单面板能组合显示 SKU，但旧解析器只读取单一字段，因此 {sku} 为空。
     ///
     /// 本桥接在旧订单桥接之前订阅原始事件，重建“属性名:属性值”规格文本，并复用既有
     /// OrderEventHub、去重、人工保护、固定模板和可靠发送流程。原始 JSON 不落盘、不写日志。
