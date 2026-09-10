@@ -63,13 +63,29 @@ def test_only_safe_candidate_commits_one_buyer_switch_then_revalidates_rendered_
     assert "静默预检已命中安全候选，现仅为实际发货切换一次目标买家" in method
 
 
-def test_silent_preflight_failures_back_off_without_foreground_oscillation():
+def test_silent_preflight_defers_only_that_record_so_other_due_orders_can_still_be_scanned():
     src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    assert 'reason.IndexOf("静默预检", StringComparison.Ordinal) >= 0' in src
-    assert "ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2)" in src
-    assert "DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason)" in src
+    process = src[src.index("private static async Task ProcessRecordAsync"):src.index("private static bool IsSilentPreflightReason")]
+
+    assert "SilentPreflightRetryDelay = TimeSpan.FromMinutes(2)" in src
+    assert "if (IsSilentPreflightReason(result.Reason))" in process
+    assert "DeferRecord(record, SilentPreflightRetryDelay, result.Reason)" in process
+    assert "DeferSellerNavigationRecords(record, SilentPreflightRetryDelay" not in process
     assert "静默预检未找到准确订单，不切换聊天窗口" in src
     assert "静默预检尚未取得已付款证据，不切换聊天窗口" in src
+
+
+def test_only_post_candidate_navigation_failures_back_off_same_seller_candidates():
+    src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    nav = src[src.index("private static bool IsConversationNavigationChurnReason"):
+              src.index("private static void DeferSellerNavigationRecords")]
+
+    assert 'reason.IndexOf("静默预检", StringComparison.Ordinal)' not in nav
+    assert "右侧订单面板尚未找到唯一准确订单卡片" in nav
+    assert "无法确认已切换到订单买家会话" in nav
+    assert "执行前买家会话发生变化" in nav
+    assert "ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2)" in src
+    assert "DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason)" in src
 
 
 def test_silent_preflight_is_fail_closed_and_final_ui_revalidation_remains_authoritative():
