@@ -21,13 +21,15 @@ def test_unknown_composer_text_is_never_deleted_and_timed_out_mutation_retains_e
     assert "Thread.Abort" not in helper
 
 
-def test_order_sku_uses_raw_structured_parser_and_bounded_retry_window():
+def test_order_sku_uses_structured_parser_without_holding_the_send_path():
     v2 = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
     legacy = read("src/Bot/Options/LegacyAboutUpdateRedirect.cs")
     assert "internal static string ResolveSkuTextFromPayload(string raw)" in legacy
     assert "SkuText = OrderSkuPayloadRecoveryBridge.ResolveSkuTextFromPayload(raw)" in v2
-    assert "new[] { 0, 250, 500, 1000, 1500 }" in v2
-    assert "new[] { 0, 500, 1000, 2000, 3000, 5000, 7000 }" not in v2
+    assert "var delays = new[] { 0 };" in v2
+    assert "field_lookup_policy=post_send_nonblocking" in v2
+    scope = v2[v2.index("private static async Task EnrichValidateAndSendAsync"):v2.index("private static async Task<EnrichmentProbe> TryEnrichFromTradeApiAsync")]
+    assert scope.index("ProcessOrderTemplateRequiredFieldsPlanAsync") < scope.index("TryEnrichFromTradeApiAsync")
 
 
 def test_exact_duplicate_cdp_payloads_stay_suppressed_across_recovery_cadences():

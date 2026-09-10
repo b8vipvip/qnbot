@@ -38,7 +38,7 @@ namespace Bot.Options
 
             // 必须在 DirectOrderEventBridge 之前启动。千牛原始订单通知往往包含 SKU、数量、
             // 实付等字段，而旧桥接只保留订单号/状态后再构造 synthetic message，导致模板
-            // {规格} {数量} {实付} 被替换成空字符串。
+            // {sku} {数量} {实付} 被替换成空字符串。
             Bot.ChromeNs.OrderRichPayloadBridge.Initialize();
 
             EventManager.RegisterClassHandler(
@@ -199,7 +199,7 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// 在旧订单桥接丢弃字段之前读取千牛原始消息负载，直接构建完整 OrderSnapshot。
-    /// 目标是保证固定模板中的 {规格}、{数量}、{金额}、{实付} 使用真实订单字段，
+    /// 目标是保证固定模板中的 {sku}、{数量}、{金额}、{实付} 使用真实订单字段，
     /// 而不是只拿到订单号和付款状态后静默替换成空字符串。
     ///
     /// 本桥接不持久化原始 JSON，只保留现有 OrderSnapshot 中的结构化字段和哈希。

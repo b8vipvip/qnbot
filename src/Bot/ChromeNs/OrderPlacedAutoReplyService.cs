@@ -1,4 +1,4 @@
-﻿using Bot.Automation.ChatDeskNs;
+using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
@@ -295,7 +295,7 @@ namespace Bot.ChromeNs
             if (template.Contains("{买家}") && (plan == null || string.IsNullOrWhiteSpace(plan.Buyer))) missing.Add("buyer");
             if (template.Contains("{订单号}") && (plan == null || string.IsNullOrWhiteSpace(plan.OrderId))) missing.Add("order_id");
             if (template.Contains("{时间}") && (plan == null || plan.EventTime == DateTime.MinValue)) missing.Add("event_time");
-            if ((template.Contains("{sku}") || template.Contains("{规格}")) && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText))) missing.Add("sku");
+            if (template.Contains("{sku}") && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText))) missing.Add("sku");
             if (template.Contains("{买家备注}") && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.BuyerRemark))) missing.Add("buyer_remark");
             if (template.Contains("{数量}") && (snapshot == null || snapshot.Quantity <= 0)) missing.Add("quantity");
             if (template.Contains("{金额}") && (snapshot == null || !snapshot.TotalAmount.HasValue)) missing.Add("total");
@@ -314,7 +314,7 @@ namespace Bot.ChromeNs
             if (template.Contains("{买家}") && plan != null && !string.IsNullOrWhiteSpace(plan.Buyer)) present.Add("buyer");
             if (template.Contains("{订单号}") && plan != null && !string.IsNullOrWhiteSpace(plan.OrderId)) present.Add("order_id");
             if (template.Contains("{时间}") && plan != null && plan.EventTime != DateTime.MinValue) present.Add("event_time");
-            if ((template.Contains("{sku}") || template.Contains("{规格}")) && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
+            if (template.Contains("{sku}") && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
             if (template.Contains("{买家备注}") && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.BuyerRemark)) present.Add("buyer_remark");
             if (template.Contains("{数量}") && snapshot != null && snapshot.Quantity > 0) present.Add("quantity");
             if (template.Contains("{金额}") && snapshot != null && snapshot.TotalAmount.HasValue) present.Add("total");
@@ -911,7 +911,6 @@ namespace Bot.ChromeNs
                 .Replace("{时间}", plan == null || plan.EventTime == DateTime.MinValue ? string.Empty : plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
                 .Replace("{商品}", snapshot == null ? string.Empty : snapshot.ItemTitle ?? string.Empty)
                 .Replace("{sku}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
-                .Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
                 .Replace("{买家备注}", snapshot == null ? string.Empty : snapshot.BuyerRemark ?? string.Empty)
                 .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
                 .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))
@@ -925,7 +924,7 @@ namespace Bot.ChromeNs
                 + " missing_reason=" + string.Join("|", missingReasons)
                 + " snapshot_source=" + Short(snapshot == null ? string.Empty : snapshot.Source, 100)
                 + " rendered_length=" + rendered.Length);
-            return allRequestedFieldsMissing ? string.Empty : rendered;
+            return rendered;
         }
 
         private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)
