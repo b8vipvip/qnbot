@@ -96,6 +96,7 @@ namespace Bot.ChromeNs
 
         private static readonly object Sync = new object();
         private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan UncertainRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan MaxPendingAge = TimeSpan.FromHours(24);
         private static StateDocument _state;
@@ -442,13 +443,62 @@ namespace Bot.ChromeNs
                     break;
 
                 default:
-                    DeferRecord(record, RetryDelay, result.Reason);
+                    if (IsConversationNavigationChurnReason(result.Reason))
+                    {
+                        DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason);
+                    }
+                    else
+                    {
+                        DeferRecord(record, RetryDelay, result.Reason);
+                    }
                     break;
+            }
+        }
+
+        private static bool IsConversationNavigationChurnReason(string reason)
+        {
+            reason = reason ?? string.Empty;
+            return reason.IndexOf("右侧订单面板尚未找到唯一准确订单卡片", StringComparison.Ordinal) >= 0
+                || reason.IndexOf("无法确认已切换到订单买家会话", StringComparison.Ordinal) >= 0
+                || reason.IndexOf("执行前买家会话发生变化", StringComparison.Ordinal) >= 0;
+        }
+
+        private static void DeferSellerNavigationRecords(PendingRecord record, TimeSpan delay, string reason)
+        {
+            if (record == null || record.Snapshot == null)
+            {
+                DeferRecord(record, delay, reason);
+                return;
+            }
+
+            var seller = (record.Snapshot.Seller ?? string.Empty).Trim();
+            var next = DateTime.Now.Add(delay);
+            var deferred = 0;
+            lock (Sync)
+            {
+                foreach (var live in _state.Pending.Where(x => x != null && x.Snapshot != null
+                    && !x.ConfirmationIntentAt.HasValue
+                    && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
+                {
+                    if (live.NextAttemptAt < next) live.NextAttemptAt = next;
+                    deferred++;
+                }
+                SaveStateLocked();
+            }
+
+            if (record.Attempts == 1 || record.Attempts % 8 == 0)
+            {
+                Log.Info("虚拟商品自动发货会话导航失败，已对同店铺待处理任务统一退避，避免多个订单反复切换前台买家: seller="
+                    + seller + ", orderId=" + record.Snapshot.OrderId
+                    + ", deferred=" + deferred
+                    + ", retryAfterSeconds=" + (int)delay.TotalSeconds
+                    + ", reason=" + (reason ?? string.Empty));
             }
         }
 
         private static void DeferRecord(PendingRecord record, TimeSpan delay, string reason)
         {
+            if (record == null) return;
             lock (Sync)
             {
                 var live = FindLiveRecordLocked(record.Key);
