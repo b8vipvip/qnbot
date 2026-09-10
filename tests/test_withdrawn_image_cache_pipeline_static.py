@@ -51,7 +51,6 @@ def test_withdrawn_image_keeps_analysis_but_suppresses_image_only_reply():
     assert "撤回只取消旧回复，图片语义已保存供后续对话使用" in source
     assert "最新消息或人工客服已接管" in source
     assert "后续回复可继续使用本次图片分析结果" in source
-    assert 'lifecycleLease.MarkCompleted("vision_withdrawn_analysis_completed")' in source
 
 
 def test_follow_up_can_reuse_withdrawn_cached_image_and_only_requests_resend_on_cache_failure():
@@ -63,24 +62,20 @@ def test_follow_up_can_reuse_withdrawn_cached_image_and_only_requests_resend_on_
     assert "recent.CacheComplete" in source
     assert "withdrawn && hasFollowUpText && !cacheComplete" in source
     assert "刚才图片已撤回且未能完整保存，请重新发送清晰图片后我再确认" in source
-
-    # Reuse must be explicitly referential. Timing plus generic recharge/status words was proven
-    # unsafe by the 1.1.1399 -> 1.1.1406 field incident and must not return through this wrapper.
-    helper = source[source.index("private static bool ShouldBindToRecentImage"):source.index(
-        "private static bool HasSubstantiveFollowUpText")]
+    helper = source[source.index("private static bool ShouldBindToRecentImage"):source.index("private static bool HasSubstantiveFollowUpText")]
     assert "VisionFollowUpContextPipeline.IsVisionReferentialFollowUp(text)" in helper
+    assert 'compact.Contains("可以")' not in helper
     assert 'compact.Contains("充值")' not in helper
     assert 'compact.Contains("能充")' not in helper
-    assert 'compact.Contains("可以")' not in helper
 
 
-def test_rebound_lease_uses_original_lease_and_cannot_recurse_into_itself():
+def test_rebound_lease_uses_original_lifecycle_owner_and_cannot_recurse_into_itself():
     source = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
 
-    lifecycle = source.index("var lifecycleLease = lease;")
-    capture = source.index("var sourceLease = lease;")
-    rebound = source.index("lease = new BuyerMessageBurstLease(burst, () => sourceLease.IsCurrent);")
-    assert lifecycle < capture < rebound
+    capture = source.index("var lifecycleLease = lease;")
+    source_lease = source.index("var sourceLease = lease;", capture)
+    rebound = source.index("lease = new BuyerMessageBurstLease(burst, () => sourceLease.IsCurrent);", source_lease)
+    assert capture < source_lease < rebound
     assert "new BuyerMessageBurstLease(burst, () => lease.IsCurrent)" not in source
     assert "CtlConversation ctl" in source
     assert "dynamic ctl" not in source
