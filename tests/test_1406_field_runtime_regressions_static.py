@@ -61,13 +61,12 @@ def test_active_conversation_update_snapshots_chatdesk_to_avoid_startup_toctou_n
     assert "Desk.Inst.ChangeBuyer" not in method
 
 
-def test_auto_delivery_navigation_failures_back_off_all_same_seller_pending_orders():
+def test_auto_delivery_navigation_failures_back_off_same_seller_only_after_candidate_navigation():
     src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
 
     assert "ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2)" in src
     assert "IsConversationNavigationChurnReason(result.Reason)" in src
     assert "DeferSellerNavigationRecords(record, ConversationNavigationRetryDelay, result.Reason)" in src
-    assert "静默预检" in src
     assert "右侧订单面板尚未找到唯一准确订单卡片" in src
     assert "无法确认已切换到订单买家会话" in src
     assert "执行前买家会话发生变化" in src
@@ -77,4 +76,10 @@ def test_auto_delivery_navigation_failures_back_off_all_same_seller_pending_orde
     assert "!x.ConfirmationIntentAt.HasValue" in helper
     assert "string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller" in helper
     assert "live.NextAttemptAt = next" in helper
-    assert "避免多个订单反复切换前台买家" in helper
+    assert "避免多个候选订单反复切换前台买家" in helper
+
+    # A silent preflight miss never changed the foreground, so it must not postpone every other
+    # due order for the seller. Otherwise one stale order could starve a valid candidate forever.
+    process = src[src.index("private static async Task ProcessRecordAsync"):src.index("private static bool IsSilentPreflightReason")]
+    assert "DeferRecord(record, SilentPreflightRetryDelay, result.Reason)" in process
+    assert "DeferSellerNavigationRecords(record, SilentPreflightRetryDelay" not in process
