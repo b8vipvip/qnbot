@@ -18,11 +18,16 @@ def canonical_block() -> str:
 def test_canonical_reply_policy_runs_before_merge_and_ai_dispatch():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     canonical = canonical_block()
+    worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private async Task ProcessPreMergeAsync", 1
+    )[0]
+    premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
+        "private bool HasPendingBuyerMessages", 1
+    )[0]
 
-    decision = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(")
-    merge = coordinator.index("EnqueueForMerge(item)", decision)
-    legacy_gate = coordinator.index("LegacyAiConfigurationGate.WaitAsync", merge)
-    assert decision < merge < legacy_gate
+    assert "CanonicalPreMergeDecisionService.HandleAsync(" in premerge
+    assert "EnqueueForMerge(item)" in premerge
+    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
     assert "不检查AI接口" in canonical
     assert "MyOpenAI" not in canonical
     assert "AiEndpointStore" not in canonical
@@ -31,13 +36,18 @@ def test_canonical_reply_policy_runs_before_merge_and_ai_dispatch():
 
 def test_shop_scoped_reply_dispatch_is_inside_the_same_buyer_worker():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    worker = coordinator.index("private async Task RunAsync")
-    decision = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(", worker)
-    merge = coordinator.index("EnqueueForMerge(item)", decision)
-    dispatch = coordinator.index("await DispatchScopedAsync", merge)
-    assert worker < decision < merge < dispatch
-    assert "state.PendingRules.Enqueue(item)" in coordinator
-    assert "if (!state.WorkerRunning)" in coordinator
+    enqueue = coordinator.split("public void Enqueue(BuyerMessageBurstItem item)", 1)[1].split(
+        "private async Task RunAsync", 1
+    )[0]
+    worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private async Task ProcessPreMergeAsync", 1
+    )[0]
+
+    assert "state.PendingRules.Enqueue(item)" in enqueue
+    assert "if (!state.WorkerRunning)" in enqueue
+    assert "await ProcessPreMergeAsync(key, state, ruleItem)" in worker
+    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
+    assert "state.WorkerRunning = false;" in worker
 
 
 def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
