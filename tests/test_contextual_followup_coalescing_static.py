@@ -28,24 +28,33 @@ def test_model_question_is_used_by_both_text_reasoning_paths():
     assert "string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion" in legacy
 
 
-def test_premerge_has_authoritative_bounded_gates_and_no_late_send_ai_race():
+def test_premerge_has_one_same_buyer_owner_and_no_late_send_ai_race():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     assert "_preMergeRuleGates" not in coordinator
     assert "PreMergeRuleExecutionDeadlineMilliseconds" not in coordinator
     assert "Task.WhenAny(rulesTask, deadlineTask)" not in coordinator
-    assert "await DeterministicAutoReplyService.HandleBeforeMergeAsync(" in coordinator
-    assert "pre_merge_enqueue_exception" in coordinator
+    assert "PendingRules" in coordinator
+    assert "CanonicalPreMergeDecisionService.HandleAsync(" in coordinator
+    assert "CanonicalPreMergeOutcome" in coordinator
+    assert "single_owner_lane" in coordinator
+    assert "single_owner_dispatch" in coordinator
 
-    # Off-hours owns its own fail-closed gate before the ordinary work-hours gate. Normal fixed
-    # rules retain one bounded per-buyer serialization gate so no late duplicate sender races AI.
-    offhours = deterministic.index("TryResolveOffHours(out offHoursReply)")
-    offhours_gate = deterministic.index("OffHoursGates.GetOrAdd", offhours)
-    ordinary_gate = deterministic.index("BuyerGates.GetOrAdd")
-    assert offhours < ordinary_gate
-    assert "gate.WaitAsync(1800)" in deterministic
-    assert "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路" in deterministic
-    assert "return false;" in deterministic[offhours_gate:deterministic.index("private static async Task<bool> HandleScopedBeforeMergeAsync")]
+    # One canonical worker owns fixed rules, merge and reply dispatch for a seller+buyer lane.
+    enqueue = coordinator.index("state.PendingRules.Enqueue(item)")
+    worker = coordinator.index("private async Task RunAsync", enqueue)
+    decision = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(", worker)
+    merge = coordinator.index("EnqueueForMerge(item)", decision)
+    dispatch = coordinator.index("await DispatchScopedAsync", merge)
+    assert enqueue < worker < decision < merge < dispatch
+
+    # The active canonical policy helper has no same-buyer semaphore or independent terminal owner.
+    canonical_start = coordinator.index("internal static class CanonicalPreMergeDecisionService")
+    canonical_end = coordinator.index("internal sealed class BuyerMessageBurstCoordinator", canonical_start)
+    canonical = coordinator[canonical_start:canonical_end]
+    assert "SemaphoreSlim" not in canonical
+    assert "BuyerSessionAgent" not in canonical
+    assert "BotActivityCoordinator.Begin" not in canonical
+    assert "TryTransition(" not in canonical
 
 
 def test_non_buyer_runtime_probe_is_guarded_before_success_correction():
