@@ -95,8 +95,19 @@ def test_new_buyer_message_enters_one_premerge_queue_before_merge():
     assert enqueue_start < observe < queue < worker < decision < merge
     assert "Task.Run(async () =>" not in coordinator[enqueue_start:worker]
     assert "item.SessionGeneration = observation.Generation;" in coordinator[observe:queue]
-    assert "allowLocalShortReply = state.PendingRules.Count == 0 && state.Items.Count == 0;" in coordinator
-    assert "return state.PendingRules.Count > 0 || state.Items.Count > 0;" in coordinator
+
+    premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
+        "private bool HasPendingBuyerMessages", 1
+    )[0]
+    pending = coordinator.split("private bool HasPendingBuyerMessages", 1)[1].split(
+        "private void EnqueueForMerge", 1
+    )[0]
+    assert "state.PendingRules.Count == 0" in premerge
+    assert "state.Items.Count == 0" in premerge
+    assert "state.InFlightDispatches.Count == 0" in premerge
+    assert "state.PendingRules.Count > 0" in pending
+    assert "state.Items.Count > 0" in pending
+    assert "state.InFlightDispatches.Count > 0" in pending
 
 
 def test_management_page_registration_is_explicit_and_idempotent():
