@@ -1,3 +1,4 @@
+using Bot.ChatRecord;
 using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
@@ -23,6 +24,22 @@ namespace Bot.ChromeNs
         private const string SettingsScope = "feature";
         private const string EnabledKey = "FirstInquiryFixedReplyEnabled";
         private const string AnswerKey = "FirstInquiryFixedReplyAnswer";
+
+        private static readonly HashSet<string> GreetingOnlyTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "你好", "您好", "哈喽", "哈罗", "嗨", "hi", "hello", "hey",
+            "在吗", "在不在", "有人吗", "客服在吗", "客服", "亲", "亲亲",
+            "早", "早上好", "上午好", "中午好", "下午好", "晚上好",
+            "你好在吗", "您好在吗", "亲在吗", "亲亲在吗", "哈喽在吗"
+        };
+
+        private static readonly HashSet<string> MeaninglessOnlyTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "嗯", "恩", "哦", "噢", "喔", "啊", "额", "呃", "哈", "呵", "哈哈", "呵呵", "嘿嘿",
+            "好", "好的", "好吧", "行", "行吧", "可以", "收到", "知道了", "明白了",
+            "谢谢", "谢谢你", "谢谢亲", "谢了", "辛苦了", "ok", "okay", "okey",
+            "1", "11", "111", "666", "测试", "test", "再见", "拜拜", "晚安"
+        };
 
         private sealed class PendingReply
         {
@@ -53,9 +70,20 @@ namespace Bot.ChromeNs
 
         public static bool TryPrepare(string seller, string buyer, string currentQuestion, IncomingMessageDecision decision, out string answer)
         {
+            return TryPrepare(seller, buyer, null, currentQuestion, decision, out answer);
+        }
+
+        public static bool TryPrepare(
+            string seller,
+            string buyer,
+            QNChatMessage message,
+            string currentQuestion,
+            IncomingMessageDecision decision,
+            out string answer)
+        {
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)
-                || string.IsNullOrWhiteSpace(currentQuestion) || !IsEligibleTrigger(decision)) return false;
+                || !IsActualProblemMessage(message, currentQuestion, decision)) return false;
             if (ShouldSuppressForOffHours(seller, buyer)) return false;
 
             var resolved = RunInShopScope(seller, delegate
@@ -82,7 +110,8 @@ namespace Bot.ChromeNs
             if (prepared)
             {
                 Log.Info("首条咨询固定回复已预留: seller=" + seller + ", buyer=" + buyer
-                    + ", trigger=" + (currentQuestion ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim());
+                    + ", trigger=" + (currentQuestion ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim()
+                    + ", actualProblem=true");
             }
             return prepared;
         }
@@ -101,20 +130,20 @@ namespace Bot.ChromeNs
                 DateTime triggered;
                 if (TriggeredAt.TryGetValue(key, out triggered) && triggered >= now.AddMinutes(-SessionResetMinutes)) return string.Empty;
 
+                // A first-inquiry reservation must be created while the full incoming message is
+                // available to TryPrepare. Do not recreate one here from display text alone: doing
+                // so loses the system/product-card metadata and can turn a platform card into a
+                // fake buyer consultation.
                 PendingReply pending;
-                if (PendingReplies.TryGetValue(key, out pending) && pending != null
-                    && pending.ExpiresAt >= now && !string.IsNullOrWhiteSpace(pending.Answer))
+                if (!PendingReplies.TryGetValue(key, out pending) || pending == null
+                    || pending.ExpiresAt < now || string.IsNullOrWhiteSpace(pending.Answer))
                 {
-                    if (pending.InFlight) return string.Empty;
-                    pending.InFlight = true;
-                    pending.ExpiresAt = now.AddSeconds(PendingReplySeconds);
-                    return pending.Answer;
+                    return string.Empty;
                 }
-
-                var candidate = ResolveFreshCurrentScope(seller, buyer, currentQuestion, now);
-                if (string.IsNullOrWhiteSpace(candidate)) return string.Empty;
-                PendingReplies[key] = new PendingReply { Answer = candidate, ExpiresAt = now.AddSeconds(PendingReplySeconds), InFlight = true };
-                return candidate;
+                if (pending.InFlight) return string.Empty;
+                pending.InFlight = true;
+                pending.ExpiresAt = now.AddSeconds(PendingReplySeconds);
+                return pending.Answer;
             });
             answer = (resolved ?? string.Empty).Trim();
             return !string.IsNullOrWhiteSpace(answer);
@@ -148,6 +177,75 @@ namespace Bot.ChromeNs
             PendingReply ignored;
             PendingReplies.TryRemove(key, out ignored);
             return false;
+        }
+
+        internal static bool IsActualProblemMessage(
+            QNChatMessage message,
+            string currentQuestion,
+            IncomingMessageDecision decision)
+        {
+            if (decision != null)
+            {
+                if (!IsEligibleTrigger(decision)) return false;
+                var isImage = string.Equals(decision.MessageLabel, "[图片]", StringComparison.Ordinal);
+                if (!decision.ShouldCallAi && !isImage) return false;
+            }
+
+            var rawText = currentQuestion ?? string.Empty;
+            if (message != null)
+            {
+                var messageText = rawText;
+                if (ConversationContextStore.IsPlatformSystemTip(message, messageText)) return false;
+                if (ConversationContextStore.IsProductLink(message, messageText)) return false;
+                if (ConversationContextStore.IsWithdrawalNotice(message, messageText)) return false;
+            }
+
+            return IsActualProblemText(rawText);
+        }
+
+        internal static bool IsActualProblemText(string value)
+        {
+            var compact = Compact(value);
+            if (string.IsNullOrWhiteSpace(compact)) return false;
+
+            var lowered = compact.ToLowerInvariant();
+            if (string.Equals(lowered, "[图片]", StringComparison.Ordinal)) return true;
+            if (string.Equals(lowered, "[商品链接]", StringComparison.Ordinal)
+                || string.Equals(lowered, "[淘宝系统提示]", StringComparison.Ordinal)
+                || string.Equals(lowered, "[撤回提示]", StringComparison.Ordinal)
+                || string.Equals(lowered, "[空白或未知消息]", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (LooksLikeSystemOrProductMetadata(lowered)) return false;
+
+            var semantic = new string(lowered.Where(char.IsLetterOrDigit).ToArray());
+            if (string.IsNullOrWhiteSpace(semantic)) return false;
+            if (GreetingOnlyTexts.Contains(semantic)) return false;
+            if (MeaninglessOnlyTexts.Contains(semantic)) return false;
+            return true;
+        }
+
+        private static bool LooksLikeSystemOrProductMetadata(string compactLower)
+        {
+            if (string.IsNullOrWhiteSpace(compactLower)) return true;
+            if (compactLower.StartsWith("当前用户来自", StringComparison.Ordinal)
+                || compactLower.StartsWith("该用户来自", StringComparison.Ordinal)
+                || compactLower.StartsWith("买家正在浏览", StringComparison.Ordinal)
+                || compactLower.StartsWith("买家从商品详情页进入", StringComparison.Ordinal)
+                || compactLower.StartsWith("平台提示", StringComparison.Ordinal)
+                || compactLower.StartsWith("系统提示", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return compactLower.IndexOf("http://", StringComparison.Ordinal) >= 0
+                || compactLower.IndexOf("https://", StringComparison.Ordinal) >= 0
+                || compactLower.IndexOf("item.taobao.com", StringComparison.Ordinal) >= 0
+                || compactLower.IndexOf("detail.tmall.com", StringComparison.Ordinal) >= 0
+                || compactLower.IndexOf("h5.m.taobao.com", StringComparison.Ordinal) >= 0
+                || compactLower.IndexOf("m.tb.cn/", StringComparison.Ordinal) >= 0;
         }
 
         private static bool ShouldSuppressForOffHours(string seller, string buyer)
@@ -213,11 +311,6 @@ namespace Bot.ChromeNs
             if (decision == null) return false;
             if (string.Equals(decision.MessageLabel, "历史消息", StringComparison.Ordinal)) return false;
             if (string.Equals(decision.MessageLabel, "[充值进度查询]", StringComparison.Ordinal)) return false;
-            // Platform cards are delivered with the buyer as fromid, but they are not authored by
-            // the buyer. VisionMessageDecision asks this service before applying the ordinary skip
-            // decision so these labels must be rejected here as well. Otherwise an order-entry card
-            // such as “当前用户来自 订单...” consumes the first-inquiry reservation and sends the
-            // configured greeting to a buyer who has not actually asked anything.
             if (string.Equals(decision.MessageLabel, "[淘宝系统提示]", StringComparison.Ordinal)) return false;
             if (string.Equals(decision.MessageLabel, "[撤回提示]", StringComparison.Ordinal)) return false;
             if (string.Equals(decision.MessageLabel, "[空白或未知消息]", StringComparison.Ordinal)) return false;
@@ -230,7 +323,10 @@ namespace Bot.ChromeNs
             if (settings == null || !settings.Enabled || string.IsNullOrWhiteSpace(settings.Answer)) return string.Empty;
             var priorTurns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 24);
             var latestPrior = priorTurns
-                .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
+                .Where(x => x != null
+                    && string.Equals(x.Role, "user", StringComparison.Ordinal)
+                    && !x.Withdrawn
+                    && !string.IsNullOrWhiteSpace(x.Text))
                 .Where(x => !IsIgnorableFirstInquiryHistoryTurn(x, now))
                 .OrderByDescending(x => x.Timestamp).FirstOrDefault();
             if (latestPrior != null)
@@ -244,28 +340,23 @@ namespace Bot.ChromeNs
         private static bool IsIgnorableFirstInquiryHistoryTurn(ConversationContextTurn turn, DateTime now)
         {
             if (turn == null) return true;
+            if (!string.Equals(turn.Role, "user", StringComparison.Ordinal)) return true;
             var text = Compact(turn.Text);
             if (string.IsNullOrWhiteSpace(text)) return true;
 
-            // Product-detail entry tips are emitted as separate buyer-side/system records around the
-            // same instant as the product card. They are not a previous consultation and must not
-            // suppress the configured first greeting.
-            if (text.StartsWith("当前用户来自", StringComparison.Ordinal)
-                || text.StartsWith("该用户来自", StringComparison.Ordinal)
-                || text.StartsWith("买家正在浏览", StringComparison.Ordinal)
-                || text.StartsWith("买家从商品详情页进入", StringComparison.Ordinal)
-                || text.StartsWith("平台提示", StringComparison.Ordinal)
-                || text.StartsWith("系统提示", StringComparison.Ordinal))
+            // The current incoming message can appear in local/remote history before the first
+            // reservation check completes. It must not make itself look like a prior consultation.
+            if (turn.Timestamp != DateTime.MinValue
+                && turn.Timestamp >= now.AddSeconds(-SameBurstHistoryGraceSeconds))
             {
                 return true;
             }
 
-            // One product card can surface as several user-side records (title/url/system tip).
-            // Ignore only very recent user turns from the same incoming burst; a recent seller
-            // reply still blocks a second first-greeting as expected.
-            return string.Equals(turn.Role, "user", StringComparison.Ordinal)
-                && turn.Timestamp != DateTime.MinValue
-                && turn.Timestamp >= now.AddSeconds(-SameBurstHistoryGraceSeconds);
+            // Only an earlier substantive buyer problem consumes the first-inquiry slot. Greetings,
+            // acknowledgements/noise, platform entry tips and product links/cards do not. This keeps
+            // “你好” or a system-injected item card from blocking a later real first question such as
+            // “不行”, while a genuine earlier problem inside the 30-minute session still blocks it.
+            return !IsActualProblemText(turn.Text);
         }
 
         private static string Compact(string value)
