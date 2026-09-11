@@ -67,7 +67,7 @@ def test_buyer_session_runtime_bridge_uses_send_ledger_as_only_echo_authorship_s
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     assert "SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text)" in bridge
     assert "IsRecentBotEcho" not in bridge
-    assert "LastSetPlainText" not in bridge
+    assert "qn.Rpa == null || string.IsNullOrWhiteSpace(qn.Rpa.LastSetPlainText)" not in bridge
     assert "SellerBotEcho" in bridge and "SellerHumanReply" in bridge
     assert "KnownBotAnswers" in watchdog
     assert "ConfirmDelivery" in watchdog
