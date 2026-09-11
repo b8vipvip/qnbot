@@ -287,38 +287,45 @@ try {
                 var recoveryKey = RecoveryKey(seller, buyer);
                 DateTime observedAt;
                 var hasObserved = _latestBuyerMessageObserved.TryGetValue(recoveryKey, out observedAt);
-                var staleEvidence = !hasObserved || observedAt < DateTime.Now.AddSeconds(-2);
-                var replayed = 0;
 
-                foreach (var message in candidates)
+                // Recovery must be decided by source chronology, not by a wall-clock freshness
+                // timeout. A 12-second history probe naturally runs more than two seconds after a
+                // healthy live event; treating that age as "stale" replayed already-observed messages
+                // and let the recovery bridge compete with the live path. The last live observation
+                // is the transport checkpoint. Only source messages newer than that checkpoint are
+                // eligible for replay; the normal ProcessIncomingMessageAsync path remains the sole
+                // business side-effect owner.
+                var missedCandidates = candidates
+                    .Where(message => !hasObserved
+                        || IncomingMessageSafety.GetSortValue(message) > observedAt.Ticks)
+                    .ToList();
+                if (missedCandidates.Count == 0)
+                {
+                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                    return;
+                }
+
+                Log.Info("business-event-gap-confirmed: seller=" + seller + ", buyer=" + buyer
+                    + ", transport=connected, liveCheckpoint="
+                    + (hasObserved ? observedAt.ToString("HH:mm:ss.fff") : "none")
+                    + ", recoveredCount=" + missedCandidates.Count
+                    + ", recovery=remote-history");
+
+                foreach (var message in missedCandidates)
                 {
                     var text = GetMessageText(message);
                     var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
                     if (!_businessInboundHistoryProbeLedger.TryAccept(messageKey)) continue;
 
-                    if (staleEvidence && replayed == 0)
-                    {
-                        Log.Info("business-event-stale: seller=" + seller + ", buyer=" + buyer
-                            + ", transport=connected, liveBusinessEventAgeSeconds="
-                            + (hasObserved ? Math.Max(0, (int)(DateTime.Now - observedAt).TotalSeconds).ToString() : "unknown")
-                            + ", recovery=remote-history");
-                    }
-                    if (staleEvidence)
-                    {
-                        Log.Info("unseen-buyer-message-detected: seller=" + seller + ", buyer=" + buyer
-                            + ", key=" + messageKey + ", source=remote-history");
-                    }
+                    Log.Info("unseen-buyer-message-detected: seller=" + seller + ", buyer=" + buyer
+                        + ", key=" + messageKey + ", source=remote-history");
 
                     // Never implement a second reply pipeline here. The normal path owns business
                     // dedupe, Knowledge V2/AI routing, burst coalescing and send verification.
                     await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
-                    replayed++;
 
-                    if (staleEvidence)
-                    {
-                        Log.Info("recovered-inbound-replay: seller=" + seller + ", buyer=" + buyer
-                            + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
-                    }
+                    Log.Info("recovered-inbound-replay: seller=" + seller + ", buyer=" + buyer
+                        + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
                 }
 
                 _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
