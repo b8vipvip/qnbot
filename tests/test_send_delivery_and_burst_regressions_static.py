@@ -31,17 +31,32 @@ def test_unknown_qianniu_version_cannot_fall_into_smart_tip_false_success_path()
     assert "Version.TryParse" in monitor
 
 
-def test_same_buyer_worker_retains_ownership_through_ai_dispatch():
+def test_same_buyer_lane_keeps_one_queue_owner_but_does_not_block_new_turns_on_slow_ai():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    clear_index = source.index("state.Items.Clear();")
-    dispatch_index = source.index("await DispatchScopedAsync(burst, lease).ConfigureAwait(false);")
-    assert clear_index < dispatch_index
     lane = source[source.index("private async Task RunAsync"):source.index("private async Task ProcessPreMergeAsync")]
-    assert "state.WorkerRunning = false;" in lane
-    assert lane.index("state.WorkerRunning = false;") < lane.index("return;")
-    assert "var dispatchedItems = state.Items.ToList();" in source
-    assert "return state.HardCancelVersion == capturedHardCancelVersion;" in source
+
+    # One actor still owns PendingRules/Items and is the only place that creates a detached burst.
     assert "state.PendingRules.Enqueue(item)" in source
+    assert "var dispatchedItems = state.Items.ToList();" in lane
+    assert "state.Items.Clear();" in lane
+    assert "StartOwnedDispatch(key, state, burst, lease);" in lane
+    assert "await DispatchScopedAsync(burst, lease)" not in lane
+
+    # In-flight generations are tracked by that same state instead of creating a second buyer owner.
+    assert "HashSet<Task> InFlightDispatches" in source
+    assert "state.InFlightDispatches.Add(task);" in source
+    assert "state.InFlightDispatches.Remove(task);" in source
+    assert "state.InFlightDispatches.Count == 0" in source
+    assert "RetireStateLocked" in source
+    assert "state.Retired" in source
+
+    # Generation cancellation releases coordinator ownership even when an upstream task ignores cancellation.
+    dispatch = source[source.index("private async Task DispatchOwnedAsync"):source.index("private void OnOwnedDispatchCompleted")]
+    assert "Task.WhenAny(dispatchTask, cancelledTask)" in dispatch
+    assert "底层非协作任务如继续运行也不再拥有发送/终态资格" in dispatch
+    assert "FinalizeReplyOutcome(burst, lease);" in dispatch
+    assert "return !state.Retired" in source
+    assert "state.HardCancelVersion == capturedHardCancelVersion" in source
 
 
 def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
