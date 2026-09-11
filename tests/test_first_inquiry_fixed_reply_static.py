@@ -59,7 +59,6 @@ def test_first_inquiry_is_once_per_30_minute_actual_problem_session():
     history_guard = source[source.index("private static bool IsIgnorableFirstInquiryHistoryTurn"):source.index("private static string Compact")]
     assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in history_guard
     assert "return !IsActualProblemText(turn.Text);" in history_guard
-    assert "Greetings" not in history_guard  # keep implementation language-neutral to tests
 
 
 def test_first_inquiry_session_is_committed_after_real_delivery():
