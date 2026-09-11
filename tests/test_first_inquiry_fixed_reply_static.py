@@ -44,7 +44,7 @@ def test_first_inquiry_defaults_to_enabled_and_expected_answer():
     assert 'GetParam2Key(AnswerKey,SettingsScope,DefaultAnswer)' in compact
 
 
-def test_first_inquiry_is_once_per_30_minute_consultation_session():
+def test_first_inquiry_is_once_per_30_minute_actual_problem_session():
     source = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
     assert "SessionResetMinutes = 30" in source
     assert "ConversationContextStore.GetRecentTurns(" in source
@@ -55,9 +55,11 @@ def test_first_inquiry_is_once_per_30_minute_consultation_session():
     assert "PendingReplies" in source
     assert "SameBurstHistoryGraceSeconds = 8" in source
     assert "IsIgnorableFirstInquiryHistoryTurn" in source
-    assert 'text.StartsWith("当前用户来自"' in source
-    assert 'text.StartsWith("系统提示"' in source
-    assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in source
+    assert 'string.Equals(x.Role, "user", StringComparison.Ordinal)' in source
+    history_guard = source[source.index("private static bool IsIgnorableFirstInquiryHistoryTurn"):source.index("private static string Compact")]
+    assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in history_guard
+    assert "return !IsActualProblemText(turn.Text);" in history_guard
+    assert "Greetings" not in history_guard  # keep implementation language-neutral to tests
 
 
 def test_first_inquiry_session_is_committed_after_real_delivery():
@@ -71,7 +73,29 @@ def test_first_inquiry_session_is_committed_after_real_delivery():
     assert "TriggeredAt[key] = DateTime.Now" in delivered
 
 
-def test_fresh_buyer_authored_message_can_prepare_fixed_reply():
+def test_first_inquiry_requires_substantive_actual_problem_and_keeps_buxing_meaningful():
+    service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+
+    classifier = service[service.index("internal static bool IsActualProblemMessage"):service.index("private static bool ShouldSuppressForOffHours")]
+    assert "ConversationContextStore.IsPlatformSystemTip(message, messageText)" in classifier
+    assert "ConversationContextStore.IsProductLink(message, messageText)" in classifier
+    assert "ConversationContextStore.IsWithdrawalNotice(message, messageText)" in classifier
+    assert "GreetingOnlyTexts.Contains(semantic)" in classifier
+    assert "MeaninglessOnlyTexts.Contains(semantic)" in classifier
+    assert "return IsActualProblemText(rawText);" in classifier
+
+    greeting_block = service[service.index("GreetingOnlyTexts"):service.index("MeaninglessOnlyTexts")]
+    noise_block = service[service.index("MeaninglessOnlyTexts"):service.index("private sealed class PendingReply")]
+    for text in ["你好", "您好", "在吗", "有人吗", "hi", "hello"]:
+        assert f'"{text}"' in greeting_block
+    for text in ["嗯", "哦", "好的", "谢谢", "111", "666"]:
+        assert f'"{text}"' in noise_block
+    # “不行” is a short but substantive failure report and must not be classified as greeting/noise.
+    assert '"不行"' not in greeting_block
+    assert '"不行"' not in noise_block
+
+
+def test_fresh_actual_problem_can_prepare_fixed_reply_with_full_message_metadata():
     service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
     router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     assert "public static bool TryPrepare(" in service
@@ -81,12 +105,16 @@ def test_fresh_buyer_authored_message_can_prepare_fixed_reply():
     ordinary_text = router.index("if (safetyDecision.ShouldCallAi)", prepare)
     image_route = router.index('if (!string.Equals(safetyDecision.MessageLabel, "[图片]"', ordinary_text)
     assert prepare < ordinary_text < image_route
+    prepare_call = router[prepare:router.index("out fixedAnswer);", prepare)]
+    assert "message," in prepare_call
     assert "IncomingMessageSafety.GetDisplayText(message, text)" in router
     assert "Kind = VisionDecisionKind.Text" in router[prepare:ordinary_text]
+    assert "随后同一实际问题继续进入正常文本回复处理" in router
     assert "首条咨询固定回复已预留" in service
+    assert "actualProblem=true" in service
 
 
-def test_platform_system_tips_are_rejected_before_fixed_reply_can_override_skip():
+def test_platform_system_and_product_messages_cannot_late_create_first_inquiry_reservation():
     safety = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
     service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
     router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
@@ -94,22 +122,30 @@ def test_platform_system_tips_are_rejected_before_fixed_reply_can_override_skip(
     assert 'decision.MessageLabel, "[淘宝系统提示]"' in service
     assert 'decision.MessageLabel, "[撤回提示]"' in service
     assert 'decision.MessageLabel, "[空白或未知消息]"' in service
+    assert "ConversationContextStore.IsProductLink(message, messageText)" in service
     prepare = router.index("FirstInquiryFixedReplyService.TryPrepare(")
     normal_skip = router.index("return Skip(safetyDecision.MessageLabel, safetyDecision.Note);", prepare)
     assert prepare < normal_skip
 
+    resolve = service[service.index("public static bool TryResolve"):service.index("public static void MarkDelivered")]
+    assert "PendingReplies.TryGetValue" in resolve
+    assert "ResolveFreshCurrentScope" not in resolve
+    assert "full incoming message" in resolve
 
-def test_fixed_first_reply_skips_ai_and_uses_normal_send_pipeline():
-    source = read("src/Bot/ChromeNs/QN.cs")
-    fixed = source.index("FirstInquiryFixedReplyService.TryResolve(")
-    ai = source.index("MyOpenAI.GetAnswer(", fixed)
-    send = source.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", ai)
-    assert fixed < ai < send
-    assert "if (usedFirstInquiryFixedReply)" in source[fixed:ai]
-    assert '"首条咨询固定回复"' in source
-    assert "BotOutboundMessageFormatter.EnsureAiMarker(answer)" in source
-    assert "if (!usedFirstInquiryFixedReply)" in source
-    assert "ReplyDeduplicationService.RememberDelivered" in source[send:]
+
+def test_first_reply_is_premerge_prelude_and_same_problem_continues_normal_reply_pipeline():
+    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+
+    resolve = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
+    invoke_send = deterministic.index("var firstOk = await SendFixedAsync(", resolve)
+    mark = deterministic.index("FirstInquiryFixedReplyService.MarkDelivered(", invoke_send)
+    local_short = deterministic.index("if (allowLocalShortReply)", mark)
+    normal_continue = deterministic.index("return true;", local_short)
+    assert resolve < invoke_send < mark < local_short < normal_continue
+    assert "随后同一实际问题继续进入正常文本回复处理" in router
+    assert "StreamingBuyerAnswerService.GetAnswerAsync(" in streaming
 
 
 def test_fixed_reply_does_not_enter_ai_learning_path():
