@@ -72,13 +72,14 @@ def test_canonical_short_reply_precedes_normal_merge_and_preserves_handoff_prior
     canonical = canonical_block()
 
     local = canonical.index("LocalShortReplyService.TryResolve(")
-    normal = canonical.index("return CanonicalPreMergeOutcome.Continue;", local)
+    end = canonical.index("return CanonicalPreMergeOutcome.Continue;", local)
     handoff_check = canonical.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
+    local_block = canonical[local:end]
     assert handoff_check >= 0
-    assert handoff_check < local < normal
-    assert '"本地短消息回复"' in canonical
-    assert "CanonicalPreMergeOutcome.Consumed" in canonical[local:normal]
-    assert "aiCalled=false" in canonical
+    assert handoff_check < local < end
+    assert '"本地短消息回复"' in local_block
+    assert "localOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed" in local_block
+    assert "aiCalled=false" in local_block
 
 
 def test_new_buyer_message_enters_one_premerge_queue_before_merge():
