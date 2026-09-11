@@ -36,9 +36,21 @@ def test_remote_history_fallback_reenters_single_normal_business_pipeline():
     assert "catchupFloor.Ticks" in text
     assert "_businessInboundHistoryProbeLedger.TryAccept(messageKey)" in text
     assert "await ProcessIncomingMessageAsync(message)" in text
-    assert "business-event-stale" in text
+    assert "business-event-gap-confirmed" in text
     assert "unseen-buyer-message-detected" in text
     assert "recovered-inbound-replay" in text
+
+
+def test_recovery_uses_live_source_checkpoint_not_wall_clock_staleness_timeout():
+    text = source()
+    method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    assert "_latestBuyerMessageObserved.TryGetValue(recoveryKey, out observedAt)" in method
+    assert "IncomingMessageSafety.GetSortValue(message) > observedAt.Ticks" in method
+    assert "var missedCandidates = candidates" in method
+    assert "foreach (var message in missedCandidates)" in method
+    assert "DateTime.Now.AddSeconds(-2)" not in method
+    assert "liveBusinessEventAgeSeconds" not in method
+    assert "business-event-stale" not in method
 
 
 def test_remote_history_fallback_catches_up_after_long_probe_gap():

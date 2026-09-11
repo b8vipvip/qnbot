@@ -10,34 +10,30 @@ def read(path: str) -> str:
 
 def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
 
     enqueue = coordinator.index("public void Enqueue(BuyerMessageBurstItem item)")
-    before_merge = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(", enqueue)
+    queued = coordinator.index("state.PendingRules.Enqueue(item)", enqueue)
+    worker = coordinator.index("private async Task RunAsync", queued)
+    before_merge = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(", worker)
     enqueue_merge = coordinator.index("EnqueueForMerge(item)", before_merge)
     quiet_delay = coordinator.index("QuietDelayMilliseconds", enqueue_merge)
-    assert enqueue < before_merge < enqueue_merge < quiet_delay
+    assert enqueue < queued < worker < before_merge < enqueue_merge < quiet_delay
 
-    dispatch = coordinator.index("private async Task DispatchScopedAsync")
-    assert "DeterministicAutoReplyService" not in coordinator[dispatch:]
+    canonical_start = coordinator.index("internal static class CanonicalPreMergeDecisionService")
+    canonical_end = coordinator.index("internal sealed class BuyerMessageBurstCoordinator", canonical_start)
+    canonical = coordinator[canonical_start:canonical_end]
+    off_hours = canonical.index("TryResolveOffHours(out offHoursReply)")
+    first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
+    local_short = canonical.index("LocalShortReplyService.TryResolve(")
+    assert off_hours < first < local_short
+    assert "OffHoursRepeatMinutes = 2" in canonical
+    assert "SendTextWithRetryAsync(" in canonical
+    assert "SemaphoreSlim" not in canonical
+    assert "BuyerSessionAgent" not in canonical
 
-    # Off-hours is the exclusive highest-priority policy and must be decided before the ordinary
-    # deterministic gate, first-inquiry greeting, local short reply, merge window, or AI dispatch.
-    off_hours = deterministic.index("TryResolveOffHours(out offHoursReply)")
-    ordinary_gate = deterministic.index("BuyerGates.GetOrAdd")
-    first = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
-    local_short = deterministic.index("LocalShortReplyService.TryResolve(")
-    assert off_hours < ordinary_gate < first < local_short
-    assert "HandleOffHoursExclusiveAsync" in deterministic
-    assert "OffHoursRepeatMinutes = 2" in deterministic
-    assert "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路" in deterministic
-    assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in deterministic
-
-    # First-inquiry is still mandatory during work hours: a failed send consumes the message and
-    # cannot fall through into a later local-short/context/AI response.
-    first_block = deterministic[first:local_short]
+    first_block = canonical[first:local_short]
     release = first_block.index("FirstInquiryFixedReplyService.ReleaseReservation(")
-    assert "return false;" in first_block[release:]
+    assert "CanonicalPreMergeOutcome.Failed" in first_block[release:]
 
 
 def test_order_auto_reply_still_precedes_burst_merge_path():

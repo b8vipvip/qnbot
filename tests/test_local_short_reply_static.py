@@ -7,6 +7,13 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+def canonical_block():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    start = coordinator.index("internal static class CanonicalPreMergeDecisionService")
+    end = coordinator.index("internal sealed class BuyerMessageBurstCoordinator", start)
+    return coordinator[start:end]
+
+
 def test_local_short_reply_is_shop_scoped_exact_match_and_never_calls_ai():
     service = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
 
@@ -61,37 +68,35 @@ def test_knowledge_center_gets_editable_short_message_management_page():
     assert "SaveForCurrentUi" in service
 
 
-def test_deterministic_short_reply_precedes_normal_merge_and_preserves_handoff_rule_priority():
-    service = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+def test_canonical_short_reply_precedes_normal_merge_and_preserves_handoff_priority():
+    canonical = canonical_block()
 
-    local = service.index("LocalShortReplyService.TryResolve(")
-    normal_merge = service.index("return true;", local)
-    handoff_check = service.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
+    local = canonical.index("LocalShortReplyService.TryResolve(")
+    outcome = "return localOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;"
+    local_end = canonical.index(outcome, local) + len(outcome)
+    handoff_check = canonical.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
+    local_block = canonical[local:local_end]
     assert handoff_check >= 0
-    assert handoff_check < local < normal_merge
-    assert '"本地短消息回复"' in service
-    assert "return false;" in service[local:normal_merge]
-    assert "aiCalled=false" in service
+    assert handoff_check < local < local_end
+    assert '"本地短消息回复"' in local_block
+    assert outcome in local_block
+    assert "aiCalled=false" in local_block
 
 
-def test_new_buyer_message_can_use_short_reply_and_supersedes_old_generation():
+def test_new_buyer_message_enters_one_premerge_queue_before_merge():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
 
     enqueue_start = coordinator.index("public void Enqueue(BuyerMessageBurstItem item)")
     observe = coordinator.index("_sessionAgent.ObserveBuyerMessage(", enqueue_start)
-    pending = coordinator.index("allowLocalShortReply = !HasPendingBuyerMessages", observe)
-    deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(", pending)
-    merge = coordinator.index("EnqueueForMerge(item);", deterministic)
-    assert enqueue_start < observe < pending < deterministic < merge
-    assert "InvalidateDispatchedAnswerOnArrival(item.SellerNick, item.BuyerNick);" not in coordinator[enqueue_start:merge]
-    assert "item.SessionGeneration = observation.Generation;" in coordinator[observe:pending]
-
-    assert "state.Items.Count < 1" in coordinator
-    assert "!state.WorkerRunning" in coordinator
-    assert "state.Version++;" in coordinator
-    assert "_states.TryRemove(key, out ignored);" in coordinator
-    assert "return state.Items.Count > 0;" in coordinator
-    assert "allowLocalShortReply" in coordinator
+    queue = coordinator.index("state.PendingRules.Enqueue(item)", observe)
+    worker = coordinator.index("private async Task RunAsync", queue)
+    decision = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(", worker)
+    merge = coordinator.index("EnqueueForMerge(item)", decision)
+    assert enqueue_start < observe < queue < worker < decision < merge
+    assert "Task.Run(async () =>" not in coordinator[enqueue_start:worker]
+    assert "item.SessionGeneration = observation.Generation;" in coordinator[observe:queue]
+    assert "allowLocalShortReply = state.PendingRules.Count == 0 && state.Items.Count == 0;" in coordinator
+    assert "return state.PendingRules.Count > 0 || state.Items.Count > 0;" in coordinator
 
 
 def test_management_page_registration_is_explicit_and_idempotent():

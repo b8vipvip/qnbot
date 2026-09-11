@@ -1,1 +1,1 @@
-// placeholder
+// Reserved for a future file split. Canonical pre-merge policy currently lives with BuyerMessageBurstCoordinator so legacy WPF project compile lists remain unchanged.

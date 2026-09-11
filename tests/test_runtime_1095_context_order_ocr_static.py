@@ -23,8 +23,11 @@ def test_generation_terminal_state_is_tracked_per_generation():
     assert "Dictionary<long, BuyerSessionAgentState> GenerationStates" in agent
     assert "TryGetGenerationState" in agent
     assert "SetGenerationStateLocked(state, generation, next)" in agent
-    assert "hasGenerationState && generationState == BuyerSessionAgentState.Generating" in coordinator
-    post = coordinator.split("await DispatchScopedAsync(burst, lease);", 1)[1].split("catch (OperationCanceledException)", 1)[0]
+    assert "hasState && generationState == BuyerSessionAgentState.Generating" in coordinator
+    post = coordinator.split("await DispatchScopedAsync(burst, lease).ConfigureAwait(false);", 1)[1].split(
+        "catch (OperationCanceledException)", 1
+    )[0]
+    assert "FinalizeReplyOutcome(burst, lease);" in post
     assert "GetSnapshot(burst.SellerNick, burst.BuyerNick)" not in post
 
 
