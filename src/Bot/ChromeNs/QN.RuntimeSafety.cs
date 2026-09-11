@@ -52,6 +52,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, PendingReply>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> TriggeredAt =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> KnownNonProblemMessageKeys =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
         public static FirstInquiryFixedReplySettings Load(string seller)
         {
@@ -82,8 +84,12 @@ namespace Bot.ChromeNs
             out string answer)
         {
             answer = string.Empty;
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)
-                || !IsActualProblemMessage(message, currentQuestion, decision)) return false;
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
+            if (!IsActualProblemMessage(message, currentQuestion, decision))
+            {
+                RememberKnownNonProblemMessage(seller, buyer, message, currentQuestion);
+                return false;
+            }
             if (ShouldSuppressForOffHours(seller, buyer)) return false;
 
             var resolved = RunInShopScope(seller, delegate
@@ -210,7 +216,8 @@ namespace Bot.ChromeNs
 
             var lowered = compact.ToLowerInvariant();
             if (string.Equals(lowered, "[图片]", StringComparison.Ordinal)) return true;
-            if (string.Equals(lowered, "[商品链接]", StringComparison.Ordinal)
+            if ((lowered.StartsWith("[", StringComparison.Ordinal) && lowered.EndsWith("]", StringComparison.Ordinal))
+                || string.Equals(lowered, "[商品链接]", StringComparison.Ordinal)
                 || string.Equals(lowered, "[淘宝系统提示]", StringComparison.Ordinal)
                 || string.Equals(lowered, "[撤回提示]", StringComparison.Ordinal)
                 || string.Equals(lowered, "[空白或未知消息]", StringComparison.Ordinal))
@@ -224,7 +231,13 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(semantic)) return false;
             if (GreetingOnlyTexts.Contains(semantic)) return false;
             if (MeaninglessOnlyTexts.Contains(semantic)) return false;
+            if (semantic.Length <= 8 && semantic.All(IsFillerCharacter)) return false;
             return true;
+        }
+
+        private static bool IsFillerCharacter(char value)
+        {
+            return "嗯恩哦噢喔啊额呃哈哈呵嘿".IndexOf(value) >= 0;
         }
 
         private static bool LooksLikeSystemOrProductMetadata(string compactLower)
@@ -246,6 +259,54 @@ namespace Bot.ChromeNs
                 || compactLower.IndexOf("detail.tmall.com", StringComparison.Ordinal) >= 0
                 || compactLower.IndexOf("h5.m.taobao.com", StringComparison.Ordinal) >= 0
                 || compactLower.IndexOf("m.tb.cn/", StringComparison.Ordinal) >= 0;
+        }
+
+        private static void RememberKnownNonProblemMessage(
+            string seller,
+            string buyer,
+            QNChatMessage message,
+            string displayText)
+        {
+            if (message == null) return;
+            var rawKey = IncomingMessageSafety.BuildMessageKey(message, displayText);
+            if (string.IsNullOrWhiteSpace(rawKey)) return;
+            var now = DateTime.Now;
+            KnownNonProblemMessageKeys[KnownNonProblemKey(seller, buyer, rawKey)] =
+                now.AddMinutes(SessionResetMinutes);
+
+            if (KnownNonProblemMessageKeys.Count > 1024)
+            {
+                foreach (var expired in KnownNonProblemMessageKeys.Where(x => x.Value < now).Take(128).ToList())
+                {
+                    DateTime ignored;
+                    KnownNonProblemMessageKeys.TryRemove(expired.Key, out ignored);
+                }
+            }
+        }
+
+        private static bool IsKnownNonProblemHistoryTurn(
+            string seller,
+            string buyer,
+            string storedMessageKey,
+            DateTime now)
+        {
+            if (string.IsNullOrWhiteSpace(storedMessageKey)) return false;
+            var separator = storedMessageKey.IndexOf('|');
+            var rawKey = separator >= 0 && separator + 1 < storedMessageKey.Length
+                ? storedMessageKey.Substring(separator + 1)
+                : storedMessageKey;
+            var key = KnownNonProblemKey(seller, buyer, rawKey);
+            DateTime expiresAt;
+            if (!KnownNonProblemMessageKeys.TryGetValue(key, out expiresAt)) return false;
+            if (expiresAt >= now) return true;
+            DateTime ignored;
+            KnownNonProblemMessageKeys.TryRemove(key, out ignored);
+            return false;
+        }
+
+        private static string KnownNonProblemKey(string seller, string buyer, string rawMessageKey)
+        {
+            return RuntimeKey(seller, buyer) + "|" + (rawMessageKey ?? string.Empty).Trim();
         }
 
         private static bool ShouldSuppressForOffHours(string seller, string buyer)
@@ -327,7 +388,7 @@ namespace Bot.ChromeNs
                     && string.Equals(x.Role, "user", StringComparison.Ordinal)
                     && !x.Withdrawn
                     && !string.IsNullOrWhiteSpace(x.Text))
-                .Where(x => !IsIgnorableFirstInquiryHistoryTurn(x, now))
+                .Where(x => !IsIgnorableFirstInquiryHistoryTurn(seller, buyer, x, now))
                 .OrderByDescending(x => x.Timestamp).FirstOrDefault();
             if (latestPrior != null)
             {
@@ -337,12 +398,22 @@ namespace Bot.ChromeNs
             return BotFeatureStore.ApplyOutputPolicy(settings.Answer.Trim()) ?? string.Empty;
         }
 
-        private static bool IsIgnorableFirstInquiryHistoryTurn(ConversationContextTurn turn, DateTime now)
+        private static bool IsIgnorableFirstInquiryHistoryTurn(
+            string seller,
+            string buyer,
+            ConversationContextTurn turn,
+            DateTime now)
         {
             if (turn == null) return true;
             if (!string.Equals(turn.Role, "user", StringComparison.Ordinal)) return true;
             var text = Compact(turn.Text);
             if (string.IsNullOrWhiteSpace(text)) return true;
+
+            // Product cards can be stored in conversation history using their visible title even
+            // though the live message metadata correctly identified them as non-problem context.
+            // Remember their authoritative message key so a title-only history turn cannot later
+            // consume the first substantive buyer-question slot.
+            if (IsKnownNonProblemHistoryTurn(seller, buyer, turn.MessageKey, now)) return true;
 
             // The current incoming message can appear in local/remote history before the first
             // reservation check completes. It must not make itself look like a prior consultation.
