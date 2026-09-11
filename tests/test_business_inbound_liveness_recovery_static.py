@@ -33,12 +33,30 @@ def test_remote_history_fallback_reenters_single_normal_business_pipeline():
     assert 'Invoke<JObject>("im.singlemsg.GetRemoteHisMsg"' in text
     assert "IsRecoveredBuyerMessageForTarget" in text
     assert "_messageSafetyStartedAt.AddSeconds(-8).Ticks" in text
-    assert "DateTime.Now.AddMinutes(-2).Ticks" in text
+    assert "catchupFloor.Ticks" in text
     assert "_businessInboundHistoryProbeLedger.TryAccept(messageKey)" in text
     assert "await ProcessIncomingMessageAsync(message)" in text
     assert "business-event-stale" in text
     assert "unseen-buyer-message-detected" in text
     assert "recovered-inbound-replay" in text
+
+
+def test_remote_history_fallback_catches_up_after_long_probe_gap():
+    text = source()
+    method = text.split("internal async Task ProbeActiveConversationForMissedInboundAsync()", 1)[1]
+    assert "BusinessInboundNormalLookback = TimeSpan.FromMinutes(2)" in text
+    assert "BusinessInboundMaxCatchupLookback = TimeSpan.FromMinutes(45)" in text
+    assert "BusinessInboundCatchupOverlap = TimeSpan.FromSeconds(8)" in text
+    assert "_lastBusinessInboundHistoryProbeCompletedAt" in text
+    assert "lastCompletedAt.Subtract(BusinessInboundCatchupOverlap)" in method
+    assert "probeStartedAt.Subtract(BusinessInboundMaxCatchupLookback)" in method
+    assert "gapRecovery ? 100 : 20" in method
+    assert "count = historyCount" in method
+    assert "business-inbound-probe-gap-detected" in method
+    assert "DateTime.Now.AddMinutes(-2).Ticks" not in method
+    assert method.rfind("_lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;") > method.find(
+        "await ProcessIncomingMessageAsync(message)"
+    )
 
 
 def test_history_fallback_does_not_hijack_visible_chat():
