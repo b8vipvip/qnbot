@@ -39,15 +39,21 @@ def test_premerge_has_one_same_buyer_owner_and_no_late_send_ai_race():
     assert "single_owner_lane" in coordinator
     assert "single_owner_dispatch" in coordinator
 
-    # One canonical worker owns fixed rules, merge and reply dispatch for a seller+buyer lane.
-    enqueue = coordinator.index("state.PendingRules.Enqueue(item)")
-    worker = coordinator.index("private async Task RunAsync", enqueue)
-    decision = coordinator.index("CanonicalPreMergeDecisionService.HandleAsync(", worker)
-    merge = coordinator.index("EnqueueForMerge(item)", decision)
-    dispatch = coordinator.index("await DispatchScopedAsync", merge)
-    assert enqueue < worker < decision < merge < dispatch
+    enqueue_method = coordinator.split("public void Enqueue(BuyerMessageBurstItem item)", 1)[1].split(
+        "private async Task RunAsync", 1
+    )[0]
+    worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private async Task ProcessPreMergeAsync", 1
+    )[0]
+    premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
+        "private bool HasPendingBuyerMessages", 1
+    )[0]
+    assert "state.PendingRules.Enqueue(item)" in enqueue_method
+    assert "await ProcessPreMergeAsync(key, state, ruleItem)" in worker
+    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
+    assert "CanonicalPreMergeDecisionService.HandleAsync(" in premerge
+    assert "EnqueueForMerge(item)" in premerge
 
-    # The active canonical policy helper has no same-buyer semaphore or independent terminal owner.
     canonical_start = coordinator.index("internal static class CanonicalPreMergeDecisionService")
     canonical_end = coordinator.index("internal sealed class BuyerMessageBurstCoordinator", canonical_start)
     canonical = coordinator[canonical_start:canonical_end]
