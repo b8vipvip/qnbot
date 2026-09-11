@@ -112,10 +112,15 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        private static readonly TimeSpan BusinessInboundNormalLookback = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan BusinessInboundMaxCatchupLookback = TimeSpan.FromMinutes(45);
+        private static readonly TimeSpan BusinessInboundCatchupOverlap = TimeSpan.FromSeconds(8);
         private readonly SemaphoreSlim _businessInboundLivenessGate = new SemaphoreSlim(1, 1);
         private readonly IncomingMessageDeduplicator _businessInboundHistoryProbeLedger =
             new IncomingMessageDeduplicator(8000);
         private DateTime _lastBusinessInboundHookRepairLogAt = DateTime.MinValue;
+        private DateTime _lastBusinessInboundHistoryProbeCompletedAt = DateTime.MinValue;
+        private DateTime _lastBusinessInboundProbeGapLogAt = DateTime.MinValue;
 
         // This hook is deliberately independent from inject.js' original closure. Qianniu can
         // replace window.imsdk while keeping the page and WebSocket alive; the historical injected
@@ -193,6 +198,7 @@ try {
 
             try
             {
+                var probeStartedAt = DateTime.Now;
                 var first = await GetCurrentConversationID().ConfigureAwait(false);
                 var current = first == null ? null : first.Result;
                 if (current == null || string.IsNullOrWhiteSpace(current.Nick)) return;
@@ -224,10 +230,38 @@ try {
                 var ccode = (current.Ccode ?? string.Empty).Trim();
                 if (ccode.Length == 0) return;
 
+                // Normal probes intentionally keep a short two-minute window. If the runtime or
+                // scheduler did not complete a history probe for longer than that, resume from the
+                // last successful probe instead. This closes the production gap where a 20+ minute
+                // scheduling pause made a real buyer message permanently invisible to the recovery
+                // bridge because DateTime.Now-2m had already advanced past it when timers resumed.
+                var lastCompletedAt = _lastBusinessInboundHistoryProbeCompletedAt;
+                var catchupFloor = probeStartedAt.Subtract(BusinessInboundNormalLookback);
+                var gapRecovery = lastCompletedAt != DateTime.MinValue
+                    && probeStartedAt - lastCompletedAt > BusinessInboundNormalLookback;
+                if (lastCompletedAt != DateTime.MinValue)
+                {
+                    var previousFloor = lastCompletedAt.Subtract(BusinessInboundCatchupOverlap);
+                    var oldestAllowed = probeStartedAt.Subtract(BusinessInboundMaxCatchupLookback);
+                    if (previousFloor < oldestAllowed) previousFloor = oldestAllowed;
+                    if (previousFloor < catchupFloor) catchupFloor = previousFloor;
+                }
+
+                if (gapRecovery
+                    && DateTime.Now - _lastBusinessInboundProbeGapLogAt > TimeSpan.FromMinutes(1))
+                {
+                    Log.Info("business-inbound-probe-gap-detected: seller=" + seller
+                        + ", gapSeconds=" + Math.Max(0, (int)(probeStartedAt - lastCompletedAt).TotalSeconds)
+                        + ", catchupSeconds=" + Math.Max(0, (int)(probeStartedAt - catchupFloor).TotalSeconds)
+                        + ", recovery=remote-history");
+                    _lastBusinessInboundProbeGapLogAt = DateTime.Now;
+                }
+
+                var historyCount = gapRecovery ? 100 : 20;
                 var history = await client.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
-                    count = 20,
+                    count = historyCount,
                     gohistory = 1,
                     msgid = "-1",
                     msgtime = "-1"
@@ -238,13 +272,17 @@ try {
                     ?? new List<QNChatMessage>();
                 var threshold = Math.Max(
                     _messageSafetyStartedAt.AddSeconds(-8).Ticks,
-                    DateTime.Now.AddMinutes(-2).Ticks);
+                    catchupFloor.Ticks);
                 var candidates = messages
                     .Where(m => m != null && IsRecoveredBuyerMessageForTarget(m, seller, buyer))
                     .Where(m => IncomingMessageSafety.GetSortValue(m) >= threshold)
                     .OrderBy(IncomingMessageSafety.GetSortValue)
                     .ToList();
-                if (candidates.Count == 0) return;
+                if (candidates.Count == 0)
+                {
+                    _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
+                    return;
+                }
 
                 var recoveryKey = RecoveryKey(seller, buyer);
                 DateTime observedAt;
@@ -282,6 +320,8 @@ try {
                             + ", key=" + messageKey + ", route=ProcessIncomingMessageAsync");
                     }
                 }
+
+                _lastBusinessInboundHistoryProbeCompletedAt = DateTime.Now;
             }
             catch (Exception ex)
             {
