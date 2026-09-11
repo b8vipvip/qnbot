@@ -25,11 +25,10 @@ namespace Bot.ChromeNs
             if (safetyDecision == null)
                 return Skip("[未知消息]", "已跳过：消息安全检查失败，未调用AI，也未发送给买家。");
 
-            // First-inquiry is a delivery policy, not a content classifier. Reserve the greeting here
-            // so media can still participate, but never downgrade a real image to Text. The previous
-            // implementation returned Text as soon as the greeting was reserved; because image safety
-            // has ShouldCallAi=false, the deterministic pre-merge sender then skipped the reservation
-            // and the image also lost its Vision route.
+            // First-inquiry is a prelude delivery policy, not a replacement answer. Reserve it only
+            // when the complete incoming message can be classified as a real buyer problem. The
+            // deterministic pre-merge sender delivers the configured greeting first; this decision
+            // then keeps the same problem on its ordinary text/vision path for the substantive reply.
             var seller = message == null || message.toid == null
                 ? string.Empty
                 : (message.toid.nick ?? string.Empty).Trim();
@@ -41,6 +40,7 @@ namespace Bot.ChromeNs
             var firstPrepared = FirstInquiryFixedReplyService.TryPrepare(
                 seller,
                 buyer,
+                message,
                 firstQuestion,
                 safetyDecision,
                 out fixedAnswer);
@@ -100,7 +100,7 @@ namespace Bot.ChromeNs
                 {
                     Kind = VisionDecisionKind.Text,
                     QuestionLabel = firstQuestion,
-                    Note = "本轮首条消息使用固定回复，不调用AI或视觉模型。"
+                    Note = "首条咨询固定回复先发送，随后同一实际问题继续进入正常文本回复处理。"
                 };
             }
 

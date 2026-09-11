@@ -20,17 +20,22 @@ def test_first_inquiry_fast_path_uses_background_notification_ccode_without_chat
     assert "BackgroundRecoveryPostSwitchHydrationDelayMs" not in source
 
 
-def test_first_inquiry_fast_path_excludes_product_metadata_and_platform_tips():
+def test_first_inquiry_fast_path_uses_shared_actual_problem_classifier():
     source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+    classifier = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
 
     assert "IsRealFirstInquiryMessage" in source
-    assert "ConversationContextStore.IsPlatformSystemTip(message, text)" in source
-    assert "ConversationContextStore.IsProductLink(message, text)" in source
-    assert "ConversationContextStore.IsWithdrawalNotice(message, text)" in source
-    assert "earliest real buyer-authored content" in source
+    assert "FirstInquiryFixedReplyService.IsActualProblemMessage(message, display, null)" in source
+    assert "earliest substantive buyer-authored problem" in source
+    assert "greetings and meaningless acknowledgements/noise" in source
+    assert "ConversationContextStore.IsPlatformSystemTip(message, messageText)" in classifier
+    assert "ConversationContextStore.IsProductLink(message, messageText)" in classifier
+    assert "ConversationContextStore.IsWithdrawalNotice(message, messageText)" in classifier
+    assert "GreetingOnlyTexts.Contains(semantic)" in classifier
+    assert "MeaninglessOnlyTexts.Contains(semantic)" in classifier
 
 
-def test_first_real_message_is_replayed_before_later_context_messages():
+def test_first_real_problem_is_replayed_before_later_context_messages():
     source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
 
     first_process = source.index(
@@ -40,10 +45,10 @@ def test_first_real_message_is_replayed_before_later_context_messages():
     later_loop = source.index("foreach (var message in recentBuyerMessages)", staging_delay)
 
     assert first_process < staging_delay < later_loop
-    assert "DeterministicAutoReplyService before merge" in source
+    assert "sends the first-inquiry greeting before normal processing" in source
 
 
-def test_fast_path_claims_recovery_only_after_real_first_message_exists():
+def test_fast_path_claims_recovery_only_after_real_first_problem_exists():
     source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
 
     candidate = source.index("var first = recentBuyerMessages.FirstOrDefault(")
@@ -54,6 +59,7 @@ def test_fast_path_claims_recovery_only_after_real_first_message_exists():
     assert candidate < predicate < empty_guard < claim
     assert "IsReplyableFirstInquiryCandidate" in source
     assert "NonBuyerConversationGuard.ShouldBlockMessage" in source
+    assert "未发现买家实际问题" in source
 
 
 def test_later_background_notifications_do_not_restart_active_first_inquiry_recovery():
