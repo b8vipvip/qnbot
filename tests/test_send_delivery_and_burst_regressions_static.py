@@ -31,14 +31,17 @@ def test_unknown_qianniu_version_cannot_fall_into_smart_tip_false_success_path()
     assert "Version.TryParse" in monitor
 
 
-def test_inflight_burst_is_detached_before_ai_handler_and_new_message_can_start_worker():
+def test_same_buyer_worker_retains_ownership_through_ai_dispatch():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     clear_index = source.index("state.Items.Clear();")
-    handler_index = source.index("await _handler(lease);")
-    assert clear_index < handler_index
-    assert "state.WorkerRunning = false;" in source[clear_index:handler_index]
+    dispatch_index = source.index("await DispatchScopedAsync(burst, lease).ConfigureAwait(false);")
+    assert clear_index < dispatch_index
+    lane = source[source.index("private async Task RunAsync"):source.index("private async Task ProcessPreMergeAsync")]
+    assert "state.WorkerRunning = false;" in lane
+    assert lane.index("state.WorkerRunning = false;") < lane.index("return;")
     assert "var dispatchedItems = state.Items.ToList();" in source
     assert "return state.HardCancelVersion == capturedHardCancelVersion;" in source
+    assert "state.PendingRules.Enqueue(item)" in source
 
 
 def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
@@ -57,6 +60,18 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     assert "Entries.TryRemove" not in progress[manual_start:manual_end]
     assert "QueueManualAnswerComparison" in learning
     assert "return false;" in learning[learning.index("public static bool TryBlockForManualReply"):]
+
+
+def test_buyer_session_runtime_bridge_uses_send_ledger_as_only_echo_authorship_source():
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
+    assert "SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text)" in bridge
+    assert "IsRecentBotEcho" not in bridge
+    assert "LastSetPlainText" not in bridge
+    assert "SellerBotEcho" in bridge and "SellerHumanReply" in bridge
+    assert "KnownBotAnswers" in watchdog
+    assert "ConfirmDelivery" in watchdog
+    assert "IsKnownBotAnswer" in watchdog
 
 
 def test_progress_cards_are_isolated_per_turn_without_cancelling_previous_generation():
