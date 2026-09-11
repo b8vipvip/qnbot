@@ -196,45 +196,16 @@ namespace Bot.ChromeNs
             {
                 return false;
             }
-            // Read-only barrier: lifecycle ownership remains with the actual answer/send path.
-            // A timing probe must never publish Ready before the answer is fully materialized.
             return IsCurrent && !CancellationToken.IsCancellationRequested;
         }
 
-        public bool MarkProcessing(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Processing, reason);
-        }
-
-        public bool MarkGenerating(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Generating, reason);
-        }
-
-        public bool MarkReady(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Ready, reason);
-        }
-
-        public bool MarkSending(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Sending, reason);
-        }
-
-        public bool MarkWaiting(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Waiting, reason);
-        }
-
-        public bool MarkCompleted(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Completed, reason);
-        }
-
-        public bool MarkFailed(string reason)
-        {
-            return Transition(BuyerSessionAgentState.Failed, reason);
-        }
+        public bool MarkProcessing(string reason) { return Transition(BuyerSessionAgentState.Processing, reason); }
+        public bool MarkGenerating(string reason) { return Transition(BuyerSessionAgentState.Generating, reason); }
+        public bool MarkReady(string reason) { return Transition(BuyerSessionAgentState.Ready, reason); }
+        public bool MarkSending(string reason) { return Transition(BuyerSessionAgentState.Sending, reason); }
+        public bool MarkWaiting(string reason) { return Transition(BuyerSessionAgentState.Waiting, reason); }
+        public bool MarkCompleted(string reason) { return Transition(BuyerSessionAgentState.Completed, reason); }
+        public bool MarkFailed(string reason) { return Transition(BuyerSessionAgentState.Failed, reason); }
 
         private bool Transition(BuyerSessionAgentState state, string reason)
         {
@@ -248,11 +219,263 @@ namespace Bot.ChromeNs
         }
     }
 
+    internal enum CanonicalPreMergeOutcome
+    {
+        Continue = 0,
+        Consumed = 1,
+        Failed = 2,
+        Cancelled = 3
+    }
+
+    /// <summary>
+    /// Pure policy/transport helper. It deliberately owns no same-buyer semaphore, worker,
+    /// BuyerSessionAgent terminal transition, or BotActivityLease. BuyerMessageBurstCoordinator is
+    /// the only runtime owner of those concerns.
+    /// </summary>
+    internal static class CanonicalPreMergeDecisionService
+    {
+        private const string DefaultOffHoursReply =
+            "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。";
+        private const int OffHoursRepeatMinutes = 2;
+        private static readonly ConcurrentDictionary<string, DateTime> OffHoursDeliveredUntil =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        public static async Task<CanonicalPreMergeOutcome> HandleAsync(
+            BuyerMessageBurstItem item,
+            bool allowLocalShortReply,
+            CancellationToken cancellationToken)
+        {
+            try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
+            if (item == null
+                || string.IsNullOrWhiteSpace(item.SellerNick)
+                || string.IsNullOrWhiteSpace(item.BuyerNick)
+                || string.IsNullOrWhiteSpace(item.DisplayText)
+                || !Params.Robot.CanUseRobotReal)
+                return CanonicalPreMergeOutcome.Continue;
+            if (item.SafetyDecision != null && !item.SafetyDecision.ShouldCallAi)
+                return CanonicalPreMergeOutcome.Continue;
+            if (item.VisionDecision != null && item.VisionDecision.Kind == VisionDecisionKind.Skip)
+                return CanonicalPreMergeOutcome.Continue;
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ShopContext shop = null;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.SellerNick); }
+            catch { shop = null; }
+            if (shop == null)
+            {
+                Log.ErrorWithMaxCount(
+                    "统一买家生命周期缺少店铺作用域，固定规则跳过并继续普通消息链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                return CanonicalPreMergeOutcome.Continue;
+            }
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return await HandleScopedAsync(item, allowLocalShortReply, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task<CanonicalPreMergeOutcome> HandleScopedAsync(
+            BuyerMessageBurstItem item,
+            bool allowLocalShortReply,
+            CancellationToken cancellationToken)
+        {
+            if (!Params.Robot.GetIsAutoReply()) return CanonicalPreMergeOutcome.Continue;
+            var qn = QN.FindExistingBySellerNick(item.SellerNick);
+            if (qn == null)
+            {
+                Log.ErrorWithMaxCount(
+                    "统一买家生命周期固定规则未发送：找不到客服运行实例。seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick, 20);
+                return CanonicalPreMergeOutcome.Continue;
+            }
+
+            var question = (item.DisplayText ?? string.Empty).Trim();
+            var buyerKey = Key(item.SellerNick, item.BuyerNick);
+            string offHoursReply;
+            if (TryResolveOffHours(out offHoursReply))
+            {
+                DateTime until;
+                if (!OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) || until <= DateTime.Now)
+                {
+                    var ok = await SendFixedAsync(
+                        qn, item, offHoursReply, "下班自动回复", cancellationToken).ConfigureAwait(false);
+                    OffHoursDeliveredUntil[buyerKey] = ok
+                        ? DateTime.Now.AddMinutes(OffHoursRepeatMinutes)
+                        : DateTime.Now.AddSeconds(15);
+                    return ok ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+                }
+                return CanonicalPreMergeOutcome.Consumed;
+            }
+
+            string firstReply;
+            var firstReserved = FirstInquiryFixedReplyService.TryResolve(
+                item.SellerNick, item.BuyerNick, question, out firstReply);
+            if (firstReserved)
+            {
+                var firstOk = await SendFixedAsync(
+                    qn, item, firstReply, "首条咨询固定回复", cancellationToken).ConfigureAwait(false);
+                if (firstOk)
+                {
+                    FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick);
+                }
+                else
+                {
+                    FirstInquiryFixedReplyService.ReleaseReservation(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason());
+                    return cancellationToken.IsCancellationRequested
+                        ? CanonicalPreMergeOutcome.Cancelled
+                        : CanonicalPreMergeOutcome.Failed;
+                }
+            }
+
+            if (allowLocalShortReply)
+            {
+                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
+                if (manualDecision == null || !manualDecision.Matched)
+                {
+                    string localAnswer;
+                    string matchedPhrase;
+                    if (LocalShortReplyService.TryResolve(
+                        item.SellerNick, question, out localAnswer, out matchedPhrase))
+                    {
+                        if (firstReserved)
+                        {
+                            Log.Info("本地短消息已由首条咨询固定回复覆盖，继续同一实际问题普通回复链路: seller="
+                                + item.SellerNick + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase);
+                            return CanonicalPreMergeOutcome.Continue;
+                        }
+                        var localOk = await SendFixedAsync(
+                            qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
+                        Log.Info("本地短消息精确命中: seller=" + item.SellerNick
+                            + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
+                            + ", success=" + localOk + ", aiCalled=false");
+                        return localOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+                    }
+                }
+            }
+
+            return CanonicalPreMergeOutcome.Continue;
+        }
+
+        private static async Task<bool> SendFixedAsync(
+            QN qn,
+            BuyerMessageBurstItem item,
+            string answer,
+            string source,
+            CancellationToken cancellationToken)
+        {
+            answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
+            if (string.IsNullOrWhiteSpace(answer)) return false;
+            cancellationToken.ThrowIfCancellationRequested();
+            var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
+            var ctl = ResponseProgressTracker.BeginAnswer(
+                item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt);
+            try
+            {
+                KnowledgeLearningService.RegisterAnswerSource(
+                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source);
+                ctl = ResponseProgressTracker.SetAnswerReady(
+                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source, detectedAt, DateTime.Now);
+                BotRuntimeStats.RecordDisplayedAnswer(true);
+                Log.Info(source + "由统一买家生命周期在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick);
+                cancellationToken.ThrowIfCancellationRequested();
+                var ok = await qn.SendTextWithRetryAsync(
+                    item.BuyerNick, answer, 3, cancellationToken).ConfigureAwait(false);
+                if (ok)
+                    ReplyDeduplicationService.RememberDelivered(item.SellerNick, item.BuyerNick, answer);
+                if (ctl != null)
+                    ctl.SetSendResult(ok, ok
+                        ? "已发送（" + source + "，由统一买家生命周期前置处理）"
+                        : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                Log.Info(source + "前置真实发送完成: seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick + ", success=" + ok);
+                return ok;
+            }
+            catch (OperationCanceledException)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
+                Log.ErrorWithMaxCount(source + "前置发送异常: seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick + ", error=" + ex.Message, 20);
+                return false;
+            }
+            finally
+            {
+                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick);
+            }
+        }
+
+        private static bool TryResolveOffHours(out string answer)
+        {
+            answer = string.Empty;
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            if (cfg == null || !cfg.EnableWorkHours) return false;
+            TimeSpan start;
+            TimeSpan end;
+            if (!TryParseClock(cfg.WorkStartTime, out start)
+                || !TryParseClock(cfg.WorkEndTime, out end))
+            {
+                Log.ErrorWithMaxCount(
+                    "下班自动回复工作时间配置无效，已停止固定回复。 workStart="
+                    + (cfg.WorkStartTime ?? string.Empty) + ", workEnd=" + (cfg.WorkEndTime ?? string.Empty), 20);
+                return false;
+            }
+            if (IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end)) return false;
+            var template = string.IsNullOrWhiteSpace(cfg.OffHoursFixedText)
+                ? DefaultOffHoursReply
+                : cfg.OffHoursFixedText.Trim();
+            answer = template.Replace("{工作时间}", FormatClock(start) + "-" + FormatClock(end));
+            return !string.IsNullOrWhiteSpace(answer);
+        }
+
+        private static bool TryParseClock(string value, out TimeSpan time)
+        {
+            time = TimeSpan.Zero;
+            DateTime parsed;
+            if (!DateTime.TryParseExact(
+                (value ?? string.Empty).Trim(),
+                new[] { "H:mm", "HH:mm" },
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out parsed)) return false;
+            time = parsed.TimeOfDay;
+            return true;
+        }
+
+        private static bool IsInsideWorkHours(TimeSpan now, TimeSpan start, TimeSpan end)
+        {
+            if (start == end) return true;
+            if (start < end) return now >= start && now < end;
+            return now >= start || now < end;
+        }
+
+        private static string FormatClock(TimeSpan value)
+        {
+            return ((int)value.TotalHours).ToString("00") + ":" + value.Minutes.ToString("00");
+        }
+
+        private static string Key(string seller, string buyer)
+        {
+            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+                + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+        }
+    }
+
     internal sealed class BuyerMessageBurstCoordinator
     {
         private sealed class BurstState
         {
             public readonly object Sync = new object();
+            public readonly Queue<BuyerMessageBurstItem> PendingRules = new Queue<BuyerMessageBurstItem>();
             public readonly List<BuyerMessageBurstItem> Items = new List<BuyerMessageBurstItem>();
             public CancellationTokenSource DelayCancellation = new CancellationTokenSource();
             public bool WorkerRunning;
@@ -265,8 +488,6 @@ namespace Bot.ChromeNs
 
         private sealed class RecentBuyerText
         {
-            // Anchor is the last substantive unresolved utterance. Punctuation nudges and short
-            // elliptical confirmations update Latest* but never erase this semantic anchor.
             public string AnchorText { get; set; }
             public DateTime AnchorReceivedAt { get; set; }
             public long AnchorGeneration { get; set; }
@@ -275,8 +496,6 @@ namespace Bot.ChromeNs
             public long LatestGeneration { get; set; }
         }
 
-        // DeterministicAutoReplyService owns the single per-buyer serialization gate.
-        // Do not add a second outer gate or race a still-running fixed-send task against AI.
         private const int SemanticContinuationWindowSeconds = 180;
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
@@ -293,19 +512,13 @@ namespace Bot.ChromeNs
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
         }
 
-        internal BuyerSessionAgent SessionAgent
-        {
-            get { return _sessionAgent; }
-        }
+        internal BuyerSessionAgent SessionAgent { get { return _sessionAgent; } }
 
         public void Enqueue(BuyerMessageBurstItem item)
         {
             if (item == null
                 || string.IsNullOrWhiteSpace(item.SellerNick)
-                || string.IsNullOrWhiteSpace(item.BuyerNick))
-            {
-                return;
-            }
+                || string.IsNullOrWhiteSpace(item.BuyerNick)) return;
 
             var observation = _sessionAgent.ObserveBuyerMessage(
                 item.SellerNick,
@@ -319,6 +532,7 @@ namespace Bot.ChromeNs
                     + item.SellerNick + ", buyer=" + item.BuyerNick + ", key=" + (item.MessageKey ?? string.Empty));
                 return;
             }
+
             item.SessionGeneration = observation.Generation;
             AttachSemanticContinuation(item);
             RememberRecentBuyerText(item);
@@ -327,233 +541,206 @@ namespace Bot.ChromeNs
                 item.BuyerNick,
                 item.SessionGeneration,
                 BuyerSessionAgentState.Coalescing,
-                "pre_merge_rules");
+                "single_owner_lane");
 
-            var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
-            Task.Run(async () =>
+            var key = Key(item.SellerNick, item.BuyerNick);
+            var state = _states.GetOrAdd(key, _ => new BurstState());
+            var startWorker = false;
+            lock (state.Sync)
             {
-                var continueToMerge = true;
-                try
+                state.PendingRules.Enqueue(item);
+                state.LatestSessionGeneration = item.SessionGeneration;
+                if (!state.WorkerRunning)
                 {
-                    // The deterministic service owns the only same-buyer gate. Ordinary fixed rules
-                    // wait with the current generation cancellation token instead of timing out into AI;
-                    // explicit generation invalidation is the bounded escape path. We deliberately await the
-                    // selected rule task here: starting AI while that task can still send would
-                    // create a duplicate/out-of-order side-effect race.
-                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
-                        item,
-                        allowLocalShortReply);
+                    state.WorkerRunning = true;
+                    startWorker = true;
                 }
-                catch (OperationCanceledException)
+            }
+            if (startWorker) Task.Run(() => RunAsync(key, state));
+        }
+
+        private async Task RunAsync(string key, BurstState state)
+        {
+            try
+            {
+                while (true)
                 {
-                    if (observation.CancellationToken.IsCancellationRequested)
+                    BuyerMessageBurstItem ruleItem = null;
+                    lock (state.Sync)
                     {
-                        Log.Info("消息合并前固定规则已因generation显式失效取消: seller="
-                            + item.SellerNick + ", buyer=" + item.BuyerNick
-                            + ", generation=" + item.SessionGeneration);
-                        return;
+                        if (state.PendingRules.Count > 0)
+                            ruleItem = state.PendingRules.Dequeue();
+                        else if (state.Items.Count < 1)
+                        {
+                            state.WorkerRunning = false;
+                            DisposeActivity(state);
+                            BurstState empty;
+                            _states.TryRemove(key, out empty);
+                            return;
+                        }
                     }
-                    Log.ErrorWithMaxCount(
-                        "消息合并前固定规则发生非会话取消，已fail-open继续普通合并链路: seller="
-                        + item.SellerNick + ", buyer=" + item.BuyerNick
-                        + ", generation=" + item.SessionGeneration,
-                        20);
-                    continueToMerge = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount(
-                        "消息合并前固定规则处理失败，继续普通合并链路: seller=" + item.SellerNick
-                        + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220),
-                        20);
-                    continueToMerge = true;
-                }
 
-                if (observation.CancellationToken.IsCancellationRequested
-                    || !_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
-                {
-                    return;
-                }
+                    if (ruleItem != null)
+                    {
+                        await ProcessPreMergeAsync(key, state, ruleItem).ConfigureAwait(false);
+                        continue;
+                    }
 
-                if (continueToMerge)
-                {
+                    CancellationToken delayToken;
+                    int capturedVersion;
+                    int capturedHardCancelVersion;
+                    int delayMilliseconds;
+                    lock (state.Sync)
+                    {
+                        if (state.PendingRules.Count > 0) continue;
+                        if (state.Items.Count < 1) continue;
+                        delayToken = state.DelayCancellation.Token;
+                        capturedVersion = state.Version;
+                        capturedHardCancelVersion = state.HardCancelVersion;
+                        delayMilliseconds = QuietDelayMilliseconds(state.Items, state.StartedAt);
+                    }
+
                     try
                     {
-                        EnqueueForMerge(item);
+                        await Task.Delay(delayMilliseconds, delayToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        continue;
+                    }
+
+                    BuyerMessageBurst burst;
+                    lock (state.Sync)
+                    {
+                        if (state.PendingRules.Count > 0) continue;
+                        if (state.Version != capturedVersion || state.Items.Count < 1) continue;
+                        var dispatchedItems = state.Items.ToList();
+                        state.Items.Clear();
+                        state.StartedAt = DateTime.MinValue;
+                        burst = new BuyerMessageBurst(
+                            dispatchedItems[0].SellerNick,
+                            dispatchedItems[0].BuyerNick,
+                            dispatchedItems,
+                            capturedVersion);
+                    }
+
+                    CompleteMergedAwayGenerations(burst);
+                    if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration))
+                    {
+                        Log.Info("统一买家生命周期派发前最终generation已失效，跳过本轮回复: seller="
+                            + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                            + ", generation=" + burst.SessionGeneration);
+                        continue;
+                    }
+
+                    var lease = new BuyerMessageBurstLease(
+                        burst,
+                        () =>
+                        {
+                            lock (state.Sync)
+                            {
+                                return state.HardCancelVersion == capturedHardCancelVersion;
+                            }
+                        },
+                        _sessionAgent);
+                    lease.MarkProcessing("single_owner_dispatch");
+                    lease.MarkGenerating("reply_generation_started");
+                    try
+                    {
+                        await DispatchScopedAsync(burst, lease).ConfigureAwait(false);
+                        FinalizeReplyOutcome(burst, lease);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_cancelled");
                     }
                     catch (Exception ex)
                     {
-                        _sessionAgent.TryTransition(
-                            item.SellerNick,
-                            item.BuyerNick,
-                            item.SessionGeneration,
-                            BuyerSessionAgentState.Failed,
-                            "pre_merge_enqueue_exception");
-                        Log.ErrorWithMaxCount(
-                            "消息进入合并队列异常，已结束Coalescing避免永久等待: seller="
-                            + item.SellerNick + ", buyer=" + item.BuyerNick
-                            + ", generation=" + item.SessionGeneration
-                            + ", error=" + Safe(ex.Message, 220),
-                            50);
+                        if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_exception");
+                        Log.Exception(ex);
+                    }
+                    finally
+                    {
+                        _sessionAgent.Prune(TimeSpan.FromMinutes(30));
                     }
                 }
-                else
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("统一买家生命周期工作器异常，已释放本买家运行权: error=" + Safe(ex.Message, 220), 50);
+                lock (state.Sync)
                 {
-                    BuyerSessionAgentState deterministicState;
-                    if (_sessionAgent.TryGetGenerationState(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        item.SessionGeneration,
-                        out deterministicState)
-                        && deterministicState == BuyerSessionAgentState.Failed)
+                    foreach (var pending in state.PendingRules.Concat(state.Items).Where(x => x != null).ToList())
                     {
-                        Log.Info("固定规则发送失败后保留Failed终态，禁止升级Completed: seller="
-                            + item.SellerNick + ", buyer=" + item.BuyerNick
-                            + ", generation=" + item.SessionGeneration);
+                        if (pending.SessionGeneration > 0)
+                            _sessionAgent.TryTransition(
+                                pending.SellerNick,
+                                pending.BuyerNick,
+                                pending.SessionGeneration,
+                                BuyerSessionAgentState.Failed,
+                                "single_owner_worker_exception");
                     }
-                    else
-                    {
-                        _sessionAgent.TryTransition(
-                            item.SellerNick,
-                            item.BuyerNick,
-                            item.SessionGeneration,
-                            BuyerSessionAgentState.Completed,
-                            "deterministic_rule_consumed");
-                    }
+                    state.PendingRules.Clear();
+                    state.Items.Clear();
+                    state.WorkerRunning = false;
+                    DisposeActivity(state);
+                    BurstState ignored;
+                    _states.TryRemove(key, out ignored);
                 }
-            });
+            }
         }
 
-        private void AttachSemanticContinuation(BuyerMessageBurstItem item)
+        private async Task ProcessPreMergeAsync(string key, BurstState state, BuyerMessageBurstItem item)
         {
-            if (item == null || !LooksLikeSemanticContinuation(item.DisplayText)) return;
-            var key = Key(item.SellerNick, item.BuyerNick);
-            RecentBuyerText previous;
-            if (!_recentBuyerTexts.TryGetValue(key, out previous) || previous == null) return;
+            if (item == null || item.SessionGeneration <= 0) return;
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)) return;
 
-            var currentAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
-            var anchorText = NormalizeSemanticText(previous.AnchorText);
-            if (string.IsNullOrWhiteSpace(anchorText) || previous.AnchorReceivedAt == DateTime.MinValue) return;
-            var age = currentAt - previous.AnchorReceivedAt;
-            if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) return;
-
-            var currentText = NormalizeSemanticText(item.DisplayText);
-            if (string.IsNullOrWhiteSpace(currentText)
-                || string.Equals(anchorText, currentText, StringComparison.OrdinalIgnoreCase)) return;
-
-            item.SemanticContinuationContext = anchorText;
-
-            // A dependent fragment is not an independent new topic. It supersedes only the previous
-            // generation in the same semantic chain; unrelated ordinary questions remain parallel.
-            var supersededGeneration = previous.LatestGeneration > 0
-                ? previous.LatestGeneration
-                : previous.AnchorGeneration;
-            if (supersededGeneration > 0 && supersededGeneration != item.SessionGeneration)
+            var token = _sessionAgent.GetCancellationToken(
+                item.SellerNick, item.BuyerNick, item.SessionGeneration);
+            bool allowLocalShortReply;
+            lock (state.Sync)
             {
-                _sessionAgent.Cancel(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    supersededGeneration,
-                    "semantic_continuation_superseded");
-            }
-            if (previous.LatestReceivedAt != DateTime.MinValue)
-            {
-                ResponseProgressTracker.MarkContextualContinuationMerged(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    previous.LatestReceivedAt,
-                    currentText);
-            }
-            Log.Info("买家省略/催问续句已关联未解决主问题: seller=" + item.SellerNick
-                + ", buyer=" + item.BuyerNick
-                + ", previousGeneration=" + supersededGeneration
-                + ", generation=" + item.SessionGeneration
-                + ", anchorAgeMs=" + Math.Max(0, (long)age.TotalMilliseconds));
-        }
-
-        private void RememberRecentBuyerText(BuyerMessageBurstItem item)
-        {
-            if (item == null) return;
-            var text = NormalizeSemanticText(item.DisplayText);
-            if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
-            var key = Key(item.SellerNick, item.BuyerNick);
-            var receivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
-            var dependent = LooksLikeSemanticContinuation(text);
-
-            if (dependent)
-            {
-                RecentBuyerText existing;
-                while (_recentBuyerTexts.TryGetValue(key, out existing) && existing != null)
-                {
-                    if (string.IsNullOrWhiteSpace(existing.AnchorText)
-                        || existing.AnchorReceivedAt == DateTime.MinValue
-                        || receivedAt - existing.AnchorReceivedAt > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds))
-                    {
-                        break;
-                    }
-                    var updated = new RecentBuyerText
-                    {
-                        AnchorText = existing.AnchorText,
-                        AnchorReceivedAt = existing.AnchorReceivedAt,
-                        AnchorGeneration = existing.AnchorGeneration,
-                        LatestText = text,
-                        LatestReceivedAt = receivedAt,
-                        LatestGeneration = item.SessionGeneration
-                    };
-                    if (_recentBuyerTexts.TryUpdate(key, updated, existing)) return;
-                }
-
-                // A pure punctuation nudge has no standalone semantics and must never erase/create an anchor.
-                if (IsPunctuationOnlySemanticNudge(text)) return;
+                allowLocalShortReply = state.PendingRules.Count == 0 && state.Items.Count == 0;
             }
 
-            // A substantive question (or a short elliptical question with no usable predecessor) becomes
-            // the new anchor. Later punctuation/confirmation fragments can safely inherit it.
-            _recentBuyerTexts[key] = new RecentBuyerText
+            CanonicalPreMergeOutcome outcome;
+            try
             {
-                AnchorText = text,
-                AnchorReceivedAt = receivedAt,
-                AnchorGeneration = item.SessionGeneration,
-                LatestText = text,
-                LatestReceivedAt = receivedAt,
-                LatestGeneration = item.SessionGeneration
-            };
-        }
-
-        private static bool LooksLikeSemanticContinuation(string value)
-        {
-            var text = NormalizeSemanticText(value);
-            if (string.IsNullOrWhiteSpace(text) || text.Length > 32) return false;
-            if (IsPunctuationOnlySemanticNudge(text)) return true;
-
-            var compact = Regex.Replace(text.ToLowerInvariant(), @"[\s，。！？!?、；;：:…~～]", string.Empty);
-            if (string.IsNullOrWhiteSpace(compact)) return true;
-
-            var prefixes = new[] { "这个", "这款", "这种", "这个版本", "这个型号", "那个", "那款", "那种", "它", "这", "那" };
-            if (prefixes.Any(x => compact.StartsWith(x, StringComparison.Ordinal)))
+                outcome = await CanonicalPreMergeDecisionService.HandleAsync(
+                    item, allowLocalShortReply, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
             {
-                if (compact == "这个" || compact == "这个呢" || compact == "那个" || compact == "那个呢" || compact == "它呢") return true;
-                if (Regex.IsMatch(compact, @"支持|能用|可以|可用|适用|兼容|行吗|能不能|可不可以|怎么样|咋样|有吗|吗$|呢$")) return true;
+                outcome = CanonicalPreMergeOutcome.Cancelled;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount(
+                    "统一买家生命周期固定规则异常，继续普通合并链路: seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220), 20);
+                outcome = CanonicalPreMergeOutcome.Continue;
             }
 
-            // Predicate-only / interrogative-only short turns omit the subject by definition.
-            // They are dependent only when an anchor actually exists; RememberRecentBuyerText falls
-            // back to treating them as a new anchor when no predecessor is available.
-            return Regex.IsMatch(compact,
-                @"^(?:可以|可以吗|可以不|行|行吗|行不行|能|能吗|能用|能用吗|能不能|支持|支持吗|可用|可用吗|适用|适用吗|兼容|兼容吗|有|有吗|是吗|对吗|确定吗|真的吗|真的|好了吗|好了没|怎么样|咋样|多久|什么时候|多少钱|在哪|哪里|怎么弄|怎么用|呢)$");
-        }
+            if (outcome == CanonicalPreMergeOutcome.Continue)
+            {
+                if (_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                    EnqueueForMerge(item);
+                return;
+            }
 
-        private static bool IsPunctuationOnlySemanticNudge(string value)
-        {
-            var compact = Regex.Replace(NormalizeSemanticText(value), @"[\s，。！？!?、；;：:…~～.\-—_]+", string.Empty);
-            return compact.Length == 0;
-        }
-
-        private static string NormalizeSemanticText(string value)
-        {
-            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
-            value = Regex.Replace(value, @"\s+", " ");
-            return value;
+            if (outcome == CanonicalPreMergeOutcome.Failed)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Failed, "canonical_pre_merge_failed");
+                return;
+            }
+            if (outcome == CanonicalPreMergeOutcome.Consumed)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Completed, "canonical_pre_merge_consumed");
+            }
         }
 
         private bool HasPendingBuyerMessages(string seller, string buyer)
@@ -562,44 +749,32 @@ namespace Bot.ChromeNs
             if (!_states.TryGetValue(Key(seller, buyer), out state) || state == null) return false;
             lock (state.Sync)
             {
-                return state.Items.Count > 0;
+                return state.PendingRules.Count > 0 || state.Items.Count > 0;
             }
         }
 
         private void EnqueueForMerge(BuyerMessageBurstItem item)
         {
-            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
-            {
-                Log.Info("固定规则返回时本条独立generation已结束，不再进入合并: seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
-                return;
-            }
-
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)) return;
             var key = Key(item.SellerNick, item.BuyerNick);
-            var state = _states.GetOrAdd(key, _ => new BurstState());
-            var startWorker = false;
+            BurstState state;
+            if (!_states.TryGetValue(key, out state) || state == null) return;
+
             List<long> trimmedGenerations = null;
             lock (state.Sync)
             {
                 if (!string.IsNullOrWhiteSpace(item.MessageKey)
                     && state.Items.Any(x => string.Equals(x.MessageKey, item.MessageKey, StringComparison.Ordinal)))
-                {
                     return;
-                }
 
                 var previousReceivedAt = state.Items.Count == 0
                     ? DateTime.MinValue
                     : state.Items[state.Items.Count - 1].ReceivedAt;
                 AdaptiveReplyTimingService.RecordInterval(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    previousReceivedAt,
-                    item.ReceivedAt);
+                    item.SellerNick, item.BuyerNick, previousReceivedAt, item.ReceivedAt);
 
                 if (state.ActivityLease == null)
-                {
                     state.ActivityLease = BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick);
-                }
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12)
@@ -614,29 +789,17 @@ namespace Bot.ChromeNs
                 }
                 state.Version++;
                 state.LatestSessionGeneration = item.SessionGeneration;
-
                 try { state.DelayCancellation.Cancel(); } catch { }
                 state.DelayCancellation.Dispose();
                 state.DelayCancellation = new CancellationTokenSource();
-
-                if (!state.WorkerRunning)
-                {
-                    state.WorkerRunning = true;
-                    startWorker = true;
-                }
             }
 
             foreach (var generation in trimmedGenerations ?? new List<long>())
             {
                 _sessionAgent.TryTransition(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    generation,
-                    BuyerSessionAgentState.Completed,
-                    "coalescing_buffer_trimmed");
+                    item.SellerNick, item.BuyerNick, generation,
+                    BuyerSessionAgentState.Completed, "coalescing_buffer_trimmed");
             }
-
-            if (startWorker) Task.Run(() => RunAsync(key, state));
         }
 
         public void CancelBuyer(string seller, string buyer, string reason)
@@ -649,151 +812,46 @@ namespace Bot.ChromeNs
                 {
                     state.Version++;
                     state.HardCancelVersion++;
+                    state.PendingRules.Clear();
                     state.Items.Clear();
                     state.StartedAt = DateTime.MinValue;
                     try { state.DelayCancellation.Cancel(); } catch { }
                     state.DelayCancellation.Dispose();
                     state.DelayCancellation = new CancellationTokenSource();
-                    state.WorkerRunning = false;
                     DisposeActivity(state);
                 }
-                BurstState ignored;
-                _states.TryRemove(key, out ignored);
             }
-
             _sessionAgent.CancelAll(seller, buyer, reason);
             Log.Info("买家自动回复任务已因显式硬失效全部取消: seller=" + seller
                 + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
         }
 
-        private async Task RunAsync(string key, BurstState state)
+        private void FinalizeReplyOutcome(BuyerMessageBurst burst, BuyerMessageBurstLease lease)
         {
-            while (true)
+            if (burst == null || lease == null || !lease.IsCurrent) return;
+            BuyerSessionAgentState generationState;
+            var hasState = _sessionAgent.TryGetGenerationState(
+                burst.SellerNick, burst.BuyerNick, burst.SessionGeneration, out generationState);
+            var failed = hasState && generationState == BuyerSessionAgentState.Failed;
+            var returnedWithoutReady = hasState && generationState == BuyerSessionAgentState.Generating;
+            if (failed)
             {
-                CancellationToken token;
-                int capturedVersion;
-                int capturedHardCancelVersion;
-                int delayMilliseconds;
-                lock (state.Sync)
-                {
-                    if (state.Items.Count < 1)
-                    {
-                        state.WorkerRunning = false;
-                        DisposeActivity(state);
-                        BurstState empty;
-                        _states.TryRemove(key, out empty);
-                        return;
-                    }
-                    token = state.DelayCancellation.Token;
-                    capturedVersion = state.Version;
-                    capturedHardCancelVersion = state.HardCancelVersion;
-                    delayMilliseconds = QuietDelayMilliseconds(state.Items, state.StartedAt);
-                }
-
-                try
-                {
-                    await Task.Delay(delayMilliseconds, token);
-                }
-                catch (OperationCanceledException)
-                {
-                    continue;
-                }
-
-                BuyerMessageBurst burst;
-                lock (state.Sync)
-                {
-                    if (state.Version != capturedVersion) continue;
-                    if (state.Items.Count < 1) continue;
-
-                    var dispatchedItems = state.Items.ToList();
-                    state.Items.Clear();
-                    state.StartedAt = DateTime.MinValue;
-                    state.WorkerRunning = false;
-                    burst = new BuyerMessageBurst(
-                        dispatchedItems[0].SellerNick,
-                        dispatchedItems[0].BuyerNick,
-                        dispatchedItems,
-                        capturedVersion);
-                }
-
-                CompleteMergedAwayGenerations(burst);
-                if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration))
-                {
-                    Log.Info("聚合完成时最终generation已失效，跳过本轮回复: seller=" + burst.SellerNick
-                        + ", buyer=" + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                    continue;
-                }
-
-                var lease = new BuyerMessageBurstLease(
-                    burst,
-                    () =>
-                    {
-                        lock (state.Sync)
-                        {
-                            return state.HardCancelVersion == capturedHardCancelVersion;
-                        }
-                    },
-                    _sessionAgent);
-                lease.MarkProcessing("burst_dispatch");
-                lease.MarkGenerating("reply_generation_started");
-
-                try
-                {
-                    await DispatchScopedAsync(burst, lease);
-                    if (lease.IsCurrent)
-                    {
-                        BuyerSessionAgentState generationState;
-                        var hasGenerationState = _sessionAgent.TryGetGenerationState(
-                            burst.SellerNick,
-                            burst.BuyerNick,
-                            burst.SessionGeneration,
-                            out generationState);
-                        var failed = hasGenerationState && generationState == BuyerSessionAgentState.Failed;
-                        var returnedWithoutReady = hasGenerationState && generationState == BuyerSessionAgentState.Generating;
-                        if (failed)
-                        {
-                            Log.Info("回复管线返回时会话已是Failed，保留失败终态且禁止升级Completed: seller="
-                                + burst.SellerNick + ", buyer=" + burst.BuyerNick
-                                + ", generation=" + burst.SessionGeneration);
-                        }
-                        else if (returnedWithoutReady && burst.HasReplyableItem)
-                        {
-                            lease.MarkFailed("reply_pipeline_returned_without_ready");
-                            Log.Info("回复管线在答案就绪前返回，保持失败态而非误记Completed: seller="
-                                + burst.SellerNick + ", buyer=" + burst.BuyerNick
-                                + ", generation=" + burst.SessionGeneration);
-                        }
-                        else
-                        {
-                            lease.MarkCompleted(returnedWithoutReady
-                                ? "non_replyable_media_skipped"
-                                : "reply_pipeline_completed");
-                        }
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_cancelled");
-                }
-                catch (Exception ex)
-                {
-                    lease.MarkFailed("reply_pipeline_exception");
-                    Log.Exception(ex);
-                }
-
-                lock (state.Sync)
-                {
-                    if (state.Version == capturedVersion
-                        && state.Items.Count < 1
-                        && !state.WorkerRunning)
-                    {
-                        DisposeActivity(state);
-                        BurstState ignored;
-                        _states.TryRemove(key, out ignored);
-                    }
-                }
-                _sessionAgent.Prune(TimeSpan.FromMinutes(30));
-                return;
+                Log.Info("回复管线返回时会话已是Failed，保留失败终态且禁止升级Completed: seller="
+                    + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                    + ", generation=" + burst.SessionGeneration);
+            }
+            else if (returnedWithoutReady && burst.HasReplyableItem)
+            {
+                lease.MarkFailed("reply_pipeline_returned_without_ready");
+                Log.Info("回复管线在答案就绪前返回，保持失败态而非误记Completed: seller="
+                    + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                    + ", generation=" + burst.SessionGeneration);
+            }
+            else
+            {
+                lease.MarkCompleted(returnedWithoutReady
+                    ? "non_replyable_media_skipped"
+                    : "reply_pipeline_completed");
             }
         }
 
@@ -806,9 +864,7 @@ namespace Bot.ChromeNs
                 .Distinct())
             {
                 _sessionAgent.TryTransition(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    generation,
+                    burst.SellerNick, burst.BuyerNick, generation,
                     BuyerSessionAgentState.Completed,
                     "coalesced_into_generation_" + burst.SessionGeneration);
             }
@@ -825,17 +881,16 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "买家回复未能解析店铺身份，使用旧全局 AI 配置兼容模式：" + Safe(ex.Message, 220),
-                    20);
+                    "买家回复未能解析店铺身份，使用旧全局 AI 配置兼容模式：" + Safe(ex.Message, 220), 20);
             }
 
             if (shop == null)
             {
-                await LegacyAiConfigurationGate.WaitAsync(lease.CancellationToken);
+                await LegacyAiConfigurationGate.WaitAsync(lease.CancellationToken).ConfigureAwait(false);
                 try
                 {
                     if (!lease.IsCurrent) return;
-                    await _handler(lease);
+                    await _handler(lease).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -847,91 +902,154 @@ namespace Bot.ChromeNs
             using (ShopSettingsScope.Enter(shop))
             {
                 if (!lease.IsCurrent) return;
-                await _handler(lease);
+                await _handler(lease).ConfigureAwait(false);
             }
         }
 
-        internal static int QuietDelayMilliseconds(
-            IEnumerable<BuyerMessageBurstItem> items,
-            DateTime startedAt)
+        private void AttachSemanticContinuation(BuyerMessageBurstItem item)
+        {
+            if (item == null || !LooksLikeSemanticContinuation(item.DisplayText)) return;
+            var key = Key(item.SellerNick, item.BuyerNick);
+            RecentBuyerText previous;
+            if (!_recentBuyerTexts.TryGetValue(key, out previous) || previous == null) return;
+            var currentAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
+            var anchorText = NormalizeSemanticText(previous.AnchorText);
+            if (string.IsNullOrWhiteSpace(anchorText) || previous.AnchorReceivedAt == DateTime.MinValue) return;
+            var age = currentAt - previous.AnchorReceivedAt;
+            if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) return;
+            var currentText = NormalizeSemanticText(item.DisplayText);
+            if (string.IsNullOrWhiteSpace(currentText)
+                || string.Equals(anchorText, currentText, StringComparison.OrdinalIgnoreCase)) return;
+
+            item.SemanticContinuationContext = anchorText;
+            var supersededGeneration = previous.LatestGeneration > 0
+                ? previous.LatestGeneration
+                : previous.AnchorGeneration;
+            if (supersededGeneration > 0 && supersededGeneration != item.SessionGeneration)
+            {
+                _sessionAgent.Cancel(
+                    item.SellerNick, item.BuyerNick, supersededGeneration,
+                    "semantic_continuation_superseded");
+            }
+            if (previous.LatestReceivedAt != DateTime.MinValue)
+            {
+                ResponseProgressTracker.MarkContextualContinuationMerged(
+                    item.SellerNick, item.BuyerNick, previous.LatestReceivedAt, currentText);
+            }
+            Log.Info("买家省略/催问续句已关联未解决主问题: seller=" + item.SellerNick
+                + ", buyer=" + item.BuyerNick
+                + ", previousGeneration=" + supersededGeneration
+                + ", generation=" + item.SessionGeneration
+                + ", anchorAgeMs=" + Math.Max(0, (long)age.TotalMilliseconds));
+        }
+
+        private void RememberRecentBuyerText(BuyerMessageBurstItem item)
+        {
+            if (item == null) return;
+            var text = NormalizeSemanticText(item.DisplayText);
+            if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
+            var key = Key(item.SellerNick, item.BuyerNick);
+            var receivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
+            var dependent = LooksLikeSemanticContinuation(text);
+            if (dependent)
+            {
+                RecentBuyerText existing;
+                while (_recentBuyerTexts.TryGetValue(key, out existing) && existing != null)
+                {
+                    if (string.IsNullOrWhiteSpace(existing.AnchorText)
+                        || existing.AnchorReceivedAt == DateTime.MinValue
+                        || receivedAt - existing.AnchorReceivedAt > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) break;
+                    var updated = new RecentBuyerText
+                    {
+                        AnchorText = existing.AnchorText,
+                        AnchorReceivedAt = existing.AnchorReceivedAt,
+                        AnchorGeneration = existing.AnchorGeneration,
+                        LatestText = text,
+                        LatestReceivedAt = receivedAt,
+                        LatestGeneration = item.SessionGeneration
+                    };
+                    if (_recentBuyerTexts.TryUpdate(key, updated, existing)) return;
+                }
+                if (IsPunctuationOnlySemanticNudge(text)) return;
+            }
+            _recentBuyerTexts[key] = new RecentBuyerText
+            {
+                AnchorText = text,
+                AnchorReceivedAt = receivedAt,
+                AnchorGeneration = item.SessionGeneration,
+                LatestText = text,
+                LatestReceivedAt = receivedAt,
+                LatestGeneration = item.SessionGeneration
+            };
+        }
+
+        private static bool LooksLikeSemanticContinuation(string value)
+        {
+            var text = NormalizeSemanticText(value);
+            if (string.IsNullOrWhiteSpace(text) || text.Length > 32) return false;
+            if (IsPunctuationOnlySemanticNudge(text)) return true;
+            var compact = Regex.Replace(text.ToLowerInvariant(), @"[\s，。！？!?、；;：:…~～]", string.Empty);
+            if (string.IsNullOrWhiteSpace(compact)) return true;
+            var prefixes = new[] { "这个", "这款", "这种", "这个版本", "这个型号", "那个", "那款", "那种", "它", "这", "那" };
+            if (prefixes.Any(x => compact.StartsWith(x, StringComparison.Ordinal)))
+            {
+                if (compact == "这个" || compact == "这个呢" || compact == "那个" || compact == "那个呢" || compact == "它呢") return true;
+                if (Regex.IsMatch(compact, @"支持|能用|可以|可用|适用|兼容|行吗|能不能|可不可以|怎么样|咋样|有吗|吗$|呢$")) return true;
+            }
+            return Regex.IsMatch(compact,
+                @"^(?:可以|可以吗|可以不|行|行吗|行不行|能|能吗|能用|能用吗|能不能|支持|支持吗|可用|可用吗|适用|适用吗|兼容|兼容吗|有|有吗|是吗|对吗|确定吗|真的吗|真的|好了吗|好了没|怎么样|咋样|多久|什么时候|多少钱|在哪|哪里|怎么弄|怎么用|呢)$");
+        }
+
+        private static bool IsPunctuationOnlySemanticNudge(string value)
+        {
+            var compact = Regex.Replace(NormalizeSemanticText(value), @"[\s，。！？!?、；;：:…~～.\-—_]+", string.Empty);
+            return compact.Length == 0;
+        }
+
+        private static string NormalizeSemanticText(string value)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return Regex.Replace(value, @"\s+", " ");
+        }
+
+        internal static int QuietDelayMilliseconds(IEnumerable<BuyerMessageBurstItem> items, DateTime startedAt)
         {
             var list = (items ?? new BuyerMessageBurstItem[0]).Where(x => x != null).ToList();
             if (list.Count == 0) return 350;
-            if (startedAt != DateTime.MinValue && DateTime.Now - startedAt >= TimeSpan.FromSeconds(4))
-            {
-                return 80;
-            }
-
+            if (startedAt != DateTime.MinValue && DateTime.Now - startedAt >= TimeSpan.FromSeconds(4)) return 80;
             var latestItem = list.Last();
             var latest = (latestItem.DisplayText ?? string.Empty).Trim();
             var compact = Regex.Replace(latest, @"\s+", string.Empty);
             int baseline;
             AdaptiveDelayKind kind;
-            if (list.Count >= 6)
-            {
-                baseline = 420;
-                kind = AdaptiveDelayKind.DenseBurst;
-            }
-            else if (IncomingMessageSafety.IsMediaPlaceholder(latest))
-            {
-                baseline = 700;
-                kind = AdaptiveDelayKind.Media;
-            }
-            else if (IsGreetingOnly(compact))
-            {
-                baseline = 950;
-                kind = AdaptiveDelayKind.Greeting;
-            }
-            else if (IsOpenShortFragment(compact))
-            {
-                baseline = 1200;
-                kind = AdaptiveDelayKind.Fragment;
-            }
-            else if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24)
-            {
-                baseline = 800;
-                kind = AdaptiveDelayKind.Fragment;
-            }
-            else
-            {
-                baseline = 350;
-                kind = AdaptiveDelayKind.Complete;
-            }
-
+            if (list.Count >= 6) { baseline = 420; kind = AdaptiveDelayKind.DenseBurst; }
+            else if (IncomingMessageSafety.IsMediaPlaceholder(latest)) { baseline = 700; kind = AdaptiveDelayKind.Media; }
+            else if (IsGreetingOnly(compact)) { baseline = 950; kind = AdaptiveDelayKind.Greeting; }
+            else if (IsOpenShortFragment(compact)) { baseline = 1200; kind = AdaptiveDelayKind.Fragment; }
+            else if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24) { baseline = 800; kind = AdaptiveDelayKind.Fragment; }
+            else { baseline = 350; kind = AdaptiveDelayKind.Complete; }
             return AdaptiveReplyTimingService.AdjustDelay(
-                latestItem.SellerNick,
-                latestItem.BuyerNick,
-                baseline,
-                kind);
+                latestItem.SellerNick, latestItem.BuyerNick, baseline, kind);
         }
 
         private static bool IsGreetingOnly(string text)
         {
-            return text == "在吗"
-                || text == "你好"
-                || text == "您好"
-                || text == "有人吗"
-                || text == "客服在吗"
-                || text == "亲在吗";
+            return text == "在吗" || text == "你好" || text == "您好"
+                || text == "有人吗" || text == "客服在吗" || text == "亲在吗";
         }
 
         private static bool IsOpenShortFragment(string text)
         {
             if (string.IsNullOrWhiteSpace(text) || text.Length > 10) return false;
             if (EndsLikeCompleteSentence(text)) return false;
-            return text != "好的"
-                && text != "好"
-                && text != "嗯"
-                && text != "谢谢"
-                && text != "知道了"
-                && text != "明白了";
+            return text != "好的" && text != "好" && text != "嗯"
+                && text != "谢谢" && text != "知道了" && text != "明白了";
         }
 
         private static bool EndsLikeCompleteSentence(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;
-            var last = text[text.Length - 1];
-            return "。！？!?；;".IndexOf(last) >= 0;
+            return "。！？!?；;".IndexOf(text[text.Length - 1]) >= 0;
         }
 
         private static void DisposeActivity(BurstState state)
