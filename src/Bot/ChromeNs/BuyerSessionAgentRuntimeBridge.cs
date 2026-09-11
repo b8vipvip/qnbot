@@ -315,7 +315,12 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var botEcho = IsRecentBotEcho(qn, text);
+                // SendDeliveryWatchdog is the single outbound-authorship authority. Do not infer
+                // Bot-vs-human from QNRpa.LastSetPlainText here: segmented sends and delayed/replayed
+                // seller echoes can arrive after that mutable field already points at another segment.
+                // The delivery ledger knows the exact seller+buyer+answer that the Bot submitted and
+                // keeps a short known-answer record after confirmation for duplicate/recovered echoes.
+                var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text);
                 var result = Agent.RecordEvent(
                     seller,
                     buyer,
@@ -366,22 +371,6 @@ namespace Bot.ChromeNs
             return BuyerSessionEventKind.OrderCreated;
         }
 
-        private static bool IsRecentBotEcho(QN qn, string text)
-        {
-            try
-            {
-                if (qn.Rpa == null || string.IsNullOrWhiteSpace(qn.Rpa.LastSetPlainText)) return false;
-                if ((DateTime.Now - qn.Rpa.LatestSetTextTime).TotalSeconds > 45) return false;
-                var expected = NormalizeReplyText(qn.Rpa.LastSetPlainText);
-                var actual = NormalizeReplyText(text);
-                return expected.Length > 0 && actual.Length > 0
-                    && (string.Equals(expected, actual, StringComparison.Ordinal)
-                        || actual.Contains(expected)
-                        || expected.Contains(actual));
-            }
-            catch { return false; }
-        }
-
         private static string GetMessageText(QNChatMessage message)
         {
             if (message == null) return string.Empty;
@@ -401,17 +390,6 @@ namespace Bot.ChromeNs
             {
             }
             return (message.summary ?? string.Empty).Trim();
-        }
-
-        private static string NormalizeReplyText(string value)
-        {
-            value = Normalize(value);
-            value = value.Replace("[AI]", string.Empty)
-                .Replace("【AI】", string.Empty)
-                .Replace("[本地知识库]", string.Empty)
-                .Replace("【本地知识库】", string.Empty)
-                .Trim();
-            return value;
         }
 
         private static string Normalize(string value)
