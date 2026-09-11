@@ -35,12 +35,16 @@ def test_burst_waits_for_fragments_and_collapses_input_artifacts():
     assert "TimeSpan.FromSeconds(4)" in coordinator
 
 
-def test_single_owner_lane_serializes_premerge_and_hard_cancel_invalidates_dispatch():
+def test_single_owner_lane_tracks_inflight_and_hard_cancel_invalidates_dispatch():
     coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert "state.PendingRules.Enqueue(item)" in coordinator
     assert "state.Version++" in coordinator
     assert "state.HardCancelVersion++" in coordinator
-    assert "return state.HardCancelVersion == capturedHardCancelVersion;" in coordinator
+    assert "HashSet<Task> InFlightDispatches" in coordinator
+    assert "StartOwnedDispatch(key, state, burst, lease);" in coordinator
+    assert "state.HardCancelVersion == capturedHardCancelVersion" in coordinator
+    assert "state.Retired" in coordinator
+    assert "Task.WhenAny(dispatchTask, cancelledTask)" in coordinator
     assert "if (state.Version != capturedVersion || state.Items.Count < 1) continue;" in coordinator
     assert "state.DelayCancellation.Cancel()" in coordinator
     assert "CanonicalPreMergeDecisionService.HandleAsync(" in coordinator
