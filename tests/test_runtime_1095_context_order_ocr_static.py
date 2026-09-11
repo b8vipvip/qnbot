@@ -24,11 +24,17 @@ def test_generation_terminal_state_is_tracked_per_generation():
     assert "TryGetGenerationState" in agent
     assert "SetGenerationStateLocked(state, generation, next)" in agent
     assert "hasState && generationState == BuyerSessionAgentState.Generating" in coordinator
-    post = coordinator.split("await DispatchScopedAsync(burst, lease).ConfigureAwait(false);", 1)[1].split(
-        "catch (OperationCanceledException)", 1
+
+    dispatch = coordinator.split("private async Task DispatchOwnedAsync", 1)[1].split(
+        "private void OnOwnedDispatchCompleted", 1
     )[0]
-    assert "FinalizeReplyOutcome(burst, lease);" in post
-    assert "GetSnapshot(burst.SellerNick, burst.BuyerNick)" not in post
+    finalizer = coordinator.split("private void FinalizeReplyOutcome", 1)[1].split(
+        "private void CompleteMergedAwayGenerations", 1
+    )[0]
+    assert "FinalizeReplyOutcome(burst, lease);" in dispatch
+    assert "TryGetGenerationState" in finalizer
+    assert "GetSnapshot(burst.SellerNick, burst.BuyerNick)" not in dispatch
+    assert "GetSnapshot(burst.SellerNick, burst.BuyerNick)" not in finalizer
 
 
 def test_fixed_preset_refreshes_only_local_hub_snapshot_before_render():

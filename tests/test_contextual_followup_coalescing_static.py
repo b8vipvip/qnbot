@@ -43,6 +43,9 @@ def test_premerge_has_one_same_buyer_owner_and_no_late_send_ai_race():
         "private async Task RunAsync", 1
     )[0]
     worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private void StartOwnedDispatch", 1
+    )[0]
+    owned = coordinator.split("private void StartOwnedDispatch", 1)[1].split(
         "private async Task ProcessPreMergeAsync", 1
     )[0]
     premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
@@ -50,7 +53,9 @@ def test_premerge_has_one_same_buyer_owner_and_no_late_send_ai_race():
     )[0]
     assert "state.PendingRules.Enqueue(item)" in enqueue_method
     assert "await ProcessPreMergeAsync(key, state, ruleItem)" in worker
-    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
+    assert "StartOwnedDispatch(key, state, burst, lease);" in worker
+    assert "DispatchScopedAsync(burst, lease)" in owned
+    assert "Task.WhenAny(dispatchTask, cancelledTask)" in owned
     assert "CanonicalPreMergeDecisionService.HandleAsync(" in premerge
     assert "EnqueueForMerge(item)" in premerge
 

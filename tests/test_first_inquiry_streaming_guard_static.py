@@ -19,6 +19,9 @@ def test_canonical_reply_policy_runs_before_merge_and_ai_dispatch():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     canonical = canonical_block()
     worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private void StartOwnedDispatch", 1
+    )[0]
+    owned = coordinator.split("private void StartOwnedDispatch", 1)[1].split(
         "private async Task ProcessPreMergeAsync", 1
     )[0]
     premerge = coordinator.split("private async Task ProcessPreMergeAsync", 1)[1].split(
@@ -27,26 +30,32 @@ def test_canonical_reply_policy_runs_before_merge_and_ai_dispatch():
 
     assert "CanonicalPreMergeDecisionService.HandleAsync(" in premerge
     assert "EnqueueForMerge(item)" in premerge
-    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
+    assert "StartOwnedDispatch(key, state, burst, lease);" in worker
+    assert "DispatchScopedAsync(burst, lease)" in owned
     assert "不检查AI接口" in canonical
     assert "MyOpenAI" not in canonical
     assert "AiEndpointStore" not in canonical
     assert "SemaphoreSlim" not in canonical
 
 
-def test_shop_scoped_reply_dispatch_is_inside_the_same_buyer_worker():
+def test_shop_scoped_reply_dispatch_remains_owned_by_same_buyer_coordinator():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     enqueue = coordinator.split("public void Enqueue(BuyerMessageBurstItem item)", 1)[1].split(
         "private async Task RunAsync", 1
     )[0]
     worker = coordinator.split("private async Task RunAsync", 1)[1].split(
+        "private void StartOwnedDispatch", 1
+    )[0]
+    owned = coordinator.split("private void StartOwnedDispatch", 1)[1].split(
         "private async Task ProcessPreMergeAsync", 1
     )[0]
 
     assert "state.PendingRules.Enqueue(item)" in enqueue
     assert "if (!state.WorkerRunning)" in enqueue
     assert "await ProcessPreMergeAsync(key, state, ruleItem)" in worker
-    assert "await DispatchScopedAsync(burst, lease).ConfigureAwait(false);" in worker
+    assert "StartOwnedDispatch(key, state, burst, lease);" in worker
+    assert "state.InFlightDispatches.Add(task);" in owned
+    assert "DispatchScopedAsync(burst, lease)" in owned
     assert "state.WorkerRunning = false;" in worker
 
 

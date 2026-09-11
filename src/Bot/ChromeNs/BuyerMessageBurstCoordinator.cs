@@ -309,6 +309,20 @@ namespace Bot.ChromeNs
                 return CanonicalPreMergeOutcome.Consumed;
             }
 
+            // Product cards/URLs are non-substantive context and must never consume the first-inquiry
+            // slot. IncomingMessageSafety registers the shop-scoped local preset specifically so the
+            // canonical buyer owner can send it without entering burst/Knowledge/AI at all.
+            string productLinkReply;
+            if (ConversationContextStore.TryTakeProductLinkReply(
+                item.SellerNick, item.BuyerNick, question, out productLinkReply))
+            {
+                var productOk = await SendFixedAsync(
+                    qn, item, productLinkReply, "商品链接预设回复", cancellationToken).ConfigureAwait(false);
+                Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick + ", success=" + productOk + ", aiCalled=false");
+                return productOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+            }
+
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick, item.BuyerNick, question, out firstReply);
@@ -477,8 +491,10 @@ namespace Bot.ChromeNs
             public readonly object Sync = new object();
             public readonly Queue<BuyerMessageBurstItem> PendingRules = new Queue<BuyerMessageBurstItem>();
             public readonly List<BuyerMessageBurstItem> Items = new List<BuyerMessageBurstItem>();
+            public readonly HashSet<Task> InFlightDispatches = new HashSet<Task>();
             public CancellationTokenSource DelayCancellation = new CancellationTokenSource();
             public bool WorkerRunning;
+            public bool Retired;
             public int Version;
             public int HardCancelVersion;
             public DateTime StartedAt = DateTime.MinValue;
@@ -544,19 +560,29 @@ namespace Bot.ChromeNs
                 "single_owner_lane");
 
             var key = Key(item.SellerNick, item.BuyerNick);
-            var state = _states.GetOrAdd(key, _ => new BurstState());
-            var startWorker = false;
-            lock (state.Sync)
+            while (true)
             {
-                state.PendingRules.Enqueue(item);
-                state.LatestSessionGeneration = item.SessionGeneration;
-                if (!state.WorkerRunning)
+                var state = _states.GetOrAdd(key, _ => new BurstState());
+                var startWorker = false;
+                var accepted = false;
+                lock (state.Sync)
                 {
-                    state.WorkerRunning = true;
-                    startWorker = true;
+                    if (!state.Retired)
+                    {
+                        state.PendingRules.Enqueue(item);
+                        state.LatestSessionGeneration = item.SessionGeneration;
+                        accepted = true;
+                        if (!state.WorkerRunning)
+                        {
+                            state.WorkerRunning = true;
+                            startWorker = true;
+                        }
+                    }
                 }
+                if (!accepted) continue;
+                if (startWorker) Task.Run(() => RunAsync(key, state));
+                return;
             }
-            if (startWorker) Task.Run(() => RunAsync(key, state));
         }
 
         private async Task RunAsync(string key, BurstState state)
@@ -573,9 +599,10 @@ namespace Bot.ChromeNs
                         else if (state.Items.Count < 1)
                         {
                             state.WorkerRunning = false;
-                            DisposeActivity(state);
-                            BurstState empty;
-                            _states.TryRemove(key, out empty);
+                            if (state.InFlightDispatches.Count == 0)
+                            {
+                                RetireStateLocked(key, state);
+                            }
                             return;
                         }
                     }
@@ -639,35 +666,19 @@ namespace Bot.ChromeNs
                         {
                             lock (state.Sync)
                             {
-                                return state.HardCancelVersion == capturedHardCancelVersion;
+                                return !state.Retired
+                                    && state.HardCancelVersion == capturedHardCancelVersion;
                             }
                         },
                         _sessionAgent);
                     lease.MarkProcessing("single_owner_dispatch");
                     lease.MarkGenerating("reply_generation_started");
-                    try
-                    {
-                        await DispatchScopedAsync(burst, lease).ConfigureAwait(false);
-                        FinalizeReplyOutcome(burst, lease);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_cancelled");
-                    }
-                    catch (Exception ex)
-                    {
-                        if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_exception");
-                        Log.Exception(ex);
-                    }
-                    finally
-                    {
-                        _sessionAgent.Prune(TimeSpan.FromMinutes(30));
-                    }
+                    StartOwnedDispatch(key, state, burst, lease);
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("统一买家生命周期工作器异常，已释放本买家运行权: error=" + Safe(ex.Message, 220), 50);
+                Log.ErrorWithMaxCount("统一买家生命周期工作器异常，已释放本买家队列运行权: error=" + Safe(ex.Message, 220), 50);
                 lock (state.Sync)
                 {
                     foreach (var pending in state.PendingRules.Concat(state.Items).Where(x => x != null).ToList())
@@ -683,10 +694,99 @@ namespace Bot.ChromeNs
                     state.PendingRules.Clear();
                     state.Items.Clear();
                     state.WorkerRunning = false;
-                    DisposeActivity(state);
-                    BurstState ignored;
-                    _states.TryRemove(key, out ignored);
+                    if (state.InFlightDispatches.Count == 0)
+                    {
+                        RetireStateLocked(key, state);
+                    }
                 }
+            }
+        }
+
+        private void StartOwnedDispatch(
+            string key,
+            BurstState state,
+            BuyerMessageBurst burst,
+            BuyerMessageBurstLease lease)
+        {
+            var task = DispatchOwnedAsync(burst, lease);
+            lock (state.Sync)
+            {
+                if (state.Retired) return;
+                state.InFlightDispatches.Add(task);
+            }
+            task.ContinueWith(
+                _ => OnOwnedDispatchCompleted(key, state, task),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private async Task DispatchOwnedAsync(BuyerMessageBurst burst, BuyerMessageBurstLease lease)
+        {
+            try
+            {
+                var dispatchTask = DispatchScopedAsync(burst, lease);
+                var cancelledTask = Task.Delay(Timeout.Infinite, lease.CancellationToken);
+                var winner = await Task.WhenAny(dispatchTask, cancelledTask).ConfigureAwait(false);
+                if (!ReferenceEquals(winner, dispatchTask))
+                {
+                    dispatchTask.ContinueWith(
+                        t => Log.ErrorWithMaxCount(
+                            "已取消generation的底层回复任务迟到异常已观察并隔离: "
+                            + Safe(t.Exception == null ? string.Empty : t.Exception.GetBaseException().Message, 220),
+                            20),
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                    Log.Info("统一买家生命周期已在generation取消时释放回复占用；底层非协作任务如继续运行也不再拥有发送/终态资格: seller="
+                        + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                        + ", generation=" + burst.SessionGeneration);
+                    return;
+                }
+
+                await dispatchTask.ConfigureAwait(false);
+                FinalizeReplyOutcome(burst, lease);
+            }
+            catch (OperationCanceledException)
+            {
+                if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_cancelled");
+            }
+            catch (Exception ex)
+            {
+                if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_exception");
+                Log.Exception(ex);
+            }
+            finally
+            {
+                _sessionAgent.Prune(TimeSpan.FromMinutes(30));
+            }
+        }
+
+        private void OnOwnedDispatchCompleted(string key, BurstState state, Task task)
+        {
+            lock (state.Sync)
+            {
+                state.InFlightDispatches.Remove(task);
+                if (!state.WorkerRunning
+                    && state.PendingRules.Count == 0
+                    && state.Items.Count == 0
+                    && state.InFlightDispatches.Count == 0)
+                {
+                    RetireStateLocked(key, state);
+                }
+            }
+        }
+
+        private void RetireStateLocked(string key, BurstState state)
+        {
+            if (state == null || state.Retired) return;
+            state.Retired = true;
+            DisposeActivity(state);
+            BurstState current;
+            if (_states.TryGetValue(key, out current) && ReferenceEquals(current, state))
+            {
+                BurstState ignored;
+                _states.TryRemove(key, out ignored);
             }
         }
 
@@ -700,7 +800,9 @@ namespace Bot.ChromeNs
             bool allowLocalShortReply;
             lock (state.Sync)
             {
-                allowLocalShortReply = state.PendingRules.Count == 0 && state.Items.Count == 0;
+                allowLocalShortReply = state.PendingRules.Count == 0
+                    && state.Items.Count == 0
+                    && state.InFlightDispatches.Count == 0;
             }
 
             CanonicalPreMergeOutcome outcome;
@@ -749,7 +851,9 @@ namespace Bot.ChromeNs
             if (!_states.TryGetValue(Key(seller, buyer), out state) || state == null) return false;
             lock (state.Sync)
             {
-                return state.PendingRules.Count > 0 || state.Items.Count > 0;
+                return state.PendingRules.Count > 0
+                    || state.Items.Count > 0
+                    || state.InFlightDispatches.Count > 0;
             }
         }
 
@@ -763,6 +867,7 @@ namespace Bot.ChromeNs
             List<long> trimmedGenerations = null;
             lock (state.Sync)
             {
+                if (state.Retired) return;
                 if (!string.IsNullOrWhiteSpace(item.MessageKey)
                     && state.Items.Any(x => string.Equals(x.MessageKey, item.MessageKey, StringComparison.Ordinal)))
                     return;
