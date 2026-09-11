@@ -17,7 +17,7 @@ namespace Bot
     {
         // Compatibility bootstrap retained so existing startup/build wiring does not change.
         // First-inquiry delivery lives before AI routing, and background notifications now have a
-        // read-only fast path so the first real buyer message does not wait for full conversation
+        // read-only fast path so the first real buyer problem does not wait for full conversation
         // switching/history hydration when receiveNewMsg is missing.
         private readonly object _firstInquiryStreamingGuardBootstrap =
             ChromeNs.FirstInquiryStreamingGuard.InitializeForApp();
@@ -33,7 +33,7 @@ namespace Bot.ChromeNs
     /// deterministic replies are evaluated before the quiet-delay merge. When Qianniu only emits
     /// onShopRobotReceriveNewMsgs, this guard uses the notification's own ccode to read recent
     /// history immediately. It never switches the visible chat and never sends by itself; it only
-    /// restores the earliest real buyer-authored message into the existing authoritative pipeline.
+    /// restores the earliest substantive buyer-authored problem into the existing authoritative pipeline.
     /// </summary>
     internal static class FirstInquiryStreamingGuard
     {
@@ -46,7 +46,7 @@ namespace Bot.ChromeNs
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 Log.Info(
                     "首条咨询固定回复保持协调器前置直发：不再动态重包消息handler，"
-                    + "不等待消息合并、不等待AI接口；已启用后台通知ccode首消息快路径。" );
+                    + "不等待消息合并、不等待AI接口；已启用后台通知ccode首个实际问题快路径。" );
             }
             return new object();
         }
@@ -215,13 +215,13 @@ namespace Bot.ChromeNs
                 .OrderBy(IncomingMessageSafety.GetSortValue)
                 .ToList();
 
-            // "First inquiry" means the earliest real buyer-authored content. Product-page metadata,
-            // automatically injected item links/cards, platform tips and withdrawal notices may be
-            // useful context later, but they are never allowed to own or delay the first-inquiry slot.
+            // "First inquiry" means the earliest substantive buyer-authored problem. Product-page
+            // metadata/cards, platform tips, greetings and meaningless acknowledgements/noise may be
+            // useful context later, but they never own or delay the first-inquiry greeting slot.
             var first = recentBuyerMessages.FirstOrDefault(m => IsRealFirstInquiryMessage(m, seller));
             if (first == null)
             {
-                Log.Info("首条咨询后台通知快路径未发现真实买家首消息，保留原后台补偿: seller="
+                Log.Info("首条咨询后台通知快路径未发现买家实际问题，保留原后台补偿: seller="
                     + seller + ", buyer=" + buyer);
                 return false;
             }
@@ -235,7 +235,7 @@ namespace Bot.ChromeNs
                     return true;
                 }
 
-                // Claim the recovery only after a real buyer message is present. This cancels the
+                // Claim the recovery only after a real buyer problem is present. This cancels the
                 // slower switch/hydration fallback without falsely suppressing it on an empty read.
                 MarkBuyerMessageObserved(seller, buyer);
             }
@@ -245,15 +245,15 @@ namespace Bot.ChromeNs
             }
 
             var firstKey = IncomingMessageSafety.BuildMessageKey(first, GetMessageText(first));
-            Log.Info("首条咨询后台通知快路径命中首个真实买家消息: seller=" + seller
+            Log.Info("首条咨询后台通知快路径命中首个买家实际问题: seller=" + seller
                 + ", buyer=" + buyer + ", key=" + firstKey
                 + ", mergeWait=false, aiGate=false");
 
-            // Feed the first real message alone into the existing recovered-message pipeline first.
-            // BuyerMessageBurstCoordinator then executes DeterministicAutoReplyService before merge.
+            // Feed the first substantive problem alone into the existing recovered-message pipeline.
+            // BuyerMessageBurstCoordinator sends the first-inquiry greeting before normal processing.
             await ProcessRecoveredBuyerMessageAfterMissAsync(first, seller, buyer).ConfigureAwait(false);
 
-            // Let the first message acquire the per-buyer deterministic gate before replaying any
+            // Let the first problem acquire the per-buyer deterministic gate before replaying any
             // later item-link/system-context messages from the same remote-history batch.
             await Task.Delay(160).ConfigureAwait(false);
 
@@ -289,13 +289,9 @@ namespace Bot.ChromeNs
             var text = GetMessageText(message);
             string nonBuyerReason;
             if (NonBuyerConversationGuard.ShouldBlockMessage(message, seller, text, out nonBuyerReason)) return false;
-            if (ConversationContextStore.IsPlatformSystemTip(message, text)) return false;
-            if (ConversationContextStore.IsProductLink(message, text)) return false;
-            if (ConversationContextStore.IsWithdrawalNotice(message, text)) return false;
 
             var display = IncomingMessageSafety.GetDisplayText(message, text);
-            return !string.IsNullOrWhiteSpace(display)
-                && !string.Equals(display, "[空白或未知消息]", StringComparison.Ordinal);
+            return FirstInquiryFixedReplyService.IsActualProblemMessage(message, display, null);
         }
     }
 }
