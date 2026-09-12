@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE = ROOT / "src" / "Bot" / "ChromeNs" / "KnowledgeLearningService.cs"
 RUNTIME_BRIDGE = ROOT / "src" / "Bot" / "ChromeNs" / "BuyerSessionAgentRuntimeBridge.cs"
+DELIVERY_WATCHDOG = ROOT / "src" / "Bot" / "ChromeNs" / "SendDeliveryWatchdog.cs"
 
 
 def _text(path: Path) -> str:
@@ -27,13 +28,17 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
     assert "manualAnswer = sellerEcho;" in method
 
 
-def test_manual_learning_reuses_runtime_bot_echo_authority():
+def test_manual_learning_reuses_delivery_watchdog_bot_echo_authority():
     learning = _text(KNOWLEDGE)
+    watchdog = _text(DELIVERY_WATCHDOG)
     runtime = _text(RUNTIME_BRIDGE)
 
     authority_call = "SendDeliveryWatchdog.IsKnownBotAnswer"
     assert authority_call in learning
-    assert authority_call in runtime
+    assert "public static bool IsKnownBotAnswer(" in watchdog
+    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
+    # The runtime keeps Bot and human seller events distinct; the learning guard now consumes
+    # the same delivery ledger that establishes Bot ownership instead of duplicating heuristics.
     assert "SellerBotEcho" in runtime
     assert "SellerHumanReply" in runtime
 
