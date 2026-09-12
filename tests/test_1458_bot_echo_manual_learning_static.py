@@ -37,10 +37,25 @@ def test_manual_learning_reuses_delivery_watchdog_bot_echo_authority():
     assert authority_call in learning
     assert "public static bool IsKnownBotAnswer(" in watchdog
     assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
-    # The runtime keeps Bot and human seller events distinct; the learning guard now consumes
+    # The runtime keeps Bot and human seller events distinct; the learning guard consumes
     # the same delivery ledger that establishes Bot ownership instead of duplicating heuristics.
     assert "SellerBotEcho" in runtime
     assert "SellerHumanReply" in runtime
+
+
+def test_bot_echo_identity_canonicalizes_qianniu_transport_suffix_once():
+    watchdog = _text(DELIVERY_WATCHDOG)
+    method_start = watchdog.index("private static string Normalize(string value)")
+    method = watchdog[method_start:]
+
+    # Qianniu can expose a confirmed Bot seller echo as "... [A]" while the delivery
+    # ledger records the buyer-visible body. Keep this transport normalization inside
+    # the watchdog's AnswerKey authority so learning does not add another decision layer.
+    strip_transport = 'Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$", string.Empty, RegexOptions.IgnoreCase)'
+    build_key = "return ConversationKey(seller, buyer) + \"#\" + Normalize(answer);"
+    assert build_key in watchdog
+    assert strip_transport in method
+    assert method.index(strip_transport) < method.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);')
 
 
 def test_real_human_reply_path_remains_available_after_bot_echo_guard():

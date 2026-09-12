@@ -440,11 +440,12 @@ namespace Bot.ChromeNs
 
         private static string Normalize(string value)
         {
-            // The in-process answer carries the internal [AI] authorship marker, while Qianniu's
-            // seller echo may expose the same text without that suffix (for example segmented order
-            // replies). Compare the buyer-visible body, not the internal marker, so a Bot echo cannot
-            // fall through to the manual-intervention guard and cancel its own first/order reply.
+            // AnswerKey is the single authority for Bot-owned seller-echo identity. Qianniu may add
+            // a transport-only trailing [A] marker to the seller echo, while the confirmed outbound
+            // body stored in the ledger does not carry it. Canonicalize that suffix here so every
+            // producer/consumer of KnownBotAnswers converges on the same identity.
             value = BotOutboundMessageFormatter.StripAiMarker(value ?? string.Empty);
+            value = Regex.Replace(value.Trim(), @"\s*\[A\]\s*$", string.Empty, RegexOptions.IgnoreCase);
             return Regex.Replace(value.Trim(), @"\s+", string.Empty);
         }
     }
