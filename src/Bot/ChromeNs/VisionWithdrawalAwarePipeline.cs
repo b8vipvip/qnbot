@@ -52,8 +52,7 @@ namespace Bot.ChromeNs
                     "_buyerMessageBurstCoordinator",
                     BindingFlags.Instance | BindingFlags.NonPublic);
                 var handlerField = typeof(BuyerMessageBurstCoordinator).GetField(
-                    "_handler",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
+                    "_handler", BindingFlags.Instance | BindingFlags.NonPublic);
                 if (coordinatorField == null || handlerField == null) return;
 
                 foreach (var qn in qns)
@@ -218,11 +217,33 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                burst.SellerNick,
-                burst.BuyerNick,
-                burst.CombinedQuestion,
-                result.Answer);
+            // OCR-first direct knowledge has already passed Knowledge Engine V2's production
+            // authority gate. Running the generic dedupe/validator without preserveTrustedAnswer
+            // can launch a hidden structured-AI repair and turn a ~250ms local answer into a 20s+
+            // generation. Preserve that authoritative answer while still applying the common AI
+            // marker and generation cancellation contract.
+            var trustedOcrKnowledge = string.Equals(
+                result.MatchedVisualKnowledgeId,
+                "ocr-direct-knowledge-v2",
+                StringComparison.Ordinal);
+            var deduplication = trustedOcrKnowledge
+                ? ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    result.Answer,
+                    lifecycleLease.CancellationToken,
+                    true)
+                : ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    result.Answer);
+            if (trustedOcrKnowledge)
+            {
+                Log.Info("OCR-first权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
+                    + burst.SellerNick + ", buyer=" + burst.BuyerNick);
+            }
             var answer = deduplication.Answer;
             if (!await lifecycleLease.ConfirmStableAsync(220))
             {
@@ -405,6 +426,15 @@ namespace Bot.ChromeNs
             var question = burst.CombinedQuestion ?? string.Empty;
             if (!ShouldBindToRecentImage(question, elapsed)) return false;
 
+            // The cached image contributes semantics, not a fresh buyer receive timestamp. Keep its
+            // source SortValue for visual ordering, but anchor the synthetic clone to the first
+            // message of the current follow-up burst so progress/slow-response metrics are measured
+            // from the actual follow-up instead of the historical image.
+            var responseAnchorAt = burst.Items
+                .Where(x => x != null)
+                .Select(x => x.ReceivedAt == DateTime.MinValue ? DateTime.Now : x.ReceivedAt)
+                .DefaultIfEmpty(DateTime.Now)
+                .Min();
             var synthetic = new BuyerMessageBurstItem
             {
                 SellerNick = burst.SellerNick,
@@ -419,7 +449,7 @@ namespace Bot.ChromeNs
                     Note = string.Empty
                 },
                 SortValue = recent.ObservedAt.Ticks,
-                ReceivedAt = recent.ObservedAt
+                ReceivedAt = responseAnchorAt
             };
             var items = new List<BuyerMessageBurstItem> { synthetic };
             items.AddRange(burst.Items.Where(x => x != null));
@@ -431,6 +461,7 @@ namespace Bot.ChromeNs
             Log.Info("最新文字已绑定本地图片缓存: seller=" + burst.SellerNick
                 + ", buyer=" + burst.BuyerNick
                 + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
+                + ", responseAnchorAt=" + responseAnchorAt.ToString("HH:mm:ss.fff")
                 + ", withdrawn=" + recent.Withdrawn
                 + ", cacheComplete=" + recent.CacheComplete
                 + ", question=" + Short(question, 100));
