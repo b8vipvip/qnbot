@@ -104,11 +104,25 @@ namespace Bot.ChromeNs
                 await next(lease); return;
             }
 
-            var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item) };
+            // The prior image is semantic context, not a newly received buyer turn. Keep its original
+            // message/sort identity so visual reasoning still sees the correct historical image, but
+            // anchor the synthetic clone's ReceivedAt to the first message of the current follow-up
+            // burst. QN/streaming progress metrics intentionally use the minimum burst ReceivedAt;
+            // leaving the old image timestamp here made a prompt follow-up such as “这样吗” appear
+            // to have waited 10+ seconds in queue and generated false slow-response anomalies.
+            var responseAnchorAt = burst.Items
+                .Where(x => x != null)
+                .Select(x => x.ReceivedAt == DateTime.MinValue ? DateTime.Now : x.ReceivedAt)
+                .DefaultIfEmpty(DateTime.Now)
+                .Min();
+            var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item, responseAnchorAt) };
             items.AddRange(burst.Items.Where(x => x != null));
             var combinedBurst = new BuyerMessageBurst(burst.SellerNick, burst.BuyerNick, items, burst.Version);
             var combinedLease = new BuyerMessageBurstLease(combinedBurst, () => lease.IsCurrent, ResolveSessionAgent(lease));
-            Log.Info("图片指代续问已重新绑定最近图片: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds) + ", reason=" + (referential ? "图片指代" : "图片说明文字") + ", question=" + SafeLog(question, 100));
+            Log.Info("图片指代续问已重新绑定最近图片: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
+                + ", responseAnchorAt=" + responseAnchorAt.ToString("HH:mm:ss.fff")
+                + ", reason=" + (referential ? "图片指代" : "图片说明文字") + ", question=" + SafeLog(question, 100));
             await next(combinedLease);
         }
 
@@ -156,9 +170,22 @@ namespace Bot.ChromeNs
             CleanupExpired();
         }
 
-        private static BuyerMessageBurstItem CloneVisionItem(BuyerMessageBurstItem source)
+        private static BuyerMessageBurstItem CloneVisionItem(BuyerMessageBurstItem source, DateTime? receivedAtOverride = null)
         {
-            return new BuyerMessageBurstItem { SellerNick = source.SellerNick, BuyerNick = source.BuyerNick, MessageKey = source.MessageKey, DisplayText = source.DisplayText, Message = source.Message, SafetyDecision = source.SafetyDecision, VisionDecision = source.VisionDecision, SortValue = source.SortValue, ReceivedAt = source.ReceivedAt, SessionGeneration = source.SessionGeneration, SemanticContinuationContext = source.SemanticContinuationContext };
+            return new BuyerMessageBurstItem
+            {
+                SellerNick = source.SellerNick,
+                BuyerNick = source.BuyerNick,
+                MessageKey = source.MessageKey,
+                DisplayText = source.DisplayText,
+                Message = source.Message,
+                SafetyDecision = source.SafetyDecision,
+                VisionDecision = source.VisionDecision,
+                SortValue = source.SortValue,
+                ReceivedAt = receivedAtOverride.HasValue ? receivedAtOverride.Value : source.ReceivedAt,
+                SessionGeneration = source.SessionGeneration,
+                SemanticContinuationContext = source.SemanticContinuationContext
+            };
         }
 
         private static void CleanupExpired()
