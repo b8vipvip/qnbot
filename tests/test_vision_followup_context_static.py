@@ -31,7 +31,8 @@ def test_referential_text_reuses_recent_image_and_keeps_original_lease():
     assert 'compact == "这种能使用吗"' in pipeline
     assert 'compact.Contains("这种")' in pipeline
     assert 'compact.Contains("这类")' in pipeline
-    assert "var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item) };" in pipeline
+    assert "var responseAnchorAt = burst.Items" in pipeline
+    assert "var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item, responseAnchorAt) };" in pipeline
     assert "items.AddRange(burst.Items.Where(x => x != null));" in pipeline
     assert "new BuyerMessageBurst(" in pipeline
     assert "ResolveSessionAgent(lease)" in pipeline
