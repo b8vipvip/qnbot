@@ -205,7 +205,20 @@ namespace Bot.ChromeNs
                 if (echoTime < questionTime.AddMilliseconds(-500) || echoTime < DateTime.Now.AddMinutes(-20)) return false;
                 if (string.IsNullOrWhiteSpace(echoText) || Normalize(echoText) == Normalize(candidateAnswer)) return false;
 
-                manualAnswer = echoText.Trim();
+                var sellerEcho = echoText.Trim();
+                // The seller-echo fields contain both human messages and Bot messages. A previous
+                // Bot reply (for example the fixed first-inquiry prelude) legitimately differs from
+                // the current candidate and must not be promoted to a manual correction. Reuse the
+                // delivery watchdog's authoritative Bot-echo ledger instead of inventing a second
+                // text/timing heuristic here.
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho))
+                {
+                    Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
+                        + seller + ", buyer=" + buyer);
+                    return false;
+                }
+
+                manualAnswer = sellerEcho;
                 RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
                 QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
                 MessageProcessingTraceService.RecordManualObservation(
