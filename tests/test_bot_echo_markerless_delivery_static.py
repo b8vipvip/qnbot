@@ -8,16 +8,20 @@ def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_delivery_matching_uses_buyer_visible_body_without_internal_ai_marker():
+def test_delivery_matching_uses_one_canonical_buyer_visible_identity():
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
 
     normalize = watchdog.index("private static string Normalize(string value)")
     strip_marker = watchdog.index("BotOutboundMessageFormatter.StripAiMarker", normalize)
-    whitespace = watchdog.index("Regex.Replace(value.Trim()", strip_marker)
+    strip_transport = watchdog.index('Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$"', strip_marker)
+    whitespace = watchdog.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);', strip_transport)
+    answer_key = watchdog.index('return ConversationKey(seller, buyer) + "#" + Normalize(answer);')
 
-    assert normalize < strip_marker < whitespace
-    assert "Bot echo cannot" in watchdog
-    assert "manual-intervention guard" in watchdog
+    # Bot ownership is decided by the watchdog ledger. Both the internal AI marker and
+    # Qianniu's transport-only [A] echo suffix must disappear before the AnswerKey is built,
+    # rather than being compensated for later in manual-learning code.
+    assert normalize < strip_marker < strip_transport < whitespace
+    assert answer_key >= 0
 
 
 def test_rpa_registers_pending_delivery_before_real_send_action():
