@@ -12,17 +12,17 @@ def test_text_ai_budget_finishes_before_absolute_generation_watchdog():
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     watchdog = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "internal const int TotalAiBudgetSeconds = 40" in pipeline
-    assert "StreamPhaseBudgetSeconds = 20" in pipeline
-    assert "StreamAttemptDefaultSeconds = 15" in pipeline
-    assert "StreamAttemptMaxSeconds = 18" in pipeline
-    assert "StructuredFallbackSeconds = 15" in pipeline
-    assert "streamPhaseCts.CancelAfter(TimeSpan.FromSeconds(StreamPhaseBudgetSeconds))" in pipeline
-    assert "if (token.IsCancellationRequested) throw;" in pipeline
-    assert "提前进入非流式兜底" in pipeline
+    assert "internal const int TotalAiBudgetSeconds = 120" in pipeline
+    assert "generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline
+    assert "StreamPhaseBudgetSeconds" not in pipeline
+    assert "StreamAttemptDefaultSeconds" not in pipeline
+    assert "StreamAttemptMaxSeconds" not in pipeline
+    assert "StructuredFallbackSeconds" not in pipeline
+    assert "timeoutCts" not in pipeline
+    assert "The caller's generation token is the only client-side timeout owner." in pipeline
     assert "SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)" in pipeline
     assert "AI失败离线安全兜底" in pipeline
-    assert "AbsoluteGenerationAgeSeconds = 55" in agent
+    assert "AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20" in agent
     assert "BuyerSessionAgent.AbsoluteGenerationAgeSeconds" in watchdog
 
 

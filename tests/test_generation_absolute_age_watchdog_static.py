@@ -12,7 +12,8 @@ def test_generation_deadline_watchdog_uses_dedicated_background_thread():
     agent = text("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "AbsoluteGenerationAgeSeconds = 55" in agent
+    assert "AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20" in agent
+    assert "+ BuyerSessionAgent.AbsoluteGenerationAgeSeconds" in source
     assert "DeadlineWatchdogSleepMilliseconds = 250" in source
     assert "new Thread(GenerationDeadlineWatchdogLoop)" in source
     assert "IsBackground = true" in source

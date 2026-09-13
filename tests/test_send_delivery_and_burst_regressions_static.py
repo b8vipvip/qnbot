@@ -109,10 +109,11 @@ def test_progress_cards_are_isolated_per_turn_without_cancelling_previous_genera
 def test_text_ai_pipeline_has_one_total_budget_and_terminal_trace_paths():
     source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     trace = read("src/Bot/ChromeNs/MessageProcessingTraceService.cs")
-    assert "internal const int TotalAiBudgetSeconds = 40;" in source
+    assert "internal const int TotalAiBudgetSeconds = 120;" in source
     assert "generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));" in source
-    assert "StreamPhaseBudgetSeconds = 20" in source
-    assert "StructuredFallbackSeconds = 15" in source
+    assert "StreamPhaseBudgetSeconds" not in source
+    assert "StructuredFallbackSeconds" not in source
+    assert "timeoutCts" not in source
     assert "ResponseProgressTracker.Fail" in source
     assert "ResponseProgressTracker.Cancel" in source
     assert "RecordKnowledgeDecision" in source

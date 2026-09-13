@@ -13,7 +13,8 @@ def test_streaming_generation_uses_session_agent_token_directly():
     assert "MonitorLeaseAsync(" not in s
     assert "monitorCts" not in s
     assert "await response.Content.ReadAsStringAsync();" not in s
-    assert "ReadResponseBodyAsync(response.Content, linked.Token)" in s
+    assert "ReadResponseBodyAsync(response.Content, token)" in s
+    assert "timeoutCts" not in s
 
 
 def test_buyer_alias_canonicalizes_qianniu_transport_prefix_in_one_place():

@@ -59,7 +59,9 @@ namespace Bot.ChromeNs
                 Name = "QnBot.GenerationDeadlineWatchdog"
             };
             _deadlineWatchdogThread.Start();
-            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习；generation绝对年龄看门狗=55s（从本次generation实际接受时起计时）。");
+            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习；generation绝对年龄看门狗="
+                + BuyerSessionAgent.AbsoluteGenerationAgeSeconds
+                + "s（从本次generation实际接受时起计时，AI预算后仅保留发送/状态收尾余量）。");
         }
 
         internal static void RegisterAcceptedGeneration(
