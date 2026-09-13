@@ -281,21 +281,32 @@ async def stream_chat(
                     continue
 
     if not await request.is_disconnected():
-        remaining = max(5, min(30, int(max(5, deadline - time.monotonic()))))
-        dispatched = await asyncio.to_thread(
-            control_plane.dispatch_chat,
-            client_name,
-            requested_model,
-            messages,
-            max_tokens,
-            temperature,
-            remaining,
-        )
-        if dispatched.get("success"):
-            attempt = dispatched["attempt"]
-            yield _synthetic_chunk(str(attempt.get("model") or requested_model), str(attempt.get("answer") or ""))
-            yield b"data: [DONE]\n\n"
-            return
+        remaining = int(deadline - time.monotonic())
+        if remaining >= 5:
+            # The realtime buyer lane owns a Chat Completions protocol contract. A final
+            # non-stream rescue may reuse the same bounded router, but it must not escape
+            # into Responses/legacy where request identity and continuation semantics differ.
+            dispatched = await asyncio.to_thread(
+                runtime_routing_guard.dispatch_chat,
+                control_plane,
+                client_name,
+                requested_model,
+                messages,
+                max_tokens,
+                temperature,
+                remaining,
+                allowed_protocols={"chat"},
+            )
+            if dispatched.get("success"):
+                attempt = dispatched["attempt"]
+                yield _synthetic_chunk(str(attempt.get("model") or requested_model), str(attempt.get("answer") or ""))
+                yield b"data: [DONE]\n\n"
+                return
+            failures.extend(
+                dict(attempt)
+                for attempt in dispatched.get("attempts", [])
+                if isinstance(attempt, dict)
+            )
 
     error_payload = {
         "error": {

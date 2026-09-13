@@ -214,11 +214,16 @@ def dispatch_chat(
     max_tokens: int,
     temperature: float,
     timeout: int,
+    *,
+    allowed_protocols: set[str] | None = None,
 ) -> Dict[str, Any]:
     vision = control_plane.messages_have_image(messages)
     attempts: List[Dict[str, Any]] = []
     profile, budget_cap, attempt_cap = _routing_policy(max_tokens)
     routes = _build_routes(control_plane, requested_model, messages)
+    if allowed_protocols is not None:
+        allowed = {str(protocol).strip().lower() for protocol in allowed_protocols if str(protocol).strip()}
+        routes = [route for route in routes if str(route[2]).strip().lower() in allowed]
     if profile == "realtime":
         budget_resolver = globals().get("_realtime_total_budget_resolver")
         if callable(budget_resolver):
