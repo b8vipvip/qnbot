@@ -27,5 +27,5 @@ def test_streaming_pipeline_hard_cancels_only_invalid_work_and_allows_relevant_p
     assert "普通后续消息和人工回复不取消已派发AI" in pipeline; assert "ParallelReplyRelevanceGate.ShouldSend" in pipeline; assert "买家后续消息明确纠正/取消了前一问题" in pipeline
     assert "internal const int TotalAiBudgetSeconds = 40" in pipeline; assert "CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline
     assert "await lease.ConfirmStableAsync(180)" in pipeline; assert "await qn.SendTextWithRetryAsync" in pipeline; assert "正在流式生成答案" in pipeline
-    assert "MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token)" in pipeline; assert "BuyerStreamingReplyPipeline.Initialize();" in app; assert "ChromeNs\\BuyerStreamingReplyPipeline.cs" in targets
+    assert "MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token, true)" in pipeline; assert "BuyerStreamingReplyPipeline.Initialize();" in app; assert "ChromeNs\\BuyerStreamingReplyPipeline.cs" in targets
     assert 'StreamAbortMarker = "[[QN_STREAM_ABORTED]]"' in formatter; assert "value.IndexOf(StreamAbortMarker" in formatter; assert "已阻止发送半截答案" in formatter; assert "return \"错误：AI流式输出中断" in formatter

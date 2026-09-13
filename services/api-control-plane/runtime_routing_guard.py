@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 import json
 import os
 import time
@@ -17,13 +18,54 @@ BACKGROUND_MIN_MAX_TOKENS = max(1000, min(16000, int(os.getenv("BACKGROUND_MIN_M
 BACKGROUND_TOTAL_BUDGET_SECONDS = max(60, min(300, int(os.getenv("BACKGROUND_TOTAL_BUDGET_SECONDS", "240"))))
 BACKGROUND_ATTEMPT_TIMEOUT_SECONDS = max(20, min(150, int(os.getenv("BACKGROUND_ATTEMPT_TIMEOUT_SECONDS", "90"))))
 
+REQUEST_ALLOWED_PROTOCOLS_HEADER = "X-QN-Allowed-Protocols"
+_VALID_PROTOCOLS = frozenset({"chat", "responses", "legacy"})
+_REQUEST_ALLOWED_PROTOCOLS: ContextVar[frozenset[str] | None] = ContextVar(
+    "qn_request_allowed_protocols",
+    default=None,
+)
+
+
+def _parse_request_protocol_scope(raw_value: Any) -> frozenset[str] | None:
+    """Parse the internal request routing scope.
+
+    Missing/blank means the caller did not request a scope and keeps existing routing behavior.
+    A non-blank but invalid value intentionally becomes an empty set so malformed internal intent
+    fails closed instead of silently broadening a buyer request to Responses/legacy.
+    """
+
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return None
+    return frozenset(
+        protocol
+        for protocol in (part.strip().lower() for part in raw.split(","))
+        if protocol in _VALID_PROTOCOLS
+    )
+
 
 def install(control_plane: Any) -> None:
-    """Replace app.dispatch_chat with a bounded failover dispatcher.
+    """Replace app.dispatch_chat with the bounded failover dispatcher and request scope bridge.
 
     FastAPI route functions resolve the module global ``dispatch_chat`` at request time,
-    so installing here keeps the main app file stable while fixing runtime routing.
+    so installing here keeps the main app file stable while fixing runtime routing. An internal
+    request header can narrow the canonical dispatcher for a specific caller without changing
+    default/background routing behavior.
     """
+
+    app = getattr(control_plane, "app", None)
+    state = getattr(app, "state", None)
+    if app is not None and state is not None and not getattr(state, "_qn_runtime_protocol_scope_installed", False):
+        @app.middleware("http")
+        async def runtime_protocol_scope_middleware(request: Any, call_next: Any) -> Any:
+            scope = _parse_request_protocol_scope(request.headers.get(REQUEST_ALLOWED_PROTOCOLS_HEADER))
+            token = _REQUEST_ALLOWED_PROTOCOLS.set(scope)
+            try:
+                return await call_next(request)
+            finally:
+                _REQUEST_ALLOWED_PROTOCOLS.reset(token)
+
+        setattr(state, "_qn_runtime_protocol_scope_installed", True)
 
     def guarded_dispatch_chat(
         client_name: str,
@@ -41,6 +83,7 @@ def install(control_plane: Any) -> None:
             max_tokens,
             temperature,
             timeout,
+            allowed_protocols=_REQUEST_ALLOWED_PROTOCOLS.get(),
         )
 
     control_plane.dispatch_chat = guarded_dispatch_chat
@@ -215,7 +258,7 @@ def dispatch_chat(
     temperature: float,
     timeout: int,
     *,
-    allowed_protocols: set[str] | None = None,
+    allowed_protocols: set[str] | frozenset[str] | None = None,
 ) -> Dict[str, Any]:
     vision = control_plane.messages_have_image(messages)
     attempts: List[Dict[str, Any]] = []
