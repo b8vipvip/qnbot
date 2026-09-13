@@ -417,6 +417,95 @@ namespace Bot.ChromeNs
             Reservations[plan.ReservationKey] = DateTime.Now.AddHours(hours);
         }
 
+        private static string ResolveAuthoritativeBuyerFromHub(OrderPlacedReplyPlan plan, out bool conflict)
+        {
+            conflict = false;
+            if (plan == null || string.IsNullOrWhiteSpace(plan.Seller) || string.IsNullOrWhiteSpace(plan.OrderId))
+                return string.Empty;
+
+            var buyers = new List<string>();
+            var eventTypes = new[]
+            {
+                OrderEventType.Created,
+                OrderEventType.Paid,
+                OrderEventType.Closed,
+                OrderEventType.RefundRequested
+            };
+            foreach (var eventType in eventTypes)
+            {
+                var probe = new OrderSnapshot
+                {
+                    Seller = plan.Seller,
+                    Buyer = string.Empty,
+                    OrderId = plan.OrderId,
+                    EventType = eventType
+                };
+                var canonical = OrderEventHub.RefreshFromCanonical(probe);
+                if (canonical == null || ReferenceEquals(canonical, probe) || string.IsNullOrWhiteSpace(canonical.Buyer))
+                    continue;
+
+                var candidate = canonical.Buyer.Trim();
+                if (buyers.Any(x => BuyerIdentityAliasService.AreEquivalent(plan.Seller, x, candidate)))
+                    continue;
+                buyers.Add(candidate);
+            }
+
+            if (buyers.Count > 1)
+            {
+                conflict = true;
+                Log.ErrorWithMaxCount(
+                    "订单自动回复已阻止：同一订单在OrderEventHub存在多个不等价买家身份，禁止猜测发送目标。 seller="
+                    + plan.Seller + ", orderId=" + plan.OrderId
+                    + ", buyers=" + string.Join("|", buyers),
+                    50);
+                return string.Empty;
+            }
+            return buyers.Count == 1 ? buyers[0] : string.Empty;
+        }
+
+        private static bool ApplyAuthoritativeBuyerBeforeExecution(OrderPlacedReplyPlan plan, out string reason)
+        {
+            reason = string.Empty;
+            bool conflict;
+            var authoritativeBuyer = ResolveAuthoritativeBuyerFromHub(plan, out conflict);
+            if (conflict)
+            {
+                reason = "order_buyer_authority_conflict";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(authoritativeBuyer)) return true;
+
+            var previousBuyer = (plan.Buyer ?? string.Empty).Trim();
+            if (!BuyerIdentityAliasService.AreEquivalent(plan.Seller, previousBuyer, authoritativeBuyer))
+            {
+                Log.ErrorWithMaxCount(
+                    "订单自动回复执行前纠正跨买家归属：当前计划buyer与OrderEventHub权威buyer不一致；以订单事件为准。 seller="
+                    + plan.Seller + ", orderId=" + plan.OrderId
+                    + ", rejectedBuyer=" + previousBuyer
+                    + ", authoritativeBuyer=" + authoritativeBuyer,
+                    100);
+            }
+            else if (!string.Equals(previousBuyer, authoritativeBuyer, StringComparison.Ordinal))
+            {
+                Log.Info("订单自动回复执行前统一买家别名: seller=" + plan.Seller
+                    + ", orderId=" + plan.OrderId
+                    + ", planBuyer=" + previousBuyer
+                    + ", authoritativeBuyer=" + authoritativeBuyer);
+            }
+
+            if (!string.Equals(previousBuyer, authoritativeBuyer, StringComparison.Ordinal))
+            {
+                plan.Buyer = authoritativeBuyer;
+                if (plan.Snapshot != null) plan.Snapshot.Buyer = authoritativeBuyer;
+                plan.ReservationKey = BuildReservationKey(
+                    plan.Seller,
+                    authoritativeBuyer,
+                    plan.OrderId,
+                    plan.IsBuyerFollowUp);
+            }
+            return true;
+        }
+
         internal static bool TryBeginExecution(OrderPlacedReplyPlan plan, out string reason)
         {
             reason = string.Empty;
@@ -426,6 +515,12 @@ namespace Bot.ChromeNs
                 reason = "invalid_plan";
                 return false;
             }
+
+            // The OrderEventHub is the authoritative order-identity boundary. Alternate entry points
+            // (messageCenter, panel recovery, V2, current-conversation fallback) may all construct a
+            // plan, but none may choose a different buyer once this order already has confirmed Hub
+            // evidence. Resolve/correct it before reserving the durable action or touching the UI.
+            if (!ApplyAuthoritativeBuyerBeforeExecution(plan, out reason)) return false;
 
             lock (ActionSync)
             {
