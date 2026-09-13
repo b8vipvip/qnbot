@@ -729,7 +729,7 @@ namespace Bot.ChromeNs
             try
             {
                 var fallback = await Task.Run(
-                    () => MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token),
+                    () => MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token, true),
                     token);
                 if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
                 {
