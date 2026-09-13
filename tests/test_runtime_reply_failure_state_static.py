@@ -11,10 +11,11 @@ def _source() -> str:
 
 def test_ai_total_budget_remains_bounded_below_generation_watchdog():
     source = _source()
-    assert "internal const int TotalAiBudgetSeconds = 40;" in source
+    assert "internal const int TotalAiBudgetSeconds = 120;" in source
     assert "generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));" in source
-    assert "StreamPhaseBudgetSeconds = 20" in source
-    assert "StructuredFallbackSeconds = 15" in source
+    assert "StreamPhaseBudgetSeconds" not in source
+    assert "StructuredFallbackSeconds" not in source
+    assert "timeoutCts" not in source
 
 
 def test_invalid_ai_answer_fails_before_answer_ready_transition():
