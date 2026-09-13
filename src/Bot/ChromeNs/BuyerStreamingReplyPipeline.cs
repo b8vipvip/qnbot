@@ -19,7 +19,10 @@ namespace Bot.ChromeNs
 {
     internal static class BuyerStreamingReplyPipeline
     {
-        internal const int TotalAiBudgetSeconds = 40;
+        // This is the single client-side AI deadline for one buyer generation. The control plane's
+        // chat2api browser bridge can legitimately need up to ~90 seconds; routing/knowledge planning
+        // happens before the HTTP call, so leave enough room for both without a shorter nested timer.
+        internal const int TotalAiBudgetSeconds = 120;
         private static readonly ConcurrentDictionary<int, bool> PatchedCoordinators =
             new ConcurrentDictionary<int, bool>();
         private static Timer _patchTimer;
@@ -136,10 +139,10 @@ namespace Bot.ChromeNs
                             conversationCtl.SetProcessing("正在流式生成答案：" + preview);
                         }
                     });
-                // Some legacy synchronous fallbacks run inside Task.Run and cannot be force-stopped
-                // after they begin. Race the whole answer task against the canonical 40-second token
-                // so a non-cooperative provider can never hold the generation until the 55-second
-                // BuyerSessionAgent absolute-age watchdog.
+                // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
+                // after they begin. Race the whole answer task only against the canonical generation
+                // budget. Provider/control-plane timeouts remain upstream concerns and must not be
+                // pre-empted by a second shorter Windows timer.
                 answer = await AwaitWithCancellationAsync(answerTask, generationCts.Token);
             }
             catch (OperationCanceledException)
@@ -449,13 +452,9 @@ namespace Bot.ChromeNs
 
     internal static class StreamingBuyerAnswerService
     {
-        // Keep the provider pipeline well inside BuyerSessionAgent's 55-second absolute-age watchdog.
-        // The stream phase has its own budget so multiple endpoints can never consume the entire
-        // generation lifetime and starve the structured fallback.
-        private const int StreamPhaseBudgetSeconds = 20;
-        private const int StreamAttemptDefaultSeconds = 15;
-        private const int StreamAttemptMaxSeconds = 18;
-        private const int StructuredFallbackSeconds = 15;
+        // One buyer generation owns one client-side cancellation deadline. The upstream control plane
+        // owns provider-specific attempt/failover timeouts. A shorter stream-phase or per-endpoint
+        // timer here previously cut chat2api off before its legitimate browser-bridge budget elapsed.
 
         private sealed class StreamResult
         {
@@ -690,46 +689,43 @@ namespace Bot.ChromeNs
         {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             var errors = new List<string>();
-            using (var streamPhaseCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            foreach (var endpoint in endpoints)
             {
-                streamPhaseCts.CancelAfter(TimeSpan.FromSeconds(StreamPhaseBudgetSeconds));
-                try
+                token.ThrowIfCancellationRequested();
+                var result = await StreamOneAsync(endpoint, messages, token, partial);
+                BotRuntimeStats.RecordAiCall(
+                    endpoint,
+                    result.InputTokens,
+                    result.OutputTokens,
+                    result.Success,
+                    result.LatencyMs,
+                    result.Success ? "流式成功" : result.Error);
+                endpoint.LastLatencyMs = result.LatencyMs;
+                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
                 {
-                    foreach (var endpoint in endpoints)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var result = await StreamOneAsync(endpoint, messages, streamPhaseCts.Token, partial);
-                        BotRuntimeStats.RecordAiCall(
-                            endpoint,
-                            result.InputTokens,
-                            result.OutputTokens,
-                            result.Success,
-                            result.LatencyMs,
-                            result.Success ? "流式成功" : result.Error);
-                        endpoint.LastLatencyMs = result.LatencyMs;
-                        endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
-                        if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
-                        {
-                            var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
-                            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
-                            errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
-                            continue;
-                        }
-                        errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
-                    }
+                    var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                    errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                    continue;
                 }
-                catch (OperationCanceledException)
-                {
-                    if (token.IsCancellationRequested) throw;
-                    errors.Add("流式阶段达到" + StreamPhaseBudgetSeconds + "秒预算，提前进入非流式兜底");
-                }
+                errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
             }
 
             token.ThrowIfCancellationRequested();
             try
             {
+                // The linked generation token remains the real deadline. Passing the same total
+                // budget here prevents CallStructuredChat from creating a shorter second window;
+                // whatever time was already spent streaming is automatically subtracted by token.
                 var fallback = await Task.Run(
-                    () => MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token, true),
+                    () => MyOpenAI.CallStructuredChat(
+                        messages,
+                        220,
+                        0.15,
+                        BuyerStreamingReplyPipeline.TotalAiBudgetSeconds,
+                        token,
+                        true),
                     token);
                 if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
                 {
@@ -768,14 +764,9 @@ namespace Bot.ChromeNs
                 ["stream"] = true
             };
             var payloadText = payload.ToString(Newtonsoft.Json.Formatting.None);
-            var timeoutSeconds = endpoint.TimeoutSeconds <= 0
-                ? StreamAttemptDefaultSeconds
-                : Math.Max(8, Math.Min(StreamAttemptMaxSeconds, endpoint.TimeoutSeconds));
 
             try
             {
-                using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
-                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 using (var request = new HttpRequestMessage(HttpMethod.Post, NormalizeUrl(endpoint.BaseUrl)))
                 {
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
@@ -786,11 +777,11 @@ namespace Bot.ChromeNs
                     using (var response = await Http.SendAsync(
                         request,
                         HttpCompletionOption.ResponseHeadersRead,
-                        linked.Token))
+                        token))
                     {
                         if (!response.IsSuccessStatusCode)
                         {
-                            var failedBody = await ReadResponseBodyAsync(response.Content, linked.Token);
+                            var failedBody = await ReadResponseBodyAsync(response.Content, token);
                             return Fail(sw, payloadText, "HTTP " + (int)response.StatusCode + " " + Short(failedBody, 300));
                         }
 
@@ -799,7 +790,7 @@ namespace Bot.ChromeNs
                             : (response.Content.Headers.ContentType.MediaType ?? string.Empty);
                         if (mediaType.IndexOf("text/event-stream", StringComparison.OrdinalIgnoreCase) < 0)
                         {
-                            var body = await ReadResponseBodyAsync(response.Content, linked.Token);
+                            var body = await ReadResponseBodyAsync(response.Content, token);
                             var answer = ExtractNormalAnswer(body);
                             if (string.IsNullOrWhiteSpace(answer))
                             {
@@ -818,14 +809,14 @@ namespace Bot.ChromeNs
 
                             while (true)
                             {
-                                linked.Token.ThrowIfCancellationRequested();
+                                token.ThrowIfCancellationRequested();
                                 if (pendingRead == null) pendingRead = reader.ReadLineAsync();
                                 var completed = await Task.WhenAny(
                                     pendingRead,
-                                    Task.Delay(120, linked.Token));
+                                    Task.Delay(120, token));
                                 if (completed != pendingRead)
                                 {
-                                    linked.Token.ThrowIfCancellationRequested();
+                                    token.ThrowIfCancellationRequested();
                                     continue;
                                 }
 
@@ -863,8 +854,8 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
-                if (token.IsCancellationRequested) throw;
-                return Fail(sw, payloadText, "流式请求超时（" + timeoutSeconds + "秒）");
+                // The caller's generation token is the only client-side timeout owner.
+                throw;
             }
             catch (Exception ex)
             {
