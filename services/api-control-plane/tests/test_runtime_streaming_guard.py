@@ -72,7 +72,11 @@ def test_streaming_source_commits_only_after_real_text_and_blocks_partial_eof():
     assert "committed = True" in source
     assert "clean_finish_seen" in source
     assert "STREAM_ABORT_MARKER" in source
-    assert "control_plane.dispatch_chat" in source
+    assert "control_plane.dispatch_chat" not in source
+    assert "runtime_routing_guard.dispatch_chat" in source
+    assert 'allowed_protocols={"chat"}' in source
+    assert "remaining = int(deadline - time.monotonic())" in source
+    assert "if remaining >= 5:" in source
     assert '"text/event-stream"' in source
     assert '"X-Accel-Buffering": "no"' in source
 
