@@ -291,6 +291,17 @@ namespace Bot.ChromeNs
 
         public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature, int timeoutSeconds, CancellationToken cancellationToken)
         {
+            return CallStructuredChat(messages, maxTokens, temperature, timeoutSeconds, cancellationToken, false);
+        }
+
+        public static StructuredChatResult CallStructuredChat(
+            JArray messages,
+            int maxTokens,
+            double temperature,
+            int timeoutSeconds,
+            CancellationToken cancellationToken,
+            bool chatProtocolOnly)
+        {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints.Count < 1)
             {
@@ -299,7 +310,7 @@ namespace Bot.ChromeNs
             var errors = new List<string>();
             foreach (var endpoint in endpoints)
             {
-                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature, timeoutSeconds, cancellationToken);
+                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature, timeoutSeconds, cancellationToken, chatProtocolOnly);
                 BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "成功" : result.Error);
                 endpoint.LastLatencyMs = result.LatencyMs;
                 endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
@@ -317,6 +328,18 @@ namespace Bot.ChromeNs
         }
 
         private static StructuredChatResult CallRawChatCompletions(AiEndpointConfig endpoint, JArray messages, int maxTokens, double temperature, int timeoutSeconds, CancellationToken cancellationToken)
+        {
+            return CallRawChatCompletions(endpoint, messages, maxTokens, temperature, timeoutSeconds, cancellationToken, false);
+        }
+
+        private static StructuredChatResult CallRawChatCompletions(
+            AiEndpointConfig endpoint,
+            JArray messages,
+            int maxTokens,
+            double temperature,
+            int timeoutSeconds,
+            CancellationToken cancellationToken,
+            bool chatProtocolOnly)
         {
             var sw = Stopwatch.StartNew();
             var url = NormalizeBaseUrl(endpoint.BaseUrl);
@@ -341,6 +364,10 @@ namespace Bot.ChromeNs
                     {
                         deadline.CancelAfter(TimeSpan.FromSeconds(effectiveTimeout));
                         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                        if (chatProtocolOnly)
+                        {
+                            request.Headers.TryAddWithoutValidation("X-QN-Allowed-Protocols", "chat");
+                        }
                         request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
                         using (var response = http.SendAsync(
                             request,
