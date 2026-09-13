@@ -122,6 +122,42 @@ def test_dispatch_rotates_to_backup_model_with_small_per_attempt_timeout(monkeyp
     assert len(calls) == 2
 
 
+def test_dispatch_protocol_scope_never_calls_responses_or_legacy(monkeypatch):
+    cp = FakeControlPlane()
+    calls = []
+
+    def fake_call(control_plane, provider, model, protocol, messages, max_tokens, temperature, timeout):
+        calls.append((model, protocol, timeout))
+        return {
+            "provider_id": provider["id"],
+            "provider_name": provider["name"],
+            "model": model,
+            "protocol": protocol,
+            "url": "https://example.invalid/v1/chat/completions",
+            "latency_ms": 10,
+            "success": False,
+            "error": "timeout",
+        }
+
+    monkeypatch.setattr(guard, "fast_upstream_call", fake_call)
+    result = guard.dispatch_chat(
+        cp,
+        "client",
+        "text-default",
+        [{"role": "user", "content": "hi"}],
+        128,
+        0.1,
+        120,
+        allowed_protocols={"chat"},
+    )
+
+    assert result["success"] is False
+    assert [(model, protocol) for model, protocol, _ in calls] == [
+        ("main-model", "chat"),
+        ("backup-model", "chat"),
+    ]
+
+
 def test_heavy_structured_request_uses_long_background_attempt_timeout(monkeypatch):
     cp = FakeControlPlane()
     calls = []
