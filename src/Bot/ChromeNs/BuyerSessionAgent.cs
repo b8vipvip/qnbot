@@ -110,7 +110,9 @@ namespace Bot.ChromeNs
         private const int MaxRememberedMessageKeys = 64;
         private const int MaxRememberedEvents = 64;
         private const int MaxRememberedGenerationStates = 128;
-        internal const int AbsoluteGenerationAgeSeconds = 55;
+        // BuyerStreamingReplyPipeline owns the AI deadline. The session watchdog is only a final
+        // lifecycle safety net and must never fire before that canonical AI budget can finish.
+        internal const int AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20;
         private static readonly ConcurrentDictionary<string, SessionState> Sessions =
             new ConcurrentDictionary<string, SessionState>(StringComparer.Ordinal);
 
