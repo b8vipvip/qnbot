@@ -16,9 +16,11 @@ def test_buyer_structured_fallback_explicitly_requests_chat_only_protocol_scope(
     assert "bool chatProtocolOnly" in my_openai
     assert 'TryAddWithoutValidation("X-QN-Allowed-Protocols", "chat")' in my_openai
     assert re.search(
-        r"MyOpenAI\.CallStructuredChat\(\s*messages,\s*220,\s*0\.15,\s*StructuredFallbackSeconds,\s*token,\s*true\s*\)",
+        r"MyOpenAI\.CallStructuredChat\(\s*messages,\s*220,\s*0\.15,\s*BuyerStreamingReplyPipeline\.TotalAiBudgetSeconds,\s*token,\s*true\s*\)",
         buyer_pipeline,
     )
+    assert "StructuredFallbackSeconds" not in buyer_pipeline
+    assert "StreamPhaseBudgetSeconds" not in buyer_pipeline
 
 
 def test_background_structured_learning_keeps_default_unrestricted_protocol_routing():
