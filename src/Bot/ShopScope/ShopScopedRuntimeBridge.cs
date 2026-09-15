@@ -25,6 +25,8 @@ namespace Bot.ShopScope
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static readonly ConcurrentDictionary<string, LogWriter> Writers =
             new ConcurrentDictionary<string, LogWriter>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, byte> LogReadyMarkers =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<QN, byte> ForegroundSubscribed =
             new ConcurrentDictionary<QN, byte>();
         private static readonly object ProfileCacheSync = new object();
@@ -45,7 +47,7 @@ namespace Bot.ShopScope
                 ScopedDataPathRouter.Configure(TryResolveDataRoot);
                 ScopedLogRouter.Configure(WriteShopLog);
                 _foregroundTimer = new Timer(_ => RefreshForegroundSubscriptions(), null, 250, 500);
-                Log.Info("多客服店铺作用域桥已启用：权威会话切换用于纠正活动店铺，重复页面入站不会抢占；店铺日志按 ShopKey 独立镜像。");
+                Log.Info("多客服店铺作用域桥已启用：任意同客服WebView承载的真实会话切换都可纠正活动店铺；店铺日志按 ShopKey 独立镜像并主动创建。");
             }
             return new object();
         }
@@ -68,6 +70,8 @@ namespace Bot.ShopScope
                     if (!ForegroundSubscribed.TryAdd(qn, 0)) continue;
                     qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
                 }
+                RefreshProfileCacheIfNeeded();
+                EnsureShopLogWriters();
             }
             catch (Exception ex)
             {
@@ -83,15 +87,24 @@ namespace Bot.ShopScope
             var forwardedSource = GetForwardedInboundSourceSession();
             if (!string.IsNullOrWhiteSpace(forwardedSource))
             {
-                Log.Info("重复页面onConversationChange仅更新本店买家，不切换活动客服: seller="
+                // Field evidence from Qianniu 9.97: the visible seller tab can emit its real
+                // onConversationChange only from one of that seller's duplicate recent.html
+                // WebViews. The recovery bridge forwards it through the seller's authoritative
+                // CDP, so treating every forwarded event as "background" leaves the previous
+                // seller permanently active. Source-session duplication is page-level, not
+                // seller-level. The bridge already verifies sourceSession -> seller before it
+                // forwards the event, therefore this is valid seller activity evidence.
+                ActiveShopSessionRegistry.ObserveChatDialogActive(
+                    qn, "forwarded-onConversationChange:" + forwardedSource);
+                ActiveShopSessionRegistry.ReassertCurrent("forwarded-onConversationChange");
+                Log.Info("重复WebView承载的真实onConversationChange已用于切换活动客服: seller="
                     + qn.Seller.Nick + ", sourceSession=" + forwardedSource);
                 return;
             }
 
-            // A direct onConversationChange raised by the seller's authoritative CDP is stronger
-            // foreground evidence than the old document.hasFocus probe. Embedded CEF pages can all
-            // report focus=false, while duplicate/standby pages are explicitly marked by
-            // BeginForwardedInbound and are rejected above.
+            // A direct onConversationChange raised by the seller's authoritative CDP is also
+            // strong foreground evidence. Embedded CEF pages can all report focus=false, so the
+            // actual conversation-change event is more reliable than document.hasFocus alone.
             ActiveShopSessionRegistry.ObserveChatDialogActive(qn, "authoritative-onConversationChange");
             ActiveShopSessionRegistry.ReassertCurrent("authoritative-onConversationChange");
         }
@@ -115,7 +128,13 @@ namespace Bot.ShopScope
         {
             var shop = ShopSettingsScope.Current ?? ResolveShopFromSafeLog(text);
             if (shop == null) return;
-            var writer = Writers.GetOrAdd(shop.ShopKey, key =>
+            var writer = GetOrCreateWriter(shop);
+            writer.Write("[shop=" + shop.ShopKey + "] " + (text ?? string.Empty), tag ?? "Info");
+        }
+
+        private static LogWriter GetOrCreateWriter(ShopContext shop)
+        {
+            return Writers.GetOrAdd(shop.ShopKey, key =>
             {
                 var path = Path.Combine(Paths.GetLogRoot(shop), "runtime.txt");
                 return new LogWriter(path, true, 8 * 1024 * 1024)
@@ -123,7 +142,18 @@ namespace Bot.ShopScope
                     LimitSameStringWriteCount = false
                 };
             });
-            writer.Write("[shop=" + shop.ShopKey + "] " + (text ?? string.Empty), tag ?? "Info");
+        }
+
+        private static void EnsureShopLogWriters()
+        {
+            foreach (var shop in ShopByKey.Values.Where(x => x != null && !string.IsNullOrWhiteSpace(x.ShopKey)))
+            {
+                var writer = GetOrCreateWriter(shop);
+                if (LogReadyMarkers.TryAdd(shop.ShopKey, 0))
+                {
+                    writer.Write("[shop=" + shop.ShopKey + "] 店铺独立运行日志已就绪；只接收本 ShopKey 可归属的业务日志。", "Info");
+                }
+            }
         }
 
         private static ShopContext ResolveShopFromSafeLog(string text)
@@ -166,6 +196,27 @@ namespace Bot.ShopScope
                         ShopByKey[shop.ShopKey] = shop;
                         var sellerRef = StableSellerRef(profile.DisplayName);
                         if (sellerRef.Length > 0) ShopBySellerRef[sellerRef] = shop;
+                    }
+
+                    // Profile display names can be shorter than the authenticated Qianniu login
+                    // identity (for example "客服名" vs "主账号:客服名"). Add the live seller
+                    // identities as aliases so privacy-safe sellerRef logs always reach the right
+                    // per-shop runtime file.
+                    foreach (var qn in QN.GetRuntimeSafetySnapshot().Where(x => x != null && x.Seller != null))
+                    {
+                        try
+                        {
+                            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+                            if (seller.Length == 0) continue;
+                            var shop = ShopIdentityResolver.Resolve(qn.Seller);
+                            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
+                            ShopByKey[shop.ShopKey] = shop;
+                            var sellerRef = StableSellerRef(seller);
+                            if (sellerRef.Length > 0) ShopBySellerRef[sellerRef] = shop;
+                        }
+                        catch
+                        {
+                        }
                     }
                 }
                 catch
