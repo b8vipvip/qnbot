@@ -12,11 +12,16 @@ def test_v11_build_migration_replaces_permanent_retire_with_recoverable_standby(
     assert "Permanent websocketRetired state remains after v11 patch" in script
 
 
-def test_v11_qninject_migration_never_kills_running_qianniu():
+def test_v11_qninject_migration_never_kills_or_live_patches_running_qianniu():
     script = (ROOT / "scripts/apply-recoverable-inject-v11.ps1").read_text(encoding="utf-8")
-    assert "Qianniu inject v11 migration: live patch; no close/kill/restart." in script
-    assert "local page reload instead of a full process restart" in script
+    replacement = script.split("$runningReplacement = @'", 1)[1].split("'@", 1)[0]
+
+    assert "Qianniu inject v11 migration deferred: AliWorkbench is running;" in replacement
+    assert "skip webui.zip/sign/cache mutation" in replacement
+    assert "return;" in replacement
+    assert "live patch; no close/kill/restart" not in replacement
     assert "Legacy destructive QNInject migration remains in StartInject" in script
+    assert "Unsafe live Qianniu resource patching remains in StartInject" in script
     assert "KillWorkbenchProcesses();" in script  # validation only; never emitted into StartInject
     assert "startBody.Contains('KillWorkbenchProcesses();')" in script
 
