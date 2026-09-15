@@ -1,5 +1,6 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.Automation.ChatDeskNs.Automators;
+using Bot.ChromeNs;
 using Bot.Options;
 using System.Windows;
 
@@ -37,6 +38,22 @@ namespace Bot.AssistWindow.Widget
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
+            }
+
+            // Clicking Settings from the Bot panel is explicit user interaction with this visible
+            // Desk. Make that seller the authoritative settings scope before WndOption opens, so a
+            // stale ActiveShopSessionRegistry value from another customer-service tab can never
+            // replace the seller selected by the visible native composer.
+            var qn = QN.FindExistingBySellerNick(seller);
+            if (qn != null && qn.Seller != null)
+            {
+                ActiveShopSessionRegistry.ActivateFromFocusedWebView(
+                    qn,
+                    qn.CDP == null ? string.Empty : qn.CDP.SessionId,
+                    qn.Seller.TargetId,
+                    string.Empty,
+                    "settings-visible-desk");
+                ActiveShopSessionRegistry.ReassertCurrent("settings-visible-desk");
             }
 
             WndOption.MyShow(seller, Wnd);
