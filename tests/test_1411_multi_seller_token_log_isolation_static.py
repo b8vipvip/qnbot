@@ -48,13 +48,17 @@ def test_shop_runtime_logs_are_materialized_and_mirrored_by_live_seller_identity
     assert 'return "seller#" + hash.ToString("x16").Substring(0, 10)' in source
 
 
-def test_control_plane_rejects_known_token_for_different_runtime_seller_even_on_force():
+def test_control_plane_normal_claim_rejects_mismatch_but_confirmed_force_can_repair_old_contamination():
     source = text(BINDING)
     assert "def _known_runtime_sellers" in source
     assert "seller_nicks_json" in source
     assert "def _validate_runtime_seller_identity" in source
+    assert "allow_confirmed_correction: bool = False" in source
     assert '"code": "token_seller_mismatch"' in source
-    assert "_validate_runtime_seller_identity(conn, client_id, seller)" in source
-    validate_pos = source.index("_validate_runtime_seller_identity(conn, client_id, seller)")
-    rebound_pos = source.index("if bound and bound != shop_key and not force")
-    assert validate_pos < rebound_pos
+    assert "if allow_confirmed_correction:" in source
+    assert "return True" in source
+    assert "seller_identity_corrected = _validate_runtime_seller_identity(" in source
+    assert "allow_confirmed_correction=bool(force)" in source
+    assert "if rebound or seller_identity_corrected:" in source
+    assert '"seller_identity_corrected": seller_identity_corrected' in source
+    assert '"server_state_reset": rebound or seller_identity_corrected' in source
