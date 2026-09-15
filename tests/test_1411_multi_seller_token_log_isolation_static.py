@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "src" / "Bot" / "ShopScope" / "ShopScopedRuntimeBridge.cs"
+SETTINGS = ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "RightPanel.SettingsEntry.cs"
 BINDING = ROOT / "services" / "api-control-plane" / "bot_client_shop_binding.py"
 
 
@@ -20,6 +21,16 @@ def test_conversation_change_recovers_active_seller_from_authoritative_or_duplic
     assert "重复页面onConversationChange仅更新本店买家，不切换活动客服" not in source
     assert 'ObserveChatDialogActive(qn, "authoritative-onConversationChange")' in source
     assert 'ReassertCurrent("authoritative-onConversationChange")' in source
+
+
+def test_settings_click_promotes_visible_desk_seller_before_opening_window():
+    source = text(SETTINGS)
+    assert "var seller = DeskSellerBindingRegistry.GetSeller(desk)" in source
+    assert "QN.FindExistingBySellerNick(seller)" in source
+    assert "ActiveShopSessionRegistry.ActivateFromFocusedWebView(" in source
+    assert '"settings-visible-desk"' in source
+    assert 'ReassertCurrent("settings-visible-desk")' in source
+    assert source.index("ActiveShopSessionRegistry.ActivateFromFocusedWebView(") < source.index("WndOption.MyShow(seller, Wnd)")
 
 
 def test_shop_runtime_logs_are_materialized_and_mirrored_by_live_seller_identity():
