@@ -10,6 +10,10 @@ def _method_body(text: str, signature: str, next_signature: str) -> str:
     return text[start:end]
 
 
+def _code_only(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+
+
 def test_v11_migration_defers_live_qianniu_resource_mutation():
     script = (ROOT / "scripts" / "apply-recoverable-inject-v11.ps1").read_text(encoding="utf-8-sig")
 
@@ -32,21 +36,21 @@ def test_attached_window_never_repositions_or_resizes_qianniu_host():
     assert "Desk.EvMaximize -= Desk_EvMaximize;" in source
     assert "Desk.EvMaximize += SafeDesk_EvMaximize;" in source
 
-    maximize = _method_body(
+    maximize = _code_only(_method_body(
         source,
         "private void SafeDesk_EvMaximize",
         "private void SafeDesk_EvMoved",
-    )
+    ))
     assert "Desk.ShowNormal" not in maximize
     assert "Desk.SetRect" not in maximize
     assert "Desk.SetLocation" not in maximize
     assert "Desk.BringTop" not in maximize
 
-    track = _method_body(
+    track = _code_only(_method_body(
         source,
         "private void SafeTrackGeometry",
         "private void SetRightPanelPositionWithoutVisibilityToggle",
-    )
+    ))
     assert "SetDeskLocation();" not in track
     assert "Desk.SetRect" not in track
     assert "Desk.SetLocation" not in track
