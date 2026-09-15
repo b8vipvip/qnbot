@@ -134,15 +134,29 @@ def _seller_identity_matches(actual: str, expected: str) -> bool:
         or expected.endswith(":" + actual) or expected.endswith("：" + actual)
 
 
-def _validate_runtime_seller_identity(conn, client_id: int, seller: str) -> None:
+def _validate_runtime_seller_identity(
+    conn,
+    client_id: int,
+    seller: str,
+    allow_confirmed_correction: bool = False,
+) -> bool:
+    """Return True only when a confirmed force claim is correcting contaminated telemetry."""
     seller = (seller or "").strip()
     if not seller:
-        return
+        return False
     known = _known_runtime_sellers(conn, client_id)
     if not known:
-        return
+        return False
     if any(_seller_identity_matches(seller, expected) for expected in known):
-        return
+        return False
+    if allow_confirmed_correction:
+        # A previous client bug could save a token under the wrong active seller and then report
+        # that wrong seller into bot_client_state. Treating that telemetry as immutable makes the
+        # correct token impossible to recover. The Windows settings flow only sends force=True
+        # after an explicit Yes/No confirmation, and current clients lock Settings to the visible
+        # Desk seller before opening the page. Allow that one confirmed correction and wipe the
+        # contaminated token-scoped runtime state below.
+        return True
     raise HTTPException(
         status_code=409,
         detail={
@@ -162,8 +176,8 @@ def _delete_if_table_exists(conn, table: str, client_id: int) -> None:
 
 
 def _reset_old_shop_server_state(conn, client_id: int) -> None:
-    # A force rebind must never expose the old shop's cloud/runtime state to the
-    # new shop. These tables are all client-token scoped in the historical schema.
+    # A force rebind/correction must never expose the old shop's cloud/runtime state to the
+    # corrected shop. These tables are all client-token scoped in the historical schema.
     for table in (
         "bot_messages",
         "bot_commands",
@@ -191,10 +205,12 @@ def ensure_binding(
 
     now = core._now()
     with _cp.db() as conn:
-        # Seller identity is an independent safety dimension from ShopKey. A stale Windows
-        # active-shop pointer must never be able to move a known token to another customer
-        # service account, even when the user confirms a force rebind prompt.
-        _validate_runtime_seller_identity(conn, client_id, seller)
+        # Normal claims remain fail-closed on seller mismatch. A force claim is different: it is
+        # emitted only after the Windows settings UI has shown an explicit confirmation dialog.
+        # That path must be able to repair telemetry contaminated by the older active-seller bug.
+        seller_identity_corrected = _validate_runtime_seller_identity(
+            conn, client_id, seller, allow_confirmed_correction=bool(force)
+        )
 
         row = _binding_row(conn, client_id)
         bound = ((row["shop_key"] if row else "") or "").strip()
@@ -202,7 +218,7 @@ def ensure_binding(
             raise HTTPException(status_code=409, detail=_conflict_detail(bound))
 
         rebound = bool(bound and bound != shop_key)
-        if rebound:
+        if rebound or seller_identity_corrected:
             _reset_old_shop_server_state(conn, client_id)
 
         if row is None:
@@ -227,7 +243,8 @@ def ensure_binding(
         "ok": True,
         "shop_key": shop_key,
         "rebound": rebound,
-        "server_state_reset": rebound,
+        "seller_identity_corrected": seller_identity_corrected,
+        "server_state_reset": rebound or seller_identity_corrected,
     }
 
 
