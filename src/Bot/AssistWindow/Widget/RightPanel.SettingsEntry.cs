@@ -30,10 +30,10 @@ namespace Bot.AssistWindow.Widget
             if (string.IsNullOrWhiteSpace(seller) || QnAccountFinder.IsGenericReceptionTitle(seller))
             {
                 MessageBox.Show(
-                    "当前千牛接待窗口已经检测到，但还没有取得该窗口唯一对应的客服账号。\n\n"
-                    + "请回到这个千牛窗口，点击一次任意买家会话；Bot 会在千牛的会话切换事件中把当前 seller 与这个窗口一对一绑定。"
-                    + "系统不会让两个店铺共享同一个窗口，以避免串店。",
-                    "正在识别店铺身份",
+                    "当前千牛接待窗口已经检测到，但还没有确认当前可见的客服账号。\n\n"
+                    + "请回到这个千牛窗口，切换到目标客服标签并点击一次任意买家会话；Bot 会根据千牛的客服/买家会话切换事件确认当前活动 seller。\n"
+                    + "同一个千牛接待窗口可以承载多个客服账号；Bot 只允许当前活动客服使用当前可见输入框，避免跨客服串号。",
+                    "正在识别当前客服身份",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
