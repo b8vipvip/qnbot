@@ -19,46 +19,51 @@ def test_qianniu_reception_discovery_does_not_require_one_exact_window_title():
     assert "Never guess between two online shops" in finder
 
 
-def test_one_to_one_registry_prevents_two_sellers_from_sharing_one_hwnd():
+def test_shared_hwnd_registry_allows_multiple_sellers_but_one_active_seller():
     registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
     rpa = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
 
     assert "SellerToHwnd" in registry
-    assert "HwndToSeller" in registry
+    assert "ActiveSellerByHwnd" in registry
     assert "同一seller不能绑定两个Desk" in registry
-    assert "同一Desk不能绑定两个seller" in registry
-    assert "Desk.Create(new QnChatWnd(seller, hwnd, pid))" in registry
+    assert "同一Desk不能绑定两个seller" not in registry
+    assert "Desk.Create(new QnChatWnd(seller, hwnd, pid))" not in registry
     assert "BindForegroundSeller" in registry
+    assert "MarkActiveSeller" in registry
+    assert "共享千牛窗口活动客服已切换" in registry
 
     assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in rpa
     assert "desks.Count == 1 && RuntimeSellerCount() <= 1" in rpa
-    assert "RuntimeSellerCount() > 1" in rpa
-    assert "禁止共享或猜测其他店铺" in rpa
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in rpa
+    assert "当前可见千牛输入框不属于目标seller" in rpa
+    assert "禁止跨客服写入/发送" in rpa
 
 
-def test_only_active_seller_switch_can_upgrade_an_ambiguous_foreground_desk():
+def test_active_seller_or_buyer_switch_can_upgrade_foreground_shared_desk():
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
     scanner = read("src/Bot/ControllerNs/DeskScanner.cs")
     settings = read("src/Bot/AssistWindow/Widget/RightPanel.SettingsEntry.cs")
 
     assert 'BindForegroundSeller(qn, "seller-switched-foreground")' in coordinator
+    assert 'BindForegroundSeller(qn, "buyer-switched-foreground")' in coordinator
     seller_handler = coordinator.split("private static void Qn_EvSellerSwitched", 1)[1].split(
         "private static void Qn_EvBuyerSwitched", 1
     )[0]
-    assert "BindForegroundSeller" in seller_handler
     buyer_handler = coordinator.split("private static void Qn_EvBuyerSwitched", 1)[1].split(
         "private static void Qn_EvRecieveNewMessage", 1
     )[0]
     receive_handler = coordinator.split("private static void Qn_EvRecieveNewMessage", 1)[1].split(
         "private static void EnsureQn", 1
     )[0]
-    assert "BindForegroundSeller" not in buyer_handler
+    assert "BindForegroundSeller" in seller_handler
+    assert "BindForegroundSeller" in buyer_handler
     assert "BindForegroundSeller" not in receive_handler
 
     assert "DeskSellerBindingRegistry.BindResolvedSeller" in scanner
     assert "EnsureVisibleForMultiShopAttachedMode" in scanner
     assert "DeskSellerBindingRegistry.GetSeller(desk)" in settings
-    assert "系统不会让两个店铺共享同一个窗口" in settings
+    assert "同一个千牛接待窗口可以承载多个客服账号" in settings
+    assert "只允许当前活动客服使用当前可见输入框" in settings
 
 
 def test_attached_bot_ui_accepts_only_its_proven_seller():
