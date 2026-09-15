@@ -20,10 +20,7 @@ namespace Bot.ChromeNs
             if (desk != null) return desk;
 
             var desks = Desk.Snapshot();
-            if (desks.Count == 1 && RuntimeSellerCount() <= 1)
-            {
-                return desks[0];
-            }
+            if (desks.Count == 1 && RuntimeSellerCount() <= 1) return desks[0];
             return null;
         }
 
@@ -31,8 +28,23 @@ namespace Bot.ChromeNs
         {
             var seller = SellerNick;
             if (string.IsNullOrWhiteSpace(seller)) return false;
-            var desk = ResolveSellerDesk();
 
+            // Multi-seller native/UIA operations require an independently arbitrated active shop.
+            // The guard verifies seller + ShopKey + CDP session. Buyer identity is verified again
+            // by QN.EnsureActiveBuyerForSendAsync immediately before the actual send.
+            if (RuntimeSellerCount() > 1)
+            {
+                string isolationReason;
+                if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason))
+                {
+                    Log.ErrorWithMaxCount("多客服发送安全锁已阻止RPA：目标店铺未通过活动身份校验: seller="
+                        + seller + ", activeSeller=" + ActiveShopSessionRegistry.GetActiveSellerNick()
+                        + ", reason=" + isolationReason, 30);
+                    return false;
+                }
+            }
+
+            var desk = ResolveSellerDesk();
             if (desk == null)
             {
                 if (Desk.HasMultipleDesks || RuntimeSellerCount() > 1)
@@ -44,12 +56,7 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            // Qianniu 9.97 may host multiple seller tabs in one HWND. Sharing the HWND is valid,
-            // sharing the visible composer is not. Native/UIA send may run only for the seller that
-            // the registry has proven to be active on this Desk. Hidden sellers keep their own QN,
-            // CDP, buyer state and shop data, but cannot type/click through another seller's tab.
-            if (RuntimeSellerCount() > 1
-                && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
+            if (RuntimeSellerCount() > 1 && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
             {
                 Log.ErrorWithMaxCount("多客服RPA已隔离：当前可见千牛输入框不属于目标seller，禁止跨客服写入/发送: seller="
                     + seller + ", activeSeller=" + DeskSellerBindingRegistry.GetSeller(desk)
@@ -59,13 +66,9 @@ namespace Bot.ChromeNs
 
             lock (_sellerDeskBindingSync)
             {
-                if (!force
-                    && automationApplication != null
+                if (!force && automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
-                    && _sellerDeskHwnd == desk.Hwnd.Handle)
-                {
-                    return true;
-                }
+                    && _sellerDeskHwnd == desk.Hwnd.Handle) return true;
 
                 try
                 {
@@ -86,9 +89,7 @@ namespace Bot.ChromeNs
                     _sellerDeskHwnd = 0;
                     _messageInputTextArea = null;
                     _sendMessageButton = null;
-                    Log.ErrorWithMaxCount(
-                        "RPA绑定当前活动客服千牛窗口失败: seller=" + seller + ", " + ex.Message,
-                        20);
+                    Log.ErrorWithMaxCount("RPA绑定当前活动客服千牛窗口失败: seller=" + seller + ", " + ex.Message, 20);
                     return false;
                 }
             }
@@ -99,6 +100,11 @@ namespace Bot.ChromeNs
             get
             {
                 var desk = DeskSellerBindingRegistry.FindSellerDesk(SellerNick);
+                if (RuntimeSellerCount() > 1)
+                {
+                    string isolationReason;
+                    if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return false;
+                }
                 return desk != null
                     && DeskSellerBindingRegistry.IsSellerForDesk(desk, SellerNick)
                     && automationApplication != null
@@ -112,17 +118,12 @@ namespace Bot.ChromeNs
             buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
             if (string.IsNullOrWhiteSpace(buyer) || _qn == null || _qn.Buyer == null) return false;
 
-            var currentBuyer = BuyerIdentityAliasService.ResolveInternalNick(
-                SellerNick,
-                _qn.Buyer.Nick);
+            var currentBuyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
             if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
 
             var expected = (LastSetPlainText ?? string.Empty).Trim();
             if (expected.Length == 0 || !HasExpectedDraft(expected)) return false;
 
-            // Recheck the conversation immediately before touching the composer. A human reply can
-            // arrive while Qianniu is switching conversations; only clear the draft when both buyer
-            // identity and exact editor contents still prove that this composer belongs to the Bot.
             currentBuyer = _qn.Buyer == null
                 ? string.Empty
                 : BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
@@ -143,8 +144,7 @@ namespace Bot.ChromeNs
             LatestSetTextTime = DateTime.MinValue;
 
             string remaining;
-            var cleared = !TryGetEditorText(out remaining)
-                || !EditorMatchesExpectedText(remaining, expected);
+            var cleared = !TryGetEditorText(out remaining) || !EditorMatchesExpectedText(remaining, expected);
             if (cleared)
             {
                 Log.Info("已清除已取消的Bot专属草稿: seller=" + SellerNick
@@ -158,16 +158,12 @@ namespace Bot.ChromeNs
             try
             {
                 return QN.GetRuntimeSafetySnapshot()
-                    .Where(qn => qn != null && qn.Seller != null
-                        && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
+                    .Where(qn => qn != null && qn.Seller != null && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
                     .Select(qn => qn.Seller.Nick.Trim())
                     .Distinct(StringComparer.Ordinal)
                     .Count();
             }
-            catch
-            {
-                return 0;
-            }
+            catch { return 0; }
         }
     }
 }
