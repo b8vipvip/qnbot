@@ -28,6 +28,19 @@ def test_native_rpa_is_gated_by_active_seller_not_only_shared_hwnd():
     assert "RPA已绑定当前活动客服的千牛窗口" in source
 
 
+def test_buyer_switch_hands_shared_desk_to_the_new_active_seller():
+    source = (ROOT / "src" / "Bot" / "ChromeNs" / "MultiShopRuntimeSessionCoordinator.cs").read_text(
+        encoding="utf-8-sig"
+    )
+
+    buyer_switch = source.split("private static void Qn_EvBuyerSwitched", 1)[1].split(
+        "private static void Qn_EvRecieveNewMessage", 1
+    )[0]
+    assert 'DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-foreground")' in buyer_switch
+    assert "EnsureQn(qn, true);" in buyer_switch
+    assert "desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in source
+
+
 def test_attached_bot_ui_only_follows_active_seller_on_shared_desk():
     source = (ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "Robot" / "CtlRobot.MultiShopSession.cs").read_text(
         encoding="utf-8-sig"
