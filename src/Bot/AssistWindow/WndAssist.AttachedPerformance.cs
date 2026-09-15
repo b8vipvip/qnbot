@@ -66,7 +66,7 @@ namespace Bot.AssistWindow
                     var oldTimer = _timer;
                     _timer = new NoReEnterTimer(SafePeriodicTrack, 5000, 1500);
                     if (oldTimer != null) oldTimer.Stop();
-                    Log.Info("贴窗Bot已切换无闪烁跟随：5秒仅做几何兜底，不再周期抢Topmost，也不再移动前隐藏控件。" );
+                    Log.Info("贴窗Bot已切换千牛崩溃保护跟随：5秒仅做几何兜底，不再周期抢Topmost，也不再主动移动/缩放千牛窗口。" );
                 }
                 catch (Exception ex)
                 {
@@ -80,17 +80,20 @@ namespace Bot.AssistWindow
             if (_lowChurnTrackingInstalled || Desk == null) return;
             _lowChurnTrackingInstalled = true;
 
-            // Replace only the event paths whose historical implementation calls Track()
-            // and raises the WPF window via Topmost. Minimize/hide/close/maximize behavior
-            // remains on the original handlers.
+            // Replace event paths that historically called Track() or directly changed the
+            // host Qianniu window. In particular Desk_EvMaximize called Desk.SetRect(), and
+            // the first Track() called SetDeskLocation(). Both become cross-process window
+            // mutations against Qt's qwindows backend and can race with Qt window teardown.
             Desk.EvShow -= Desk_EvShow;
             Desk.EvNormalize -= Desk_EvNormalize;
+            Desk.EvMaximize -= Desk_EvMaximize;
             Desk.EvMoved -= Desk_EvMoved;
             Desk.EvResized -= Desk_EvResized;
             Desk.EvGetForeground -= Desk_EvGetForeground;
 
             Desk.EvShow += SafeDesk_EvShow;
             Desk.EvNormalize += SafeDesk_EvNormalize;
+            Desk.EvMaximize += SafeDesk_EvMaximize;
             Desk.EvMoved += SafeDesk_EvMoved;
             Desk.EvResized += SafeDesk_EvResized;
             Desk.EvGetForeground += SafeDesk_EvGetForeground;
@@ -107,6 +110,7 @@ namespace Bot.AssistWindow
                 if (Desk == null) return;
                 Desk.EvShow -= SafeDesk_EvShow;
                 Desk.EvNormalize -= SafeDesk_EvNormalize;
+                Desk.EvMaximize -= SafeDesk_EvMaximize;
                 Desk.EvMoved -= SafeDesk_EvMoved;
                 Desk.EvResized -= SafeDesk_EvResized;
                 Desk.EvGetForeground -= SafeDesk_EvGetForeground;
@@ -141,6 +145,15 @@ namespace Bot.AssistWindow
 
         private void SafeDesk_EvNormalize(object sender, DeskEventArgs e)
         {
+            WakeUp();
+            SafeTrackGeometry(false, false);
+        }
+
+        private void SafeDesk_EvMaximize(object sender, DeskEventArgs e)
+        {
+            // Never force the host back to normal or resize it from qnbot. The historical
+            // handler called Desk.ShowNormal()/Desk.SetRect() while Qt was processing the
+            // maximize transition. Keep the host-owned transition intact and only follow it.
             WakeUp();
             SafeTrackGeometry(false, false);
         }
@@ -196,11 +209,15 @@ namespace Bot.AssistWindow
                         if (!IsVisible) return;
 
                         SetPanelsSize();
-                        if (_isFirstTrack || adjustDeskLocation)
-                        {
+
+                        // Crash guard: qnbot follows Qianniu; it must not reposition Qianniu.
+                        // The old first-track path called SetDeskLocation() -> Desk.SetLocation()
+                        // -> SetWindowPlacement() in the AliWorkbench process. Qt 5.15.2 receives
+                        // those changes in qwindows.dll while its QWindow objects can be changing.
+                        // Keep the parameter for call-site compatibility but intentionally ignore
+                        // requests to move the host window.
+                        if (_isFirstTrack)
                             _isFirstTrack = false;
-                            SetDeskLocation();
-                        }
 
                         // Do not call the historical SetRightPanelPosition here. Its MoveUIElement
                         // implementation hides a visible control, moves it, then shows it again.

@@ -35,14 +35,15 @@ $qn = Replace-Required $qn "private const string injectVersionMarker = `"$oldMar
 $runningReplacement = @'
                 if (IsWorkbenchRunning())
                 {
-                    // v11 is non-destructive. Patch the on-disk WebView payload without
-                    // terminating the logged-in Qianniu process. A loaded v10 page can
-                    // consume v11 after a local page reload instead of a full process restart.
-                    Log.Info("Qianniu inject v11 migration: live patch; no close/kill/restart. marker=" + injectVersionMarker);
+                    // Crash guard: never rewrite webui.zip/sign.json or clear QNCEF caches
+                    // while AliWorkbench/AliRender can still be using them. The migration is
+                    // deferred to a clean start instead of mutating Qianniu's live WebView files.
+                    Log.Info("Qianniu inject v11 migration deferred: AliWorkbench is running; skip webui.zip/sign/cache mutation. marker=" + injectVersionMarker);
+                    return;
                 }
 '@
-if (-not $qn.Contains('Qianniu inject v11 migration: live patch; no close/kill/restart.')) {
-    $runningPattern = '(?ms)^                if \(IsWorkbenchRunning\(\)\)\n                \{.*?^                    await Task\.Delay\(3000\);\n                \}'
+if (-not $qn.Contains('Qianniu inject v11 migration deferred: AliWorkbench is running;')) {
+    $runningPattern = '(?ms)^                if \(IsWorkbenchRunning\(\)\)\n                \{.*?^                \}'
     $updated = [regex]::Replace($qn, $runningPattern, $runningReplacement, 1)
     if ($updated -eq $qn) { throw 'Required patch fragment missing: running Qianniu migration' }
     $qn = $updated
@@ -51,18 +52,18 @@ if (-not $qn.Contains('Qianniu inject v11 migration: live patch; no close/kill/r
 $resultReplacement = @'
                 if (success == needInjectPaths.Count)
                 {
-                    Log.Info("Qianniu inject v11 written to disk; no process restart required. A loaded v10 WebView switches after local page reload. marker=" + injectVersionMarker);
+                    Log.Info("Qianniu inject v11 written while AliWorkbench is closed; start Qianniu to load the new payload. marker=" + injectVersionMarker);
                 }
                 else if (success > 0)
                 {
-                    Log.Error("Qianniu inject v11 partial migration; keep Qianniu running and retry non-destructively. success=" + success + ", total=" + needInjectPaths.Count);
+                    Log.Error("Qianniu inject v11 partial migration while AliWorkbench is closed. success=" + success + ", total=" + needInjectPaths.Count);
                 }
                 else
                 {
-                    Log.Error("Qianniu inject v11 migration failed; keep Qianniu running and retry non-destructively. marker=" + injectVersionMarker);
+                    Log.Error("Qianniu inject v11 migration failed while AliWorkbench is closed. marker=" + injectVersionMarker);
                 }
 '@
-if (-not $qn.Contains('Qianniu inject v11 written to disk; no process restart required.')) {
+if (-not $qn.Contains('Qianniu inject v11 written while AliWorkbench is closed;')) {
     $resultPattern = '(?ms)^                if \(success == needInjectPaths\.Count\)\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}\n                else if \(success > 0\)\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}\n                else\n                \{\n                    MessageBox\.Show\(".*?"\);\n                \}'
     $updated = [regex]::Replace($qn, $resultPattern, $resultReplacement, 1)
     if ($updated -eq $qn) { throw 'Required patch fragment missing: migration result' }
@@ -74,6 +75,8 @@ $end = $qn.IndexOf('private static string FindInstallPath()', $start)
 if ($start -lt 0 -or $end -le $start) { throw 'Cannot locate QNInject.StartInject for safety validation' }
 $startBody = $qn.Substring($start, $end - $start)
 if ($startBody.Contains('KillWorkbenchProcesses();')) { throw 'Legacy destructive QNInject migration remains in StartInject' }
+if ($startBody.Contains('live patch; no close/kill/restart.')) { throw 'Unsafe live Qianniu resource patching remains in StartInject' }
+if (-not $startBody.Contains('Qianniu inject v11 migration deferred: AliWorkbench is running;')) { throw 'Running-Qianniu defer guard missing from StartInject' }
 if ($startBody.Contains('MessageBox.Show(') -and $startBody.Contains('success == needInjectPaths.Count')) {
     # The early install/resource error dialogs are allowed; the success/restart result block is not.
     $resultStart = $startBody.IndexOf('if (success == needInjectPaths.Count)')
@@ -81,4 +84,4 @@ if ($startBody.Contains('MessageBox.Show(') -and $startBody.Contains('success ==
 }
 [IO.File]::WriteAllText($qnPath, $qn, (New-Object Text.UTF8Encoding($true)))
 
-Write-Host "Applied recoverable Qianniu inject migration: $newMarker"
+Write-Host "Applied crash-safe recoverable Qianniu inject migration: $newMarker"

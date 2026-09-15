@@ -22,8 +22,9 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Keeps QN/CDP sellers, native Qianniu Desk HWNDs and ShopKeys aligned without
-    /// replacing the existing message pipeline. A seller may own only one native Desk and
-    /// a Desk may own only one seller for the lifetime of that live binding.
+    /// replacing the existing message pipeline. Several authenticated sellers may share one
+    /// Qianniu reception HWND, but only the seller proven active by a foreground conversation
+    /// switch may own that Desk's visible composer and attached Bot UI at a given moment.
     /// </summary>
     internal static class MultiShopRuntimeSessionCoordinator
     {
@@ -63,7 +64,14 @@ namespace Bot.ChromeNs
                 {
                     if (qn == null) continue;
                     if (Subscribed.TryAdd(qn, 0)) Subscribe(qn);
-                    if (qn.Rpa != null) qn.Rpa.EnsureSellerDeskBinding();
+
+                    var seller = Seller(qn);
+                    var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                    if (qn.Rpa != null
+                        && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)))
+                    {
+                        qn.Rpa.EnsureSellerDeskBinding();
+                    }
                     SyncAttachedUi(qn);
                 }
             }
@@ -84,23 +92,28 @@ namespace Bot.ChromeNs
         private static void Qn_EvSellerSwitched(object sender, SellerSwitchedEventArgs e)
         {
             var qn = sender as QN;
-            // EvSellerSwitched is raised by the active chat/dialog switch path. It is the
-            // safest moment to associate an unresolved generic Desk with the seller whose
-            // native Qianniu reception window is currently foreground. Never do this from
-            // background message/status events.
+            // Seller switch is direct foreground evidence. The same native HWND may already be
+            // known by another seller tab, so this changes active composer ownership instead of
+            // trying to manufacture another Desk.
             DeskSellerBindingRegistry.BindForegroundSeller(qn, "seller-switched-foreground");
             EnsureQn(qn, true);
         }
 
         private static void Qn_EvBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
         {
-            EnsureQn(sender as QN, true);
+            var qn = sender as QN;
+            // onConversationChange is also foreground evidence. Production Qianniu 9.97 does not
+            // reliably emit a separate sellerSwitched event when clicking another logged-in seller
+            // tab, but the newly active seller immediately emits buyerSwitched. Use that event to
+            // hand the shared Desk/composer to the correct seller before any UIA operation.
+            DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-foreground");
+            EnsureQn(qn, true);
         }
 
         private static void Qn_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
         {
-            // Background messages must not create seller-to-HWND associations. They may only
-            // use a relationship that was already proven by native title or active switching.
+            // Background messages must not change active seller-to-HWND ownership. They may only
+            // use a relationship that was already proven by native title or foreground switching.
             EnsureQn(sender as QN, true);
         }
 
@@ -109,7 +122,13 @@ namespace Bot.ChromeNs
             if (qn == null) return;
             try
             {
-                if (qn.Rpa != null) qn.Rpa.EnsureSellerDeskBinding(force);
+                var seller = Seller(qn);
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                if (qn.Rpa != null
+                    && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)))
+                {
+                    qn.Rpa.EnsureSellerDeskBinding(force);
+                }
                 SyncAttachedUi(qn);
             }
             catch (Exception ex)
@@ -124,7 +143,7 @@ namespace Bot.ChromeNs
             var seller = Seller(qn);
             if (seller.Length == 0) return;
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
-            if (desk == null) return;
+            if (desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)) return;
             var assist = desk.AssistWindow;
             if (assist == null || assist.Dispatcher == null) return;
 
