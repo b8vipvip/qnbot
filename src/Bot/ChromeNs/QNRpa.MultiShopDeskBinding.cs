@@ -22,8 +22,6 @@ namespace Bot.ChromeNs
             var desks = Desk.Snapshot();
             if (desks.Count == 1 && RuntimeSellerCount() <= 1)
             {
-                // Historical single-shop compatibility only. If two authenticated sellers
-                // exist, a single discovered HWND is ambiguous and must never be shared.
                 return desks[0];
             }
             return null;
@@ -40,21 +38,22 @@ namespace Bot.ChromeNs
                 if (Desk.HasMultipleDesks || RuntimeSellerCount() > 1)
                 {
                     Log.ErrorWithMaxCount(
-                        "多店铺RPA绑定失败，未找到卖家唯一对应千牛窗口，禁止共享或猜测其他店铺: seller=" + seller,
+                        "多店铺RPA绑定失败，未找到当前seller已登记的千牛窗口，禁止猜测其他窗口: seller=" + seller,
                         20);
                 }
                 return false;
             }
 
-            // Even after resolution, verify the one-to-one registry. A seller-named legacy
-            // Desk is remembered by FindSellerDesk; generic single-shop compatibility is only
-            // accepted above when there is at most one authenticated seller.
-            var boundSeller = DeskSellerBindingRegistry.GetSeller(desk);
+            // Qianniu 9.97 may host multiple seller tabs in one HWND. Sharing the HWND is valid,
+            // sharing the visible composer is not. Native/UIA send may run only for the seller that
+            // the registry has proven to be active on this Desk. Hidden sellers keep their own QN,
+            // CDP, buyer state and shop data, but cannot type/click through another seller's tab.
             if (RuntimeSellerCount() > 1
-                && !string.Equals(boundSeller, seller, StringComparison.Ordinal))
+                && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
             {
-                Log.ErrorWithMaxCount("多店铺RPA绑定已阻止：目标Desk尚未证明属于当前seller: seller="
-                    + seller + ", hwnd=" + desk.Hwnd.Handle, 20);
+                Log.ErrorWithMaxCount("多客服RPA已隔离：当前可见千牛输入框不属于目标seller，禁止跨客服写入/发送: seller="
+                    + seller + ", activeSeller=" + DeskSellerBindingRegistry.GetSeller(desk)
+                    + ", hwnd=" + desk.Hwnd.Handle, 20);
                 return false;
             }
 
@@ -77,7 +76,7 @@ namespace Bot.ChromeNs
                     _closeContactButton = null;
                     _sellerDeskProcessId = desk.ProcessId;
                     _sellerDeskHwnd = desk.Hwnd.Handle;
-                    Log.Info("RPA已绑定卖家专属千牛窗口: seller=" + seller
+                    Log.Info("RPA已绑定当前活动客服的千牛窗口: seller=" + seller
                         + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
                     return true;
                 }
@@ -88,7 +87,7 @@ namespace Bot.ChromeNs
                     _messageInputTextArea = null;
                     _sendMessageButton = null;
                     Log.ErrorWithMaxCount(
-                        "RPA绑定卖家专属千牛窗口失败: seller=" + seller + ", " + ex.Message,
+                        "RPA绑定当前活动客服千牛窗口失败: seller=" + seller + ", " + ex.Message,
                         20);
                     return false;
                 }
