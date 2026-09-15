@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -102,6 +102,58 @@ def _conflict_detail(bound_shop_key: str) -> Dict[str, Any]:
     }
 
 
+def _known_runtime_sellers(conn, client_id: int) -> List[str]:
+    try:
+        row = conn.execute(
+            "SELECT seller_nicks_json FROM bot_client_state WHERE client_id=?",
+            (client_id,),
+        ).fetchone()
+        values = json.loads((row["seller_nicks_json"] if row else "") or "[]")
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for value in values:
+            seller = str(value or "").strip()
+            if seller and seller not in result:
+                result.append(seller)
+        return result[:8]
+    except Exception:
+        return []
+
+
+def _seller_identity_matches(actual: str, expected: str) -> bool:
+    actual = (actual or "").strip().casefold()
+    expected = (expected or "").strip().casefold()
+    if not actual or not expected:
+        return False
+    if actual == expected:
+        return True
+    # Console rows may use a short customer-service display name while Qianniu reports
+    # account-prefix:name. Treat only an explicit suffix separator as the same identity.
+    return actual.endswith(":" + expected) or actual.endswith("：" + expected) \
+        or expected.endswith(":" + actual) or expected.endswith("：" + actual)
+
+
+def _validate_runtime_seller_identity(conn, client_id: int, seller: str) -> None:
+    seller = (seller or "").strip()
+    if not seller:
+        return
+    known = _known_runtime_sellers(conn, client_id)
+    if not known:
+        return
+    if any(_seller_identity_matches(seller, expected) for expected in known):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "token_seller_mismatch",
+            "message": "该 Bot 客户端令牌最近属于其他千牛客服，拒绝绑定到当前错误店铺",
+            "bound_shop_key": "",
+            "expected_sellers": known,
+        },
+    )
+
+
 def _delete_if_table_exists(conn, table: str, client_id: int) -> None:
     try:
         conn.execute(f"DELETE FROM {table} WHERE client_id=?", (client_id,))
@@ -139,6 +191,11 @@ def ensure_binding(
 
     now = core._now()
     with _cp.db() as conn:
+        # Seller identity is an independent safety dimension from ShopKey. A stale Windows
+        # active-shop pointer must never be able to move a known token to another customer
+        # service account, even when the user confirms a force rebind prompt.
+        _validate_runtime_seller_identity(conn, client_id, seller)
+
         row = _binding_row(conn, client_id)
         bound = ((row["shop_key"] if row else "") or "").strip()
         if bound and bound != shop_key and not force:
