@@ -22,13 +22,14 @@ def test_native_rpa_is_gated_by_active_seller_not_only_shared_hwnd():
         encoding="utf-8-sig"
     )
 
+    assert "ActiveShopSessionRegistry.ValidateNativeSend(_qn" in source
     assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in source
     assert "当前可见千牛输入框不属于目标seller" in source
     assert "禁止跨客服写入/发送" in source
     assert "RPA已绑定当前活动客服的千牛窗口" in source
 
 
-def test_buyer_switch_hands_shared_desk_to_the_new_active_seller():
+def test_buyer_switch_cannot_steal_shared_desk_from_focused_seller():
     source = (ROOT / "src" / "Bot" / "ChromeNs" / "MultiShopRuntimeSessionCoordinator.cs").read_text(
         encoding="utf-8-sig"
     )
@@ -36,16 +37,22 @@ def test_buyer_switch_hands_shared_desk_to_the_new_active_seller():
     buyer_switch = source.split("private static void Qn_EvBuyerSwitched", 1)[1].split(
         "private static void Qn_EvRecieveNewMessage", 1
     )[0]
-    assert 'DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-foreground")' in buyer_switch
+    assert "ActiveShopSessionRegistry.IsActive(qn)" in buyer_switch
+    assert "ActivateFromFocusedWebView" not in buyer_switch
+    assert "ObserveChatDialogActive" not in buyer_switch
     assert "EnsureQn(qn, true);" in buyer_switch
-    assert "desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in source
+    assert "ReassertCurrent" in buyer_switch
 
 
 def test_attached_bot_ui_only_follows_active_seller_on_shared_desk():
-    source = (ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "Robot" / "CtlRobot.MultiShopSession.cs").read_text(
+    coordinator = (ROOT / "src" / "Bot" / "ChromeNs" / "MultiShopRuntimeSessionCoordinator.cs").read_text(
+        encoding="utf-8-sig"
+    )
+    robot = (ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "Robot" / "CtlRobot.MultiShopSession.cs").read_text(
         encoding="utf-8-sig"
     )
 
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in source
-    assert "txtSeller.Text = seller;" in source
-    assert "txtBuyer.Text = buyer.Length == 0" in source
+    assert "ActiveShopSessionRegistry.IsActive(qn)" in coordinator
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in robot
+    assert "txtSeller.Text = seller;" in robot
+    assert "txtBuyer.Text = buyer.Length == 0" in robot
