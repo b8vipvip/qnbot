@@ -30,7 +30,7 @@ jobs:
           ref: master
           fetch-depth: 1
 
-      - name: Check whether the verified commit changes Bot product files
+      - name: Check whether the verified range changes Bot product files
         if: github.event_name == 'workflow_run'
         id: release_gate
         shell: bash
@@ -39,20 +39,46 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          base_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.parents[0].sha // ""')"
+
+          # Compare the verified head against the source commit of the latest
+          # stable Bot release. This covers multi-commit pushes/merges: product
+          # changes earlier in the range cannot be hidden by a CI-only head.
+          latest_release="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '[.[] | select(.draft == false and (.tag_name | startswith("bot-v")))] | sort_by(.published_at) | reverse | .[0] // empty')"
+          base_sha=""
+          if [[ -n "$latest_release" ]]; then
+            base_sha="$(jq -r '.target_commitish // empty' <<<"$latest_release")"
+          fi
+
+          if [[ -z "$base_sha" ]]; then
+            # Bootstrap safety: without a previous stable source, compare the
+            # full verified commit against its first parent rather than publish
+            # unconditionally.
+            base_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.parents[0].sha // ""')"
+          fi
           if [[ -z "$base_sha" ]]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "No parent commit found; automatic release is suppressed."
+            echo "No stable release source or parent commit found; automatic release is suppressed."
             exit 0
           fi
-          changed="$(gh api "repos/$GITHUB_REPOSITORY/compare/$base_sha...$HEAD_SHA" --jq '.files[].filename')"
+
+          compare="$(gh api "repos/$GITHUB_REPOSITORY/compare/$base_sha...$HEAD_SHA")"
+          status="$(jq -r '.status' <<<"$compare")"
+          if [[ "$status" == "behind" || "$status" == "diverged" ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Verified head is not a forward descendant of stable source $base_sha (status=$status); automatic release is suppressed."
+            exit 0
+          fi
+
+          changed="$(jq -r '.files[].filename' <<<"$compare")"
+          printf 'Release eligibility range: %s...%s\n' "$base_sha" "$HEAD_SHA"
           printf '%s\n' "$changed"
           if grep -Eq '^(src/|tools/qn_discovery_lab/)' <<<"$changed"; then
             echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "Bot product files changed; automatic release is eligible."
+            echo "Bot product files changed since the latest stable release; automatic release is eligible."
           else
             echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "Only CI/workflow or non-Bot files changed; skip automatic Bot release."
+            echo "No Bot product files changed since the latest stable release; skip automatic Bot release."
           fi
 
       - name: Resolve verified Windows build
@@ -240,4 +266,4 @@ jobs:
 
       - name: Skip workflow-only automatic release
         if: github.event_name == 'workflow_run' && steps.release_gate.outputs.release != 'true'
-        run: echo "Verified Windows build came from a non-product master change; no Bot release is created."
+        run: echo "Verified Windows build contains no Bot product changes since the latest stable release; no Bot release is created."
