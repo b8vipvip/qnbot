@@ -40,6 +40,24 @@ namespace Bot.ChromeNs
                 ? "检测到千牛“服务态度提醒”，Bot已停止自动发送并等待人工处理"
                 : detected.Detail + "；Bot已停止自动发送并等待人工处理";
             SetSendCancellation("平台发送拦截", detail);
+
+            // The send action is now conclusively cancelled by a visible platform guard. Keeping an
+            // already-started delivery watchdog alive would report a false “9秒未回显” anomaly even
+            // though no submission was allowed. Production 1.1.1499 logs showed exactly that chain,
+            // followed by misleading failure reports. Cancel every pending delivery for this exact
+            // seller+buyer conversation; the platform reminder itself remains untouched for human
+            // review and Bot still never clicks “继续发送”.
+            var cancelledWatchdogs = SendDeliveryWatchdog.CancelConversation(
+                SellerNick,
+                buyer,
+                "platform_send_blocked:" + (stage ?? string.Empty));
+            if (cancelledWatchdogs > 0)
+            {
+                Log.Info("平台发送拦截已同步取消发送回显监控，禁止把明确取消误报为发送异常: seller="
+                    + SellerNick + ", buyer=" + buyer + ", count=" + cancelledWatchdogs
+                    + ", stage=" + stage);
+            }
+
             Log.ErrorWithMaxCount(
                 "检测到千牛服务态度提醒，已失败关闭本次Bot发送；不会自动点击“继续发送”: seller="
                 + SellerNick + ", buyer=" + buyer + ", stage=" + stage + ", detail=" + detail,
