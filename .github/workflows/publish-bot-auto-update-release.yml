@@ -30,7 +30,33 @@ jobs:
           ref: master
           fetch-depth: 1
 
+      - name: Check whether the verified commit changes Bot product files
+        if: github.event_name == 'workflow_run'
+        id: release_gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          base_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.parents[0].sha // ""')"
+          if [[ -z "$base_sha" ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "No parent commit found; automatic release is suppressed."
+            exit 0
+          fi
+          changed="$(gh api "repos/$GITHUB_REPOSITORY/compare/$base_sha...$HEAD_SHA" --jq '.files[].filename')"
+          printf '%s\n' "$changed"
+          if grep -Eq '^(src/|tools/qn_discovery_lab/)' <<<"$changed"; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Bot product files changed; automatic release is eligible."
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Only CI/workflow or non-Bot files changed; skip automatic Bot release."
+          fi
+
       - name: Resolve verified Windows build
+        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
         id: build
         shell: bash
         env:
@@ -69,6 +95,7 @@ jobs:
           echo "Publishing $tag from verified workflow run $run_id ($head_sha)"
 
       - name: Download complete x64 artifact
+        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -89,6 +116,7 @@ jobs:
           echo "Downloaded artifact $artifact_id"
 
       - name: Prepare stable update package and manifest
+        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
         id: package
         shell: bash
         env:
@@ -159,6 +187,7 @@ jobs:
           echo "Prepared $TAG package: $package_size bytes, sha256=$sha256"
 
       - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -196,6 +225,7 @@ jobs:
             --latest
 
       - name: Verify published release assets
+        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -205,3 +235,7 @@ jobs:
           assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           grep -Fx 'qianniu-bot-x64.zip' <<<"$assets"
           grep -Fx 'update.json' <<<"$assets"
+
+      - name: Skip workflow-only automatic release
+        if: github.event_name == 'workflow_run' && steps.release_gate.outputs.release != 'true'
+        run: echo "Verified Windows build came from a non-product master change; no Bot release is created."
