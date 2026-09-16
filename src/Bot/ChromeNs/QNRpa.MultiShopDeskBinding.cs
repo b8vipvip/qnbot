@@ -20,9 +20,36 @@ namespace Bot.ChromeNs
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
             if (desk != null) return desk;
 
-            var desks = Desk.Snapshot();
+            var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
             if (desks.Count == 1 && RuntimeSellerCount() <= 1) return desks[0];
             return null;
+        }
+
+        private Desk TryRecoverActiveSellerDesk(string seller)
+        {
+            if (RuntimeSellerCount() <= 1) return null;
+
+            string isolationReason;
+            if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return null;
+
+            // Production 1.1.1502 showed that the seller->HWND registry can be empty after an
+            // attached-window lifecycle transition even though the independently arbitrated
+            // active ShopKey/CDP session is still valid and AliWorkbench still has exactly one
+            // live reception Desk. In that exact case it is safe to reconstruct the many-to-one
+            // mapping. Never choose among multiple native windows and never recover a background
+            // seller: both conditions remain fail-closed.
+            var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
+            if (desks.Count != 1) return null;
+
+            var desk = DeskSellerBindingRegistry.BindResolvedSeller(
+                desks[0], seller, "active-session-single-desk-recovery");
+            if (desk == null) return null;
+
+            DeskSellerBindingRegistry.MarkActiveSeller(
+                desk, seller, "active-session-single-desk-recovery");
+            Log.Info("多客服RPA已从活动ShopKey/CDP身份恢复共享千牛窗口绑定: seller=" + seller
+                + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
+            return desk;
         }
 
         internal bool EnsureSellerDeskBinding(bool force = false)
@@ -30,9 +57,6 @@ namespace Bot.ChromeNs
             var seller = SellerNick;
             if (string.IsNullOrWhiteSpace(seller)) return false;
 
-            // Multi-seller native/UIA operations require an independently arbitrated active shop.
-            // The guard verifies seller + ShopKey + CDP session. Buyer identity is verified again
-            // by QN.EnsureActiveBuyerForSendAsync immediately before the actual send.
             if (RuntimeSellerCount() > 1)
             {
                 string isolationReason;
@@ -46,6 +70,7 @@ namespace Bot.ChromeNs
             }
 
             var desk = ResolveSellerDesk();
+            if (desk == null) desk = TryRecoverActiveSellerDesk(seller);
             if (desk == null)
             {
                 if (Desk.HasMultipleDesks || RuntimeSellerCount() > 1)
@@ -67,12 +92,6 @@ namespace Bot.ChromeNs
 
             lock (_sellerDeskBindingSync)
             {
-                // A shared AliWorkbench HWND does not need to be re-attached every time a foreground
-                // seller/buyer event asks for a forced runtime refresh. Production 1.1.1499 logs
-                // showed the same seller+PID+HWND being FlaUI.Attach'ed many times per second while
-                // switching customer-service tabs. That churn buys no new identity proof and adds
-                // avoidable UIA/Qt pressure. Re-attach only when the actual process/window/seller
-                // identity changes; callers that need fresh controls already use RefreshChatControls.
                 if (automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
                     && _sellerDeskHwnd == desk.Hwnd.Handle
