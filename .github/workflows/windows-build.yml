@@ -9,7 +9,7 @@ on:
       - 'tools/qn_discovery_lab/**'
       - '.github/workflows/windows-build.yml'
   push:
-    branches: [master, integration/master-candidate, vaxsh7-codex/api, agent/uia-send-control-diagnostics]
+    branches: [master]
     paths:
       - 'src/**'
       - 'tools/qn_discovery_lab/**'
