@@ -1,43 +1,41 @@
 name: Windows x64 release build
 
-# Preserve the established Bin + data deployment layout.
-# User-specific params.db is never published.
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - master
-      - integration/master-candidate
-      - vaxsh7-codex/api
-      - agent/uia-send-control-diagnostics
+    branches: [master, integration/master-candidate, vaxsh7-codex/api, agent/uia-send-control-diagnostics]
+    paths:
+      - 'src/**'
+      - 'tools/qn_discovery_lab/**'
+      - '.github/workflows/windows-build.yml'
   push:
-    branches:
-      - master
-      - integration/master-candidate
-      - vaxsh7-codex/api
-      - agent/uia-send-control-diagnostics
+    branches: [master, integration/master-candidate, vaxsh7-codex/api, agent/uia-send-control-diagnostics]
+    paths:
+      - 'src/**'
+      - 'tools/qn_discovery_lab/**'
+      - '.github/workflows/windows-build.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-release-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test-and-build:
     runs-on: windows-2022
     timeout-minutes: 40
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.10'
-
-      - name: Install Python test dependencies
+      - name: Install Python tool-test dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check uiautomation pytest
-
+        run: python -m pip install --disable-pip-version-check uiautomation
       - name: Compile Python tools
         shell: pwsh
         run: |
@@ -47,62 +45,30 @@ jobs:
             tools/qn_discovery_lab/qn_uia_message_lifecycle.py `
             tools/qn_discovery_lab/qn_uia_lifecycle_probe.py `
             tools/qn_discovery_lab/qn_uia_withdraw_exact_probe.py
-
-      - name: Run lifecycle tests
+      - name: Run Windows-specific lifecycle tests
         shell: pwsh
         run: python -m unittest discover -s tools/qn_discovery_lab/tests
-
-      - name: Run repository static tests
-        shell: pwsh
-        run: python -m pytest -q tests
-
       - name: Validate updater with Windows PowerShell 5.1 parser
         shell: powershell
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'src\Bot\Update\BotAutoUpdater.ps1'),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List *
-            throw "BotAutoUpdater.ps1 has Windows PowerShell 5.1 parser errors."
-          }
-          Write-Host 'BotAutoUpdater.ps1 Windows PowerShell 5.1 syntax check passed.'
-
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'src\Bot\Update\BotAutoUpdater.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Format-List *; throw "BotAutoUpdater.ps1 has Windows PowerShell 5.1 parser errors." }
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
-
       - name: Restore NuGet packages
         shell: pwsh
         run: nuget restore src/Bot.sln -PackagesDirectory src/packages -NonInteractive
-
       - name: Build Bot solution x64
         shell: pwsh
         run: |
-          msbuild src/Bot.sln `
-            /t:Build `
-            /m `
-            /nologo `
-            /verbosity:minimal `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /bl:msbuild.binlog `
-            '/flp:logfile=msbuild.log;verbosity=diagnostic'
+          msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release /p:Platform=x64 /bl:msbuild.binlog '/flp:logfile=msbuild.log;verbosity=diagnostic'
           $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            Write-Host '--- MSBuild errors ---'
-            Select-String -Path msbuild.log -Pattern ': error ',' error CS',' error MSB' |
-              Select-Object -Last 120 |
-              ForEach-Object { Write-Host $_.Line }
-            exit $code
-          }
-
+          if ($code -ne 0) { Select-String -Path msbuild.log -Pattern ': error ',' error CS',' error MSB' | Select-Object -Last 120 | ForEach-Object { Write-Host $_.Line }; exit $code }
       - name: Upload MSBuild diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msbuild-diagnostics-x64-${{ github.sha }}
           path: |
@@ -110,81 +76,25 @@ jobs:
             msbuild.binlog
           if-no-files-found: warn
           retention-days: 14
-
       - name: Assemble complete runtime package
         shell: pwsh
         run: |
-          $packageRoot = Join-Path $PWD 'package'
-          $packageBin = Join-Path $packageRoot 'Bin'
-          $packageData = Join-Path $packageRoot 'data'
-          $releaseBin = Join-Path $PWD 'src\Bot\bin\x64\Release'
-          $baselineBin = Join-Path $PWD 'src\Bin'
-          $sourceData = Join-Path $PWD 'src\data'
-
+          $packageRoot = Join-Path $PWD 'package'; $packageBin = Join-Path $packageRoot 'Bin'; $packageData = Join-Path $packageRoot 'data'; $releaseBin = Join-Path $PWD 'src\Bot\bin\x64\Release'; $baselineBin = Join-Path $PWD 'src\Bin'; $sourceData = Join-Path $PWD 'src\data'
           Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $packageBin -Force | Out-Null
-          New-Item -ItemType Directory -Path $packageData -Force | Out-Null
-
-          Copy-Item -Path (Join-Path $baselineBin '*') `
-            -Destination $packageBin -Recurse -Force
-
-          Copy-Item -Path (Join-Path $releaseBin '*') `
-            -Destination $packageBin -Recurse -Force
-
-          if (Test-Path -LiteralPath $sourceData -PathType Container) {
-            Get-ChildItem -LiteralPath $sourceData -Force |
-              Where-Object { $_.Name -ne 'params.db' } |
-              Copy-Item -Destination $packageData -Recurse -Force
-          }
-
-          @(
-            'This package preserves the established Bin + data directory layout.',
-            '',
-            'params.db is intentionally excluded because it contains local user',
-            'configuration and runtime state.',
-            '',
-            'OCR inference is provided by the authenticated server control plane.',
-            'No LocalOcrWorker executable or OCR model files are required on Windows.',
-            '',
-            'Back up your existing data directory before testing.',
-            'Copy only your own params.db into this package data directory.',
-            'Do not commit or upload params.db.'
-          ) | Set-Content `
-            -LiteralPath (Join-Path $packageData 'README-PARAMS.txt') `
-            -Encoding UTF8
-
+          New-Item -ItemType Directory -Path $packageBin -Force | Out-Null; New-Item -ItemType Directory -Path $packageData -Force | Out-Null
+          Copy-Item -Path (Join-Path $baselineBin '*') -Destination $packageBin -Recurse -Force
+          Copy-Item -Path (Join-Path $releaseBin '*') -Destination $packageBin -Recurse -Force
+          if (Test-Path -LiteralPath $sourceData -PathType Container) { Get-ChildItem -LiteralPath $sourceData -Force | Where-Object { $_.Name -ne 'params.db' } | Copy-Item -Destination $packageData -Recurse -Force }
+          @('This package preserves the established Bin + data directory layout.','','params.db is intentionally excluded because it contains local user configuration and runtime state.','','OCR inference is provided by the authenticated server control plane.','No LocalOcrWorker executable or OCR model files are required on Windows.','','Back up your existing data directory before testing.','Copy only your own params.db into this package data directory.','Do not commit or upload params.db.') | Set-Content -LiteralPath (Join-Path $packageData 'README-PARAMS.txt') -Encoding UTF8
       - name: Verify complete Bot package
         shell: pwsh
         run: |
-          $required = @(
-            'package\Bin\Bot.exe',
-            'package\Bin\Bot.exe.config',
-            'package\Bin\BotLib.dll',
-            'package\Bin\DbEntity.dll',
-            'package\Bin\FlaUI.Core.dll',
-            'package\Bin\FlaUI.UIA3.dll',
-            'package\data\README-PARAMS.txt'
-          )
-
-          foreach ($path in $required) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "Required package file not found: $path"
-            }
-          }
-
-          if (Test-Path -LiteralPath 'package\Bin\local-ocr') {
-            throw 'Local OCR runtime must not be bundled after server OCR migration.'
-          }
-
-          if (Test-Path -LiteralPath 'package\data\params.db') {
-            throw 'params.db must not be present in the GitHub artifact.'
-          }
-
-          Get-Item -LiteralPath 'package\Bin\Bot.exe' |
-            Format-List FullName,Length,LastWriteTime
-
+          $required = @('package\Bin\Bot.exe','package\Bin\Bot.exe.config','package\Bin\BotLib.dll','package\Bin\DbEntity.dll','package\Bin\FlaUI.Core.dll','package\Bin\FlaUI.UIA3.dll','package\data\README-PARAMS.txt')
+          foreach ($path in $required) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required package file not found: $path" } }
+          if (Test-Path -LiteralPath 'package\Bin\local-ocr') { throw 'Local OCR runtime must not be bundled after server OCR migration.' }
+          if (Test-Path -LiteralPath 'package\data\params.db') { throw 'params.db must not be present in the GitHub artifact.' }
       - name: Upload complete x64 package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qianniu-bot-complete-x64-${{ github.sha }}
           path: package/**
