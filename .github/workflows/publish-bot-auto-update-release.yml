@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Windows x64 release build"]
     types: [completed]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -20,10 +21,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 1

@@ -2,9 +2,7 @@ name: API control plane CI
 
 on:
   push:
-    branches:
-      - feat/api-control-plane
-      - agent/reply-dedup-knowledge-navigation
+    branches: [master]
     paths:
       - services/api-control-plane/**
       - scripts/update-api-control-plane.sh
