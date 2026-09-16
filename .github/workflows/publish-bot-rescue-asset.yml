@@ -9,6 +9,8 @@ on:
   workflow_run:
     workflows: ["Publish Bot auto-update release"]
     types: [completed]
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   actions: read
@@ -22,11 +24,13 @@ jobs:
   publish:
     if: >-
       github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 1
@@ -46,17 +50,20 @@ jobs:
             throw (($errors | ForEach-Object Message) -join ' | ')
           }
 
-      - name: Attach rescue updater to latest stable release
+      - name: Attach rescue updater to latest Bot stable release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+          tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft,isPrerelease \
+            --jq '[.[] | select((.tagName | startswith("bot-v")) and .isDraft == false and .isPrerelease == false)][0].tagName // ""')"
           if [[ -z "$tag" ]]; then
-            echo "No stable Bot release exists yet; nothing to attach." >&2
+            echo "No stable bot-v* release exists yet; nothing to attach." >&2
             exit 1
           fi
+          echo "Attaching rescue updater to $tag"
           cp scripts/qianniu-bot-rescue-update.ps1 qianniu-bot-rescue-update.ps1
           gh release upload "$tag" qianniu-bot-rescue-update.ps1 \
             --repo "$GITHUB_REPOSITORY" \
