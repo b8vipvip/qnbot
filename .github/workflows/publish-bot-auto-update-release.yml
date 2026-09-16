@@ -24,10 +24,10 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
+      - name: Checkout verified release source
         uses: actions/checkout@v7
         with:
-          ref: master
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'master' }}
           fetch-depth: 1
 
       - name: Check whether the verified range changes Bot product files
@@ -40,9 +40,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Compare the verified head against the source commit of the latest
-          # stable Bot release. This covers multi-commit pushes/merges: product
-          # changes earlier in the range cannot be hidden by a CI-only head.
           latest_release="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq '[.[] | select(.draft == false and (.tag_name | startswith("bot-v")))] | sort_by(.published_at) | reverse | .[0] // empty')"
           base_sha=""
@@ -51,9 +48,6 @@ jobs:
           fi
 
           if [[ -z "$base_sha" ]]; then
-            # Bootstrap safety: without a previous stable source, compare the
-            # full verified commit against its first parent rather than publish
-            # unconditionally.
             base_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.parents[0].sha // ""')"
           fi
           if [[ -z "$base_sha" ]]; then
@@ -67,6 +61,13 @@ jobs:
           if [[ "$status" == "behind" || "$status" == "diverged" ]]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "Verified head is not a forward descendant of stable source $base_sha (status=$status); automatic release is suppressed."
+            exit 0
+          fi
+
+          file_count="$(jq '.files | length' <<<"$compare")"
+          if [[ "$file_count" -ge 300 ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Compare API returned $file_count files, which may be truncated; fail safe by allowing a release rather than missing a product change."
             exit 0
           fi
 
