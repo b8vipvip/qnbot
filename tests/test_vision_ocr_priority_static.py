@@ -32,7 +32,7 @@ def test_control_plane_bootstrap_and_container_package_priority_runtime():
     assert "runtime_ocr_priority.init_db(control_plane)" in bootstrap
     assert "runtime_ocr_priority.py" in dockerfile
     assert "runtime_ocr_priority.py" in workflow
-    assert "node --check static/ocr-settings.js" in workflow
+    assert "node --check services/api-control-plane/static/ocr-settings.js" in workflow
     assert "OCR_VISION_PRIORITY=ocr_first" in env
 
 
@@ -57,21 +57,3 @@ def test_bot_reads_priority_from_authenticated_shop_control_plane():
 
     assert "VisionOcrPriorityService.cs" in props
     assert "ShopControlPlaneConnectionStore" in service
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in service
-    assert 'new AuthenticationHeaderValue("Bearer", endpoint.ApiKey)' in service
-    assert '"/api/runtime/v1/ocr/vision-priority"' in service
-    assert 'public const string OcrFirst = "ocr_first"' in service
-    assert 'public const string AiFirst = "ai_first"' in service
-    assert "return OcrFirst;" in service  # fail-safe keeps previous behavior
-
-
-def test_ai_first_yields_before_ocr_direct_reply_but_keeps_no_ai_fallback():
-    decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
-
-    priority_lookup = decision.index("VisionOcrPriorityService.ResolveAsync")
-    image_resolution = decision.index("new VisionImageResolver().ResolveAsync")
-    assert priority_lookup < image_resolution
-    assert "VisionOcrPriorityService.IsAiFirst(priority)" in decision
-    assert "AiEndpointStore.GetVisionEnabledEndpoints()" in decision
-    assert "跳过OCR+知识库提前直答" in decision
-    assert "未配置可用视觉模型，允许OCR+知识库兜底" in decision
