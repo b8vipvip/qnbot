@@ -93,7 +93,7 @@ def test_server_bootstrap_container_and_ci_package_new_bridge():
     assert "bot_web_bot_enabled.install(control_plane)" in bootstrap
     assert "bot_web_bot_enabled.init_db()" in bootstrap
     assert "bot_web_bot_enabled.py" in dockerfile
-    assert "python -m py_compile app.py bootstrap.py" in workflow
+    assert "python -m compileall -q services/api-control-plane" in workflow
     assert "bot_web_bot_enabled.py" in workflow
-    assert "node --check static/bot-web-bot-enabled.js" in workflow
+    assert "node --check services/api-control-plane/static/bot-web-bot-enabled.js" in workflow
     assert "services/api-control-plane/bot_web_bot_enabled.py" in workflow

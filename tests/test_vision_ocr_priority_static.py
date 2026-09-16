@@ -32,7 +32,7 @@ def test_control_plane_bootstrap_and_container_package_priority_runtime():
     assert "runtime_ocr_priority.init_db(control_plane)" in bootstrap
     assert "runtime_ocr_priority.py" in dockerfile
     assert "runtime_ocr_priority.py" in workflow
-    assert "node --check static/ocr-settings.js" in workflow
+    assert "node --check services/api-control-plane/static/ocr-settings.js" in workflow
     assert "OCR_VISION_PRIORITY=ocr_first" in env
 
 

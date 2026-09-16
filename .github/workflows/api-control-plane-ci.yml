@@ -18,16 +18,68 @@ on:
       - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: api-control-plane-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  windows-static:
-    runs-on: windows-2022
+  fast-gate:
+    name: Fast Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Validate server updater shell syntax
+        run: bash -n scripts/update-api-control-plane.sh
+      - name: Install fast-test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run repository static tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
+      - name: Upload fast-gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: repository-static-${{ github.sha }}
+          path: repository-static.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Compile API control-plane Python
+        run: python -m compileall -q services/api-control-plane
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check services/api-control-plane/static/app.js
+          node --check services/api-control-plane/static/bot-web-auto-reply-rules.js
+          node --check services/api-control-plane/static/bot-web-bot-enabled.js
+          node --check services/api-control-plane/static/message-traces.js
+          node --check services/api-control-plane/static/version-update.js
+          node --check services/api-control-plane/static/console-startup-guard.js
+          node --check services/api-control-plane/static/ocr-settings.js
+
+  windows-static:
+    name: Windows Static Gate
+    needs: fast-gate
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
       - name: Validate Windows updater PowerShell syntax
         shell: pwsh
         run: |
@@ -42,60 +94,26 @@ jobs:
             $errors | Format-List | Out-String | Write-Error
             exit 1
           }
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install Python test dependencies
-        run: python -m pip install pytest
-      - name: Run release-scope tests on Windows
-        shell: pwsh
-        run: |
-          python -m pytest -q --tb=short tests 2>&1 | Tee-Object -FilePath repository-static-windows.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Upload Windows static diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repository-static-windows-${{ github.sha }}
-          path: repository-static-windows.log
-          if-no-files-found: warn
-          retention-days: 7
 
-  test-build-package:
+  full-gate:
+    name: Full Gate / Build Package
+    needs: [fast-gate, windows-static]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: services/api-control-plane
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Validate server updater shell syntax
-        working-directory: .
-        run: bash -n scripts/update-api-control-plane.sh
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: services/api-control-plane/requirements.txt
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Run repository static tests
-        working-directory: .
-        run: |
-          set -o pipefail
-          python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
-      - name: Upload repository static diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repository-static-${{ github.sha }}
-          path: repository-static.log
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py bot_web_auto_reply_rules.py bot_web_bot_enabled.py chat2api_runtime_guard.py deep_test_guard.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py github_vless_proxy.py message_processing_traces.py scheduled_deep_test_retry.py runtime_embedding_guard.py runtime_ocr.py runtime_ocr_priority.py runtime_routing_guard.py runtime_streaming_guard.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_chat2api_runtime_guard.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_github_vless_proxy.py tests/test_message_processing_traces.py tests/test_runtime_embedding_guard.py tests/test_runtime_ocr.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
       - name: Run control plane tests
         env:
           DATA_DIR: ${{ runner.temp }}/qianniu-api-control-plane-test-data
@@ -107,21 +125,12 @@ jobs:
           python -m pytest -q --tb=short 2>&1 | tee pytest.log
       - name: Upload pytest diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-control-plane-pytest-${{ github.sha }}
           path: services/api-control-plane/pytest.log
           if-no-files-found: warn
           retention-days: 7
-      - name: Check browser JavaScript syntax
-        run: |
-          node --check static/app.js
-          node --check static/bot-web-auto-reply-rules.js
-          node --check static/bot-web-bot-enabled.js
-          node --check static/message-traces.js
-          node --check static/version-update.js
-          node --check static/console-startup-guard.js
-          node --check static/ocr-settings.js
       - name: Build Ubuntu container
         run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
       - name: Smoke test Ubuntu container startup and OCR engine
@@ -159,13 +168,13 @@ jobs:
           docker compose -f docker-compose.bt.yml config >/dev/null
       - name: Clean generated caches
         run: |
-          rm -f .env pytest.log repository-static.log
+          rm -f .env pytest.log
           rm -rf .test-data
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type d -name .pytest_cache -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
       - name: Upload Ubuntu deployment package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qianniu-api-control-plane-ubuntu-${{ github.sha }}
           path: |

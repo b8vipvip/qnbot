@@ -28,6 +28,6 @@ def test_retry_scheduler_is_registered_and_shipped_in_server_package():
     assert "scheduled_deep_test_retry.install(control_plane)" in bootstrap
     assert "scheduled_deep_test_retry.py" in dockerfile
     assert "scheduled_deep_test_retry.py" in workflow
-    assert "test_scheduled_deep_test_retry.py" in workflow
+    assert "services/api-control-plane/tests/**" in workflow
     assert "SCHEDULED_DEEP_TEST_RETRY_MINUTES=10" in env_example
     assert "SCHEDULED_DEEP_TEST_RETRY_POLL_SECONDS=60" in env_example
