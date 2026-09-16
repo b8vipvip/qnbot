@@ -3,27 +3,15 @@ name: Windows CI
 on:
   workflow_dispatch:
   pull_request:
-    branches: [ master ]
-    paths:
-      - 'src/Bot/**'
-      - 'src/BotLib/**'
-      - 'src/DbEntity/**'
-      - 'src/*.sln'
-      - 'src/Directory.Build.*'
-      - '.github/workflows/build-windows.yml'
+    branches: [master]
+    paths: ['src/Bot/**', 'src/BotLib/**', 'src/DbEntity/**', 'src/*.sln', 'src/Directory.Build.*', '.github/workflows/build-windows.yml']
   push:
-    branches: [ master ]
-    paths:
-      - 'src/Bot/**'
-      - 'src/BotLib/**'
-      - 'src/DbEntity/**'
-      - 'src/*.sln'
-      - 'src/Directory.Build.*'
-      - '.github/workflows/build-windows.yml'
+    branches: [master]
+    paths: ['src/Bot/**', 'src/BotLib/**', 'src/DbEntity/**', 'src/*.sln', 'src/Directory.Build.*', '.github/workflows/build-windows.yml']
 
 concurrency:
-  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: windows-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -41,107 +29,49 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        configuration: [ Debug ]
-        platform: [ x64 ]
-
+      matrix: { configuration: [Debug], platform: [x64] }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v7
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
-
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
-
       - name: Prepare legacy project files
         shell: pwsh
         run: |
-          $projects = @(
-            'src\Bot\Bot.csproj',
-            'src\DbEntity\DbEntity.csproj'
-          )
-
+          $projects = @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')
           foreach ($project in $projects) {
-            if (-not (Test-Path -LiteralPath $project)) {
-              continue
-            }
-
+            if (-not (Test-Path -LiteralPath $project)) { continue }
             $xml = Get-Content -LiteralPath $project -Raw
-
-            # Legacy project compatibility for the GitHub-hosted Windows runner.
             $xml = $xml -replace '\{F935DC20-1CF0-11D0-ADB9-00C04FD58A\}', '{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}'
-            $xml = [regex]::Replace(
-              $xml,
-              '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>',
-              ''
-            )
-
+            $xml = [regex]::Replace($xml,'(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>','')
             if ($project -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
               $sharpZipReference = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
               $xml = $xml -replace '(\s*<Reference Include="System" />)', "`r`n$sharpZipReference`$1"
             }
-
             Set-Content -LiteralPath $project -Value $xml -Encoding UTF8
           }
-
       - name: Restore NuGet packages
         shell: pwsh
         run: |
           nuget restore $env:SOLUTION -NonInteractive -Verbosity normal
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build solution
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts\logs | Out-Null
-
-          msbuild $env:SOLUTION `
-            /m `
-            /t:Rebuild `
-            /nologo `
-            /v:minimal `
-            /p:Configuration="${{ matrix.configuration }}" `
-            /p:Platform="${{ matrix.platform }}" `
-            /bl:artifacts\logs\msbuild.binlog `
-            '/flp:logfile=artifacts\logs\msbuild.log;verbosity=diagnostic'
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host '--- Recent MSBuild errors ---'
-            if (Test-Path artifacts\logs\msbuild.log) {
-              Select-String -Path artifacts\logs\msbuild.log -Pattern ': error ',' error CS',' error MSB' |
-                Select-Object -Last 120 |
-                ForEach-Object { Write-Host $_.Line }
-            }
-            exit $LASTEXITCODE
-          }
-
+          msbuild $env:SOLUTION /m /t:Rebuild /nologo /v:minimal /p:Configuration="${{ matrix.configuration }}" /p:Platform="${{ matrix.platform }}" /bl:artifacts\logs\msbuild.binlog '/flp:logfile=artifacts\logs\msbuild.log;verbosity=diagnostic'
+          if ($LASTEXITCODE -ne 0) { if (Test-Path artifacts\logs\msbuild.log) { Select-String -Path artifacts\logs\msbuild.log -Pattern ': error ',' error CS',' error MSB' | Select-Object -Last 120 | ForEach-Object { Write-Host $_.Line } }; exit $LASTEXITCODE }
       - name: Verify build output
         shell: pwsh
         run: |
           $exe = Join-Path $env:OUTPUT_DIR 'Bot.exe'
-          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-            throw "Expected build output not found: $exe"
-          }
-
-          Get-Item -LiteralPath $exe | Format-List FullName,Length,LastWriteTime
-
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Expected build output not found: $exe" }
       - name: Upload Bot artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qianniu-bot-bin
-          path: src/Bin/**
-          if-no-files-found: error
-          retention-days: 14
-
+        uses: actions/upload-artifact@v7
+        with: { name: qianniu-bot-bin, path: 'src/Bin/**', if-no-files-found: error, retention-days: 14 }
       - name: Upload build diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qianniu-bot-build-logs
-          path: artifacts/logs/**
-          if-no-files-found: warn
-          retention-days: 14
+        uses: actions/upload-artifact@v7
+        with: { name: qianniu-bot-build-logs, path: 'artifacts/logs/**', if-no-files-found: warn, retention-days: 14 }
