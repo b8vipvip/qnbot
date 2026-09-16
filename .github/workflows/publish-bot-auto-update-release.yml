@@ -218,6 +218,7 @@ jobs:
           gh release create "$TAG" \
             qianniu-bot-x64.zip \
             update.json \
+            scripts/qianniu-bot-rescue-update.ps1 \
             --repo "$GITHUB_REPOSITORY" \
             --target "$HEAD_SHA" \
             --title "Qianniu AI Bot $VERSION" \
@@ -235,6 +236,7 @@ jobs:
           assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           grep -Fx 'qianniu-bot-x64.zip' <<<"$assets"
           grep -Fx 'update.json' <<<"$assets"
+          grep -Fx 'qianniu-bot-rescue-update.ps1' <<<"$assets"
 
       - name: Skip workflow-only automatic release
         if: github.event_name == 'workflow_run' && steps.release_gate.outputs.release != 'true'
