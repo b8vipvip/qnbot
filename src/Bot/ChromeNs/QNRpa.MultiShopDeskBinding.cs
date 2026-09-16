@@ -11,6 +11,7 @@ namespace Bot.ChromeNs
         private readonly object _sellerDeskBindingSync = new object();
         private int _sellerDeskProcessId;
         private int _sellerDeskHwnd;
+        private string _sellerDeskBoundSeller = string.Empty;
 
         internal Desk ResolveSellerDesk()
         {
@@ -66,9 +67,19 @@ namespace Bot.ChromeNs
 
             lock (_sellerDeskBindingSync)
             {
-                if (!force && automationApplication != null
+                // A shared AliWorkbench HWND does not need to be re-attached every time a foreground
+                // seller/buyer event asks for a forced runtime refresh. Production 1.1.1499 logs
+                // showed the same seller+PID+HWND being FlaUI.Attach'ed many times per second while
+                // switching customer-service tabs. That churn buys no new identity proof and adds
+                // avoidable UIA/Qt pressure. Re-attach only when the actual process/window/seller
+                // identity changes; callers that need fresh controls already use RefreshChatControls.
+                if (automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
-                    && _sellerDeskHwnd == desk.Hwnd.Handle) return true;
+                    && _sellerDeskHwnd == desk.Hwnd.Handle
+                    && string.Equals(_sellerDeskBoundSeller, seller, StringComparison.Ordinal))
+                {
+                    return true;
+                }
 
                 try
                 {
@@ -79,6 +90,7 @@ namespace Bot.ChromeNs
                     _closeContactButton = null;
                     _sellerDeskProcessId = desk.ProcessId;
                     _sellerDeskHwnd = desk.Hwnd.Handle;
+                    _sellerDeskBoundSeller = seller;
                     Log.Info("RPA已绑定当前活动客服的千牛窗口: seller=" + seller
                         + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
                     return true;
@@ -87,6 +99,7 @@ namespace Bot.ChromeNs
                 {
                     _sellerDeskProcessId = 0;
                     _sellerDeskHwnd = 0;
+                    _sellerDeskBoundSeller = string.Empty;
                     _messageInputTextArea = null;
                     _sendMessageButton = null;
                     Log.ErrorWithMaxCount("RPA绑定当前活动客服千牛窗口失败: seller=" + seller + ", " + ex.Message, 20);
@@ -109,7 +122,8 @@ namespace Bot.ChromeNs
                     && DeskSellerBindingRegistry.IsSellerForDesk(desk, SellerNick)
                     && automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
-                    && _sellerDeskHwnd == desk.Hwnd.Handle;
+                    && _sellerDeskHwnd == desk.Hwnd.Handle
+                    && string.Equals(_sellerDeskBoundSeller, SellerNick, StringComparison.Ordinal);
             }
         }
 
