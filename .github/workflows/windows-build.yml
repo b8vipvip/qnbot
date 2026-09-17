@@ -3,7 +3,7 @@ name: Windows x64 release build
 on:
   workflow_dispatch:
   pull_request:
-    branches: [master, integration/master-candidate, vaxsh7-codex/api, agent/uia-send-control-diagnostics]
+    branches: [master]
     paths:
       - 'src/**'
       - 'tools/qn_discovery_lab/**'
