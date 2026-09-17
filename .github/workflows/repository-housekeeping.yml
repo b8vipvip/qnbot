@@ -7,33 +7,36 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-  pull-requests: read
 concurrency:
   group: repository-housekeeping-${{ github.repository }}
   cancel-in-progress: true
 jobs:
-  prune-merged-branches:
+  prune-stale-branches:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
-      - name: Delete only conclusively merged short-lived branches
-        env: { GH_TOKEN: "${{ github.token }}" }
+        with:
+          fetch-depth: 0
+      - name: Delete every non-default branch older than 7 days
         shell: bash
         run: |
           set -Eeuo pipefail
-          default="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')"; owner="${GITHUB_REPOSITORY%%/*}"
+          default="${{ github.event.repository.default_branch }}"
+          cutoff="$(date -u -d '7 days ago' +%s)"
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          mapfile -t open_heads < <(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --jq '.[].head.ref')
-          is_open_head(){ local b="$1" x; for x in "${open_heads[@]:-}"; do [[ "$x" == "$b" ]] && return 0; done; return 1; }
           deleted=0; kept=0
           while IFS= read -r ref; do
-            branch="${ref#refs/remotes/origin/}"; [[ "$branch" == HEAD || "$branch" == "$default" || "$branch" == develop || "$branch" == development || "$branch" == staging ]] && continue
-            case "$branch" in agent/*|feat/*|feature/*|fix/*|hotfix/*|chore/*|refactor/*|test/*|ui/*|hardening/*|ci/*|build/*|docs/*|release/*|actions-recovery/*) ;; *) continue ;; esac
-            if is_open_head "$branch"; then echo "KEEP open PR: $branch"; kept=$((kept+1)); continue; fi
-            sha="$(git rev-parse "$ref")"; reason=""
-            if git merge-base --is-ancestor "$ref" "origin/$default"; then reason="ancestor"; else pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=closed&head=$owner:$branch&per_page=100")"; merged="$(jq --arg sha "$sha" '[.[] | select(.merged_at != null and .head.sha == $sha)] | length' <<<"$pr_json")"; [[ "$merged" -gt 0 ]] && reason="merged-pr-head"; fi
-            if [[ -n "$reason" ]]; then echo "DELETE $branch ($reason)"; git push origin --delete "$branch" && deleted=$((deleted+1)) || kept=$((kept+1)); else echo "KEEP unique/unproven: $branch"; kept=$((kept+1)); fi
+            branch="${ref#refs/remotes/origin/}"
+            [[ "$branch" == HEAD || "$branch" == "$default" ]] && continue
+            tip_epoch="$(git log -1 --format=%ct "$ref")"
+            tip_date="$(git log -1 --format=%cI "$ref")"
+            if (( tip_epoch < cutoff )); then
+              echo "DELETE stale branch: $branch (tip=$tip_date)"
+              if git push origin --delete "$branch"; then deleted=$((deleted+1)); else echo "::warning::Unable to delete $branch"; kept=$((kept+1)); fi
+            else
+              echo "KEEP recent branch: $branch (tip=$tip_date)"
+              kept=$((kept+1))
+            fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
           echo "deleted=$deleted kept=$kept"
