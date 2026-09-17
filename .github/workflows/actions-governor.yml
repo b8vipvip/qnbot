@@ -1,0 +1,33 @@
+name: Actions Governor
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: actions-governor-${{ github.repository }}
+  cancel-in-progress: true
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel superseded and stale non-release runs
+        env: { GH_TOKEN: "${{ github.token }}" }
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          repo="$GITHUB_REPOSITORY"; current="$GITHUB_RUN_ID"; now="$(date -u +%s)"; default="$(gh api "repos/$repo" --jq '.default_branch')"
+          tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+          for s in queued in_progress; do gh api --paginate "repos/$repo/actions/runs?status=$s&per_page=100" --jq '.workflow_runs[] | [(.created_at//""),(.id|tostring),(.workflow_id|tostring),(.name//""),(.head_branch//""),(.event//""),(.status//"")] | join("\u001f")'; done | sort -r > "$tmp"
+          declare -A seen=()
+          while IFS=$'\x1f' read -r created id wid name branch event status; do
+            [[ -z "$id" || "$id" == "$current" ]] && continue; low="${name,,}"; [[ "$low" == *release* || "$low" == *deploy* || "$low" == *publish* || "$low" == "actions governor" ]] && continue
+            key="$wid|$branch|$event"; age=$(( (now-$(date -u -d "$created" +%s))/60 )); cancel=false
+            [[ -n "${seen[$key]:-}" && ( "$event" == pull_request || "$branch" != "$default" ) ]] && cancel=true
+            [[ "$status" == queued && "$age" -ge 30 ]] && cancel=true; [[ "$status" == in_progress && "$age" -ge 90 ]] && cancel=true
+            if $cancel; then gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true; sleep 1; gh api --method POST "repos/$repo/actions/runs/$id/force-cancel" >/dev/null 2>&1 || true; fi
+            [[ -z "${seen[$key]:-}" ]] && seen[$key]="$id"
+          done < "$tmp"
