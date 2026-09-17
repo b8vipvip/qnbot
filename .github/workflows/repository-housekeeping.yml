@@ -10,7 +10,7 @@ permissions:
   pull-requests: read
 concurrency:
   group: repository-housekeeping-${{ github.repository }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   prune-merged-branches:
     runs-on: ubuntu-latest
@@ -33,7 +33,7 @@ jobs:
             case "$branch" in agent/*|feat/*|feature/*|fix/*|hotfix/*|chore/*|refactor/*|test/*|ui/*|hardening/*|ci/*|build/*|docs/*|release/*|actions-recovery/*) ;; *) continue ;; esac
             if is_open_head "$branch"; then echo "KEEP open PR: $branch"; kept=$((kept+1)); continue; fi
             sha="$(git rev-parse "$ref")"; reason=""
-            if git merge-base --is-ancestor "$ref" "origin/$default"; then reason="ancestor"; else merged="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=closed&head=$owner:$branch&per_page=100" --jq --arg sha "$sha" '[.[] | select(.merged_at != null and .head.sha == $sha)] | length' | awk '{s+=$1} END{print s+0}')"; [[ "$merged" -gt 0 ]] && reason="merged-pr-head"; fi
+            if git merge-base --is-ancestor "$ref" "origin/$default"; then reason="ancestor"; else pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=closed&head=$owner:$branch&per_page=100")"; merged="$(jq --arg sha "$sha" '[.[] | select(.merged_at != null and .head.sha == $sha)] | length' <<<"$pr_json")"; [[ "$merged" -gt 0 ]] && reason="merged-pr-head"; fi
             if [[ -n "$reason" ]]; then echo "DELETE $branch ($reason)"; git push origin --delete "$branch" && deleted=$((deleted+1)) || kept=$((kept+1)); else echo "KEEP unique/unproven: $branch"; kept=$((kept+1)); fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
           echo "deleted=$deleted kept=$kept"
