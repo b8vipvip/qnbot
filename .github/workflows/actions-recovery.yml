@@ -1,0 +1,51 @@
+name: Actions Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Failed or abnormal workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-recovery-${{ inputs.source_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Inspect and retry safe workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          name="$(jq -r '.name // ""' <<<"$run")"
+          status="$(jq -r '.status // ""' <<<"$run")"
+          conclusion="$(jq -r '.conclusion // ""' <<<"$run")"
+          attempt="$(jq -r '.run_attempt // 1' <<<"$run")"
+          lower="$(tr '[:upper:]' '[:lower:]' <<<"$name")"
+          echo "source=$SOURCE_RUN_ID name=$name status=$status conclusion=$conclusion attempt=$attempt"
+          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* ]]; then
+            echo "Side-effectful workflow detected; automatic replay is blocked."
+            exit 0
+          fi
+          if [[ "$status" != "completed" ]]; then
+            echo "Source run is not completed; no replay performed."
+            exit 0
+          fi
+          if (( attempt >= 2 )); then
+            echo "Source run has already been attempted at least twice; no replay performed."
+            exit 0
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/rerun" >/dev/null
+          echo "Safe rerun requested for $SOURCE_RUN_ID"
