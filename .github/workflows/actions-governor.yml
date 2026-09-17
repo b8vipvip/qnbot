@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: actions-governor-${{ github.repository }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   enforce:
     runs-on: ubuntu-latest
