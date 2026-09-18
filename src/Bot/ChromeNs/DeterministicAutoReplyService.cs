@@ -555,7 +555,7 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, VariantEntry> Entries =
             new ConcurrentDictionary<string, VariantEntry>(StringComparer.Ordinal);
         private static readonly Regex StableTokenRegex =
-            new Regex(@"https?://\S+|\b\d[\d\.:/\-]{2,}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            new Regex(@"https?://\S+|\d+(?:[\d\.:/\-]*\d)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(5);
         private static readonly Timer RetryTimer =
             new Timer(_ => RetryPending(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
