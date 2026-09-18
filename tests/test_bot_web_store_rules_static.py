@@ -11,7 +11,7 @@ def read(path):
 
 def test_mobile_store_rule_center_is_loaded_from_settings_bundle():
     page, loader = read(PAGE), read(LOADER)
-    assert 'bot-web-bot-enabled.js?v=4' in page
+    assert 'bot-web-bot-enabled.js?v=5' in page
     assert 'script.src = "/static/bot-web-store-rules.js?v=1"' in loader
     assert "data-bot-web-store-rules" in loader
 
