@@ -65,7 +65,7 @@
         <button id="addKnowledgeBtn" class="primary">新增知识</button>
       </div>
       <div class="knowledge-toolbar"><input id="knowledgeSearch" placeholder="搜索问题、答案或关键词"><select id="knowledgeCategory"><option value="">全部分类</option></select><button id="refreshKnowledgeBtn">刷新</button></div>
-      <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
+      <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><button id="knowledgeBackupsBtn">版本备份</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
       <div id="knowledgeMeta" class="knowledge-meta"></div>
       <div id="knowledgeList" class="knowledge-list"><div class="empty">暂无云端知识</div></div>
     </section>
@@ -118,8 +118,14 @@
   </form>
 </dialog>
 
+<dialog id="knowledgeBackupsDialog" class="knowledge-dialog">
+  <div class="dialog-head"><h3>知识库版本备份</h3><button id="closeKnowledgeBackupsBtn" class="close-button" type="button">×</button></div>
+  <p class="hint">服务端保留最近 30 个版本。恢复会覆盖当前云端知识，当前版本会先自动备份，并等待 Windows Bot 云同步应用。</p>
+  <div id="knowledgeBackupsList" class="knowledge-list"><div class="empty">正在加载备份</div></div>
+</dialog>
+
 <div id="toast" class="toast hidden"></div>
-<script src="/static/bot-web-v2.js?v=4"></script>
+<script src="/static/bot-web-v2.js?v=5"></script>
 <script src="/static/bot-web-bot-enabled.js?v=3"></script>
 </body>
 </html>
