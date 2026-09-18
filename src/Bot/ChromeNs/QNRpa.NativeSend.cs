@@ -95,7 +95,7 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            if (await StopIfPlatformSendBlockedAsync(buyer, "发送前").ConfigureAwait(false)) return false;
+            if (await StopIfPlatformSendBlockedAsync(buyer, text, "发送前").ConfigureAwait(false)) return false;
 
             var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
             if (domTriggered)
@@ -175,7 +175,7 @@ namespace Bot.ChromeNs
 
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
             if (uiResult) return true;
-            if (await StopIfPlatformSendBlockedAsync(buyer, "UIA发送后").ConfigureAwait(false)) return false;
+            if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后").ConfigureAwait(false)) return false;
 
             if (!await HasExpectedDraftFastAsync(text, 650).ConfigureAwait(false))
             {

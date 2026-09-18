@@ -28,8 +28,11 @@ def test_platform_send_block_cancels_started_delivery_watchdog_but_never_clicks_
     assert '"platform_send_blocked:" + (stage ?? string.Empty)' in src
     assert "平台发送拦截已同步取消发送回显监控" in src
     assert "不会自动点击“继续发送”" in src
-    assert "Production policy is read-only: never invoke" in src
-    # Preserve the fail-closed policy from the 2026-09-09 field incident.
+    assert "ReturnModifyButton.AsButton().Invoke()" in src
+    assert "ContinueButton.AsButton().Invoke()" not in src
+    assert 'SetSendCancellation("警告撤回"' in src
+    # Preserve the fail-closed policy from the 2026-09-09 field incident: the rejected
+    # message may be returned for cleanup, but the Bot must never force it through.
     assert "result.Continued = false;" in src
 
 

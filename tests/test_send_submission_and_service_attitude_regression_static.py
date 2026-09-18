@@ -32,16 +32,23 @@ def test_native_send_accepts_verified_submission_instead_of_echo_only_retry():
     assert "VerifyCurrentBuyerWithoutNavigationAsync" in platform
 
 
-def test_service_attitude_reminder_is_read_only_and_fail_closed():
+def test_service_attitude_reminder_returns_to_edit_clears_owned_draft_and_never_continues():
     text = read(PLATFORM)
     assert "服务态度提醒" in text
+    assert "返回修改" in text
     assert "继续发送" in text
     assert "GetBoundedServiceAttitudeReadProbeAsync" in text
     assert "_serviceAttitudeReadProbeTask" in text
     assert "Task.WhenAny(" in text
-    assert "不会自动点击“继续发送”" in text
+    assert "绝不会自动点击“继续发送”" in text
     assert "result.Continued = false;" in text
-    assert ".AsButton().Invoke()" not in text
+    assert "WithdrawServiceAttitudeBlockedSendAsync" in text
+    assert "detected.ReturnModifyButton.AsButton().Invoke()" in text
+    assert "ClearExpectedDraftIfSafeAsync(" in text
+    assert "警告撤回：服务态度提醒返回修改后清空" in text
+    assert "服务态度提醒撤回后输入框确认" in text
+    assert "SetSendCancellation(\"警告撤回\"" in text
+    assert "detected.ContinueButton.AsButton().Invoke()" not in text
     assert "千牛服务态度提醒已自动点击“继续发送”" not in text
     assert "ArmLateServiceAttitudeContinuationWatch" in text
     assert "Task.Delay(650)" in text

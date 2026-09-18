@@ -52,6 +52,32 @@ namespace Bot.ChromeNs
             return desk;
         }
 
+        private void RequestSellerActivationForPendingSend(string seller, string isolationReason)
+        {
+            if (_qn == null || _qn.Buyer == null) return;
+            var buyer = (_qn.Buyer.Nick ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(buyer)) return;
+
+            try
+            {
+                // A QN/CDP session may already report the correct buyer while the shared native
+                // AliWorkbench Desk still belongs to another seller. QN's buyer-only preflight can
+                // therefore pass and the native safety gate correctly rejects the send. Do not
+                // weaken that gate. Ask Qianniu to open this seller's pending buyer instead; the
+                // resulting authoritative onConversationChange promotes the seller, and the normal
+                // retry path can send only after ActiveShopSessionRegistry confirms ownership.
+                Log.Info("多客服发送检测到buyer已匹配但活动seller未切换，先请求千牛激活目标客服会话: seller="
+                    + seller + ", buyer=" + buyer + ", activeSeller="
+                    + ActiveShopSessionRegistry.GetActiveSellerNick() + ", reason=" + (isolationReason ?? string.Empty));
+                _qn.OpenChat(buyer);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("多客服发送请求激活目标客服会话失败: seller=" + seller
+                    + ", buyer=" + buyer + ", " + ex.Message, 20);
+            }
+        }
+
         internal bool EnsureSellerDeskBinding(bool force = false)
         {
             var seller = SellerNick;
@@ -62,6 +88,7 @@ namespace Bot.ChromeNs
                 string isolationReason;
                 if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason))
                 {
+                    RequestSellerActivationForPendingSend(seller, isolationReason);
                     Log.ErrorWithMaxCount("多客服发送安全锁已阻止RPA：目标店铺未通过活动身份校验: seller="
                         + seller + ", activeSeller=" + ActiveShopSessionRegistry.GetActiveSellerNick()
                         + ", reason=" + isolationReason, 30);

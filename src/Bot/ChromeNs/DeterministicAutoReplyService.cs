@@ -1,6 +1,7 @@
 ﻿using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -29,7 +30,7 @@ namespace Bot.ChromeNs
     {
         private const string DefaultOffHoursReply =
             "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。";
-        private const int OffHoursRepeatMinutes = 2;
+        private const int OffHoursRepeatMinutes = 5;
 
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> BuyerGates =
             new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
@@ -192,7 +193,7 @@ namespace Bot.ChromeNs
                 DateTime until;
                 if (OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) && until > DateTime.Now)
                 {
-                    Log.Info("下班独占策略已消费买家消息，距离下一次下班提示不足2分钟，不进入其它回复链: seller="
+                    Log.Info("下班独占策略已消费买家消息，距离下一次下班提示不足5分钟，不进入其它回复链: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", next=" + until.ToString("HH:mm:ss"));
                     return false;
@@ -346,6 +347,7 @@ namespace Bot.ChromeNs
             string answer,
             string source)
         {
+            answer = FixedAutoReplyVariantService.Select(source, answer);
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer))
             {
@@ -536,6 +538,155 @@ namespace Bot.ChromeNs
         {
             return (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+        }
+    }
+
+    internal static class FixedAutoReplyVariantService
+    {
+        private sealed class VariantEntry
+        {
+            public string Source;
+            public string Canonical;
+            public string[] Variants;
+            public DateTime NextRetryAt;
+            public int Compiling;
+        }
+
+        private static readonly ConcurrentDictionary<string, VariantEntry> Entries =
+            new ConcurrentDictionary<string, VariantEntry>(StringComparer.Ordinal);
+        private static readonly Regex StableTokenRegex =
+            new Regex(@"https?://\S+|\d+(?:[\d\.:/\-]*\d)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(5);
+        private static readonly Timer RetryTimer =
+            new Timer(_ => RetryPending(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+
+        public static string Select(string source, string configuredText)
+        {
+            var text = BotOutboundMessageFormatter.StripAiMarker(configuredText ?? string.Empty).Trim();
+            if (text.Length == 0) return text;
+
+            Dictionary<string, string> tokens;
+            var canonical = Canonicalize(text, out tokens);
+            var key = (source ?? "固定自动回复").Trim() + "\n" + canonical;
+            var entry = Entries.GetOrAdd(key, _ => new VariantEntry
+            {
+                Source = (source ?? "固定自动回复").Trim(),
+                Canonical = canonical,
+                NextRetryAt = DateTime.MinValue
+            });
+            EnsureCompilation(entry);
+
+            var variants = entry.Variants;
+            if (variants == null || variants.Length != 10) return text;
+            var selected = variants[(Guid.NewGuid().GetHashCode() & int.MaxValue) % variants.Length];
+            return RestoreTokens(selected, tokens);
+        }
+
+        public static void Warmup(string source, string configuredText)
+        {
+            Select(source, configuredText);
+        }
+
+        private static void RetryPending()
+        {
+            foreach (var entry in Entries.Values)
+            {
+                if (entry.Variants != null && entry.Variants.Length == 10) continue;
+                if (entry.NextRetryAt > DateTime.Now) continue;
+                EnsureCompilation(entry);
+            }
+        }
+
+        private static void EnsureCompilation(VariantEntry entry)
+        {
+            if (entry == null || (entry.Variants != null && entry.Variants.Length == 10)) return;
+            if (entry.NextRetryAt > DateTime.Now) return;
+            if (Interlocked.CompareExchange(ref entry.Compiling, 1, 0) != 0) return;
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    var messages = new JArray
+                    {
+                        new JObject
+                        {
+                            ["role"] = "system",
+                            ["content"] =
+                                "你负责为淘宝客服固定自动回复生成同义改写。必须保持事实、承诺、链接、编号、占位符和业务含义完全一致；"
+                                + "不要新增优惠、时效、退款承诺或不存在的信息。输出严格JSON数组，恰好10个字符串；"
+                                + "10条文本措辞和字数要有明显差异，但语义一致。任何[[T数字]]占位符必须原样保留且每条都出现。"
+                        },
+                        new JObject
+                        {
+                            ["role"] = "user",
+                            ["content"] = "来源：" + entry.Source + "\n原文：" + entry.Canonical
+                        }
+                    };
+                    var result = MyOpenAI.CallStructuredChat(
+                        messages, 1400, 0.85, 18, CancellationToken.None, true);
+                    if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
+                        throw new InvalidOperationException(result == null ? "AI接口无返回" : result.Error);
+
+                    var array = JArray.Parse(result.Answer.Trim());
+                    var list = array.Values<string>()
+                        .Select(x => (x ?? string.Empty).Trim())
+                        .Where(x => x.Length > 0)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
+                    if (list.Count != 10)
+                        throw new InvalidOperationException("AI同义编译结果不是10条唯一文本");
+
+                    var placeholders = Regex.Matches(entry.Canonical, @"\[\[T\d+\]\]")
+                        .Cast<Match>().Select(x => x.Value).Distinct(StringComparer.Ordinal).ToArray();
+                    foreach (var variant in list)
+                    {
+                        foreach (var placeholder in placeholders)
+                        {
+                            if (variant.IndexOf(placeholder, StringComparison.Ordinal) < 0)
+                                throw new InvalidOperationException("AI同义编译丢失稳定占位符 " + placeholder);
+                        }
+                    }
+
+                    entry.Variants = list.ToArray();
+                    entry.NextRetryAt = DateTime.MaxValue;
+                    Log.Info("固定自动回复同义编译完成: source=" + entry.Source
+                        + ", variants=10, canonicalChars=" + entry.Canonical.Length);
+                }
+                catch (Exception ex)
+                {
+                    entry.NextRetryAt = DateTime.Now.Add(RetryInterval);
+                    Log.ErrorWithMaxCount(
+                        "固定自动回复同义编译失败，5分钟后重试: source=" + entry.Source
+                        + ", error=" + ex.Message,
+                        30);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref entry.Compiling, 0);
+                }
+            });
+        }
+
+        private static string Canonicalize(string text, out Dictionary<string, string> tokens)
+        {
+            var stableTokens = new Dictionary<string, string>(StringComparer.Ordinal);
+            var index = 0;
+            var canonical = StableTokenRegex.Replace(text, match =>
+            {
+                var key = "[[T" + index++ + "]]";
+                stableTokens[key] = match.Value;
+                return key;
+            });
+            tokens = stableTokens;
+            return canonical;
+        }
+
+        private static string RestoreTokens(string variant, Dictionary<string, string> tokens)
+        {
+            var result = variant ?? string.Empty;
+            foreach (var pair in tokens) result = result.Replace(pair.Key, pair.Value);
+            return result.Trim();
         }
     }
 

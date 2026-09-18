@@ -39,8 +39,9 @@ def test_service_attitude_read_probe_is_bounded_cached_and_cannot_block_send_mai
     assert "已放行发送主链且复用同一后台探测避免UIA堆积" in text
     # Field complaint policy: once the platform anti-abuse reminder is actually detected, the Bot
     # fails closed and must not perform any Continue side effect.
-    assert "不会自动点击“继续发送”" in text
-    assert ".AsButton().Invoke()" not in text
+    assert "绝不会自动点击“继续发送”" in text
+    assert "ReturnModifyButton.AsButton().Invoke()" in text
+    assert "ContinueButton.AsButton().Invoke()" not in text
     assert "result.Continued = false;" in text
 
 
