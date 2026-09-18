@@ -190,3 +190,23 @@ def web_v2_runtime_settings_status(command_id: int, client=Depends(bot_web_conso
     return {"command_id":command_id,"command_type":row["command_type"],"status":row["status"],
       "result":json.loads(row["result_json"] or "{}"),"error":row["error"] or "",
       "created_at":row["created_at"],"completed_at":row["completed_at"]}
+
+
+@router.get("/api/bot-web/knowledge-v2/runtime-settings/audit")
+def web_v2_runtime_settings_audit(client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        rows=conn.execute("""SELECT id,command_type,status,payload_json,result_json,error,created_at,completed_at
+          FROM bot_commands WHERE client_id=? AND command_type IN ('knowledge_v2_settings_get','knowledge_v2_settings_set')
+          ORDER BY id DESC LIMIT 30""",(int(client["id"]),)).fetchall()
+    items=[]
+    for row in rows:
+        payload=json.loads(row["payload_json"] or "{}")
+        result=json.loads(row["result_json"] or "{}")
+        safe={}
+        source=result if row["status"]=="completed" else payload
+        for key in ("enabled","mode","direct_threshold","min_confidence","shop_key"):
+            if key in source: safe[key]=source[key]
+        items.append({"id":int(row["id"]),"action":"保存设置" if row["command_type"]=="knowledge_v2_settings_set" else "读取设置",
+          "status":row["status"],"settings":safe,"error":row["error"] or "",
+          "created_at":row["created_at"],"completed_at":row["completed_at"]})
+    return {"items":items}
