@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -162,6 +163,44 @@ def _save_state(
         "updated_by": updated_by,
         "updated_at": now,
     }
+
+
+class StoreRuleWebInput(BaseModel):
+    profile: Dict[str, Any]
+
+
+def _profile_hash(profile: Dict[str, Any]) -> str:
+    return hashlib.sha256(_json(profile).encode("utf-8")).hexdigest()
+
+
+@router.get("/api/bot-web/store-rules")
+def web_store_rules(
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    state = _state(int(client["id"]))
+    return {
+        "profile": state["profile"] or {},
+        "revision": state["revision"],
+        "content_hash": state["content_hash"],
+        "updated_by": state["updated_by"],
+        "updated_at": state["updated_at"],
+    }
+
+
+@router.put("/api/bot-web/store-rules")
+def web_store_rules_update(
+    data: StoreRuleWebInput,
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    clean = _validate_profile(data.profile)
+    digest = _profile_hash(clean)
+    with _STORE_RULE_LOCK:
+        current = _state(client_id)
+        if current["profile"] is not None and current["content_hash"] == digest:
+            return {"ok": True, **current}
+        state = _save_state(client_id, clean, digest, "web")
+    return {"ok": True, **state}
 
 
 class StoreRuleSyncInput(BaseModel):
