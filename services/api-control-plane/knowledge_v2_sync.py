@@ -24,6 +24,12 @@ class KnowledgeV2SmartImportInput(BaseModel):
     text: str
     timeout_seconds: int = 90
 
+class KnowledgeV2RuntimeSettingsInput(BaseModel):
+    enabled: bool
+    mode: str = "production"
+    direct_threshold: float = 0.82
+    min_confidence: float = 0.72
+
 def install(control_plane, console_module=bot_web_console):
     global _cp
     _cp = control_plane
@@ -142,3 +148,45 @@ def web_smart_import_status(command_id: int, client=Depends(bot_web_console._web
     if not row:
         raise HTTPException(status_code=404,detail="智能导入任务不存在")
     return {"command_id":command_id,"status":row["status"],"result":json.loads(row["result_json"] or "{}"),"error":row["error"] or "","created_at":row["created_at"],"completed_at":row["completed_at"]}
+
+
+def _enqueue_v2_settings_command(client_id: int, command_type: str, payload: dict[str, Any] | None = None):
+    with _cp.db() as conn:
+        cursor=conn.execute("""INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+          VALUES(?,?,?,'pending','{}','',?)""",
+          (client_id,command_type,json.dumps(payload or {},ensure_ascii=False,separators=(",",":")),_cp.iso_now()))
+        return int(cursor.lastrowid)
+
+@router.post("/api/bot-web/knowledge-v2/runtime-settings/read")
+def web_v2_runtime_settings_read(client=Depends(bot_web_console._web_client)):
+    command_id=_enqueue_v2_settings_command(int(client["id"]),"knowledge_v2_settings_get")
+    return {"ok":True,"command_id":command_id,"status":"pending"}
+
+@router.post("/api/bot-web/knowledge-v2/runtime-settings")
+def web_v2_runtime_settings_save(payload: KnowledgeV2RuntimeSettingsInput, client=Depends(bot_web_console._web_client)):
+    mode=(payload.mode or "").strip().lower()
+    if mode not in ("production","shadow"):
+        raise HTTPException(status_code=400,detail="运行模式只能是 production 或 shadow")
+    threshold=float(payload.direct_threshold)
+    confidence=float(payload.min_confidence)
+    if threshold<0.70 or threshold>0.96:
+        raise HTTPException(status_code=400,detail="本地直答匹配阈值必须在 0.70~0.96")
+    if confidence<0.50 or confidence>0.95:
+        raise HTTPException(status_code=400,detail="最低知识可信度必须在 0.50~0.95")
+    command_id=_enqueue_v2_settings_command(int(client["id"]),"knowledge_v2_settings_set",{
+        "enabled":bool(payload.enabled),"mode":mode,
+        "direct_threshold":round(threshold,3),"min_confidence":round(confidence,3)
+    })
+    return {"ok":True,"command_id":command_id,"status":"pending"}
+
+@router.get("/api/bot-web/knowledge-v2/runtime-settings/{command_id}")
+def web_v2_runtime_settings_status(command_id: int, client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        row=conn.execute("""SELECT command_type,status,result_json,error,created_at,completed_at FROM bot_commands
+          WHERE id=? AND client_id=? AND command_type IN ('knowledge_v2_settings_get','knowledge_v2_settings_set')""",
+          (command_id,int(client["id"]))).fetchone()
+    if not row:
+        raise HTTPException(status_code=404,detail="V2 运行设置任务不存在")
+    return {"command_id":command_id,"command_type":row["command_type"],"status":row["status"],
+      "result":json.loads(row["result_json"] or "{}"),"error":row["error"] or "",
+      "created_at":row["created_at"],"completed_at":row["completed_at"]}
