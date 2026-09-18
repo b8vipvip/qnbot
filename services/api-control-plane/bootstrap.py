@@ -24,6 +24,7 @@ import console_cache_guard
 import deep_test_guard
 import github_vless_proxy
 import message_processing_traces
+import knowledge_v2_sync
 import recharge_status_query
 import runtime_embedding_guard
 import runtime_ocr
@@ -72,6 +73,7 @@ client_data_backup.install(control_plane)
 store_rule_sync.install(control_plane)
 runtime_shop_ai_proxy.install(control_plane)
 message_processing_traces.install(control_plane)
+knowledge_v2_sync.install(control_plane, bot_web_console)
 
 
 @control_plane.app.on_event("startup")
@@ -91,6 +93,7 @@ def initialize_control_plane_extensions() -> None:
     client_data_backup.init_db()
     store_rule_sync.init_db()
     message_processing_traces.init_db()
+    knowledge_v2_sync.init_db()
     github_vless_proxy.init_github_vless_proxy()
     bot_update_cache.init_bot_update_cache()
     bot_update_prefetch.init_bot_update_prefetch()

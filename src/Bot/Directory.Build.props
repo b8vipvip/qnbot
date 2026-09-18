@@ -89,6 +89,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RevisionUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2GovernanceUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2SmartImportService.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2CloudSyncService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2AiToolsUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2NaturalLanguageService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2OperatorUiBridge.cs" />
