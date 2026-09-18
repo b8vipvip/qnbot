@@ -443,6 +443,25 @@ namespace Bot.ChromeNs
                 .Select(x => (x.Seller.Nick ?? string.Empty).Trim())
                 .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToList();
             var windowsAuto = Params.Robot.GetIsAutoReply();
+            var connection = new ShopControlPlaneConnectionStore(state.Shop, Paths);
+            var authorization = new JObject
+            {
+                ["shop_key"] = state.Shop.ShopKey,
+                ["control_scope"] = "current_shop_only",
+                ["seller_accounts"] = new JArray(sellers),
+                ["seller_count"] = sellers.Count,
+                ["control_plane_configured"] = connection.HasShopServerUrl,
+                ["client_token_bound"] = connection.HasToken,
+                ["credentials_location"] = "windows_local_only",
+                ["sensitive_credentials_exposed"] = false,
+                ["capabilities"] = new JArray(
+                    "status",
+                    "messages",
+                    state.AllowManualReply ? "manual_reply" : "manual_reply_disabled",
+                    "safe_settings",
+                    "knowledge",
+                    "notifications")
+            };
             return new JObject
             {
                 ["shop_key"] = state.Shop.ShopKey,
@@ -456,6 +475,7 @@ namespace Bot.ChromeNs
                 ["message_sync_enabled"] = state.MessageSyncEnabled,
                 ["allow_web_manual_reply"] = state.AllowManualReply,
                 ["pending_message_count"] = state.PendingMessages.Count,
+                ["authorization"] = authorization,
                 ["uptime_seconds"] = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds),
                 ["process_id"] = Process.GetCurrentProcess().Id,
                 ["synced_at"] = DateTime.UtcNow.ToString("o")

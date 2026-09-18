@@ -106,6 +106,9 @@
 <label>EncodingAESKey<input id="wecomCallbackAesKey" type="password" maxlength="128" placeholder="留空保持原 AES Key"></label>
 <label>回调地址<input id="wecomCallbackUrl" readonly></label>
 <button id="saveWecomBtn" class="primary wide" type="button">保存企业微信配置</button><div id="wecomHint" class="hint"></div></section>
+<section class="panel settings-panel"><div class="panel-head"><h3>账号与授权</h3><span id="authorizationBadge" class="pill gray">等待 Windows</span></div>
+<p class="hint">只展示当前 Bot 客户端绑定店铺的客服账号、令牌绑定状态和可控范围。客户端令牌、Cookie、密码及其他凭据不会在手机端回显。</p>
+<dl id="authorizationInfo" class="info-list"></dl></section>
 <section class="panel"><h3>当前客户端信息</h3><dl id="clientInfo" class="info-list"></dl></section>
     </section>
   </main>
