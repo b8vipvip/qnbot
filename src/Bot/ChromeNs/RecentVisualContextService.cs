@@ -9,6 +9,14 @@ using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
+    internal sealed class KugouAccountEvidence
+    {
+        public string Nickname { get; set; }
+        public string UserId { get; set; }
+        public DateTime ObservedAt { get; set; }
+        public string Summary { get; set; }
+    }
+
     /// <summary>
     /// Reuses privacy-safe visual semantics that have already been persisted by
     /// VisualKnowledgeLearningService. Raw image URLs/bytes are never read here.
@@ -45,6 +53,14 @@ namespace Bot.ChromeNs
             "酷狗.{0,12}(?:官方app|官方应用|官方版|电视版|电视端).{0,18}(?:支持|可以|能用|可用)|(?:官方app|官方应用|酷狗音乐app|酷狗app).{0,18}(?:支持|可以|能用|可用)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        private static readonly Regex KugouNicknameRegex = new Regex(
+            @"(?:酷狗)?(?:账号)?昵称\s*(?:[:：]|为)\s*([^\s,，;；。|]{1,40})",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Regex KugouUserIdRegex = new Regex(
+            @"(?:酷狗|用户|账号)?(?:ID|id)\s*(?:[:：]|为)\s*([A-Za-z0-9_-]{3,64})",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static string BuildPromptAddon(string seller, string buyer, string currentQuestion)
         {
             var items = LoadRecent(seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
@@ -68,6 +84,51 @@ namespace Bot.ChromeNs
                 if (tags.Length > 0) sb.Append("；标签：").Append(tags);
             }
             return sb.ToString();
+        }
+
+        public static bool TryGetRecentKugouAccountEvidence(
+            string seller,
+            string buyer,
+            out KugouAccountEvidence evidence)
+        {
+            evidence = null;
+            var items = LoadRecent(
+                    seller,
+                    buyer,
+                    DateTime.Now.AddMinutes(-PromptWindowMinutes),
+                    DateTime.Now.AddMinutes(2),
+                    20)
+                .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
+                .ToList();
+
+            foreach (var item in items)
+            {
+                var combined = CleanForPrompt(
+                    (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty),
+                    1800);
+                if (combined.IndexOf("酷狗", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!HasKugouOfficialAppEvidence(combined)) continue;
+
+                var nicknameMatch = KugouNicknameRegex.Match(combined);
+                var idMatch = KugouUserIdRegex.Match(combined);
+                var nickname = nicknameMatch.Success
+                    ? CleanAccountField(nicknameMatch.Groups[1].Value, 40)
+                    : string.Empty;
+                var userId = idMatch.Success
+                    ? CleanAccountField(idMatch.Groups[1].Value, 64)
+                    : string.Empty;
+                if (nickname.Length == 0 && userId.Length == 0) continue;
+
+                evidence = new KugouAccountEvidence
+                {
+                    Nickname = nickname,
+                    UserId = userId,
+                    ObservedAt = SafeTime(item.ObservedAtTicks),
+                    Summary = CleanForPrompt(item.VisualSummary, 220)
+                };
+                return true;
+            }
+            return false;
         }
 
         public static bool TrySatisfyOrderPhotoRequirement(
@@ -259,6 +320,14 @@ namespace Bot.ChromeNs
             {
                 return DateTime.MinValue;
             }
+        }
+
+        private static string CleanAccountField(string value, int max)
+        {
+            value = (value ?? string.Empty).Trim().Trim('"', '\'', '“', '”', '【', '】', '[', ']');
+            value = Regex.Replace(value, @"\s+", string.Empty);
+            if (value.Length > max) value = value.Substring(0, max);
+            return value;
         }
 
         private static string CleanForPrompt(string value, int max)
