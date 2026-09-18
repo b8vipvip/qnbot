@@ -207,3 +207,15 @@ def test_backup_restore_requires_confirmation_and_is_client_isolated(tmp_path):
     backups = module.web_knowledge_backups(limit=20, client={"id": 1})["backups"]
     assert backups[0]["revision"] == 2
     assert backups[0]["reason"] == "web-backup-restore"
+
+
+def test_mobile_console_exposes_backup_restore_with_explicit_confirmation():
+    page = (ROOT / "services" / "api-control-plane" / "static" / "bot-web.html").read_text(encoding="utf-8-sig")
+    script = (ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.js").read_text(encoding="utf-8-sig")
+    assert 'id="knowledgeBackupsBtn"' in page
+    assert 'id="knowledgeBackupsDialog"' in page
+    assert 'src="/static/bot-web-v2.js?v=5"' in page
+    assert 'api("/api/bot-web/knowledge/backups?limit=30")' in script
+    assert '/api/bot-web/knowledge/backups/${id}/restore' in script
+    assert "restore_confirmed:true" in script
+    assert "confirm(" in script
