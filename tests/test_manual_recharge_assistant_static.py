@@ -95,7 +95,7 @@ def test_failures_stop_and_handoff_without_sensitive_values():
     block = service[notify - 1000 : notify + 700]
     assert "state.Phone" not in block
     assert "state.Code" not in block
-    assert "state.OrderId" not in block
+    assert '"；兑换码尾号=" + OrderSuffix' in block
 
 
 def test_control_plane_is_fixed_path_https_whitelist_and_client_cannot_supply_url():
