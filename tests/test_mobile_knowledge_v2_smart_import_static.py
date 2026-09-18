@@ -32,7 +32,7 @@ def test_mobile_submits_confirms_and_polls_v2_smart_import():
     h=read(HTML); s=read(JS)
     assert 'id="knowledgeV2SmartImportText"' in h
     assert 'id="knowledgeV2SmartImportBtn"' in h
-    assert 'src="/static/bot-web-v2.js?v=9"' in h
+    assert 'src="/static/bot-web-v2.js?v=10"' in h
     assert 'api("/api/bot-web/knowledge-v2/smart-import"' in s
     assert "/api/bot-web/knowledge-v2/smart-import/${id}" in s
     assert "confirm(" in s

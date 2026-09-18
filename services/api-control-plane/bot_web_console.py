@@ -350,6 +350,23 @@ class WebSendInput(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class ConfirmedCommandInput(BaseModel):
+    confirmed: bool = False
+
+
+def _queue_safe_command(client_id: int, command_type: str, payload: Optional[Dict[str, Any]] = None) -> int:
+    allowed = {"diagnostics_snapshot", "update_check", "update_install"}
+    if command_type not in allowed:
+        raise HTTPException(status_code=400, detail="不支持的 Bot Web 命令")
+    with _cp.db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+               VALUES(?,?,?,'pending','{}','',?)""",
+            (client_id, command_type, _json(payload or {}), _now()),
+        )
+        return int(cursor.lastrowid)
+
+
 @router.get("/bot")
 def bot_web_redirect() -> RedirectResponse:
     return RedirectResponse(url="/bot/", status_code=307)
@@ -497,6 +514,29 @@ def bot_web_send_message(
                 _now(),
             ),
         )
+    return {"ok": True, "command_id": command_id, "status": "pending"}
+
+
+@router.post("/api/bot-web/diagnostics/run")
+def bot_web_run_diagnostics(client: Dict[str, Any] = Depends(_web_client)) -> Dict[str, Any]:
+    command_id = _queue_safe_command(int(client["id"]), "diagnostics_snapshot")
+    return {"ok": True, "command_id": command_id, "status": "pending"}
+
+
+@router.post("/api/bot-web/update/check")
+def bot_web_update_check(client: Dict[str, Any] = Depends(_web_client)) -> Dict[str, Any]:
+    command_id = _queue_safe_command(int(client["id"]), "update_check")
+    return {"ok": True, "command_id": command_id, "status": "pending"}
+
+
+@router.post("/api/bot-web/update/install")
+def bot_web_update_install(
+    data: ConfirmedCommandInput,
+    client: Dict[str, Any] = Depends(_web_client),
+) -> Dict[str, Any]:
+    if not data.confirmed:
+        raise HTTPException(status_code=400, detail="远程安装必须明确二次确认")
+    command_id = _queue_safe_command(int(client["id"]), "update_install", {"confirmed": True})
     return {"ok": True, "command_id": command_id, "status": "pending"}
 
 

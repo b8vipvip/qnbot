@@ -109,6 +109,12 @@
 <section class="panel settings-panel"><div class="panel-head"><h3>账号与授权</h3><span id="authorizationBadge" class="pill gray">等待 Windows</span></div>
 <p class="hint">只展示当前 Bot 客户端绑定店铺的客服账号、令牌绑定状态和可控范围。客户端令牌、Cookie、密码及其他凭据不会在手机端回显。</p>
 <dl id="authorizationInfo" class="info-list"></dl></section>
+<section class="panel settings-panel"><div class="panel-head"><h3>日志与诊断</h3><span id="diagnosticsBadge" class="pill gray">安全摘要</span></div>
+<p class="hint">仅展示当前客户端的脱敏运行摘要，不上传原始日志、聊天正文、API Key、Cookie、验证码、密码或 Authorization。</p>
+<dl id="diagnosticsInfo" class="info-list"></dl><button id="runDiagnosticsBtn" class="wide" type="button">运行安全诊断</button><div id="diagnosticsHint" class="hint"></div></section>
+<section class="panel settings-panel"><div class="panel-head"><h3>更新管理</h3><span id="updateBadge" class="pill gray">等待状态</span></div>
+<p class="hint">复用现有正式版 updater、SHA-256 校验、watchdog 与失败恢复机制。远程安装需要再次明确确认。</p>
+<dl id="updateInfo" class="info-list"></dl><div class="knowledge-toolbar"><button id="checkUpdateBtn" type="button">检查更新</button><button id="installUpdateBtn" class="danger" type="button">远程安装正式版</button></div><div id="updateHint" class="hint"></div></section>
 <section class="panel"><h3>当前客户端信息</h3><dl id="clientInfo" class="info-list"></dl></section>
     </section>
   </main>
@@ -169,7 +175,7 @@
 </dialog>
 
 <div id="toast" class="toast hidden"></div>
-<script src="/static/bot-web-v2.js?v=9"></script>
+<script src="/static/bot-web-v2.js?v=10"></script>
 <script src="/static/bot-web-bot-enabled.js?v=5"></script>
 </body>
 </html>
