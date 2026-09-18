@@ -139,6 +139,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ManualRechargeAssistantService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ManualRechargeAssistantService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionImageCacheService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionImageCacheService.cs" />
   </ItemGroup>
