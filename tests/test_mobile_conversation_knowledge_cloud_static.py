@@ -26,6 +26,7 @@ def test_server_registers_conversation_and_knowledge_extension():
     assert "bot_web_conversation_knowledge.py" in dockerfile
     assert "CREATE TABLE IF NOT EXISTS bot_conversation_reads" in server
     assert "CREATE TABLE IF NOT EXISTS bot_knowledge_state" in server
+    assert "CREATE TABLE IF NOT EXISTS bot_knowledge_backups" in server
 
 
 def test_conversation_list_is_sorted_by_latest_message_and_supports_read_state():
@@ -44,6 +45,11 @@ def test_web_knowledge_crud_and_runtime_cloud_sync_are_client_isolated():
     assert '@router.post("/api/bot-web/knowledge")' in source
     assert '@router.put("/api/bot-web/knowledge/{knowledge_id}")' in source
     assert '@router.delete("/api/bot-web/knowledge/{knowledge_id}")' in source
+    assert '@router.get("/api/bot-web/knowledge/export")' in source
+    assert '@router.get("/api/bot-web/knowledge/backups")' in source
+    assert '@router.post("/api/bot-web/knowledge/import")' in source
+    assert "replace_confirmed" in source
+    assert "web-import-replace" in source
     assert '@router.post("/api/runtime/v1/bot-web/knowledge-sync")' in source
     assert "client_id = int(client[\"id\"])" in source
     assert "updated_by" in source
@@ -58,6 +64,11 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert 'id="chatMessageList"' in html
     assert 'data-page="knowledge"' in html
     assert 'id="knowledgeList"' in html
+    assert 'id="knowledgeExportBtn"' in html
+    assert 'id="knowledgeMergeImportBtn"' in html
+    assert 'id="knowledgeReplaceImportBtn"' in html
+    assert 'id="knowledgeImportFile"' in html
+    assert 'src="/static/bot-web-v2.js?v=4"' in html
     assert 'id="messageActionSheet"' in html
     assert "ORDER BY" not in js
     assert "bindLongPress" in js
@@ -65,6 +76,10 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert "inferKnowledgePair" in js
     assert "/api/bot-web/conversations" in js
     assert "/api/bot-web/knowledge" in js
+    assert "/api/bot-web/knowledge/export" in js
+    assert "/api/bot-web/knowledge/import" in js
+    assert "replace_confirmed" in js
+    assert "Windows 应用前会自动备份本店知识" in js
     assert ".conversation-item" in css
     assert ".knowledge-card" in css
 

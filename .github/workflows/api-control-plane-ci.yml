@@ -66,6 +66,7 @@ jobs:
           node --check services/api-control-plane/static/bot-web-auto-reply-rules.js
           node --check services/api-control-plane/static/bot-web-ai-model-settings.js
           node --check services/api-control-plane/static/bot-web-bot-enabled.js
+          node --check services/api-control-plane/static/bot-web-v2.js
           node --check services/api-control-plane/static/message-traces.js
           node --check services/api-control-plane/static/version-update.js
           node --check services/api-control-plane/static/console-startup-guard.js
