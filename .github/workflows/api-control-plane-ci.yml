@@ -64,6 +64,7 @@ jobs:
         run: |
           node --check services/api-control-plane/static/app.js
           node --check services/api-control-plane/static/bot-web-auto-reply-rules.js
+          node --check services/api-control-plane/static/bot-web-ai-model-settings.js
           node --check services/api-control-plane/static/bot-web-bot-enabled.js
           node --check services/api-control-plane/static/message-traces.js
           node --check services/api-control-plane/static/version-update.js
@@ -185,6 +186,7 @@ jobs:
             services/api-control-plane/bot_update_progress.py
             services/api-control-plane/bot_update_push.py
             services/api-control-plane/github_vless_proxy.py
+            services/api-control-plane/bot_web_ai_model_settings.py
             services/api-control-plane/bot_web_auto_reply_rules.py
             services/api-control-plane/bot_web_bot_enabled.py
             services/api-control-plane/scheduled_deep_test_retry.py
