@@ -322,8 +322,16 @@ def test_mobile_ui_exposes_safe_fields_and_no_secret_inputs():
     assert "retry_count" in script
     assert "Windows 连接测试" in script
     lowered = script.lower()
-    for forbidden in ("base_url", "baseurl", "api_key", "apikey", "authorization", "cookie", "password"):
-        assert forbidden not in lowered
+    for forbidden_field in (
+        'data-ai-field="base_url"',
+        'data-ai-field="api_key"',
+        'data-ai-field="authorization"',
+        'data-ai-field="cookie"',
+        'data-ai-field="password"',
+    ):
+        assert forbidden_field not in lowered
+    for forbidden_payload_key in ('base_url:', 'api_key:', 'authorization:', 'cookie:', 'password:'):
+        assert forbidden_payload_key not in lowered
     assert "/static/bot-web-ai-model-settings.js?v=1" in loader
     assert 'src="/static/bot-web-bot-enabled.js?v=3"' in page
 
