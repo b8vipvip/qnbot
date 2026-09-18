@@ -266,7 +266,12 @@ namespace Bot.ChromeNs
             // Only the eight explicitly whitelisted fields above are changed. Notification
             // webhooks, SMTP credentials, order API tokens and every other local rule field
             // remain untouched on the existing config object.
-            if (changed) BotFeatureStore.SaveAutoReplyRules(cfg);
+            if (changed)
+            {
+                BotFeatureStore.SaveAutoReplyRules(cfg);
+                if (!string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
+                    FixedAutoReplyVariantService.Warmup("下班自动回复", cfg.OffHoursFixedText);
+            }
         }
 
         private static bool SetBool(JObject desired, string key, bool current, Action<bool> setter)
