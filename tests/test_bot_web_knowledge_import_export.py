@@ -214,7 +214,7 @@ def test_mobile_console_exposes_backup_restore_with_explicit_confirmation():
     script = (ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.js").read_text(encoding="utf-8-sig")
     assert 'id="knowledgeBackupsBtn"' in page
     assert 'id="knowledgeBackupsDialog"' in page
-    assert 'src="/static/bot-web-v2.js?v=5"' in page
+    assert 'src="/static/bot-web-v2.js?v=6"' in page
     assert 'api("/api/bot-web/knowledge/backups?limit=30")' in script
     assert '/api/bot-web/knowledge/backups/${id}/restore' in script
     assert "restore_confirmed:true" in script
