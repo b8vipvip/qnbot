@@ -292,6 +292,17 @@ namespace Bot.ChromeNs
             }
 
             var question = (item.DisplayText ?? string.Empty).Trim();
+
+            if (await ManualRechargeAssistantService.TryHandleAsync(
+                qn,
+                item,
+                cancellationToken).ConfigureAwait(false))
+            {
+                Log.Info("人工代充安全状态机已消费当前买家消息: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick);
+                return CanonicalPreMergeOutcome.Consumed;
+            }
+
             var buyerKey = Key(item.SellerNick, item.BuyerNick);
             string offHoursReply;
             if (TryResolveOffHours(out offHoursReply))
