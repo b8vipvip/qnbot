@@ -24,10 +24,10 @@ def test_v2_local_direct_requires_current_message_grounding():
 
 def test_service_attitude_warning_is_fail_closed_not_auto_confirmed():
     src = (ROOT / "src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs").read_text(encoding="utf-8")
-    assert "不会自动点击“继续发送”" in src
+    assert "绝不会自动点击“继续发送”" in src
     assert "安全策略禁止Bot自动点击“继续发送”" in src
     assert "result.Continued = false;" in src
-    assert ".AsButton().Invoke()" not in src
+    assert "ReturnModifyButton.AsButton().Invoke()" in src\n    assert "ContinueButton.AsButton().Invoke()" not in src
 
 
 def test_field_incident_messages_are_explicitly_covered():
