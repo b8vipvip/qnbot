@@ -98,3 +98,53 @@ def test_store_rule_state_rejects_invalid_hash_and_oversized_rule_set(tmp_path):
     with pytest.raises(HTTPException) as too_many:
         rules._save_state(1, profile, "c" * 64, "windows")
     assert too_many.value.status_code == 400
+
+
+def test_bot_web_store_rule_center_reads_and_updates_client_isolated_state(tmp_path):
+    cp = setup_cp(tmp_path)
+    with cp.db() as conn:
+        conn.execute("INSERT INTO client_tokens(id) VALUES(2)")
+
+    profile = sample_profile("售前只回答本店明确支持的服务")
+    saved = rules.web_store_rules_update(
+        rules.StoreRuleWebInput(profile=profile),
+        client={"id": 1},
+    )
+    assert saved["ok"] is True
+    assert saved["revision"] == 1
+    assert saved["updated_by"] == "web"
+    assert saved["content_hash"] == rules._profile_hash(profile)
+
+    loaded = rules.web_store_rules(client={"id": 1})
+    assert loaded["profile"]["rules"][0]["Content"] == "售前只回答本店明确支持的服务"
+    assert loaded["revision"] == 1
+
+    isolated = rules.web_store_rules(client={"id": 2})
+    assert isolated["revision"] == 0
+    assert isolated["profile"] == {}
+
+    unchanged = rules.web_store_rules_update(
+        rules.StoreRuleWebInput(profile=profile),
+        client={"id": 1},
+    )
+    assert unchanged["revision"] == 1
+
+    changed_profile = sample_profile("售后问题必须按本店规则回答")
+    changed = rules.web_store_rules_update(
+        rules.StoreRuleWebInput(profile=changed_profile),
+        client={"id": 1},
+    )
+    assert changed["revision"] == 2
+    assert changed["content_hash"] == rules._profile_hash(changed_profile)
+
+
+def test_bot_web_store_rule_center_reuses_runtime_validation(tmp_path):
+    setup_cp(tmp_path)
+    invalid = sample_profile()
+    invalid["rules"] = invalid["rules"] * 81
+    with pytest.raises(HTTPException) as too_many:
+        rules.web_store_rules_update(
+            rules.StoreRuleWebInput(profile=invalid),
+            client={"id": 1},
+        )
+    assert too_many.value.status_code == 400
