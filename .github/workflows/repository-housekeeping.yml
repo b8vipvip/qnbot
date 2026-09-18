@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  pull-requests: read
 concurrency:
   group: repository-housekeeping-${{ github.repository }}
   cancel-in-progress: true
@@ -25,12 +26,28 @@ jobs:
           default="${{ github.event.repository.default_branch }}"
           cutoff="$(date -u -d '7 days ago' +%s)"
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          deleted=0; kept=0
+
+          # An old branch can still be the head of an active PR. Never delete such a ref:
+          # deleting it strands the PR as "unknown repository / mergeable=false" and makes
+          # Compare/Actions unable to continue. Build the protected set from GitHub itself.
+          declare -A open_pr_heads=()
+          while IFS= read -r head; do
+            [[ -n "$head" ]] && open_pr_heads["$head"]=1
+          done < <(gh pr list --state open --limit 500 --json headRefName --jq '.[].headRefName')
+
+          deleted=0; kept=0; protected=0
           while IFS= read -r ref; do
             branch="${ref#refs/remotes/origin/}"
             [[ "$branch" == HEAD || "$branch" == "$default" ]] && continue
             tip_epoch="$(git log -1 --format=%ct "$ref")"
             tip_date="$(git log -1 --format=%cI "$ref")"
+
+            if [[ -n "${open_pr_heads[$branch]+x}" ]]; then
+              echo "KEEP open-PR branch: $branch (tip=$tip_date)"
+              protected=$((protected+1))
+              continue
+            fi
+
             if (( tip_epoch < cutoff )); then
               echo "DELETE stale branch: $branch (tip=$tip_date)"
               if git push origin --delete "$branch"; then deleted=$((deleted+1)); else echo "::warning::Unable to delete $branch"; kept=$((kept+1)); fi
@@ -39,4 +56,4 @@ jobs:
               kept=$((kept+1))
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
-          echo "deleted=$deleted kept=$kept"
+          echo "deleted=$deleted kept=$kept protected_open_pr=$protected"
