@@ -80,6 +80,13 @@
         <label class="field-row"><span>消息保留</span><select id="retentionDays"><option value="1">1 天</option><option value="3">3 天</option><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select></label>
         <button id="saveSettingsBtn" class="primary wide" type="button">保存并下发到 Windows Bot</button><div id="settingsHint" class="hint"></div>
       </section>
+      <section class="panel settings-panel">
+        <div class="panel-head"><h3>AI 模型设置</h3><span class="pill gray">安全白名单</span></div>
+        <p class="hint">这里只同步模型、视觉、超时、重试和系统提示词。BaseUrl 与 API Key 始终只保存在 Windows 本机，Web 不读取也不能修改。</p>
+        <div id="aiEndpointList"><div class="empty">等待 Windows Bot 首次同步 AI 模型设置</div></div>
+        <button id="saveAiModelSettingsBtn" class="primary wide" type="button" disabled>保存 AI 模型设置</button>
+        <div id="aiModelSettingsHint" class="hint"></div>
+      </section>
       <section class="panel"><h3>当前客户端信息</h3><dl id="clientInfo" class="info-list"></dl></section>
     </section>
   </main>
@@ -112,6 +119,6 @@
 
 <div id="toast" class="toast hidden"></div>
 <script src="/static/bot-web-v2.js?v=3"></script>
-<script src="/static/bot-web-bot-enabled.js?v=2"></script>
+<script src="/static/bot-web-bot-enabled.js?v=3"></script>
 </body>
 </html>
