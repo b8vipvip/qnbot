@@ -137,3 +137,12 @@
   script.dataset.botWebAiModelSettings = "1";
   document.body.appendChild(script);
 })();
+
+
+(() => {
+  if (document.querySelector('script[data-bot-web-store-rules]')) return;
+  const script = document.createElement("script");
+  script.src = "/static/bot-web-store-rules.js?v=1";
+  script.dataset.botWebStoreRules = "1";
+  document.body.appendChild(script);
+})();
