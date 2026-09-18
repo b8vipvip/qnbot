@@ -211,6 +211,8 @@ namespace Bot.ChromeNs
         private static JObject BuildCurrentSettings()
         {
             var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
+            if (!string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
+                FixedAutoReplyVariantService.Warmup("下班自动回复", cfg.OffHoursFixedText);
             return new JObject
             {
                 ["auto_reply_rules_enabled"] = cfg.Enabled,
