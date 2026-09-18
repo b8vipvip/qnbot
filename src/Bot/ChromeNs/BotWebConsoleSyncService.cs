@@ -555,6 +555,8 @@ namespace Bot.ChromeNs
                     JObject result;
                     if (string.Equals(type, "send_text", StringComparison.OrdinalIgnoreCase))
                         result = await ExecuteSendTextAsync(state, id, command["payload"] as JObject);
+                    else if (string.Equals(type, "knowledge_v2_smart_import", StringComparison.OrdinalIgnoreCase))
+                        result = await ExecuteKnowledgeV2SmartImportAsync(state, id, command["payload"] as JObject);
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
                     MarkProcessed(state, id);
@@ -591,6 +593,32 @@ namespace Bot.ChromeNs
             }
             EnqueueMessage(state, seller, resolvedBuyer, "assistant", text, "web_sent", DateTime.Now, "command:" + commandId);
             return new JObject { ["sent"] = true, ["shop_key"] = state.Shop.ShopKey };
+        }
+
+        private static async Task<JObject> ExecuteKnowledgeV2SmartImportAsync(ShopWebState state, long commandId, JObject payload)
+        {
+            if (payload == null) throw new Exception("V2 智能导入参数为空");
+            var text = Convert.ToString(payload["text"] ?? string.Empty).Trim();
+            if (text.Length == 0) throw new Exception("V2 智能导入资料为空");
+            if (text.Length > 20000) throw new Exception("V2 智能导入文字超过 20000 字");
+            var timeout = payload.Value<int?>("timeout_seconds") ?? 90;
+            timeout = Math.Max(15, Math.Min(180, timeout));
+            var seller = (state.Shop.DisplayName ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new Exception("本店客服账号未识别，不能执行 V2 智能导入");
+            var data = new Bot.Knowledge.ClipboardKnowledgeData { Text = text };
+            var service = new Bot.Knowledge.KnowledgeV2SmartImportService();
+            var imported = await service.ImportAsync(
+                seller, data, timeout, CancellationToken.None, null,
+                progress => Log.Info("Bot Web V2智能导入: command=" + commandId + ", shop=" + state.Shop.ShopKey + ", " + Safe(progress, 260)));
+            return new JObject
+            {
+                ["import_id"] = imported.ImportId,
+                ["ai_generated"] = imported.AiGenerated,
+                ["added"] = imported.Added,
+                ["duplicate_skipped"] = imported.DuplicateSkipped,
+                ["text_chars"] = imported.TextChars,
+                ["shop_key"] = state.Shop.ShopKey
+            };
         }
 
         private static JObject Result(long id, bool success, string error, JObject result)
