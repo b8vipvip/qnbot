@@ -68,7 +68,7 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert 'id="knowledgeMergeImportBtn"' in html
     assert 'id="knowledgeReplaceImportBtn"' in html
     assert 'id="knowledgeImportFile"' in html
-    assert 'src="/static/bot-web-v2.js?v=7"' in html
+    assert 'src="/static/bot-web-v2.js?v=8"' in html
     assert 'id="messageActionSheet"' in html
     assert "ORDER BY" not in js
     assert "bindLongPress" in js

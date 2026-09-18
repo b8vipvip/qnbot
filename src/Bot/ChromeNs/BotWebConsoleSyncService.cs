@@ -557,6 +557,10 @@ namespace Bot.ChromeNs
                         result = await ExecuteSendTextAsync(state, id, command["payload"] as JObject);
                     else if (string.Equals(type, "knowledge_v2_smart_import", StringComparison.OrdinalIgnoreCase))
                         result = await ExecuteKnowledgeV2SmartImportAsync(state, id, command["payload"] as JObject);
+                    else if (string.Equals(type, "knowledge_v2_settings_get", StringComparison.OrdinalIgnoreCase))
+                        result = ExecuteKnowledgeV2SettingsGet(state);
+                    else if (string.Equals(type, "knowledge_v2_settings_set", StringComparison.OrdinalIgnoreCase))
+                        result = ExecuteKnowledgeV2SettingsSet(state, command["payload"] as JObject);
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
                     MarkProcessed(state, id);
@@ -593,6 +597,41 @@ namespace Bot.ChromeNs
             }
             EnqueueMessage(state, seller, resolvedBuyer, "assistant", text, "web_sent", DateTime.Now, "command:" + commandId);
             return new JObject { ["sent"] = true, ["shop_key"] = state.Shop.ShopKey };
+        }
+
+        private static JObject ExecuteKnowledgeV2SettingsGet(ShopWebState state)
+        {
+            var seller = (state.Shop.DisplayName ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new Exception("本店客服账号未识别，不能读取 V2 运行设置");
+            var settings = Bot.Knowledge.KnowledgeEngineV2Service.GetSettingsView(seller);
+            return new JObject
+            {
+                ["enabled"] = settings.Enabled,
+                ["mode"] = settings.Mode,
+                ["direct_threshold"] = settings.DirectThreshold,
+                ["min_confidence"] = settings.MinConfidence,
+                ["shop_key"] = state.Shop.ShopKey
+            };
+        }
+
+        private static JObject ExecuteKnowledgeV2SettingsSet(ShopWebState state, JObject payload)
+        {
+            if (payload == null) throw new Exception("V2 运行设置参数为空");
+            var seller = (state.Shop.DisplayName ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new Exception("本店客服账号未识别，不能保存 V2 运行设置");
+            var enabled = payload.Value<bool?>("enabled") ?? true;
+            var mode = (payload.Value<string>("mode") ?? "production").Trim().ToLowerInvariant();
+            if (mode != "production" && mode != "shadow") throw new Exception("V2 运行模式无效");
+            var threshold = payload.Value<double?>("direct_threshold") ?? 0.82;
+            var confidence = payload.Value<double?>("min_confidence") ?? 0.72;
+            if (threshold < 0.70 || threshold > 0.96) throw new Exception("V2 本地直答匹配阈值必须在 0.70~0.96");
+            if (confidence < 0.50 || confidence > 0.95) throw new Exception("V2 最低知识可信度必须在 0.50~0.95");
+            Bot.Knowledge.KnowledgeEngineV2Service.SetSettings(seller, enabled, mode, threshold, confidence);
+            Log.Info("Bot Web 已更新 Knowledge V2 运行设置: shop=" + state.Shop.ShopKey
+                + ", enabled=" + enabled + ", mode=" + mode
+                + ", threshold=" + threshold.ToString("0.000")
+                + ", minConfidence=" + confidence.ToString("0.000"));
+            return ExecuteKnowledgeV2SettingsGet(state);
         }
 
         private static async Task<JObject> ExecuteKnowledgeV2SmartImportAsync(ShopWebState state, long commandId, JObject payload)
