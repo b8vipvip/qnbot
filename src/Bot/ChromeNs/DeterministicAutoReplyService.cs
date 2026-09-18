@@ -670,14 +670,16 @@ namespace Bot.ChromeNs
 
         private static string Canonicalize(string text, out Dictionary<string, string> tokens)
         {
-            tokens = new Dictionary<string, string>(StringComparer.Ordinal);
+            var stableTokens = new Dictionary<string, string>(StringComparer.Ordinal);
             var index = 0;
-            return StableTokenRegex.Replace(text, match =>
+            var canonical = StableTokenRegex.Replace(text, match =>
             {
                 var key = "[[T" + index++ + "]]";
-                tokens[key] = match.Value;
+                stableTokens[key] = match.Value;
                 return key;
             });
+            tokens = stableTokens;
+            return canonical;
         }
 
         private static string RestoreTokens(string variant, Dictionary<string, string> tokens)
