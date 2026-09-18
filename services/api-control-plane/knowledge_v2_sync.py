@@ -20,6 +20,10 @@ class KnowledgeV2SyncInput(BaseModel):
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
 
+class KnowledgeV2SmartImportInput(BaseModel):
+    text: str
+    timeout_seconds: int = 90
+
 def install(control_plane, console_module=bot_web_console):
     global _cp
     _cp = control_plane
@@ -112,3 +116,29 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
     if payload.records is not None:
         return _save(client_id,payload.records,"windows")
     return current
+
+
+@router.post("/api/bot-web/knowledge-v2/smart-import")
+def web_smart_import(payload: KnowledgeV2SmartImportInput, client=Depends(bot_web_console._web_client)):
+    text=(payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400,detail="智能导入资料不能为空")
+    if len(text)>20000:
+        raise HTTPException(status_code=413,detail="智能导入文字最多 20000 字")
+    timeout=max(15,min(180,int(payload.timeout_seconds or 90)))
+    client_id=int(client["id"])
+    with _cp.db() as conn:
+        cursor=conn.execute("""INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+          VALUES(?,?,?,'pending','{}','',?)""",
+          (client_id,"knowledge_v2_smart_import",json.dumps({"text":text,"timeout_seconds":timeout},ensure_ascii=False,separators=(",",":")),_cp.iso_now()))
+        command_id=int(cursor.lastrowid)
+    return {"ok":True,"command_id":command_id,"status":"pending"}
+
+@router.get("/api/bot-web/knowledge-v2/smart-import/{command_id}")
+def web_smart_import_status(command_id: int, client=Depends(bot_web_console._web_client)):
+    with _cp.db() as conn:
+        row=conn.execute("""SELECT status,result_json,error,created_at,completed_at FROM bot_commands
+          WHERE id=? AND client_id=? AND command_type='knowledge_v2_smart_import'""",(command_id,int(client["id"]))).fetchone()
+    if not row:
+        raise HTTPException(status_code=404,detail="智能导入任务不存在")
+    return {"command_id":command_id,"status":row["status"],"result":json.loads(row["result_json"] or "{}"),"error":row["error"] or "","created_at":row["created_at"],"completed_at":row["completed_at"]}
