@@ -60,6 +60,23 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_bot_knowledge_backups_client
             ON bot_knowledge_backups(client_id,id DESC);
 
+            CREATE TABLE IF NOT EXISTS bot_knowledge_smart_import_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                source_text TEXT NOT NULL DEFAULT '',
+                timeout_seconds INTEGER NOT NULL DEFAULT 90,
+                status TEXT NOT NULL DEFAULT 'pending',
+                progress TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bot_knowledge_smart_import_client
+            ON bot_knowledge_smart_import_requests(client_id,status,id);
+
             CREATE INDEX IF NOT EXISTS idx_bot_conversation_reads
             ON bot_conversation_reads(client_id, seller, buyer);
             """
@@ -206,6 +223,19 @@ class KnowledgeImportInput(BaseModel):
     mode: str = Field(default="merge", max_length=20)
     replace_confirmed: bool = False
     items: List[Dict[str, Any]] = Field(default_factory=list, max_length=20000)
+
+
+class KnowledgeSmartImportInput(BaseModel):
+    text: str = Field(min_length=1, max_length=100000)
+    timeout_seconds: int = Field(default=90, ge=30, le=180)
+
+
+class RuntimeKnowledgeSmartImportSyncInput(BaseModel):
+    request_id: int = Field(default=0, ge=0)
+    status: str = Field(default="", max_length=20)
+    progress: str = Field(default="", max_length=1000)
+    result: Dict[str, Any] = Field(default_factory=dict)
+    error: str = Field(default="", max_length=1000)
 
 
 class KnowledgeSyncInput(BaseModel):
@@ -492,6 +522,156 @@ def web_knowledge_delete(
             raise HTTPException(status_code=404, detail="知识条目不存在")
         result = _save_knowledge(client_id, items, "web")
     return {"ok": True, "revision": result["revision"]}
+
+
+@router.post("/api/bot-web/knowledge/smart-import")
+def web_knowledge_smart_import(
+    data: KnowledgeSmartImportInput,
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    if not _cloud_sync_enabled(client_id):
+        raise HTTPException(status_code=409, detail="请先在 Windows 知识库界面启用本店云同步")
+    text = _safe_text(data.text, 100000)
+    if not text:
+        raise HTTPException(status_code=422, detail="智能导入资料不能为空")
+    with core._cp.db() as conn:
+        active = conn.execute(
+            """
+            SELECT id,status FROM bot_knowledge_smart_import_requests
+            WHERE client_id=? AND status IN ('pending','running')
+            ORDER BY id DESC LIMIT 1
+            """,
+            (client_id,),
+        ).fetchone()
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail="已有智能导入任务正在等待或执行，请先等待任务完成",
+            )
+        now = _now()
+        cursor = conn.execute(
+            """
+            INSERT INTO bot_knowledge_smart_import_requests(
+                client_id,source_text,timeout_seconds,status,progress,result_json,error,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (client_id, text, int(data.timeout_seconds), "pending", "等待 Windows Bot 接收任务", "{}", "", now, now),
+        )
+        request_id = int(cursor.lastrowid)
+    return {"ok": True, "request_id": request_id, "status": "pending"}
+
+
+@router.get("/api/bot-web/knowledge/smart-import/status")
+def web_knowledge_smart_import_status(
+    request_id: int = Query(0, ge=0),
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    with core._cp.db() as conn:
+        if request_id > 0:
+            row = conn.execute(
+                """
+                SELECT id,status,progress,result_json,error,created_at,updated_at
+                FROM bot_knowledge_smart_import_requests
+                WHERE client_id=? AND id=?
+                """,
+                (client_id, request_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id,status,progress,result_json,error,created_at,updated_at
+                FROM bot_knowledge_smart_import_requests
+                WHERE client_id=? ORDER BY id DESC LIMIT 1
+                """,
+                (client_id,),
+            ).fetchone()
+    if not row:
+        return {"request_id": 0, "status": "idle", "progress": "", "result": {}, "error": ""}
+    try:
+        result = json.loads(row["result_json"] or "{}")
+    except Exception:
+        result = {}
+    return {
+        "request_id": int(row["id"]),
+        "status": str(row["status"] or ""),
+        "progress": _safe_text(row["progress"], 1000),
+        "result": result if isinstance(result, dict) else {},
+        "error": _safe_text(row["error"], 1000),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@router.post("/api/runtime/v1/bot-web/knowledge-smart-import/sync")
+def runtime_knowledge_smart_import_sync(
+    data: RuntimeKnowledgeSmartImportSyncInput,
+    client: Dict[str, Any] = Depends(core._runtime_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    now = _now()
+    status = (data.status or "").strip().lower()
+    with core._cp.db() as conn:
+        if data.request_id > 0 and status in {"running", "succeeded", "failed"}:
+            result_json = _json(data.result if isinstance(data.result, dict) else {})
+            conn.execute(
+                """
+                UPDATE bot_knowledge_smart_import_requests
+                SET status=?,progress=?,result_json=?,error=?,updated_at=?
+                WHERE client_id=? AND id=?
+                """,
+                (
+                    status,
+                    _safe_text(data.progress, 1000),
+                    result_json,
+                    _safe_text(data.error, 1000),
+                    now,
+                    client_id,
+                    int(data.request_id),
+                ),
+            )
+
+        running = conn.execute(
+            """
+            SELECT id FROM bot_knowledge_smart_import_requests
+            WHERE client_id=? AND status='running'
+            ORDER BY id LIMIT 1
+            """,
+            (client_id,),
+        ).fetchone()
+        if running:
+            return {"ok": True, "request": None}
+
+        pending = conn.execute(
+            """
+            SELECT id,source_text,timeout_seconds
+            FROM bot_knowledge_smart_import_requests
+            WHERE client_id=? AND status='pending'
+            ORDER BY id LIMIT 1
+            """,
+            (client_id,),
+        ).fetchone()
+        if not pending:
+            return {"ok": True, "request": None}
+
+        request_id = int(pending["id"])
+        conn.execute(
+            """
+            UPDATE bot_knowledge_smart_import_requests
+            SET status='running',progress='Windows Bot 已接收，正在调用本机 AI 智能整理',updated_at=?
+            WHERE client_id=? AND id=? AND status='pending'
+            """,
+            (now, client_id, request_id),
+        )
+    return {
+        "ok": True,
+        "request": {
+            "id": request_id,
+            "text": str(pending["source_text"] or ""),
+            "timeout_seconds": int(pending["timeout_seconds"] or 90),
+        },
+    }
 
 
 @router.post("/api/runtime/v1/bot-web/knowledge-sync")
