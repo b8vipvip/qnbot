@@ -1,0 +1,49 @@
+name: GPTAuto Protocol Check
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/gptauto/**'
+      - '.github/tests/test_gptauto.py'
+      - '.github/actions/upload-gptauto-log/**'
+      - '.github/GPTAUTO.md'
+      - '.github/workflows/gptauto-check.yml'
+  push:
+    branches: [master]
+    paths:
+      - '.github/gptauto/**'
+      - '.github/tests/test_gptauto.py'
+      - '.github/actions/upload-gptauto-log/**'
+      - '.github/GPTAUTO.md'
+      - '.github/workflows/gptauto-check.yml'
+permissions:
+  contents: read
+concurrency:
+  group: gptauto-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test embedded GPTAuto
+        run: PYTHONPATH=.github python -m unittest discover -s .github/tests -p 'test_gptauto.py' -v
+      - name: Create diagnostic smoke task
+        shell: bash
+        run: |
+          PYTHONPATH=.github python -m gptauto.cli init --goal "CI diagnostic smoke test" --repo "${{ github.repository }}" --out .gptauto/task.json > /tmp/gptauto-init.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data=json.loads(Path("/tmp/gptauto-init.json").read_text())
+          with open(os.environ["GITHUB_ENV"],"a") as f: f.write("GPTAUTO_TASK_ID="+Path(data["directory"]).name+"\n")
+          PY
+      - name: Upload GPTAuto diagnostic artifact
+        uses: ./.github/actions/upload-gptauto-log
+        with:
+          task-id: ${{ env.GPTAUTO_TASK_ID }}
+          retention-days: '1'

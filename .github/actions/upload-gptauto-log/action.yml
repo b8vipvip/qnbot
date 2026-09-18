@@ -1,0 +1,42 @@
+name: Upload GPTAuto diagnostic log
+description: Archive a GPTAuto task directory as a GitHub Actions artifact
+inputs:
+  task-id:
+    description: GPTAuto task ID, for example GA-a81c92f217e4
+    required: true
+  log-root:
+    description: GPTAuto log root
+    required: false
+    default: .gptauto/logs
+  retention-days:
+    description: Artifact retention in days
+    required: false
+    default: '30'
+outputs:
+  artifact-name:
+    description: Uploaded artifact name
+    value: ${{ steps.meta.outputs.name }}
+runs:
+  using: composite
+  steps:
+    - id: meta
+      shell: bash
+      env:
+        TASK_ID: ${{ inputs.task-id }}
+        LOG_ROOT: ${{ inputs.log-root }}
+      run: |
+        set -Eeuo pipefail
+        [[ "$TASK_ID" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::Invalid GPTAuto task ID"; exit 1; }
+        dir="$LOG_ROOT/$TASK_ID"
+        [[ -d "$dir" ]] || { echo "::error::GPTAuto task directory not found: $dir"; exit 1; }
+        for file in task.log state.json events.jsonl summary.md; do
+          [[ -f "$dir/$file" ]] || { echo "::error::Missing diagnostic file: $dir/$file"; exit 1; }
+        done
+        echo "name=gptauto-$TASK_ID" >> "$GITHUB_OUTPUT"
+        echo "path=$dir" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.meta.outputs.name }}
+        path: ${{ steps.meta.outputs.path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
