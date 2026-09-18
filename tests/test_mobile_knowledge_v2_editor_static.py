@@ -14,7 +14,7 @@ def test_mobile_exposes_native_knowledge_v2_editor():
     assert 'id="knowledgeV2Dialog"' in h
     for field in ("knowledgeV2Type","knowledgeV2Intent","knowledgeV2Subject","knowledgeV2Predicate","knowledgeV2Entities","knowledgeV2Aliases","knowledgeV2Conditions","knowledgeV2Exclusions","knowledgeV2RequiredContext","knowledgeV2ProductIds","knowledgeV2Risk"):
         assert f'id="{field}"' in h
-    assert 'src="/static/bot-web-v2.js?v=9"' in h
+    assert 'src="/static/bot-web-v2.js?v=10"' in h
     assert 'api("/api/bot-web/knowledge-v2")' in s
     assert 'method:"PUT"' in s
     assert "SourceType:old.SourceType||\"web_manual\"" in s
