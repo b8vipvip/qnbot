@@ -177,6 +177,16 @@ def _editable(values: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _validate_web_settings(values: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _editable(values)
+    for endpoint in normalized["endpoints"]:
+        if endpoint["enabled"] and not endpoint["text_model"]:
+            raise ValueError("启用 AI 接口时，文本模型不能为空")
+        if endpoint["supports_vision"] and not endpoint["vision_model"]:
+            raise ValueError("启用图片视觉理解时，视觉模型不能为空")
+    return normalized
+
+
 def _reconcile_desired(stored: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
     current_editable = _editable(current)
     try:
@@ -258,9 +268,8 @@ def put_ai_model_settings(
         raise HTTPException(status_code=409, detail="请先等待 Windows Bot 完成首次 AI 模型设置同步")
 
     try:
-        desired = _normalize_settings(
-            {"endpoints": [item.model_dump() for item in data.endpoints]},
-            include_status=False,
+        desired = _validate_web_settings(
+            {"endpoints": [item.model_dump() for item in data.endpoints]}
         )
         current = _normalize_settings(_load(existing["current_settings_json"]), include_status=True)
     except ValueError as exc:
