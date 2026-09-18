@@ -3,7 +3,7 @@ from .audit import write_audit
 from .engine import begin_verify,criterion,finish,gate,is_complete,plan_ready,start
 from .model import Criterion,CriterionStatus,Gate,GateStatus,Task
 from .planner import GoalPlanner
-from .registry import latest,register
+from .registry import diagnostic_report,latest,register
 
 def persist(t,path,log_root,registry_root):
     t.save(path);logs=write_audit(t,log_root);register(t,registry_root,artifact_name="gptauto-"+t.task_id);return logs
@@ -17,13 +17,15 @@ def main():
     lg=s.add_parser("log");lg.add_argument("task")
     bd=s.add_parser("bind");bd.add_argument("task")
     for name in ["branch","head-sha","pr-number","merge-sha","run-id","artifact-name"]:bd.add_argument("--"+name)
-    s.add_parser("latest")
+    s.add_parser("latest");s.add_parser("report")
     a=p.parse_args()
     if a.command=="init":
         tid="GA-"+uuid.uuid4().hex[:12];t=Task(tid,a.goal,a.repo,[Criterion(x) for x in a.done]);t.record("goal contract created",kind="goal");start(t)
         gates=[Gate(x) for x in a.gate] if a.gate else None;GoalPlanner().apply(t,gates,a.done or None);plan_ready(t);paths=persist(t,a.out,a.log_root,a.registry_root);print(json.dumps({"task_id":tid,**paths},ensure_ascii=False));return 0
     if a.command=="latest":
         print(json.dumps(latest(a.registry_root),ensure_ascii=False));return 0
+    if a.command=="report":
+        print(json.dumps(diagnostic_report(a.registry_root),ensure_ascii=False));return 0
     t=Task.load(a.task)
     if a.command=="status":
         print(json.dumps({"task_id":t.task_id,"state":t.state.value,"complete":is_complete(t),"repairs":t.repair_attempts,"metadata":t.metadata,"plan":[{"gate":x.gate.value,"status":x.status.value,"required":x.required,"evidence":x.evidence} for x in t.plan],"definition_of_done":[{"text":x.text,"status":x.status.value,"evidence":x.evidence} for x in t.definition_of_done]},ensure_ascii=False));return 0
