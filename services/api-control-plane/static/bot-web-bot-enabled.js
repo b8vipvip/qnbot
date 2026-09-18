@@ -128,3 +128,12 @@
   script.dataset.botWebAutoReplyRules = "1";
   document.body.appendChild(script);
 })();
+
+
+(() => {
+  if (document.querySelector('script[data-bot-web-ai-model-settings]')) return;
+  const script = document.createElement("script");
+  script.src = "/static/bot-web-ai-model-settings.js?v=1";
+  script.dataset.botWebAiModelSettings = "1";
+  document.body.appendChild(script);
+})();

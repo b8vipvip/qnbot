@@ -143,6 +143,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebAutoReplyRulesSyncService.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebAiModelSettingsSyncService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebAiModelSettingsSyncService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\MessageProcessingTraceService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\MessageProcessingTraceService.cs" />
   </ItemGroup>
