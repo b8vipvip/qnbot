@@ -8,12 +8,14 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -581,6 +583,10 @@ namespace Bot.ChromeNs
                         result = ExecuteKnowledgeV2SettingsGet(state);
                     else if (string.Equals(type, "knowledge_v2_settings_set", StringComparison.OrdinalIgnoreCase))
                         result = ExecuteKnowledgeV2SettingsSet(state, command["payload"] as JObject);
+                    else if (string.Equals(type, "diagnostics_snapshot", StringComparison.OrdinalIgnoreCase))
+                        result = ExecuteDiagnosticsSnapshot(state);
+                    else if (string.Equals(type, "diagnostics_flow_probe", StringComparison.OrdinalIgnoreCase))
+                        result = await ExecuteDiagnosticsFlowProbeAsync(state);
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
                     MarkProcessed(state, id);
@@ -678,6 +684,125 @@ namespace Bot.ChromeNs
                 ["text_chars"] = imported.TextChars,
                 ["shop_key"] = state.Shop.ShopKey
             };
+        }
+
+        private static JObject ExecuteDiagnosticsSnapshot(ShopWebState state)
+        {
+            var reports = SlowResponseAnomalyService.GetReports(40) ?? new List<SlowResponseAnomalyReport>();
+            var sendFailures = reports
+                .Where(x => x != null && (x.AnswerSource ?? string.Empty).StartsWith("发送异常", StringComparison.Ordinal))
+                .Take(20)
+                .Select(ToSafeDiagnosticReport)
+                .ToList();
+            var slowResponses = reports
+                .Where(x => x != null && !(x.AnswerSource ?? string.Empty).StartsWith("发送异常", StringComparison.Ordinal))
+                .Take(20)
+                .Select(ToSafeDiagnosticReport)
+                .ToList();
+
+            return new JObject
+            {
+                ["mode"] = "safe_redacted_snapshot",
+                ["shop_key"] = state.Shop.ShopKey,
+                ["generated_at"] = DateTime.UtcNow.ToString("o"),
+                ["recent_logs"] = new JArray(ReadSafeDiagnosticLogLines(120)),
+                ["send_failures"] = new JArray(sendFailures),
+                ["slow_responses"] = new JArray(slowResponses),
+                ["privacy"] = new JObject
+                {
+                    ["raw_customer_text_exposed"] = false,
+                    ["raw_credentials_exposed"] = false,
+                    ["phone_and_code_redacted"] = true
+                }
+            };
+        }
+
+        private static async Task<JObject> ExecuteDiagnosticsFlowProbeAsync(ShopWebState state)
+        {
+            var candidate = await BotFlowTestService.PickRandomCandidateAsync();
+            var sellerOnline = candidate != null
+                && FindQns(state.Shop).Any(x => x != null && x.Seller != null
+                    && string.Equals(
+                        (x.Seller.Nick ?? string.Empty).Trim(),
+                        (candidate.Seller ?? string.Empty).Trim(),
+                        StringComparison.Ordinal));
+            return new JObject
+            {
+                ["mode"] = "dry_run_no_send",
+                ["success"] = candidate != null && sellerOnline,
+                ["candidate_available"] = candidate != null,
+                ["seller_online"] = sellerOnline,
+                ["candidate_source"] = candidate == null ? string.Empty : SafeDiagnosticText(candidate.Source, 120),
+                ["question_chars"] = candidate == null || candidate.Question == null ? 0 : candidate.Question.Length,
+                ["message_sent"] = false,
+                ["detail"] = candidate == null
+                    ? "未找到适合安全预检的近期买家问题；未发送任何消息。"
+                    : (sellerOnline
+                        ? "已完成当前店铺/客服/候选问题只读预检；未调用真实流程发送。"
+                        : "已找到候选问题，但对应客服连接不可用；未发送任何消息。")
+            };
+        }
+
+        private static JObject ToSafeDiagnosticReport(SlowResponseAnomalyReport report)
+        {
+            return new JObject
+            {
+                ["id"] = Safe(report == null ? string.Empty : report.Id, 80),
+                ["created_at"] = report == null || report.CreatedAt == DateTime.MinValue
+                    ? string.Empty : report.CreatedAt.ToUniversalTime().ToString("o"),
+                ["severity"] = SafeDiagnosticText(report == null ? string.Empty : report.Severity, 120),
+                ["analysis_status"] = SafeDiagnosticText(report == null ? string.Empty : report.AnalysisStatus, 160),
+                ["answer_source"] = SafeDiagnosticText(report == null ? string.Empty : report.AnswerSource, 160),
+                ["total_ms"] = report == null ? 0 : Math.Max(0, report.TotalMilliseconds),
+                ["queue_ms"] = report == null ? 0 : Math.Max(0, report.QueueMilliseconds),
+                ["generation_ms"] = report == null ? 0 : Math.Max(0, report.GenerationMilliseconds),
+                ["summary"] = SafeDiagnosticText(report == null ? string.Empty : report.Summary, 900),
+                ["likely_cause"] = SafeDiagnosticText(report == null ? string.Empty : report.LikelyCause, 900),
+                ["evidence"] = SafeDiagnosticText(report == null ? string.Empty : report.Evidence, 900),
+                ["recommendations"] = SafeDiagnosticText(report == null ? string.Empty : report.Recommendations, 900)
+            };
+        }
+
+        private static IEnumerable<string> ReadSafeDiagnosticLogLines(int maxLines)
+        {
+            try
+            {
+                Log.Flush();
+                var path = Log.CurrentFileName;
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return new[] { "当前没有可读取的运行日志。" };
+                var lines = File.ReadLines(path)
+                    .Reverse()
+                    .Take(Math.Max(1, Math.Min(300, maxLines)))
+                    .Reverse()
+                    .Select(x => SafeDiagnosticText(x, 700))
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToArray();
+                return lines.Length == 0 ? new[] { "当前运行日志为空。" } : lines;
+            }
+            catch (Exception ex)
+            {
+                return new[] { "读取安全日志摘要失败：" + SafeDiagnosticText(ex.Message, 240) };
+            }
+        }
+
+        private static string SafeDiagnosticText(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            if (value.Length == 0) return string.Empty;
+            value = Regex.Replace(
+                value,
+                @"(?i)(authorization|bearer|api[-_ ]?key|token|cookie|password|secret)\s*[:=：]\s*[^\s,，;；|]+",
+                "$1=[REDACTED]");
+            value = Regex.Replace(
+                value,
+                @"(?i)(question|answer|text|message|prompt|content|buyer|seller|phone|code|order[_-]?id|手机号|验证码|订单号)\s*[:=：]\s*[^,，;；|]+",
+                "$1=[REDACTED]");
+            value = Regex.Replace(value, @"(?<!\d)1\d{10}(?!\d)", "[PHONE]");
+            value = Regex.Replace(value, @"(?<!\d)\d{6}(?!\d)", "[CODE]");
+            value = Regex.Replace(value, @"https?://[^\s]+", "[URL]", RegexOptions.IgnoreCase);
+            while (value.Contains("  ")) value = value.Replace("  ", " ");
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
         private static JObject Result(long id, bool success, string error, JObject result)
