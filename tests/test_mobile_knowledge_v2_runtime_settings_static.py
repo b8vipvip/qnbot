@@ -34,7 +34,7 @@ def test_mobile_runtime_settings_require_confirmation_and_show_safety_semantics(
     assert 'id="knowledgeV2RuntimeMode"' in h
     assert 'id="knowledgeV2DirectThreshold"' in h
     assert 'id="knowledgeV2MinConfidence"' in h
-    assert 'src="/static/bot-web-v2.js?v=8"' in h
+    assert 'src="/static/bot-web-v2.js?v=9"' in h
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings/read"' in s
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings"' in s
     assert "Production 会允许满足安全门控" in s
