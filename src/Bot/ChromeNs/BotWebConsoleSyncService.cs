@@ -450,8 +450,8 @@ namespace Bot.ChromeNs
                 ["control_scope"] = "current_shop_only",
                 ["seller_accounts"] = new JArray(sellers),
                 ["seller_count"] = sellers.Count,
-                ["control_plane_configured"] = connection.Configured,
-                ["client_token_bound"] = connection.TokenExists,
+                ["control_plane_configured"] = connection.HasShopServerUrl,
+                ["client_token_bound"] = connection.HasToken,
                 ["credentials_location"] = "windows_local_only",
                 ["sensitive_credentials_exposed"] = false,
                 ["capabilities"] = new JArray(
