@@ -11,6 +11,7 @@ import bot_update_prefetch
 import bot_update_progress
 import bot_update_push
 import bot_web_admin
+import bot_web_ai_model_settings
 import bot_web_auto_reply_rules
 import bot_web_bot_enabled
 import bot_web_bot_qa
@@ -58,6 +59,7 @@ github_vless_proxy.install(control_plane)
 control_plane.app.include_router(bot_update_cache.router)
 control_plane.app.include_router(bot_update_push.router)
 bot_web_console.install(control_plane)
+bot_web_ai_model_settings.install(control_plane, bot_web_console)
 bot_web_auto_reply_rules.install(control_plane, bot_web_console)
 bot_web_settings_ack.install(control_plane, bot_web_console)
 bot_client_shop_binding.install(control_plane)
@@ -80,6 +82,7 @@ def initialize_control_plane_extensions() -> None:
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
     bot_web_console.init_bot_web_db()
+    bot_web_ai_model_settings.init_db()
     bot_web_auto_reply_rules.init_db()
     bot_web_settings_ack.init_db()
     bot_client_shop_binding.init_db()
