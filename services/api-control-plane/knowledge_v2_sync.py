@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 import bot_web_console
@@ -84,13 +84,31 @@ def _save(client_id, records, updated_by):
     return {"revision":revision,"records":records,"updated_at":now,"updated_by":updated_by}
 
 @router.get("/api/bot-web/knowledge-v2")
-def web_get(client=Depends(lambda: None)):
-    return {}
+def web_get(client=Depends(bot_web_console._web_client)):
+    return _state(int(client["id"]))
 
 @router.put("/api/bot-web/knowledge-v2")
-def web_put(payload: KnowledgeV2WebInput, client=Depends(lambda: None)):
-    return {}
+def web_put(payload: KnowledgeV2WebInput, client=Depends(bot_web_console._web_client)):
+    return _save(int(client["id"]), payload.records, "web")
 
 @router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")
-def runtime_sync(payload: KnowledgeV2SyncInput, authorization: str | None = Header(default=None), x_shop_key: str | None = Header(default=None)):
-    return {}
+def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: str | None = Header(default=None)):
+    client=bot_web_console._runtime_client(request)
+    client_id=int(client["id"])
+    shop_key=(x_shop_key or "").strip()
+    if not shop_key:
+        raise HTTPException(status_code=400,detail="缺少 X-Shop-Key")
+    if payload.revision < 0:
+        raise HTTPException(status_code=400,detail="revision 无效")
+    current=_state(client_id)
+    # First Windows report seeds cloud state. Later, a newer cloud revision wins and is
+    # returned to Windows; an equal revision with changed local data is treated as a
+    # Windows-originated update. This keeps the existing local repository authoritative
+    # during first adoption without allowing stale clients to overwrite Web changes.
+    if current["revision"] == 0 and payload.records is not None:
+        return _save(client_id,payload.records,"windows")
+    if current["revision"] > payload.revision:
+        return current
+    if payload.records is not None:
+        return _save(client_id,payload.records,"windows")
+    return current
