@@ -1184,6 +1184,7 @@ namespace Bot.ChromeNs
             for (var i = 0; i < segments.Count; i++)
             {
                 if (i > 0) await Task.Delay(220);
+                segments[i] = FixedAutoReplyVariantService.Select("订单固定预设", segments[i]);
                 if (await IsOrderPresetSegmentAlreadySatisfiedAsync(plan, segments[i]).ConfigureAwait(false))
                 {
                     result.SatisfiedSegments++;
