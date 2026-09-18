@@ -31,6 +31,8 @@ def test_stale_desktop_composer_is_cleared_only_when_bot_ownership_and_target_bu
     assert "输入框存在所有权无法证明的内容，已保留并阻止覆盖/追加发送" in block
     assert "RunUiActionAsync" not in block
     assert "RunUiMutationAsync" in block
+    assert "UIA文本尚未刷新，交由CDP二次确认" in block
+    assert "残留草稿清理后确认" in block
 
 
 def test_exact_current_task_draft_is_adopted_and_side_effect_mutations_use_bounded_exclusive_lease():
