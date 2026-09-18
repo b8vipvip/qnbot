@@ -29,7 +29,7 @@ namespace Bot.ChromeNs
     {
         private const string DefaultOffHoursReply =
             "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。";
-        private const int OffHoursRepeatMinutes = 2;
+        private const int OffHoursRepeatMinutes = 5;
 
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> BuyerGates =
             new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
@@ -192,7 +192,7 @@ namespace Bot.ChromeNs
                 DateTime until;
                 if (OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) && until > DateTime.Now)
                 {
-                    Log.Info("下班独占策略已消费买家消息，距离下一次下班提示不足2分钟，不进入其它回复链: seller="
+                    Log.Info("下班独占策略已消费买家消息，距离下一次下班提示不足5分钟，不进入其它回复链: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", next=" + until.ToString("HH:mm:ss"));
                     return false;
