@@ -311,6 +311,36 @@ def send_app_text(users: Tuple[str, ...], content: str) -> Dict[str, Any]:
     return data
 
 
+def client_wecom_settings(client_id: int) -> Dict[str, Any]:
+    import wecom_settings
+    return wecom_settings.load_client_settings(int(client_id))
+
+def client_bridge_configured(settings: Dict[str, Any]) -> bool:
+    return bool(settings.get("enabled") and settings.get("corp_id") and settings.get("app_secret")
+        and str(settings.get("agent_id") or "").isdigit() and split_users(str(settings.get("to_users") or "")))
+
+def get_access_token_for(settings: Dict[str, Any]) -> str:
+    if not client_bridge_configured(settings):
+        raise RuntimeError("当前 Bot 客户端尚未完整配置企业微信应用消息")
+    response=curl_requests.get("https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+        params={"corpid":str(settings.get("corp_id") or ""),"corpsecret":str(settings.get("app_secret") or "")},
+        timeout=20,impersonate="chrome")
+    data=response.json()
+    if response.status_code!=200 or int(data.get("errcode",-1))!=0 or not data.get("access_token"):
+        raise RuntimeError("获取企业微信access_token失败："+safe_text(data.get("errmsg") or response.text,200))
+    return str(data["access_token"])
+
+def send_app_text_for(settings: Dict[str, Any], users: Tuple[str, ...], content: str) -> Dict[str, Any]:
+    token=get_access_token_for(settings)
+    payload={"touser":"|".join(users),"msgtype":"text","agentid":int(settings["agent_id"]),
+      "text":{"content":content},"safe":0,"enable_id_trans":0,"enable_duplicate_check":1,"duplicate_check_interval":1800}
+    response=curl_requests.post("https://qyapi.weixin.qq.com/cgi-bin/message/send",
+      params={"access_token":token},json=payload,timeout=20,impersonate="chrome")
+    data=response.json()
+    if response.status_code!=200 or int(data.get("errcode",-1))!=0:
+        raise RuntimeError("发送企业微信应用消息失败："+safe_text(data.get("errmsg") or response.text,240))
+    return data
+
 def new_ticket_id() -> str:
     return "QN-" + secrets.token_hex(4).upper()
 
@@ -349,8 +379,10 @@ class CompleteInput(BaseModel):
 def create_ticket(client: Dict[str, Any], data: HandoffNotifyInput) -> str:
     ticket_id = new_ticket_id()
     now = iso_now()
-    expires_at = (utcnow() + timedelta(hours=WECOM_TICKET_HOURS)).isoformat(timespec="seconds")
-    recipients = configured_recipients()
+    settings=client_wecom_settings(int(client["id"]))
+    expires_at = (utcnow() + timedelta(hours=max(1,min(168,int(settings.get("ticket_hours") or 24))))).isoformat(timespec="seconds")
+    settings=client_wecom_settings(int(client["id"]))
+    recipients=split_users(str(settings.get("to_users") or ""))
     with db() as conn:
         conn.execute(
             """
@@ -395,10 +427,13 @@ def build_handoff_message(ticket_id: str, data: HandoffNotifyInput) -> str:
 
 @router.get("/api/runtime/v1/handoff/capabilities")
 def handoff_capabilities(client: Dict[str, Any] = Depends(require_client)) -> Dict[str, Any]:
+    import wecom_settings
+    settings=client_wecom_settings(int(client["id"]))
+    public=wecom_settings.public_client_settings(int(client["id"]),settings)
     return {
-        "enabled": bridge_configured(),
-        "callback_enabled": bridge_configured(require_callback=True),
-        "callback_url": (PUBLIC_BASE_URL + "/api/wecom/callback") if PUBLIC_BASE_URL else "/api/wecom/callback",
+        "enabled": bool(public["outbound_configured"]),
+        "callback_enabled": bool(public["callback_configured"]),
+        "callback_url": public["callback_url"],
         "client": client["name"],
         "reply_format": "QN-XXXXXXXX 回复内容",
     }
@@ -406,13 +441,15 @@ def handoff_capabilities(client: Dict[str, Any] = Depends(require_client)) -> Di
 
 @router.post("/api/runtime/v1/handoff/notify")
 def handoff_notify(data: HandoffNotifyInput, client: Dict[str, Any] = Depends(require_client)) -> Dict[str, Any]:
-    if not bridge_configured():
-        raise HTTPException(status_code=503, detail="Ubuntu服务端尚未配置企业微信应用消息参数")
+    settings=client_wecom_settings(int(client["id"]))
+    if not client_bridge_configured(settings):
+        raise HTTPException(status_code=503, detail="当前 Bot 客户端尚未配置企业微信应用消息参数")
     if not data.test and (not data.seller.strip() or not data.buyer.strip() or not data.question.strip()):
         raise HTTPException(status_code=400, detail="seller、buyer、question不能为空")
     ticket_id = create_ticket(client, data)
     try:
-        result = send_app_text(configured_recipients(), build_handoff_message(ticket_id, data))
+        recipients=split_users(str(settings.get("to_users") or ""))
+        result = send_app_text_for(settings, recipients, build_handoff_message(ticket_id, data))
         with db() as conn:
             conn.execute(
                 "UPDATE wecom_handoff_tickets SET status='notified',updated_at=? WHERE ticket_id=?",
