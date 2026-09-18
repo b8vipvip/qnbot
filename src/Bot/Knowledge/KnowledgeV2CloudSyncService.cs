@@ -61,7 +61,7 @@ namespace Bot.Knowledge
                 var connection=new ShopControlPlaneConnectionStore(shop,Paths);
                 string token,error; var url=connection.GetServerUrl();
                 if(!connection.TryGetToken(out token,out error)||string.IsNullOrWhiteSpace(url)||string.IsNullOrWhiteSpace(token)) return;
-                var local=KnowledgeEngineV2Repository.LoadAll(shop.SellerNick);
+                var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var fingerprint=Fingerprint(local);
                 var payload=new JObject { ["revision"]=state.Revision };
                 if(state.Revision==0 || !string.Equals(fingerprint,state.Fingerprint,StringComparison.Ordinal))
@@ -86,7 +86,7 @@ namespace Bot.Knowledge
                         {
                             // ReplaceAll is the existing structural V2 write path: it updates the
                             // shop-scoped DB, compatibility mirror and runtime snapshot together.
-                            KnowledgeEngineV2Repository.ReplaceAll(shop.SellerNick,records);
+                            KnowledgeEngineV2Repository.ReplaceAll(shop.DisplayName,records);
                             local=records; fingerprint=Fingerprint(local);
                             Log.Info("Knowledge V2 已应用云端版本: shop="+shop.ShopKey+", revision="+cloudRevision+", records="+records.Count);
                         }
