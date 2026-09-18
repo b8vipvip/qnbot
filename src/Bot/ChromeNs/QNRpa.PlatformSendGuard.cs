@@ -287,11 +287,17 @@ namespace Bot.ChromeNs
                 }
 
                 continueButtons = continueButtons.Distinct().ToList();
+                returnModifyButtons = returnModifyButtons.Distinct().ToList();
                 result.ContinueButton = continueButtons.Count == 1 ? continueButtons[0] : null;
-                result.Detail = continueButtons.Count == 1
-                    ? "检测到千牛“服务态度提醒”及唯一“继续发送”按钮"
-                    : (continueButtons.Count == 0 ? "检测到千牛“服务态度提醒”，未找到“继续发送”按钮" : "检测到千牛“服务态度提醒”，存在多个“继续发送”候选按钮");
-                // Kept for binary/source compatibility only. Production policy is read-only: never invoke.
+                result.ReturnModifyButton = returnModifyButtons.Count == 1 ? returnModifyButtons[0] : null;
+                result.Detail = "检测到千牛“服务态度提醒”"
+                    + (returnModifyButtons.Count == 1
+                        ? "及唯一“返回修改”按钮"
+                        : "，“返回修改”按钮数量=" + returnModifyButtons.Count)
+                    + "；“继续发送”按钮数量=" + continueButtons.Count;
+                // Detection remains read-only here. The guarded caller may invoke only the unique
+                // “返回修改” action after it has the exact Bot-owned draft required for safe cleanup.
+                result.Continued = false;
                 return result;
             }
             catch (Exception ex)
