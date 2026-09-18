@@ -33,6 +33,13 @@ class Task:
     created_at:str=field(default_factory=utcnow); updated_at:str=field(default_factory=utcnow)
     def record(self,reason,kind="state",gate="",status="",evidence=""):
         self.updated_at=utcnow();self.history.append(Event(self.updated_at,self.state.value,reason,kind,gate,status,evidence))
+    def bind(self, **refs):
+        changed={}
+        for key,value in refs.items():
+            if value is not None and str(value).strip():
+                self.metadata[key]=value;changed[key]=value
+        if changed:self.record("task references bound",kind="binding",evidence=json.dumps(changed,ensure_ascii=False,sort_keys=True))
+        return changed
     def required_gates_satisfied(self): return all((not s.required) or s.status in {GateStatus.PASSED,GateStatus.SKIPPED} for s in self.plan)
     def criteria_satisfied(self): return bool(self.definition_of_done) and all(c.status==CriterionStatus.PASSED and bool(c.evidence.strip()) for c in self.definition_of_done)
     def to_dict(self):

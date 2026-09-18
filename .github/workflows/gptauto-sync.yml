@@ -1,0 +1,38 @@
+name: GPTAuto Consumer Sync
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: gptauto-consumer-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync canonical GPTAuto runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tmp="$(mktemp -d)"
+          git clone --depth 1 https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
+          mkdir -p .github/gptauto .github/actions/upload-gptauto-log
+          cp "$tmp"/GPTAuto/gptauto/*.py .github/gptauto/
+          cp "$tmp"/GPTAuto/.github/actions/upload-gptauto-log/action.yml .github/actions/upload-gptauto-log/action.yml
+          ver="$(grep '^version = ' "$tmp/GPTAuto/pyproject.toml" | head -1 | cut -d'"' -f2)"
+          printf '%s\n' "$ver" > .github/gptauto/VERSION
+          if git diff --quiet -- .github/gptauto .github/actions/upload-gptauto-log; then exit 0; fi
+          branch="chore/gptauto-sync-v$ver"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout -b "$branch"
+          git add .github/gptauto .github/actions/upload-gptauto-log
+          git commit -m "chore: sync GPTAuto v$ver"
+          git push -u origin "$branch"
+          gh pr create --title "chore: sync GPTAuto v$ver" --body "Automated sync from canonical b8vipvip/GPTAuto. Merge after repository CI passes." --base "${{ github.event.repository.default_branch }}" --head "$branch"
