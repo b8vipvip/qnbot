@@ -46,6 +46,20 @@ def init_db() -> None:
                 FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS bot_knowledge_backups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                revision INTEGER NOT NULL,
+                items_json TEXT NOT NULL DEFAULT '[]',
+                content_hash TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bot_knowledge_backups_client
+            ON bot_knowledge_backups(client_id,id DESC);
+
             CREATE INDEX IF NOT EXISTS idx_bot_conversation_reads
             ON bot_conversation_reads(client_id, seller, buyer);
             """
@@ -123,9 +137,35 @@ def _save_knowledge(client_id: int, items: List[Dict[str, Any]], updated_by: str
     now = _now()
     with _KNOWLEDGE_LOCK, cp.db() as conn:
         current = conn.execute(
-            "SELECT revision FROM bot_knowledge_state WHERE client_id=?",
+            "SELECT revision,items_json,content_hash FROM bot_knowledge_state WHERE client_id=?",
             (client_id,),
         ).fetchone()
+        if current and str(current["content_hash"] or "") != digest:
+            conn.execute(
+                """
+                INSERT INTO bot_knowledge_backups(
+                    client_id,revision,items_json,content_hash,reason,created_at
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    client_id,
+                    int(current["revision"] or 0),
+                    str(current["items_json"] or "[]"),
+                    str(current["content_hash"] or ""),
+                    _safe_text(updated_by, 80),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                DELETE FROM bot_knowledge_backups
+                WHERE client_id=? AND id NOT IN (
+                    SELECT id FROM bot_knowledge_backups
+                    WHERE client_id=? ORDER BY id DESC LIMIT 30
+                )
+                """,
+                (client_id, client_id),
+            )
         revision = int(current["revision"] or 0) + 1 if current else 1
         conn.execute(
             """
@@ -160,6 +200,12 @@ class KnowledgeItemInput(BaseModel):
     answer: str = Field(min_length=1, max_length=10000)
     keywords: str = Field(default="", max_length=2000)
     enabled: bool = True
+
+
+class KnowledgeImportInput(BaseModel):
+    mode: str = Field(default="merge", max_length=20)
+    replace_confirmed: bool = False
+    items: List[Dict[str, Any]] = Field(default_factory=list, max_length=20000)
 
 
 class KnowledgeSyncInput(BaseModel):
@@ -287,6 +333,113 @@ def web_knowledge_list(
         "updated_by": state["updated_by"],
         "cloud_sync_enabled": _cloud_sync_enabled(client_id),
     }
+
+
+@router.get("/api/bot-web/knowledge/export")
+def web_knowledge_export(
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    state = _knowledge_row(client_id)
+    return {
+        "format": "qianniu-bot-knowledge",
+        "format_version": 1,
+        "exported_at": _now(),
+        "revision": state["revision"],
+        "items": state["items"],
+    }
+
+
+@router.get("/api/bot-web/knowledge/backups")
+def web_knowledge_backups(
+    limit: int = Query(20, ge=1, le=30),
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    with core._cp.db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id,revision,content_hash,reason,created_at,
+                   LENGTH(items_json) AS bytes
+            FROM bot_knowledge_backups
+            WHERE client_id=? ORDER BY id DESC LIMIT ?
+            """,
+            (client_id, limit),
+        ).fetchall()
+    return {"backups": [dict(row) for row in rows]}
+
+
+@router.post("/api/bot-web/knowledge/import")
+def web_knowledge_import(
+    data: KnowledgeImportInput,
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    mode = (data.mode or "merge").strip().lower()
+    if mode not in {"merge", "replace"}:
+        raise HTTPException(status_code=422, detail="导入模式只支持 merge 或 replace")
+    if mode == "replace" and not data.replace_confirmed:
+        raise HTTPException(status_code=409, detail="替换全部知识需要二次确认")
+
+    normalized: List[Dict[str, Any]] = []
+    seen_ids = set()
+    seen_titles = set()
+    for raw in data.items:
+        item = _normalize_item(raw)
+        key = item["Title"].strip().lower()
+        if item["Id"] in seen_ids or key in seen_titles:
+            raise HTTPException(status_code=422, detail="导入文件包含重复的知识 ID 或问题标题")
+        seen_ids.add(item["Id"])
+        seen_titles.add(key)
+        normalized.append(item)
+
+    with _KNOWLEDGE_LOCK:
+        state = _knowledge_row(client_id)
+        if mode == "replace":
+            result = _save_knowledge(client_id, normalized, "web-import-replace")
+            return {
+                "ok": True,
+                "mode": mode,
+                "added": len(normalized),
+                "updated": 0,
+                "skipped": 0,
+                "revision": result["revision"],
+            }
+
+        items = list(state["items"])
+        by_id = {str(item.get("Id") or ""): index for index, item in enumerate(items)}
+        title_to_id = {
+            str(item.get("Title") or "").strip().lower(): str(item.get("Id") or "")
+            for item in items
+        }
+        added = updated = skipped = 0
+        for item in normalized:
+            item_id = item["Id"]
+            title_key = item["Title"].strip().lower()
+            if item_id in by_id:
+                index = by_id[item_id]
+                item["CreatedAt"] = str(items[index].get("CreatedAt") or item["CreatedAt"])
+                items[index] = item
+                title_to_id[title_key] = item_id
+                updated += 1
+                continue
+            if title_key in title_to_id:
+                skipped += 1
+                continue
+            by_id[item_id] = len(items)
+            title_to_id[title_key] = item_id
+            items.append(item)
+            added += 1
+
+        result = _save_knowledge(client_id, items, "web-import-merge")
+        return {
+            "ok": True,
+            "mode": mode,
+            "added": added,
+            "updated": updated,
+            "skipped": skipped,
+            "revision": result["revision"],
+        }
 
 
 @router.post("/api/bot-web/knowledge")
