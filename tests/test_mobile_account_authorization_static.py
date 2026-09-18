@@ -10,7 +10,7 @@ def test_mobile_account_authorization_is_read_only_and_client_scoped():
 
     assert '["authorization"] = authorization' in runtime
     assert '["control_scope"] = "current_shop_only"' in runtime
-    assert '["client_token_bound"] = connection.TokenExists' in runtime
+    assert '["client_token_bound"] = connection.HasToken' in runtime
     assert '["credentials_location"] = "windows_local_only"' in runtime
     assert '["sensitive_credentials_exposed"] = false' in runtime
     assert '["seller_accounts"] = new JArray(sellers)' in runtime
