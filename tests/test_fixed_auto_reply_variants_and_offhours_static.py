@@ -34,6 +34,7 @@ def test_semantic_variants_preserve_dynamic_stable_tokens_and_cover_order_preset
     text = read(DET)
     order = read(ORDER)
     assert "StableTokenRegex" in text
+    assert r'\d+(?:[\d\.:/\-]*\d)?' in text
     assert 'var key = "[[T" + index++ + "]]";' in text
     assert "AI同义编译丢失稳定占位符" in text
     assert "RestoreTokens(selected, tokens)" in text
