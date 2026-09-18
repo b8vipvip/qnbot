@@ -1,4 +1,5 @@
 using Bot.ShopScope;
+using Bot.UpdateNs;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
@@ -476,6 +477,29 @@ namespace Bot.ChromeNs
                 ["allow_web_manual_reply"] = state.AllowManualReply,
                 ["pending_message_count"] = state.PendingMessages.Count,
                 ["authorization"] = authorization,
+                ["diagnostics"] = new JObject
+                {
+                    ["shop_key"] = state.Shop.ShopKey,
+                    ["online_seller_count"] = sellers.Count,
+                    ["pending_message_count"] = state.PendingMessages.Count,
+                    ["pending_command_result_count"] = state.PendingCommandResults.Count,
+                    ["sync_in_progress"] = state.Syncing != 0,
+                    ["message_sync_enabled"] = state.MessageSyncEnabled,
+                    ["manual_reply_enabled"] = state.AllowManualReply,
+                    ["remote_pause"] = state.RemotePause,
+                    ["process_id"] = Process.GetCurrentProcess().Id,
+                    ["uptime_seconds"] = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds),
+                    ["sensitive_data_exposed"] = false
+                },
+                ["update"] = new JObject
+                {
+                    ["current_version"] = BotUpdateService.CurrentVersion,
+                    ["latest_version"] = BotUpdateService.LatestRelease == null ? string.Empty : BotUpdateService.LatestRelease.Version,
+                    ["update_available"] = BotUpdateService.LastResult != null && BotUpdateService.LastResult.UpdateAvailable,
+                    ["last_success"] = BotUpdateService.LastResult == null ? (bool?)null : BotUpdateService.LastResult.Success,
+                    ["last_message"] = BotUpdateService.LastResult == null ? string.Empty : Safe(BotUpdateService.LastResult.Message, 260),
+                    ["install_started"] = BotUpdateService.LastResult != null && BotUpdateService.LastResult.InstallStarted
+                },
                 ["uptime_seconds"] = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds),
                 ["process_id"] = Process.GetCurrentProcess().Id,
                 ["synced_at"] = DateTime.UtcNow.ToString("o")
@@ -581,6 +605,12 @@ namespace Bot.ChromeNs
                         result = ExecuteKnowledgeV2SettingsGet(state);
                     else if (string.Equals(type, "knowledge_v2_settings_set", StringComparison.OrdinalIgnoreCase))
                         result = ExecuteKnowledgeV2SettingsSet(state, command["payload"] as JObject);
+                    else if (string.Equals(type, "diagnostics_snapshot", StringComparison.OrdinalIgnoreCase))
+                        result = BuildSafeDiagnostics(state);
+                    else if (string.Equals(type, "update_check", StringComparison.OrdinalIgnoreCase))
+                        result = await ExecuteUpdateCheckAsync();
+                    else if (string.Equals(type, "update_install", StringComparison.OrdinalIgnoreCase))
+                        result = await ExecuteUpdateInstallAsync(command["payload"] as JObject);
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
                     MarkProcessed(state, id);
@@ -592,6 +622,46 @@ namespace Bot.ChromeNs
                     state.PendingCommandResults[id] = Result(id, false, Safe(ex.Message, 600), new JObject());
                 }
             }
+        }
+
+        private static JObject BuildSafeDiagnostics(ShopWebState state)
+        {
+            var qns = FindQns(state.Shop);
+            return new JObject
+            {
+                ["shop_key"] = state.Shop.ShopKey,
+                ["captured_at"] = DateTime.UtcNow.ToString("o"),
+                ["online_seller_count"] = qns.Count,
+                ["pending_message_count"] = state.PendingMessages.Count,
+                ["pending_command_result_count"] = state.PendingCommandResults.Count,
+                ["sync_in_progress"] = state.Syncing != 0,
+                ["message_sync_enabled"] = state.MessageSyncEnabled,
+                ["manual_reply_enabled"] = state.AllowManualReply,
+                ["effective_auto_reply_enabled"] = Params.Robot.GetIsAutoReply() && !state.RemotePause,
+                ["process_id"] = Process.GetCurrentProcess().Id,
+                ["uptime_seconds"] = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds),
+                ["sensitive_data_exposed"] = false
+            };
+        }
+
+        private static async Task<JObject> ExecuteUpdateCheckAsync()
+        {
+            var check = await BotUpdateService.CheckNowAsync(false);
+            return new JObject
+            {
+                ["success"] = check != null && check.Success,
+                ["current_version"] = BotUpdateService.CurrentVersion,
+                ["latest_version"] = check == null || check.Release == null ? string.Empty : check.Release.Version,
+                ["update_available"] = check != null && check.UpdateAvailable,
+                ["message"] = check == null ? "未返回检查结果" : Safe(check.Message, 260)
+            };
+        }
+
+        private static async Task<JObject> ExecuteUpdateInstallAsync(JObject payload)
+        {
+            if (payload == null || !payload.Value<bool?>("confirmed").GetValueOrDefault())
+                throw new Exception("远程更新缺少明确二次确认");
+            return await BotUpdateService.RemoteInstallLatestAsync();
         }
 
         private static async Task<JObject> ExecuteSendTextAsync(ShopWebState state, long commandId, JObject payload)
