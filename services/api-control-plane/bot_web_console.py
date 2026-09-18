@@ -350,6 +350,10 @@ class WebSendInput(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class DiagnosticsInput(BaseModel):
+    kind: str = Field(min_length=1, max_length=40)
+
+
 @router.get("/bot")
 def bot_web_redirect() -> RedirectResponse:
     return RedirectResponse(url="/bot/", status_code=307)
@@ -408,7 +412,7 @@ def bot_web_snapshot(
             rows = list(reversed(rows))
         command_rows = conn.execute(
             """
-            SELECT id,command_type,status,error,created_at,completed_at
+            SELECT id,command_type,status,error,result_json,created_at,completed_at
             FROM bot_commands WHERE client_id=? ORDER BY id DESC LIMIT 20
             """,
             (client_id,),
@@ -428,7 +432,13 @@ def bot_web_snapshot(
         "status": status_data,
         "settings": settings,
         "messages": [dict(row) for row in rows],
-        "commands": [dict(row) for row in command_rows],
+        "commands": [
+            {
+                **{k: v for k, v in dict(row).items() if k != "result_json"},
+                "result": _parse(row["result_json"], {}),
+            }
+            for row in command_rows
+        ],
         "server_time": _now(),
     }
 
@@ -453,6 +463,32 @@ def bot_web_update_settings(
             (_json(current), _now(), client_id),
         )
     return {"ok": True, "desired": current}
+
+
+@router.post("/api/bot-web/diagnostics")
+def bot_web_run_diagnostics(
+    data: DiagnosticsInput,
+    client: Dict[str, Any] = Depends(_web_client),
+) -> Dict[str, Any]:
+    kind = (data.kind or "").strip().lower()
+    command_types = {
+        "snapshot": "diagnostics_snapshot",
+        "flow_probe": "diagnostics_flow_probe",
+    }
+    command_type = command_types.get(kind)
+    if not command_type:
+        raise HTTPException(status_code=422, detail="不支持的诊断类型")
+    client_id = int(client["id"])
+    with _cp.db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO bot_commands(client_id,command_type,payload_json,status,result_json,error,created_at)
+            VALUES(?,?,?,'pending','{}','',?)
+            """,
+            (client_id, command_type, "{}", _now()),
+        )
+        command_id = int(cursor.lastrowid)
+    return {"ok": True, "command_id": command_id, "status": "pending", "kind": kind}
 
 
 @router.post("/api/bot-web/messages/send")
