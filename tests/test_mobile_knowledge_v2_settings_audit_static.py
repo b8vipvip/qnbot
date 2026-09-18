@@ -19,7 +19,7 @@ def test_mobile_renders_settings_audit_without_command_payload_dump():
     h=read(HTML); s=read(JS)
     assert 'id="knowledgeV2SettingsAudit"' in h
     assert 'id="refreshKnowledgeV2SettingsAuditBtn"' in h
-    assert 'src="/static/bot-web-v2.js?v=9"' in h
+    assert 'src="/static/bot-web-v2.js?v=10"' in h
     assert 'api("/api/bot-web/knowledge-v2/runtime-settings/audit")' in s
     assert "loadKnowledgeV2SettingsAudit(false)" in s
     assert "x.settings||{}" in s
