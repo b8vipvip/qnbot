@@ -25,6 +25,7 @@ import deep_test_guard
 import github_vless_proxy
 import message_processing_traces
 import knowledge_v2_sync
+import manual_recharge
 import recharge_status_query
 import runtime_embedding_guard
 import runtime_ocr
@@ -55,6 +56,7 @@ install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
+control_plane.app.include_router(manual_recharge.router)
 bot_update_progress.install()
 github_vless_proxy.install(control_plane)
 control_plane.app.include_router(bot_update_cache.router)
@@ -83,6 +85,7 @@ def initialize_control_plane_extensions() -> None:
     wecom_bridge.init_wecom_db()
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
+    manual_recharge.init_manual_recharge_db()
     bot_web_console.init_bot_web_db()
     bot_web_ai_model_settings.init_db()
     bot_web_auto_reply_rules.init_db()
