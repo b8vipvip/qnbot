@@ -67,6 +67,7 @@
       <div class="knowledge-toolbar"><input id="knowledgeSearch" placeholder="搜索问题、答案或关键词"><select id="knowledgeCategory"><option value="">全部分类</option></select><button id="refreshKnowledgeBtn">刷新</button></div>
       <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><button id="knowledgeBackupsBtn">版本备份</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
       <div id="knowledgeMeta" class="knowledge-meta"></div>
+      <section class="panel"><div class="panel-head"><div><h3>Knowledge Center V2</h3><small>原生结构化知识 · 与 Windows V2 引擎双向同步</small></div><button id="addKnowledgeV2Btn" class="primary">新增 V2 知识</button></div><div class="knowledge-toolbar"><input id="knowledgeV2Search" placeholder="搜索标题、答案、意图、主体或实体"><button id="refreshKnowledgeV2Btn">刷新 V2</button></div><div id="knowledgeV2Meta" class="knowledge-meta">等待 V2 同步</div><div id="knowledgeV2List" class="knowledge-list"><div class="empty">暂无 V2 结构化知识</div></div></section>
       <div id="knowledgeList" class="knowledge-list"><div class="empty">暂无云端知识</div></div>
     </section>
 
@@ -118,6 +119,29 @@
   </form>
 </dialog>
 
+<dialog id="knowledgeV2Dialog" class="knowledge-dialog">
+  <form method="dialog" id="knowledgeV2Form">
+    <input id="knowledgeV2Id" type="hidden">
+    <div class="dialog-head"><h3 id="knowledgeV2DialogTitle">新增 V2 知识</h3><button value="cancel" class="close-button">×</button></div>
+    <label>标题 / 用户问题<textarea id="knowledgeV2Title" rows="2" maxlength="1000" required></textarea></label>
+    <label>标准答案<textarea id="knowledgeV2Answer" rows="6" maxlength="10000" required></textarea></label>
+    <label>短答案<textarea id="knowledgeV2ShortAnswer" rows="2" maxlength="2000"></textarea></label>
+    <label>知识类型<select id="knowledgeV2Type"><option value="fact">事实</option><option value="procedure">流程</option><option value="safety_rule">安全规则</option><option value="policy">策略</option><option value="general">通用</option></select></label>
+    <label>意图<input id="knowledgeV2Intent" maxlength="200" placeholder="general / price / delivery ..."></label>
+    <label>主体<input id="knowledgeV2Subject" maxlength="500" placeholder="商品、服务或业务主体"></label>
+    <label>谓词<input id="knowledgeV2Predicate" maxlength="200" placeholder="price / delivery_time / rule ..."></label>
+    <label>实体（每行一个）<textarea id="knowledgeV2Entities" rows="2" maxlength="3000"></textarea></label>
+    <label>别名（每行一个）<textarea id="knowledgeV2Aliases" rows="2" maxlength="3000"></textarea></label>
+    <label>适用条件（每行一个）<textarea id="knowledgeV2Conditions" rows="2" maxlength="3000"></textarea></label>
+    <label>排除条件（每行一个）<textarea id="knowledgeV2Exclusions" rows="2" maxlength="3000"></textarea></label>
+    <label>必需上下文（每行一个）<textarea id="knowledgeV2RequiredContext" rows="2" maxlength="3000"></textarea></label>
+    <label>商品 ID（每行一个）<textarea id="knowledgeV2ProductIds" rows="2" maxlength="3000"></textarea></label>
+    <label>风险级别<select id="knowledgeV2Risk"><option value="normal">普通</option><option value="high">高风险</option></select></label>
+    <label class="remember"><input id="knowledgeV2Enabled" type="checkbox" checked>启用这条 V2 知识</label>
+    <div class="dialog-actions"><button id="deleteKnowledgeV2Btn" type="button" class="danger hidden">删除</button><span></span><button value="cancel" class="secondary">取消</button><button id="saveKnowledgeV2Btn" type="button" class="primary">保存 V2</button></div>
+  </form>
+</dialog>
+
 <dialog id="knowledgeBackupsDialog" class="knowledge-dialog">
   <div class="dialog-head"><h3>知识库版本备份</h3><button id="closeKnowledgeBackupsBtn" class="close-button" type="button">×</button></div>
   <p class="hint">服务端保留最近 30 个版本。恢复会覆盖当前云端知识，当前版本会先自动备份，并等待 Windows Bot 云同步应用。</p>
@@ -125,7 +149,7 @@
 </dialog>
 
 <div id="toast" class="toast hidden"></div>
-<script src="/static/bot-web-v2.js?v=5"></script>
+<script src="/static/bot-web-v2.js?v=6"></script>
 <script src="/static/bot-web-bot-enabled.js?v=4"></script>
 </body>
 </html>
