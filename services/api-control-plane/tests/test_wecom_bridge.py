@@ -47,6 +47,11 @@ def bridge_client(tmp_path, monkeypatch):
     monkeypatch.setattr(wecom_bridge, "WECOM_CALLBACK_TOKEN", "callback-token")
     monkeypatch.setattr(wecom_bridge, "WECOM_CALLBACK_AES_KEY", make_aes_key())
     wecom_crypto.install_on_bridge(wecom_bridge)
+    monkeypatch.setattr(wecom_bridge, "client_wecom_settings", lambda client_id: {
+        "enabled": True, "corp_id": "ww-test-corp", "app_secret": "app-secret",
+        "agent_id": "1000002", "to_users": "operator1", "allowed_reply_users": "operator1",
+        "ticket_hours": 24,
+    })
     wecom_bridge.init_wecom_db()
 
     raw_token = "qnb_test_client_token"
@@ -82,8 +87,8 @@ def test_ticket_reply_is_queued_claimed_and_completed(bridge_client, monkeypatch
     client, database, headers = bridge_client
     monkeypatch.setattr(
         wecom_bridge,
-        "send_app_text",
-        lambda users, content: {"errcode": 0, "errmsg": "ok", "msgid": "outbound-1"},
+        "send_app_text_for",
+        lambda settings, users, content: {"errcode": 0, "errmsg": "ok", "msgid": "outbound-1"},
     )
 
     notify = client.post(
@@ -171,8 +176,8 @@ def test_reply_requires_ticket_and_authorized_member(bridge_client, monkeypatch)
     client, _, headers = bridge_client
     monkeypatch.setattr(
         wecom_bridge,
-        "send_app_text",
-        lambda users, content: {"errcode": 0, "errmsg": "ok", "msgid": "outbound-2"},
+        "send_app_text_for",
+        lambda settings, users, content: {"errcode": 0, "errmsg": "ok", "msgid": "outbound-2"},
     )
     notify = client.post(
         "/api/runtime/v1/handoff/notify",
