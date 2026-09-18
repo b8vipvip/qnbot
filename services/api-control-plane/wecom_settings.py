@@ -148,6 +148,21 @@ def init_wecom_settings_db(path: Optional[Path] = None) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS wecom_client_settings (
+                client_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                corp_id TEXT NOT NULL DEFAULT '',
+                app_secret_cipher TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT '',
+                to_users TEXT NOT NULL DEFAULT '',
+                callback_token_cipher TEXT NOT NULL DEFAULT '',
+                callback_aes_key_cipher TEXT NOT NULL DEFAULT '',
+                allowed_reply_users TEXT NOT NULL DEFAULT '',
+                ticket_hours INTEGER NOT NULL DEFAULT 24,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id)
+            );
+
             CREATE TABLE IF NOT EXISTS wecom_handoff_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -610,3 +625,81 @@ def admin_test_wecom(_: str = Depends(require_admin)) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
     return {"ok": True, "msgid": result.get("msgid"), "message": "测试消息发送成功"}
+
+
+def load_client_settings(client_id: int, path: Optional[Path] = None) -> Dict[str, Any]:
+    init_wecom_settings_db(path)
+    with db(path) as conn:
+        row=conn.execute("SELECT * FROM wecom_client_settings WHERE client_id=?",(int(client_id),)).fetchone()
+    if not row:
+        return default_settings()
+    return {
+        "exists":True,"enabled":bool(row["enabled"]),"corp_id":str(row["corp_id"] or "").strip(),
+        "app_secret":decrypt_secret(row["app_secret_cipher"]),"agent_id":str(row["agent_id"] or "").strip(),
+        "to_users":str(row["to_users"] or "").strip(),"callback_token":decrypt_secret(row["callback_token_cipher"]),
+        "callback_aes_key":decrypt_secret(row["callback_aes_key_cipher"]),
+        "allowed_reply_users":str(row["allowed_reply_users"] or "").strip(),
+        "ticket_hours":max(1,min(168,int(row["ticket_hours"] or 24))),"updated_at":row["updated_at"],
+    }
+
+def client_callback_url(client_id: int) -> str:
+    path="/api/wecom/callback/"+str(int(client_id))
+    return (PUBLIC_BASE_URL+path) if PUBLIC_BASE_URL else path
+
+def public_client_settings(client_id: int, settings: Dict[str, Any]) -> Dict[str, Any]:
+    result=public_settings(settings)
+    result["callback_url"]=client_callback_url(client_id)
+    return result
+
+def save_client_settings(client_id: int, data: WeComSettingsInput, path: Optional[Path] = None) -> Dict[str, Any]:
+    existing=load_client_settings(client_id,path)
+    app_secret="" if data.clear_app_secret else ((data.app_secret or "").strip() or existing.get("app_secret",""))
+    callback_token="" if data.clear_callback_token else ((data.callback_token or "").strip() or existing.get("callback_token",""))
+    callback_aes_key="" if data.clear_callback_aes_key else ((data.callback_aes_key or "").strip() or existing.get("callback_aes_key",""))
+    corp_id=(data.corp_id or "").strip(); agent_id=(data.agent_id or "").strip()
+    recipients=split_users(data.to_users); allowed=split_users(data.allowed_reply_users) or recipients
+    if data.enabled:
+        if not corp_id: raise HTTPException(status_code=400,detail="CorpID 不能为空")
+        if not app_secret: raise HTTPException(status_code=400,detail="应用 Secret 不能为空")
+        if not agent_id.isdigit(): raise HTTPException(status_code=400,detail="AgentId 必须是数字")
+        if not recipients: raise HTTPException(status_code=400,detail="至少填写一个接收成员 UserID")
+    if bool(callback_token)!=bool(callback_aes_key):
+        raise HTTPException(status_code=400,detail="回调 Token 和 EncodingAESKey 必须同时配置")
+    if callback_aes_key and not validate_aes_key(callback_aes_key):
+        raise HTTPException(status_code=400,detail="EncodingAESKey 必须是可解码为32字节的43位值")
+    now=iso_now(); init_wecom_settings_db(path)
+    with db(path) as conn:
+        conn.execute("""INSERT INTO wecom_client_settings(client_id,enabled,corp_id,app_secret_cipher,agent_id,to_users,
+          callback_token_cipher,callback_aes_key_cipher,allowed_reply_users,ticket_hours,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(client_id) DO UPDATE SET enabled=excluded.enabled,corp_id=excluded.corp_id,
+          app_secret_cipher=excluded.app_secret_cipher,agent_id=excluded.agent_id,to_users=excluded.to_users,
+          callback_token_cipher=excluded.callback_token_cipher,callback_aes_key_cipher=excluded.callback_aes_key_cipher,
+          allowed_reply_users=excluded.allowed_reply_users,ticket_hours=excluded.ticket_hours,updated_at=excluded.updated_at""",
+          (int(client_id),1 if data.enabled else 0,corp_id,encrypt_secret(app_secret),agent_id,"|".join(recipients),
+           encrypt_secret(callback_token),encrypt_secret(callback_aes_key),"|".join(allowed),
+           max(1,min(168,int(data.ticket_hours))),now))
+    return load_client_settings(client_id,path)
+
+def require_bot_web_client(request: Request) -> Dict[str, Any]:
+    token=request.headers.get("x-bot-token","").strip() or bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=401,detail="客户端令牌无效")
+    with db() as conn:
+        row=conn.execute("SELECT * FROM client_tokens WHERE token_hash=? AND enabled=1",(hashlib.sha256(token.encode("utf-8")).hexdigest(),)).fetchone()
+    if not row: raise HTTPException(status_code=401,detail="客户端令牌无效")
+    return dict(row)
+
+@router.get("/api/bot-web/wecom/settings")
+def bot_web_get_wecom_settings(client: Dict[str, Any]=Depends(require_bot_web_client)) -> Dict[str, Any]:
+    return public_client_settings(int(client["id"]),load_client_settings(int(client["id"])))
+
+@router.put("/api/bot-web/wecom/settings")
+def bot_web_save_wecom_settings(data: WeComSettingsInput, client: Dict[str, Any]=Depends(require_bot_web_client)) -> Dict[str, Any]:
+    return public_client_settings(int(client["id"]),save_client_settings(int(client["id"]),data))
+
+@router.post("/api/bot-web/wecom/generate-callback")
+def bot_web_generate_wecom_callback(client: Dict[str, Any]=Depends(require_bot_web_client)) -> Dict[str,str]:
+    return {"callback_token":secrets.token_urlsafe(24),
+      "callback_aes_key":base64.b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("="),
+      "callback_url":client_callback_url(int(client["id"]))}
