@@ -187,6 +187,7 @@
     <Compile Include="Common\Account\AccountHelper.cs" />
     <Compile Include="Common\DbHelper.cs" />
     <Compile Include="Common\DatabaseRecoveryService.cs" />
+    <Compile Include="Update\BotUpdateService.Remote.cs" />
     <Compile Include="Update\UpdateStartupHealthService.cs" />
     <Compile Include="Common\Db\HybridHelper.cs" />
     <Compile Include="Common\EmojiInputer\EmojiHelper.cs" />
