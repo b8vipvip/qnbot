@@ -164,3 +164,58 @@ def test_merge_skips_same_title_with_different_id_and_rejects_duplicate_import_f
         )
     assert duplicate.value.status_code == 422
     assert "重复" in duplicate.value.detail
+
+
+@needs_server_deps
+def test_backup_restore_requires_confirmation_and_is_client_isolated(tmp_path):
+    from fastapi import HTTPException
+
+    module, _ = load_module(tmp_path)
+    module._save_knowledge(1, [item("a", "初始问题", "初始答案")], "windows")
+    module._save_knowledge(1, [item("b", "当前问题", "当前答案")], "web")
+    backup = module.web_knowledge_backups(limit=20, client={"id": 1})["backups"][0]
+    assert backup["revision"] == 1
+
+    with pytest.raises(HTTPException) as blocked:
+        module.web_knowledge_backup_restore(
+            backup["id"],
+            module.KnowledgeBackupRestoreInput(restore_confirmed=False),
+            client={"id": 1},
+        )
+    assert blocked.value.status_code == 409
+    assert "二次确认" in blocked.value.detail
+
+    with pytest.raises(HTTPException) as isolated:
+        module.web_knowledge_backup_restore(
+            backup["id"],
+            module.KnowledgeBackupRestoreInput(restore_confirmed=True),
+            client={"id": 2},
+        )
+    assert isolated.value.status_code == 404
+
+    restored = module.web_knowledge_backup_restore(
+        backup["id"],
+        module.KnowledgeBackupRestoreInput(restore_confirmed=True),
+        client={"id": 1},
+    )
+    assert restored["restored_backup_id"] == backup["id"]
+    assert restored["restored_from_revision"] == 1
+    assert restored["revision"] == 3
+    assert restored["items_count"] == 1
+    assert module._knowledge_row(1)["items"][0]["Id"] == "a"
+
+    backups = module.web_knowledge_backups(limit=20, client={"id": 1})["backups"]
+    assert backups[0]["revision"] == 2
+    assert backups[0]["reason"] == "web-backup-restore"
+
+
+def test_mobile_console_exposes_backup_restore_with_explicit_confirmation():
+    page = (ROOT / "services" / "api-control-plane" / "static" / "bot-web.html").read_text(encoding="utf-8-sig")
+    script = (ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.js").read_text(encoding="utf-8-sig")
+    assert 'id="knowledgeBackupsBtn"' in page
+    assert 'id="knowledgeBackupsDialog"' in page
+    assert 'src="/static/bot-web-v2.js?v=5"' in page
+    assert 'api("/api/bot-web/knowledge/backups?limit=30")' in script
+    assert '/api/bot-web/knowledge/backups/${id}/restore' in script
+    assert "restore_confirmed:true" in script
+    assert "confirm(" in script

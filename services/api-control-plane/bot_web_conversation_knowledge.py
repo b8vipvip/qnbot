@@ -208,6 +208,10 @@ class KnowledgeImportInput(BaseModel):
     items: List[Dict[str, Any]] = Field(default_factory=list, max_length=20000)
 
 
+class KnowledgeBackupRestoreInput(BaseModel):
+    restore_confirmed: bool = False
+
+
 class KnowledgeSyncInput(BaseModel):
     enabled: bool = False
     revision: int = Field(default=0, ge=0)
@@ -367,6 +371,44 @@ def web_knowledge_backups(
             (client_id, limit),
         ).fetchall()
     return {"backups": [dict(row) for row in rows]}
+
+
+@router.post("/api/bot-web/knowledge/backups/{backup_id}/restore")
+def web_knowledge_backup_restore(
+    backup_id: int,
+    data: KnowledgeBackupRestoreInput,
+    client: Dict[str, Any] = Depends(core._web_client),
+) -> Dict[str, Any]:
+    client_id = int(client["id"])
+    if not data.restore_confirmed:
+        raise HTTPException(status_code=409, detail="恢复知识备份会覆盖当前知识，需要二次确认")
+
+    with _KNOWLEDGE_LOCK:
+        with core._cp.db() as conn:
+            row = conn.execute(
+                """
+                SELECT id,revision,items_json,content_hash,reason,created_at
+                FROM bot_knowledge_backups
+                WHERE client_id=? AND id=?
+                """,
+                (client_id, backup_id),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="知识备份不存在")
+        try:
+            items = json.loads(row["items_json"] or "[]")
+        except Exception:
+            raise HTTPException(status_code=422, detail="知识备份内容损坏，无法恢复")
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise HTTPException(status_code=422, detail="知识备份格式无效，无法恢复")
+        result = _save_knowledge(client_id, items, "web-backup-restore")
+    return {
+        "ok": True,
+        "restored_backup_id": int(row["id"]),
+        "restored_from_revision": int(row["revision"] or 0),
+        "revision": result["revision"],
+        "items_count": len(result["items"]),
+    }
 
 
 @router.post("/api/bot-web/knowledge/import")
