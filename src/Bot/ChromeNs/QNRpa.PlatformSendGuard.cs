@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
             public bool Continued;
             public string Detail = string.Empty;
             public AutomationElement ContinueButton;
+            public AutomationElement ReturnModifyButton;
         }
 
         /// <summary>
@@ -30,16 +31,21 @@ namespace Bot.ChromeNs
         /// “继续发送” can turn a bad/repeated answer into a buyer complaint, as observed in the
         /// 2026-09-09 field incident.
         /// </summary>
-        private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string stage)
+        private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string expectedText, string stage)
         {
             var detected = await GetBoundedServiceAttitudeReadProbeAsync(buyer, stage).ConfigureAwait(false);
             if (detected == null || !detected.Detected) return false;
 
             _lastServiceAttitudeContinueAt = DateTime.Now;
+            var withdrawn = await WithdrawServiceAttitudeBlockedSendAsync(
+                buyer, expectedText, detected, stage).ConfigureAwait(false);
             var detail = string.IsNullOrWhiteSpace(detected.Detail)
-                ? "检测到千牛“服务态度提醒”，Bot已停止自动发送并等待人工处理"
-                : detected.Detail + "；Bot已停止自动发送并等待人工处理";
-            SetSendCancellation("平台发送拦截", detail);
+                ? "检测到千牛“服务态度提醒”"
+                : detected.Detail;
+            detail += withdrawn
+                ? "；已点击“返回修改”、清空Bot草稿并取消本次发送"
+                : "；未能安全执行“返回修改”，Bot已停止自动发送并等待人工处理";
+            SetSendCancellation("警告撤回", detail);
 
             // The send action is now conclusively cancelled by a visible platform guard. Keeping an
             // already-started delivery watchdog alive would report a false “9秒未回显” anomaly even
@@ -59,9 +65,64 @@ namespace Bot.ChromeNs
             }
 
             Log.ErrorWithMaxCount(
-                "检测到千牛服务态度提醒，已失败关闭本次Bot发送；不会自动点击“继续发送”: seller="
+                "检测到千牛服务态度提醒，已撤回/失败关闭本次Bot发送；绝不会自动点击“继续发送”: seller="
                 + SellerNick + ", buyer=" + buyer + ", stage=" + stage + ", detail=" + detail,
                 50);
+            return true;
+        }
+
+        private async Task<bool> WithdrawServiceAttitudeBlockedSendAsync(
+            string buyer,
+            string expectedText,
+            ServiceAttitudeProbeResult detected,
+            string stage)
+        {
+            if (detected == null || detected.ReturnModifyButton == null)
+            {
+                Log.ErrorWithMaxCount(
+                    "服务态度提醒已检测到，但未找到唯一“返回修改”按钮；保持弹窗并停止发送: seller="
+                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage,
+                    50);
+                return false;
+            }
+
+            var invoked = await RunUiMutationAsync(() =>
+            {
+                try
+                {
+                    detected.ReturnModifyButton.AsButton().Invoke();
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("点击服务态度提醒“返回修改”失败: " + ex.Message);
+                    return false;
+                }
+            }, "服务态度提醒返回修改").ConfigureAwait(false);
+            if (!invoked) return false;
+
+            // Qianniu restores the rejected text to the composer after “返回修改”. Give the
+            // native UI a short settling window, then delete only this exact Bot-owned draft.
+            await Task.Delay(180).ConfigureAwait(false);
+            await ClearExpectedDraftIfSafeAsync(
+                buyer,
+                expectedText,
+                "警告撤回：服务态度提醒返回修改后清空").ConfigureAwait(false);
+
+            var empty = await ProbeInputboxEmptyAsync(
+                "服务态度提醒撤回后输入框确认",
+                Math.Max(CdpQuickProbeTimeoutMs, 900)).ConfigureAwait(false);
+            if (!empty.Completed || !empty.IsEmpty)
+            {
+                Log.ErrorWithMaxCount(
+                    "服务态度提醒已点击“返回修改”，但Bot精确草稿未确认清空；保持取消态且禁止重试: seller="
+                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage,
+                    50);
+                return false;
+            }
+
+            Log.Info("服务态度提醒已安全撤回：已点击“返回修改”并清空Bot精确草稿: seller="
+                + SellerNick + ", buyer=" + buyer + ", stage=" + stage);
             return true;
         }
 
@@ -137,7 +198,7 @@ namespace Bot.ChromeNs
                             if (!stablePlatformProbeDone)
                             {
                                 stablePlatformProbeDone = true;
-                                if (await StopIfPlatformSendBlockedAsync(buyer, method + "稳定清空后平台确认").ConfigureAwait(false)) return false;
+                                if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认").ConfigureAwait(false)) return false;
                             }
                             if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
                             ResetSendFailure();
@@ -145,7 +206,7 @@ namespace Bot.ChromeNs
                             SendDeliveryWatchdog.MarkSubmissionAccepted(SellerNick, buyer, text, submissionEvidence);
                             BotConnectionDiagnostics.RecordSendAttempt(true, method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
                             Log.Info(method + "发送提交确认成功：本次精确草稿在发送动作后稳定清空；禁止因实时回显缺失重新写入同一文本。buyer=" + buyer);
-                            ArmLateServiceAttitudeContinuationWatch(buyer, method);
+                            ArmLateServiceAttitudeContinuationWatch(buyer, text, method);
                             return true;
                         }
                     }
@@ -153,17 +214,17 @@ namespace Bot.ChromeNs
                 else if (probe.Completed && !probe.IsEmpty && !earlyPlatformProbeDone && (DateTime.Now - sendStart).TotalMilliseconds >= 350)
                 {
                     earlyPlatformProbeDone = true;
-                    if (await StopIfPlatformSendBlockedAsync(buyer, method + "发送动作后平台确认").ConfigureAwait(false)) return false;
+                    if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "发送动作后平台确认").ConfigureAwait(false)) return false;
                 }
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
-            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, method + "超时前平台确认").ConfigureAwait(false)) return false;
+            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, text, method + "超时前平台确认").ConfigureAwait(false)) return false;
             SetSendFailure("发送确认", method + "后既未检测到卖家回显，也未观察到发送动作后的稳定输入框清空；emptyObserved=" + emptyObserved);
             return false;
         }
 
-        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string method)
+        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string text, string method)
         {
             if (Interlocked.CompareExchange(ref _lateServiceAttitudeWatchArmed, 1, 0) != 0) return;
             var startedAt = DateTime.Now;
@@ -173,7 +234,7 @@ namespace Bot.ChromeNs
                 {
                     await Task.Delay(650).ConfigureAwait(false);
                     if (_lastServiceAttitudeContinueAt >= startedAt) return;
-                    await StopIfPlatformSendBlockedAsync(buyer, method + "迟到服务态度提醒单次监控").ConfigureAwait(false);
+                    await StopIfPlatformSendBlockedAsync(buyer, text, method + "迟到服务态度提醒单次监控").ConfigureAwait(false);
                 }
                 catch (Exception ex) { Log.Info("迟到服务态度提醒单次监控异常: " + ex.Message); }
                 finally { Interlocked.Exchange(ref _lateServiceAttitudeWatchArmed, 0); }
@@ -215,12 +276,14 @@ namespace Bot.ChromeNs
                 if (reminderRoots.Count == 0) return result;
                 result.Detected = true;
                 var continueButtons = new List<AutomationElement>();
+                var returnModifyButtons = new List<AutomationElement>();
                 foreach (var root in reminderRoots)
                 {
                     var elements = new List<AutomationElement> { root };
                     try { elements.AddRange(root.FindAllDescendants().Where(x => x != null)); }
                     catch (Exception ex) { Log.Info("读取服务态度提醒子控件失败: " + ex.Message); }
                     continueButtons.AddRange(elements.Where(x => string.Equals(RegexCompactPlatformGuardText(SafeName(x)), "继续发送", StringComparison.Ordinal)));
+                    returnModifyButtons.AddRange(elements.Where(x => string.Equals(RegexCompactPlatformGuardText(SafeName(x)), "返回修改", StringComparison.Ordinal)));
                 }
 
                 continueButtons = continueButtons.Distinct().ToList();
