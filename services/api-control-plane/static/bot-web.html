@@ -93,7 +93,20 @@
         <button id="saveAiModelSettingsBtn" class="primary wide" type="button" disabled>保存 AI 模型设置</button>
         <div id="aiModelSettingsHint" class="hint"></div>
       </section>
-      <section class="panel"><h3>当前客户端信息</h3><dl id="clientInfo" class="info-list"></dl></section>
+      <section class="panel settings-panel"><div class="panel-head"><h3>消息通知与企业微信</h3><span id="wecomStatusBadge" class="pill gray">未配置</span></div>
+<p class="hint">配置仅属于当前 Bot 客户端。Secret、回调 Token 和 EncodingAESKey 加密保存，页面只显示是否已配置，不回显原值。</p>
+<label class="switch-row"><span><strong>启用企业微信通知</strong><small>转人工等通知通过当前客户端自己的企业微信应用发送。</small></span><input id="wecomEnabled" type="checkbox"></label>
+<label>CorpID<input id="wecomCorpId" maxlength="128"></label><label>AgentId<input id="wecomAgentId" maxlength="32"></label>
+<label>接收成员 UserID（| 分隔）<input id="wecomToUsers" maxlength="2000"></label>
+<label>应用 Secret<input id="wecomAppSecret" type="password" maxlength="512" placeholder="留空保持原 Secret"></label>
+<label>允许人工回复成员 UserID（| 分隔）<input id="wecomAllowedUsers" maxlength="2000"></label>
+<label>工单有效小时<input id="wecomTicketHours" type="number" min="1" max="168" value="24"></label>
+<div class="knowledge-toolbar"><button id="generateWecomCallbackBtn">生成回调参数</button><button id="testWecomBtn">发送测试通知</button></div>
+<label>回调 Token<input id="wecomCallbackToken" type="password" maxlength="512" placeholder="留空保持原 Token"></label>
+<label>EncodingAESKey<input id="wecomCallbackAesKey" type="password" maxlength="128" placeholder="留空保持原 AES Key"></label>
+<label>回调地址<input id="wecomCallbackUrl" readonly></label>
+<button id="saveWecomBtn" class="primary wide" type="button">保存企业微信配置</button><div id="wecomHint" class="hint"></div></section>
+<section class="panel"><h3>当前客户端信息</h3><dl id="clientInfo" class="info-list"></dl></section>
     </section>
   </main>
 
@@ -154,6 +167,6 @@
 
 <div id="toast" class="toast hidden"></div>
 <script src="/static/bot-web-v2.js?v=9"></script>
-<script src="/static/bot-web-bot-enabled.js?v=4"></script>
+<script src="/static/bot-web-bot-enabled.js?v=5"></script>
 </body>
 </html>

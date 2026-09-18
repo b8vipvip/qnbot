@@ -703,3 +703,18 @@ def bot_web_generate_wecom_callback(client: Dict[str, Any]=Depends(require_bot_w
     return {"callback_token":secrets.token_urlsafe(24),
       "callback_aes_key":base64.b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("="),
       "callback_url":client_callback_url(int(client["id"]))}
+
+
+@router.post("/api/bot-web/wecom/test")
+def bot_web_test_wecom(client: Dict[str, Any]=Depends(require_bot_web_client)) -> Dict[str,Any]:
+    import wecom_bridge
+    settings=load_client_settings(int(client["id"]))
+    public=public_client_settings(int(client["id"]),settings)
+    if not public["outbound_configured"]:
+        raise HTTPException(status_code=400,detail="请先保存完整的当前 Bot 企业微信应用消息配置")
+    content="【千牛 AI Bot 测试】\n当前 Bot 客户端企业微信通知配置已生效。\n客户端："+str(client.get("name") or "")+"\n回调地址："+public["callback_url"]
+    try:
+        result=wecom_bridge.send_app_text_for(settings,split_users(str(settings.get("to_users") or "")),content)
+    except Exception as exc:
+        raise HTTPException(status_code=502,detail=str(exc)[:500]) from exc
+    return {"ok":True,"msgid":result.get("msgid"),"message":"测试消息发送成功"}

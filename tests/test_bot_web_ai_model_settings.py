@@ -333,7 +333,7 @@ def test_mobile_ui_exposes_safe_fields_and_no_secret_inputs():
     for forbidden_payload_key in ('base_url:', 'api_key:', 'authorization:', 'cookie:', 'password:'):
         assert forbidden_payload_key not in lowered
     assert "/static/bot-web-ai-model-settings.js?v=1" in loader
-    assert 'src="/static/bot-web-bot-enabled.js?v=4"' in page
+    assert 'src="/static/bot-web-bot-enabled.js?v=5"' in page
 
 
 def test_bootstrap_container_and_windows_build_package_ai_model_sync():
