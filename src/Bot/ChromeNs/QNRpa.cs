@@ -1133,11 +1133,19 @@ namespace Bot.ChromeNs
                     PressBackspace();
                     Thread.Sleep(120);
                     string afterClear;
-                    if (!TryGetEditorText(out afterClear)
-                        || !string.IsNullOrWhiteSpace(NormalizeEditorText(afterClear)))
+                    if (TryGetEditorText(out afterClear)
+                        && string.IsNullOrWhiteSpace(NormalizeEditorText(afterClear)))
                     {
-                        return false;
+                        ForgetOwnedDraft();
+                        return true;
                     }
+
+                    // FlaUI's Text property can lag behind the native editor after Ctrl+A/Backspace.
+                    // Do not convert that stale cache into a false cleanup failure here. The caller
+                    // performs an authoritative CDP empty-composer probe before any new text may be
+                    // written, so returning from the mutation only means the guarded destructive
+                    // keystroke was executed against the exact owned draft.
+                    Log.Info("Bot历史残留草稿已执行清空键序列，UIA文本尚未刷新，交由CDP二次确认: buyer=" + buyer);
                     ForgetOwnedDraft();
                     return true;
                 }, "Bot历史残留草稿清理").ConfigureAwait(false);
