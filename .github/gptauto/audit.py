@@ -30,7 +30,7 @@ def write_audit(task:Task,root:str|Path=".gptauto/logs")->dict[str,str]:
 - Complete: **{'YES' if is_complete(task) else 'NO'}**
 - Required gates: **{passed}/{required}**
 - DoD: **{dod}/{len(task.definition_of_done)}**
-- Repairs: **{task.repair_attempts}**
+- Repairs: **{task.repair_attempts}**\n- Provenance: **{task.metadata.get("provenance","native_host")}**\n- Task type: **{task.metadata.get("task_type","native")}**
 - Created: {task.created_at}
 - Updated: {task.updated_at}
 
