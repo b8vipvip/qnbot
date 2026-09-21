@@ -48,7 +48,13 @@ jobs:
           git checkout -B "$branch"
           git add .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml
           git commit -m "chore: sync GPTAuto v$ver"
-          git push --force-with-lease -u origin "$branch"
+
+          remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+          if [[ -n "$remote_sha" ]]; then
+            git push --force-with-lease="refs/heads/$branch:$remote_sha" -u origin "$branch"
+          else
+            git push -u origin "$branch"
+          fi
 
           pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -z "$pr" ]]; then
