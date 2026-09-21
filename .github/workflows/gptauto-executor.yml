@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   execute:
-    # Observer records every lifecycle event, but Executor only needs to wake after
-    # CI/Release observations (or an explicit recovery dispatch). PR/push/release
-    # observations are ledger-only and otherwise create no-op Executor runners.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')) }}
+    # Executor normally wakes after CI/Release observations. A merged pull_request
+    # observation is also authoritative: it must be allowed to adopt the Completion
+    # Lease when somebody other than Executor performed the merge.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch' || github.event.workflow_run.event == 'pull_request')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -51,10 +51,12 @@ jobs:
           echo "task-id=$(jq -r '.task_id' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "pr-number=$(jq -r '.pr_number // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "head-sha=$(jq -r '.head_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "merge-sha=$(jq -r '.merge_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "run-id=$(jq -r '.run_id // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "release-required=$(jq -r '.release_required // false' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "repair-key=$(jq -r '.repair_key // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "lease-active=$(jq -r '.completion_lease.active // false' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "foreground-status=$(jq -r '.completion_lease.foreground_completion_status // "blocked"' <<<"$action")" >> "$GITHUB_OUTPUT"
       - name: Execute safe merge gate
         if: ${{ steps.state.outputs.action == 'merge' }}
         env:
@@ -105,6 +107,42 @@ jobs:
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
             -f release_required="${{ steps.state.outputs.release-required }}"
+      - name: Adopt externally merged completion lease
+        if: ${{ steps.state.outputs.action == 'reconcile_adopt' }}
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          MERGE_SHA: ${{ steps.state.outputs.merge-sha }}
+          RELEASE_REQUIRED: ${{ steps.state.outputs.release-required }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || {
+            echo "::error::Reconcile adoption is missing task/PR/merge identity."
+            exit 1
+          }
+
+          # A terminal artifact is durable proof that this lease already finished.
+          # Otherwise dispatch is safe even when another adopter raced us: Reconcile
+          # has task-scoped concurrency with cancel-in-progress, so all dispatches
+          # converge to one current owner instead of creating a second authority.
+          terminal_artifact="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=20"             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+          if [[ -n "$terminal_artifact" ]]; then
+            rm -rf /tmp/gptauto-adopt
+            mkdir -p /tmp/gptauto-adopt
+            gh api "repos/$REPOSITORY/actions/artifacts/$terminal_artifact/zip" > /tmp/gptauto-adopt.zip
+            unzip -qo /tmp/gptauto-adopt.zip -d /tmp/gptauto-adopt
+            if find /tmp/gptauto-adopt -name completion.json -type f -print -quit | grep -q .; then
+              echo "Terminal DONE artifact already exists for $TASK_ID; no adoption dispatch needed."
+              exit 0
+            fi
+          fi
+
+          gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA"             -f release_required="$RELEASE_REQUIRED"
+          echo "Adopted merged Completion Lease for $TASK_ID / $MERGE_SHA." >> "$GITHUB_STEP_SUMMARY"
       - name: Emit repair request
         if: ${{ steps.state.outputs.action == 'repair_request' }}
         env:
@@ -174,6 +212,29 @@ jobs:
           mkdir -p .gptauto/completion-leases
           cp /tmp/gptauto-action.json ".gptauto/completion-leases/$TASK_ID.json"
           echo "Completion lease remains active for $TASK_ID; current decision is $ACTION." >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish foreground completion guard
+        if: ${{ steps.state.outputs.lease-active == 'true' && steps.state.outputs.pr-number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          ACTION: ${{ steps.state.outputs.action }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          body="$marker
+          GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: $ACTION).
+
+          This engineering task is NOT complete. A PR, commit, successful partial check, repair request, merge, or release-in-progress is non-terminal evidence. Foreground agents must continue/recover and must not report completion until a terminal DONE receipt exists."
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
       - name: Persist timeout recovery checkpoint
         if: ${{ steps.state.outputs.action == 'timeout_recovery' }}
         env:
