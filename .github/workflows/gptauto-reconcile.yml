@@ -19,6 +19,7 @@ permissions:
   contents: read
   actions: write
   pull-requests: read
+  issues: write
 concurrency:
   group: gptauto-reconcile-${{ inputs.task_id }}
   cancel-in-progress: true
@@ -125,7 +126,12 @@ jobs:
           [[ "$captured_release_required" == "$RELEASE_REQUIRED" ]] || { echo "::error::Terminal capture changed release intent"; exit 1; }
           [[ "$captured_provenance" == "reconciler" ]] || { echo "::error::Terminal capture provenance is not reconciler"; exit 1; }
           echo "task-id=$captured_task_id" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/upload-gptauto-log
+        with:
+          task-id: ${{ steps.terminal.outputs.task-id }}
+          retention-days: '30'
       - name: Publish terminal foreground receipt
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -149,10 +155,6 @@ jobs:
           else
             gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
           fi
-      - uses: ./.github/actions/upload-gptauto-log
-        with:
-          task-id: ${{ steps.terminal.outputs.task-id }}
-          retention-days: '30'
       - name: Terminal receipt summary
         env:
           TASK_ID: ${{ inputs.task_id }}
