@@ -1,0 +1,152 @@
+name: GPTAuto Reconcile
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: Stable GPTAuto task ID
+        required: true
+      pr_number:
+        description: Merged PR number
+        required: true
+      merge_sha:
+        description: Merge commit SHA
+        required: true
+      release_required:
+        description: Whether Release must succeed
+        required: true
+        default: 'false'
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+concurrency:
+  group: gptauto-reconcile-${{ inputs.task_id }}
+  cancel-in-progress: true
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for terminal post-merge gates
+        id: gates
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TASK_ID: ${{ inputs.task_id }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          RELEASE_REQUIRED: ${{ inputs.release_required }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+            ci_status="$(jq -r '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].status // "missing"' <<<"$runs")"
+            ci_conclusion="$(jq -r '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].conclusion // ""' <<<"$runs")"
+            release_status="completed"
+            release_conclusion="success"
+            if [[ "$RELEASE_REQUIRED" == "true" ]]; then
+              release_status="$(jq -r '[.workflow_runs[] | select(.name == "Release")] | sort_by(.created_at) | reverse | .[0].status // "missing"' <<<"$runs")"
+              release_conclusion="$(jq -r '[.workflow_runs[] | select(.name == "Release")] | sort_by(.created_at) | reverse | .[0].conclusion // ""' <<<"$runs")"
+            fi
+            echo "task=$TASK_ID ci=$ci_status/$ci_conclusion release=$release_status/$release_conclusion"
+            if [[ "$ci_status" == "completed" && "$ci_conclusion" != "success" ]]; then
+              echo "::error::Post-merge CI finished with $ci_conclusion"
+              exit 1
+            fi
+            if [[ "$RELEASE_REQUIRED" == "true" && "$release_status" == "completed" && "$release_conclusion" != "success" ]]; then
+              echo "::error::Release finished with $release_conclusion"
+              exit 1
+            fi
+            if [[ "$ci_status" == "completed" && "$ci_conclusion" == "success" && "$release_status" == "completed" && "$release_conclusion" == "success" ]]; then
+              ci_run_id="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs")"
+              release_run_id=""
+              if [[ "$RELEASE_REQUIRED" == "true" ]]; then
+                release_run_id="$(jq -r '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs")"
+              fi
+              echo "main-ci-run-id=$ci_run_id" >> "$GITHUB_OUTPUT"
+              echo "release-run-id=$release_run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Timed out waiting for post-merge completion gates"
+          exit 1
+      - name: Capture terminal DONE evidence directly
+        id: terminal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TASK_ID: ${{ inputs.task_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          MAIN_CI_RUN_ID: ${{ steps.gates.outputs.main-ci-run-id }}
+          RELEASE_RUN_ID: ${{ steps.gates.outputs.release-run-id }}
+          RELEASE_REQUIRED: ${{ inputs.release_required }}
+          RUN_ID: ${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pr_json="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
+          pr_title="$(jq -r '.title // ""' <<<"$pr_json")"
+          pr_body="$(jq -r '.body // ""' <<<"$pr_json")"
+          pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+          merged="$(jq -r 'if .merged_at then "true" else "false" end' <<<"$pr_json")"
+          actual_merge_sha="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+          [[ "$merged" == "true" ]] || { echo "::error::PR is no longer recorded as merged"; exit 1; }
+          [[ "$actual_merge_sha" == "$MERGE_SHA" ]] || { echo "::error::Merge SHA mismatch during terminal capture"; exit 1; }
+
+          pr_ci_run_id="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&status=success&per_page=50" --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+          previous_artifact_id="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=10" --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+          if [[ -n "$previous_artifact_id" ]]; then
+            mkdir -p ".gptauto/logs/$TASK_ID"
+            gh api "repos/$REPOSITORY/actions/artifacts/$previous_artifact_id/zip" > /tmp/gptauto-previous.zip
+            unzip -qo /tmp/gptauto-previous.zip -d ".gptauto/logs/$TASK_ID"
+          fi
+
+          release_conclusion=""
+          [[ "$RELEASE_REQUIRED" == "true" ]] && release_conclusion="success"
+          PYTHONPATH=.github python -m gptauto.observer capture             --event "reconcile" --repo "$REPOSITORY" --default-branch "$DEFAULT_BRANCH"             --branch "$DEFAULT_BRANCH" --head-sha "$MERGE_SHA" --pr-number "$PR_NUMBER"             --pr-title "$pr_title" --pr-body "$pr_body" --pr-state "closed" --pr-merged "true"             --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR"             --pr-ci-conclusion "success" --pr-ci-run-id "$pr_ci_run_id"             --main-ci-conclusion "success" --main-ci-run-id "$MAIN_CI_RUN_ID"             --release-conclusion "$release_conclusion" --release-run-id "$RELEASE_RUN_ID"             --current-pr-head-sha "$pr_head_sha" --release-required-override "$RELEASE_REQUIRED"             --provenance "reconciler" > terminal-result.json
+          cat terminal-result.json
+          captured_task_id="$(python -c 'import json;print(json.load(open("terminal-result.json"))["task_id"])')"
+          captured_state="$(python -c 'import json;print(json.load(open("terminal-result.json"))["state"])')"
+          captured_release_required="$(python -c 'import json;print(str(json.load(open("terminal-result.json"))["release_required"]).lower())')"
+          captured_provenance="$(python -c 'import json;print(json.load(open("terminal-result.json"))["provenance"])')"
+          [[ "$captured_task_id" == "$TASK_ID" ]] || { echo "::error::Terminal capture changed TASK_ID"; exit 1; }
+          [[ "$captured_state" == "DONE" ]] || { echo "::error::Terminal capture did not reach DONE: $captured_state"; exit 1; }
+          [[ "$captured_release_required" == "$RELEASE_REQUIRED" ]] || { echo "::error::Terminal capture changed release intent"; exit 1; }
+          [[ "$captured_provenance" == "reconciler" ]] || { echo "::error::Terminal capture provenance is not reconciler"; exit 1; }
+          echo "task-id=$captured_task_id" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/upload-gptauto-log
+        with:
+          task-id: ${{ steps.terminal.outputs.task-id }}
+          retention-days: '30'
+      - name: Terminal receipt summary
+        env:
+          TASK_ID: ${{ inputs.task_id }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          MAIN_CI_RUN_ID: ${{ steps.gates.outputs.main-ci-run-id }}
+          RELEASE_RUN_ID: ${{ steps.gates.outputs.release-run-id }}
+          RELEASE_REQUIRED: ${{ inputs.release_required }}
+        shell: bash
+        run: |
+          {
+            echo "## GPTAuto terminal reconciliation"
+            echo "- Task: $TASK_ID"
+            echo "- State: DONE"
+            echo "- Merge: $MERGE_SHA"
+            echo "- Main CI run: $MAIN_CI_RUN_ID"
+            echo "- Release required: $RELEASE_REQUIRED"
+            echo "- Release run: ${RELEASE_RUN_ID:-not-required}"
+            echo "- Terminal evidence provenance: reconciler"
+            echo "- Terminal release intent is pinned to the Executor/Reconcile lease input, not recomputed from mutable PR text."
+            echo "- Terminal evidence was captured and uploaded by Reconcile itself; no follow-up Observer run is required."
+          } >> "$GITHUB_STEP_SUMMARY"

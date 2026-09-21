@@ -1,0 +1,171 @@
+name: GPTAuto Observer
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to reconcile
+        required: false
+      head_sha:
+        description: Event/merge SHA to reconcile
+        required: false
+      merge_sha:
+        description: Merge SHA to reconcile
+        required: false
+      main_ci_run_id:
+        description: Successful post-merge CI run ID verified by reconciler
+        required: false
+      release_run_id:
+        description: Successful Release run ID verified by reconciler
+        required: false
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  push:
+    branches:
+      - main
+      - master
+  workflow_run:
+    workflows: [CI, Release]
+    types: [completed]
+  release:
+    types: [published]
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: gptauto-observer-${{ github.event.pull_request.number || github.event.workflow_run.id || github.event.release.id || github.ref }}
+  cancel-in-progress: true
+jobs:
+  observe:
+    # A cancelled CI/Release run is replacement/no-result evidence: it cannot
+    # satisfy a gate and must not open a repair cycle. Keep the existing
+    # Completion Lease active and wait for the replacement/current-head run.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'cancelled') || github.event_name == 'release' || github.actor != 'github-actions[bot]' || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Capture repository-side GPTAuto task
+        id: capture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_NAME: ${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ inputs.head_sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || '' }}
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_STATE: ${{ github.event.pull_request.state || '' }}
+          PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          MERGE_SHA: ${{ inputs.merge_sha || github.event.pull_request.merge_commit_sha || '' }}
+          RUN_ID: ${{ github.event.workflow_run.id || github.run_id }}
+          RECONCILED_MAIN_CI_RUN_ID: ${{ inputs.main_ci_run_id || '' }}
+          RECONCILED_RELEASE_RUN_ID: ${{ inputs.release_run_id || '' }}
+          ACTOR: ${{ github.actor }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+          RELEASE_STATE: ${{ github.event.action || '' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$EVENT_NAME" == "release" && -n "$RELEASE_TAG" ]]; then
+            git fetch --tags --force origin
+            resolved="$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null || true)"
+            [[ -n "$resolved" ]] && HEAD_SHA="$resolved"
+          fi
+
+          if [[ -z "$PR_NUMBER" && "$HEAD_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            PR_NUMBER="$(gh api "repos/$REPOSITORY/commits/$HEAD_SHA/pulls" \
+              --jq '[.[] | select(.merged_at != null)][0].number // .[0].number // empty' 2>/dev/null || true)"
+          fi
+
+          PR_HEAD_SHA=""
+          PR_CI_CONCLUSION=""
+          PR_CI_RUN_ID=""
+          MAIN_CI_CONCLUSION=""
+          MAIN_CI_RUN_ID=""
+          RELEASE_CONCLUSION=""
+          RELEASE_RUN_ID=""
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ -n "$RECONCILED_MAIN_CI_RUN_ID" ]]; then
+              MAIN_CI_RUN_ID="$RECONCILED_MAIN_CI_RUN_ID"
+              MAIN_CI_CONCLUSION="success"
+            fi
+            if [[ -n "$RECONCILED_RELEASE_RUN_ID" ]]; then
+              RELEASE_RUN_ID="$RECONCILED_RELEASE_RUN_ID"
+              RELEASE_CONCLUSION="success"
+            fi
+          fi
+          if [[ -n "$PR_NUMBER" ]]; then
+            pr_json="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
+            PR_TITLE="$(jq -r '.title // ""' <<<"$pr_json")"
+            PR_BODY="$(jq -r '.body // ""' <<<"$pr_json")"
+            PR_STATE="$(jq -r '.state // ""' <<<"$pr_json")"
+            PR_MERGED="$(jq -r 'if .merged_at then "true" else "false" end' <<<"$pr_json")"
+            MERGE_SHA="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+            PR_HEAD_SHA="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+
+            if [[ -n "$PR_HEAD_SHA" ]]; then
+              PR_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              [[ -n "$PR_CI_RUN_ID" ]] && PR_CI_CONCLUSION="success"
+            fi
+            if [[ "$PR_MERGED" == "true" && -n "$MERGE_SHA" ]]; then
+              MAIN_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
+              RELEASE_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              [[ -n "$RELEASE_RUN_ID" ]] && RELEASE_CONCLUSION="success"
+            fi
+          fi
+
+          TASK_ID="$(PYTHONPATH=.github python -c 'from gptauto.observer import observed_task_id; import os; print(observed_task_id(os.environ["REPOSITORY"], os.environ.get("PR_NUMBER",""), os.environ.get("HEAD_SHA",""), os.environ.get("MERGE_SHA","")))' )"
+          previous_artifact_id="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=10" \
+            --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+          if [[ -n "$previous_artifact_id" ]]; then
+            mkdir -p ".gptauto/logs/$TASK_ID"
+            gh api "repos/$REPOSITORY/actions/artifacts/$previous_artifact_id/zip" > /tmp/gptauto-previous.zip
+            unzip -qo /tmp/gptauto-previous.zip -d ".gptauto/logs/$TASK_ID"
+          fi
+
+          PYTHONPATH=.github python -m gptauto.observer capture \
+            --event "$EVENT_NAME" --repo "$REPOSITORY" --default-branch "$DEFAULT_BRANCH" \
+            --branch "$REF_NAME" --head-sha "$HEAD_SHA" --pr-number "$PR_NUMBER" \
+            --pr-title "$PR_TITLE" --pr-body "$PR_BODY" --pr-state "$PR_STATE" --pr-merged "$PR_MERGED" \
+            --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR" \
+            --workflow-name "$WORKFLOW_NAME" --workflow-conclusion "$WORKFLOW_CONCLUSION" \
+            --release-tag "$RELEASE_TAG" --release-state "$RELEASE_STATE" \
+            --pr-ci-conclusion "$PR_CI_CONCLUSION" --pr-ci-run-id "$PR_CI_RUN_ID" \
+            --main-ci-conclusion "$MAIN_CI_CONCLUSION" --main-ci-run-id "$MAIN_CI_RUN_ID" \
+            --release-conclusion "$RELEASE_CONCLUSION" --release-run-id "$RELEASE_RUN_ID" \
+            --current-pr-head-sha "$PR_HEAD_SHA" > observer-result.json
+          cat observer-result.json
+          task_id="$(python -c 'import json;print(json.load(open("observer-result.json"))["task_id"])')"
+          echo "task-id=$task_id" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/upload-gptauto-log
+        with:
+          task-id: ${{ steps.capture.outputs.task-id }}
+          retention-days: '30'
+      - name: Summary
+        env:
+          TASK_ID: ${{ steps.capture.outputs.task-id }}
+        run: |
+          {
+            echo "## GPTAuto repository observation"
+            echo "- Task ID: \`$TASK_ID\`"
+            echo "- Artifact: \`gptauto-$TASK_ID\`"
+            echo "- Provenance: \`repository_observer\`"
+            echo "- PR/push/main-CI/release events are re-associated through the PR before TASK_ID generation."
+            echo "- A merged PR is VERIFY, not DONE; release/main-CI evidence is reconstructed from successful historical runs, so event order does not affect DONE."
+            echo "- DONE artifacts include completion.json: a single terminal receipt with merge, CI, release, gate, and DoD evidence."
+          } >> "$GITHUB_STEP_SUMMARY"
