@@ -2,37 +2,72 @@ name: GPTAuto Consumer Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 * * * *'
 permissions:
   contents: write
   pull-requests: write
+  actions: read
 concurrency:
   group: gptauto-consumer-sync
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GPTAUTO_SYNC_TOKEN || github.token }}
       - name: Sync canonical GPTAuto runtime
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN || github.token }}
+          HAS_DEDICATED_SYNC_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN != '' }}
         shell: bash
         run: |
           set -Eeuo pipefail
           tmp="$(mktemp -d)"
           git clone --depth 1 https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
-          mkdir -p .github/gptauto .github/actions/upload-gptauto-log
+          mkdir -p .github/gptauto .github/actions/upload-gptauto-log .github/workflows
           cp "$tmp"/GPTAuto/gptauto/*.py .github/gptauto/
           cp "$tmp"/GPTAuto/.github/actions/upload-gptauto-log/action.yml .github/actions/upload-gptauto-log/action.yml
+          cp "$tmp"/GPTAuto/consumer-template/gptauto-sync.yml .github/workflows/gptauto-sync.yml
+          cp "$tmp"/GPTAuto/consumer-template/gptauto-observer.yml .github/workflows/gptauto-observer.yml
+          cp "$tmp"/GPTAuto/consumer-template/gptauto-executor.yml .github/workflows/gptauto-executor.yml
+          cp "$tmp"/GPTAuto/consumer-template/gptauto-repair.yml .github/workflows/gptauto-repair.yml
+          cp "$tmp"/GPTAuto/consumer-template/gptauto-reconcile.yml .github/workflows/gptauto-reconcile.yml
           ver="$(grep '^version = ' "$tmp/GPTAuto/pyproject.toml" | head -1 | cut -d'"' -f2)"
           printf '%s\n' "$ver" > .github/gptauto/VERSION
-          if git diff --quiet -- .github/gptauto .github/actions/upload-gptauto-log; then exit 0; fi
+          if git diff --quiet -- .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml; then
+            echo "GPTAuto runtime already current."
+            exit 0
+          fi
+
           branch="chore/gptauto-sync-v$ver"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git checkout -b "$branch"
-          git add .github/gptauto .github/actions/upload-gptauto-log
+          git checkout -B "$branch"
+          git add .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml
           git commit -m "chore: sync GPTAuto v$ver"
-          git push -u origin "$branch"
-          gh pr create --title "chore: sync GPTAuto v$ver" --body "Automated sync from canonical b8vipvip/GPTAuto. Merge after repository CI passes." --base "${{ github.event.repository.default_branch }}" --head "$branch"
+          git push --force-with-lease -u origin "$branch"
+
+          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            if ! create_output="$(gh pr create \
+              --title "chore: sync GPTAuto v$ver" \
+              --body "Automated sync from canonical b8vipvip/GPTAuto. Repository CI remains the safety gate." \
+              --base "${{ github.event.repository.default_branch }}" --head "$branch" 2>&1)"; then
+              {
+                echo "## GPTAuto sync branch prepared"
+                echo "- Branch: \`$branch\`"
+                echo "- Version: \`$ver\`"
+                echo "- PR creation was blocked by repository GitHub Actions policy."
+                echo "- Enable **Allow GitHub Actions to create and approve pull requests**, or configure a repository secret \`GPTAUTO_SYNC_TOKEN\` using a fine-grained token with Contents and Pull requests write permission."
+                echo "- Dedicated sync token configured: \`$HAS_DEDICATED_SYNC_TOKEN\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::PR creation blocked after branch sync: $create_output"
+              exit 0
+            fi
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          fi
+
+          gh pr merge "$pr" --auto --squash || echo "::notice::Auto-merge is unavailable; PR remains open for normal CI-gated merge."
