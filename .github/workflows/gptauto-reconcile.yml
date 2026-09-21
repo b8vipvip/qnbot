@@ -125,6 +125,30 @@ jobs:
           [[ "$captured_release_required" == "$RELEASE_REQUIRED" ]] || { echo "::error::Terminal capture changed release intent"; exit 1; }
           [[ "$captured_provenance" == "reconciler" ]] || { echo "::error::Terminal capture provenance is not reconciler"; exit 1; }
           echo "task-id=$captured_task_id" >> "$GITHUB_OUTPUT"
+      - name: Publish terminal foreground receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TASK_ID: ${{ inputs.task_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          body="$marker
+          GPTAuto Completion Lease is RELEASED for task $TASK_ID.
+
+          Terminal state: DONE
+          Merge SHA: $MERGE_SHA
+          Foreground completion is now permitted because Reconcile produced terminal DONE evidence."
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
       - uses: ./.github/actions/upload-gptauto-log
         with:
           task-id: ${{ steps.terminal.outputs.task-id }}

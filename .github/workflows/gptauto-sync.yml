@@ -7,6 +7,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: read
+  issues: write
 concurrency:
   group: gptauto-consumer-sync
   cancel-in-progress: true
@@ -37,6 +38,50 @@ jobs:
           cp "$tmp"/GPTAuto/consumer-template/gptauto-reconcile.yml .github/workflows/gptauto-reconcile.yml
           ver="$(grep '^version = ' "$tmp/GPTAuto/pyproject.toml" | head -1 | cut -d'"' -f2)"
           printf '%s\n' "$ver" > .github/gptauto/VERSION
+
+          workflow_paths=(
+            .github/workflows/gptauto-sync.yml
+            .github/workflows/gptauto-observer.yml
+            .github/workflows/gptauto-executor.yml
+            .github/workflows/gptauto-repair.yml
+            .github/workflows/gptauto-reconcile.yml
+          )
+          workflow_drift=false
+          if ! git diff --quiet -- "${workflow_paths[@]}"; then
+            workflow_drift=true
+          fi
+
+          # GitHub's repository GITHUB_TOKEN is a GitHub App token and cannot
+          # create/update workflow files unless the credential has Workflows write.
+          # Do not discover this only after git push: publish a durable, deduplicated
+          # repository issue and leave the consumer untouched/atomic.
+          if [[ "$workflow_drift" == "true" && "$HAS_DEDICATED_SYNC_TOKEN" != "true" ]]; then
+            marker="<!-- gptauto-sync-workflow-permission -->"
+            title="GPTAuto sync blocked: Workflows write permission required"
+            body="$marker
+            GPTAuto detected canonical workflow changes while syncing to v$ver, but this repository has no `GPTAUTO_SYNC_TOKEN`.
+
+            The default GitHub Actions token cannot push updates under `.github/workflows/` in this repository. The consumer was intentionally left unchanged so its VERSION never claims a partially installed GPTAuto release.
+
+            Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write** for this repository. The next scheduled sync will retry automatically."
+            issue="$(gh issue list --state open --search "$marker in:body" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+            if [[ -n "$issue" ]]; then
+              gh issue edit "$issue" --title "$title" --body "$body" >/dev/null || true
+            else
+              gh issue create --title "$title" --body "$body" >/dev/null || true
+            fi
+            {
+              echo "## GPTAuto sync blocked before push"
+              echo "- Target version: `$ver`"
+              echo "- Workflow drift: `true`"
+              echo "- Dedicated sync token configured: `false`"
+              echo "- Consumer left unchanged (atomic sync)."
+              echo "- Required token permissions: Contents write, Pull requests write, Workflows write."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::GPTAuto v$ver contains workflow changes. Configure GPTAUTO_SYNC_TOKEN with Workflows write; no partial update was pushed."
+            exit 0
+          fi
+
           if git diff --quiet -- .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml; then
             echo "GPTAuto runtime already current."
             exit 0
@@ -50,10 +95,21 @@ jobs:
           git commit -m "chore: sync GPTAuto v$ver"
 
           remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+          push_log="$(mktemp)"
           if [[ -n "$remote_sha" ]]; then
-            git push --force-with-lease="refs/heads/$branch:$remote_sha" -u origin "$branch"
+            if ! git push --force-with-lease="refs/heads/$branch:$remote_sha" -u origin "$branch" 2> >(tee "$push_log" >&2); then
+              if grep -qiE 'workflow.*permission|refusing to allow .* workflow' "$push_log"; then
+                echo "::error::GPTAUTO_SYNC_TOKEN is present but lacks Workflows write permission. Grant Contents, Pull requests, and Workflows write, then rerun Consumer Sync."
+              fi
+              exit 1
+            fi
           else
-            git push -u origin "$branch"
+            if ! git push -u origin "$branch" 2> >(tee "$push_log" >&2); then
+              if grep -qiE 'workflow.*permission|refusing to allow .* workflow' "$push_log"; then
+                echo "::error::GPTAUTO_SYNC_TOKEN is present but lacks Workflows write permission. Grant Contents, Pull requests, and Workflows write, then rerun Consumer Sync."
+              fi
+              exit 1
+            fi
           fi
 
           pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
@@ -67,7 +123,7 @@ jobs:
                 echo "- Branch: \`$branch\`"
                 echo "- Version: \`$ver\`"
                 echo "- PR creation was blocked by repository GitHub Actions policy."
-                echo "- Enable **Allow GitHub Actions to create and approve pull requests**, or configure a repository secret \`GPTAUTO_SYNC_TOKEN\` using a fine-grained token with Contents and Pull requests write permission."
+                echo "- Enable **Allow GitHub Actions to create and approve pull requests**, or configure a repository secret \`GPTAUTO_SYNC_TOKEN\` using a fine-grained token with Contents, Pull requests, and Workflows write permission."
                 echo "- Dedicated sync token configured: \`$HAS_DEDICATED_SYNC_TOKEN\`"
               } >> "$GITHUB_STEP_SUMMARY"
               echo "::warning::PR creation blocked after branch sync: $create_output"

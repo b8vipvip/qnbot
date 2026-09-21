@@ -16,6 +16,8 @@ def _lease(task: Task) -> dict:
         "completion_gate": str(meta.get("completion_gate") or ""),
         "release_required": bool(meta.get("release_required")),
         "may_finish_foreground": task.state == State.DONE,
+        "foreground_completion_status": "terminal" if task.state == State.DONE else "blocked",
+        "foreground_instruction": ("Report task completion only from terminal DONE evidence." if task.state == State.DONE else "Do not report the engineering task complete; continue/recover until terminal DONE evidence exists."),
     }
 
 
@@ -100,6 +102,18 @@ def next_action(task: Task) -> dict:
         })
 
     if task.state == State.VERIFY:
+        merge_sha = str(meta.get("merge_sha") or "")
+        pr_number = str(meta.get("pr_number") or "")
+        if pr_number and merge_sha:
+            return _with_lease(task, {
+                "action": "reconcile_adopt",
+                "reason": "Merged task is unfinished; ensure a Reconciler owns the Completion Lease regardless of who merged the PR",
+                "task_id": task.task_id,
+                "pr_number": pr_number,
+                "merge_sha": merge_sha,
+                "release_required": bool(meta.get("release_required")),
+                "completion_gate": str(meta.get("completion_gate") or ""),
+            })
         return _with_lease(task, {
             "action": "verify",
             "reason": "Waiting for post-merge CI/release evidence",
