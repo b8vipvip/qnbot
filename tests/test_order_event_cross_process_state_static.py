@@ -45,3 +45,15 @@ def test_order_state_write_is_flush_to_disk_and_atomic_without_delete_window():
     assert "catch (IOException ex)" in save
     assert "File.Delete(path)" not in save
     assert "旧状态文件已保留" in save
+
+def test_first_accept_timestamp_is_immutable_across_duplicate_observations_and_process_merge():
+    code = read("src/Bot/ChromeNs/OrderEventHub.cs")
+    assert "public DateTime AcceptedAt { get; set; }" in code
+    assert "var previousSeenAt = existing.SeenAt;" in code
+    assert "existing.AcceptedAt == DateTime.MinValue" in code
+    assert "existing.AcceptedAt = previousSeenAt == DateTime.MinValue ? now : previousSeenAt;" in code
+    assert "AcceptedAt = now" in code
+    assert "var localAcceptedAt = local.AcceptedAt == DateTime.MinValue ? local.SeenAt : local.AcceptedAt;" in code
+    assert "localAcceptedAt < existing.AcceptedAt" in code
+    duplicate = code.split("if (existing != null)", 1)[1].split("_state.Events.Add", 1)[0]
+    assert duplicate.index("existing.AcceptedAt") < duplicate.index("existing.SeenAt = now")
