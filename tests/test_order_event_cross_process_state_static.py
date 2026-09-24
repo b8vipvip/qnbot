@@ -55,5 +55,7 @@ def test_first_accept_timestamp_is_immutable_across_duplicate_observations_and_p
     assert "AcceptedAt = now" in code
     assert "var localAcceptedAt = local.AcceptedAt == DateTime.MinValue ? local.SeenAt : local.AcceptedAt;" in code
     assert "localAcceptedAt < existing.AcceptedAt" in code
-    duplicate = code.split("if (existing != null)", 1)[1].split("_state.Events.Add", 1)[0]
+    publish = code.split("public static OrderEventPublishResult Publish", 1)[1]
+    publish = publish.split("private static StateMutexLease AcquireStateMutex", 1)[0]
+    duplicate = publish.split("if (existing != null)", 1)[1].split("_state.Events.Add", 1)[0]
     assert duplicate.index("existing.AcceptedAt") < duplicate.index("existing.SeenAt = now")
