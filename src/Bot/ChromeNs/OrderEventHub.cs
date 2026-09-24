@@ -497,6 +497,12 @@ namespace Bot.ChromeNs
         private sealed class StoredOrderEvent
         {
             public string Key { get; set; }
+
+            // Immutable first-accept timestamp. The Hub may observe the same order again days later
+            // (history replay, duplicate messageCenterNotify, cross-process merge). SeenAt is allowed
+            // to move forward for retention/diagnostics, but AcceptedAt must never be refreshed by a
+            // duplicate because the auto-reply fallback uses it as the side-effect freshness proof.
+            public DateTime AcceptedAt { get; set; }
             public DateTime SeenAt { get; set; }
             public OrderSnapshot Snapshot { get; set; }
         }
@@ -585,10 +591,20 @@ namespace Bot.ChromeNs
                     var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
                     if (existing != null)
                     {
+                        // Legacy state files only had SeenAt. Capture that value before refreshing
+                        // SeenAt so a duplicate historical event can never become a newly accepted
+                        // event for the Hub auto-reply consumer.
+                        var previousSeenAt = existing.SeenAt;
+                        if (existing.AcceptedAt == DateTime.MinValue)
+                        {
+                            existing.AcceptedAt = previousSeenAt == DateTime.MinValue ? now : previousSeenAt;
+                        }
                         Merge(existing.Snapshot, snapshot);
                         existing.SeenAt = now;
                         if (lease.Acquired) SaveInternal(path);
-                        Log.Info("订单事件已去重: key=" + key + ", buyer=" + snapshot.Buyer);
+                        Log.Info("订单事件已去重: key=" + key + ", buyer=" + snapshot.Buyer
+                            + ", acceptedAt=" + existing.AcceptedAt.ToString("yyyy-MM-dd HH:mm:ss")
+                            + ", lastSeenAt=" + existing.SeenAt.ToString("yyyy-MM-dd HH:mm:ss"));
                         return new OrderEventPublishResult
                         {
                             Detected = true,
@@ -598,7 +614,13 @@ namespace Bot.ChromeNs
                         };
                     }
 
-                    _state.Events.Add(new StoredOrderEvent { Key = key, SeenAt = now, Snapshot = snapshot });
+                    _state.Events.Add(new StoredOrderEvent
+                    {
+                        Key = key,
+                        AcceptedAt = now,
+                        SeenAt = now,
+                        Snapshot = snapshot
+                    });
                     if (_state.Events.Count > 2000)
                     {
                         _state.Events = _state.Events.OrderByDescending(x => x.SeenAt).Take(2000).ToList();
@@ -721,6 +743,17 @@ namespace Bot.ChromeNs
                 }
                 if (existing.Snapshot == null) existing.Snapshot = local.Snapshot;
                 else Merge(existing.Snapshot, local.Snapshot);
+
+                // AcceptedAt is "first accepted", so cross-process reconciliation keeps the oldest
+                // non-empty value. For pre-migration state, the old SeenAt is the best available
+                // approximation and is intentionally captured before SeenAt is advanced.
+                if (existing.AcceptedAt == DateTime.MinValue) existing.AcceptedAt = existing.SeenAt;
+                var localAcceptedAt = local.AcceptedAt == DateTime.MinValue ? local.SeenAt : local.AcceptedAt;
+                if (localAcceptedAt != DateTime.MinValue
+                    && (existing.AcceptedAt == DateTime.MinValue || localAcceptedAt < existing.AcceptedAt))
+                {
+                    existing.AcceptedAt = localAcceptedAt;
+                }
                 if (local.SeenAt > existing.SeenAt) existing.SeenAt = local.SeenAt;
             }
             _state = merged;
