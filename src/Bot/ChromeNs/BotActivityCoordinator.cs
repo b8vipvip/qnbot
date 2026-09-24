@@ -177,6 +177,12 @@ namespace Bot.ChromeNs
     internal static class OrderEventAutoReplyFallback
     {
         private static readonly DateTime StartedAt = DateTime.Now;
+
+        // Late order recovery probes run for at most 180 seconds. Five minutes leaves margin for
+        // file polling / scheduling while making a historical persisted event permanently ineligible
+        // for a new customer-facing send. This is independent of process uptime.
+        internal static readonly TimeSpan HubEventFreshnessWindow = TimeSpan.FromMinutes(5);
+
         private static readonly ConcurrentDictionary<string, DateTime> Scheduled =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static Timer _timer;
@@ -230,7 +236,14 @@ namespace Bot.ChromeNs
                 {
                     DateTime seenAt;
                     if (!TryReadLocalDateTime(item["SeenAt"], out seenAt)) continue;
-                    if (seenAt < StartedAt.AddSeconds(-2)) continue;
+
+                    DateTime acceptedAt;
+                    if (!TryReadLocalDateTime(item["AcceptedAt"], out acceptedAt))
+                    {
+                        // Backward compatibility for state files written before AcceptedAt existed.
+                        acceptedAt = seenAt;
+                    }
+                    if (!IsFreshAcceptedAt(acceptedAt, StartedAt)) continue;
 
                     OrderSnapshot snapshot;
                     try
@@ -252,7 +265,7 @@ namespace Bot.ChromeNs
 
                     var key = BuildKey(snapshot);
                     if (!Scheduled.TryAdd(key, DateTime.Now)) continue;
-                    Task.Run(async () => await HandleAsync(snapshot, seenAt, key));
+                    Task.Run(async () => await HandleAsync(snapshot, acceptedAt, key));
                 }
             }
             catch (Exception ex)
@@ -348,6 +361,22 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        internal static bool IsFreshAcceptedAt(DateTime acceptedAt, DateTime runtimeStartedAt)
+        {
+            if (acceptedAt == DateTime.MinValue) return false;
+            if (acceptedAt.Kind == DateTimeKind.Utc) acceptedAt = acceptedAt.ToLocalTime();
+            if (runtimeStartedAt.Kind == DateTimeKind.Utc) runtimeStartedAt = runtimeStartedAt.ToLocalTime();
+
+            var now = DateTime.Now;
+            if (acceptedAt < runtimeStartedAt.AddSeconds(-2)) return false;
+            if (acceptedAt < now.Subtract(HubEventFreshnessWindow)) return false;
+
+            // A materially future timestamp is not valid freshness evidence either. Allow a small
+            // clock/serialization tolerance but never let a corrupted future value stay eligible.
+            if (acceptedAt > now.AddMinutes(1)) return false;
+            return true;
+        }
+
         private static string GetOrderEventStatePath()
         {
             // Keep this exactly aligned with OrderEventHub.GetPath().
@@ -367,7 +396,10 @@ namespace Bot.ChromeNs
 
         private static void CleanupScheduled()
         {
-            var cutoff = DateTime.Now.AddHours(-24);
+            // OrderEventHub retains facts for 30 days. Keep the in-memory "already considered"
+            // ledger slightly longer so a long-running Bot cannot re-arm yesterday's order merely
+            // because this dictionary used to evict keys after 24 hours.
+            var cutoff = DateTime.Now.AddDays(-31);
             foreach (var pair in Scheduled)
             {
                 if (pair.Value >= cutoff) continue;
@@ -388,6 +420,18 @@ namespace Bot.ChromeNs
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return;
+
+            // Defense in depth: Tick() filters persisted history, but the execution boundary must
+            // independently reject stale acceptance timestamps. This protects direct callers and
+            // future refactors from replaying an old Hub fact into a customer-facing fixed preset.
+            if (!OrderEventAutoReplyFallback.IsFreshAcceptedAt(hubSeenAt, _messageSafetyStartedAt))
+            {
+                Log.Info("[订单自动回复] Hub兜底拒绝历史回放，未发送: orderId=" + snapshot.OrderId
+                    + ", hubAcceptedAt=" + hubSeenAt.ToString("yyyy-MM-dd HH:mm:ss.fff")
+                    + ", botStartedAt=" + _messageSafetyStartedAt.ToString("yyyy-MM-dd HH:mm:ss")
+                    + ", freshnessMinutes=" + OrderEventAutoReplyFallback.HubEventFreshnessWindow.TotalMinutes.ToString("0"));
+                return;
+            }
 
             var runtimeSeller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(runtimeSeller)
@@ -468,7 +512,7 @@ namespace Bot.ChromeNs
                 + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                 + ", event=" + snapshot.EventType
                 + ", source=" + snapshot.Source
-                + ", hubSeenAt=" + hubSeenAt.ToString("yyyy-MM-dd HH:mm:ss.fff")
+                + ", hubAcceptedAt=" + hubSeenAt.ToString("yyyy-MM-dd HH:mm:ss.fff")
                 + ", mode=" + mode
                 + ", autoReply=" + Params.Robot.GetIsAutoReply());
 
