@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROME = ROOT / "src" / "Bot" / "ChromeNs"
@@ -43,10 +43,15 @@ def test_cdp_foreground_chat_can_promote_connected_standby_without_disabling_gua
     assert "TryPromoteDuplicateSellerSession" in window, (
         "A real foreground onChatDlgActive from a connected standby must atomically become authority."
     )
-    assert "IsAuthoritativeSellerSession" in coordinator, (
-        "Fail-closed send validation must remain in place after authority rebinding."
+    assert "IsAuthoritativeSellerSession" in server, (
+        "The WebSocket authority registry must remain fail-closed after foreground rebinding."
     )
-    assert "activeSessionRef" in coordinator and "targetSessionRef" in coordinator
+    assert "ValidateNativeSend" in coordinator, (
+        "Native send must still reject a seller/shop/CDP session that is not the active authority."
+    )
+    validate = coordinator[coordinator.index("internal static bool ValidateNativeSend"):coordinator.index("internal static void ReassertCurrent")]
+    assert "activeSession=" in validate and "targetSession=" in validate
+    assert "return false" in validate
 
 
 def test_control_plane_credentials_are_resolved_from_current_shop_at_call_time():
