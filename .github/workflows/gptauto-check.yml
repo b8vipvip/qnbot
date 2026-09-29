@@ -7,7 +7,7 @@ on:
       - '.github/tests/test_gptauto.py'
       - '.github/actions/upload-gptauto-log/**'
       - '.github/GPTAUTO.md'
-      - '.github/workflows/gptauto-check.yml'
+      - '.github/workflows/gptauto-*.yml'
   push:
     branches: [master]
     paths:
@@ -15,7 +15,7 @@ on:
       - '.github/tests/test_gptauto.py'
       - '.github/actions/upload-gptauto-log/**'
       - '.github/GPTAUTO.md'
-      - '.github/workflows/gptauto-check.yml'
+      - '.github/workflows/gptauto-*.yml'
 permissions:
   contents: read
 concurrency:
@@ -30,6 +30,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Validate qnbot terminal gate bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          reconcile='.github/workflows/gptauto-reconcile.yml'
+          grep -Fq 'Windows x64 release build' "$reconcile"
+          grep -Fq 'API control plane CI' "$reconcile"
+          grep -Fq 'Publish Bot auto-update release' "$reconcile"
+          grep -Fq 'secondary-ci-run-id' "$reconcile"
       - name: Test embedded GPTAuto
         run: PYTHONPATH=.github python -m unittest discover -s .github/tests -p 'test_gptauto.py' -v
       - name: Create diagnostic smoke task
