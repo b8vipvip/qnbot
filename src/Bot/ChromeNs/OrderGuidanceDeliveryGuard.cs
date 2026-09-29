@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -192,6 +192,37 @@ namespace Bot.ChromeNs
         /// This is the supported query boundary for CommerceContext; callers receive a clone and
         /// therefore cannot mutate the order-guidance ledger or its delivery idempotency state.
         /// </summary>
+        /// <summary>
+        /// Returns recent confirmed orders as independent per-order snapshots. CommerceContext uses
+        /// this projection to select the order relevant to the current question instead of blindly
+        /// inheriting whichever order happened to be observed most recently.
+        /// </summary>
+        public static List<OrderSnapshot> GetRecentOrderSnapshots(string seller, string buyer, int maxCount = 8)
+        {
+            var result = new List<OrderSnapshot>();
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return result;
+            maxCount = Math.Max(1, Math.Min(20, maxCount));
+            lock (Sync)
+            {
+                EnsureLoaded();
+                CleanupInternal();
+                foreach (var record in _state.Records
+                    .Where(x => x != null
+                        && Same(x.Seller, seller)
+                        && Same(x.Buyer, buyer)
+                        && x.Snapshot != null
+                        && x.ObservedAt >= DateTime.Now.AddDays(-7))
+                    .OrderByDescending(x => x.EventTime)
+                    .ThenByDescending(x => x.ObservedAt)
+                    .Take(maxCount))
+                {
+                    var clone = CloneSnapshot(record.Snapshot);
+                    if (clone != null) result.Add(clone);
+                }
+            }
+            return result;
+        }
+
         public static bool TryGetLatestOrderSnapshot(string seller, string buyer, out OrderSnapshot snapshot)
         {
             snapshot = null;

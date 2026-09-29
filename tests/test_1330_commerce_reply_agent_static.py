@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,10 +25,13 @@ def test_structured_order_context_is_final_conversation_enrichment():
 
 def test_commerce_context_prefers_verified_order_over_text_fallback():
     text = read("src/Bot/ChromeNs/CommerceContextService.cs")
-    structured = text.index("OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot")
+    structured = text.index("SelectRelevantOrderSnapshot(")
     fallback = text.index("ApplyConversationFallback(result")
     assert structured < fallback
-    assert "ApplyOrder(result, order);\n                return result;" in text
+    build = text[text.index("public static CommerceContextSnapshot Build"):text.index("public static void EnrichState")]
+    assert "TryGetLatestOrderSnapshot" not in build
+    assert "ApplyOrder(result, order);" in build
+    assert "result.SelectionReason = selectionReason;" in build
     assert 'SetPhase(target, "paid", "已付款/待履约")' in text
     assert 'SetPhase(target, "unpaid", "已下单/待付款")' in text
     assert 'SetPhase(target, "after_sale", "售后/退款处理中")' in text

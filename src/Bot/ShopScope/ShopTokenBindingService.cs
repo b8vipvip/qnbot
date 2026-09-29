@@ -1,4 +1,4 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -21,6 +21,137 @@ namespace Bot.ShopScope
         public bool Rebound { get; set; }
         public string BoundShopKey { get; set; }
         public string Error { get; set; }
+    }
+
+    internal sealed class ShopRuntimeCredentialResolution
+    {
+        public bool Success { get; set; }
+        public bool TokenChanged { get; set; }
+        public ShopContext Shop { get; set; }
+        public string ServerUrl { get; set; }
+        public string Token { get; set; }
+        public string TokenFingerprint { get; set; }
+        public string Error { get; set; }
+    }
+
+    internal static class ShopRuntimeCredentialAuthority
+    {
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+
+        public static bool ResolveForCurrentShop(
+            out ShopContext shop,
+            out string serverUrl,
+            out string token,
+            out string error)
+        {
+            shop = ShopSettingsScope.Current;
+            serverUrl = string.Empty;
+            token = string.Empty;
+            error = string.Empty;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            {
+                error = "当前请求没有可确认的 ShopKey，已阻止控制面调用";
+                return false;
+            }
+
+            var connection = new ShopControlPlaneConnectionStore(shop, Paths);
+            serverUrl = connection.GetServerUrl();
+            if (string.IsNullOrWhiteSpace(serverUrl))
+            {
+                error = "当前店铺没有可用的控制面地址";
+                return false;
+            }
+            if (!connection.TryGetToken(out token, out error) || string.IsNullOrWhiteSpace(token))
+            {
+                error = string.IsNullOrWhiteSpace(error) ? "当前店铺没有可用的客户端令牌" : error;
+                return false;
+            }
+            token = token.Trim();
+            return true;
+        }
+
+        public static async Task<ShopRuntimeCredentialResolution> RecoverUnauthorizedAsync(
+            ShopContext expectedShop,
+            string rejectedToken)
+        {
+            var result = new ShopRuntimeCredentialResolution { Shop = expectedShop };
+            if (expectedShop == null || string.IsNullOrWhiteSpace(expectedShop.ShopKey))
+            {
+                result.Error = "401恢复缺少当前 ShopKey";
+                return result;
+            }
+
+            var ambient = ShopSettingsScope.Current;
+            if (ambient == null || !string.Equals(ambient.ShopKey, expectedShop.ShopKey, StringComparison.Ordinal))
+            {
+                result.Error = "401恢复时活动 ShopKey 已变化，已阻止跨店凭据回退";
+                Log.Info("401同店令牌恢复: shopKey=" + expectedShop.ShopKey
+                    + ", rejectedFingerprint=" + Fingerprint(rejectedToken)
+                    + ", result=blocked_shop_scope_changed");
+                return result;
+            }
+
+            var connection = new ShopControlPlaneConnectionStore(expectedShop, Paths);
+            result.ServerUrl = connection.GetServerUrl();
+            string refreshed;
+            string error;
+            if (!connection.TryGetToken(out refreshed, out error) || string.IsNullOrWhiteSpace(refreshed))
+            {
+                result.Error = string.IsNullOrWhiteSpace(error) ? "同店令牌重读失败" : error;
+                Log.Info("401同店令牌恢复: shopKey=" + expectedShop.ShopKey
+                    + ", rejectedFingerprint=" + Fingerprint(rejectedToken)
+                    + ", result=token_missing");
+                return result;
+            }
+
+            refreshed = refreshed.Trim();
+            result.Token = refreshed;
+            result.TokenFingerprint = Fingerprint(refreshed);
+            result.TokenChanged = !string.Equals(
+                (rejectedToken ?? string.Empty).Trim(),
+                refreshed,
+                StringComparison.Ordinal);
+            if (result.TokenChanged)
+            {
+                result.Success = true;
+                Log.Info("401同店令牌恢复: shopKey=" + expectedShop.ShopKey
+                    + ", rejectedFingerprint=" + Fingerprint(rejectedToken)
+                    + ", refreshedFingerprint=" + result.TokenFingerprint
+                    + ", tokenChanged=true, result=retry_same_shop");
+                return result;
+            }
+
+            var claim = await ShopTokenBindingService.ClaimAsync(expectedShop, refreshed, false).ConfigureAwait(false);
+            result.Success = claim != null && claim.Success;
+            result.Error = result.Success ? string.Empty : (claim == null ? "同店绑定验证没有返回结果" : claim.Error);
+            Log.Info("401同店令牌恢复: shopKey=" + expectedShop.ShopKey
+                + ", rejectedFingerprint=" + Fingerprint(rejectedToken)
+                + ", refreshedFingerprint=" + result.TokenFingerprint
+                + ", tokenChanged=false, claimSuccess=" + result.Success
+                + ", conflict=" + (claim != null && claim.Conflict)
+                + ", result=" + (result.Success ? "retry_same_shop" : "fail_closed"));
+            return result;
+        }
+
+        private static string Fingerprint(string token)
+        {
+            token = (token ?? string.Empty).Trim();
+            if (token.Length == 0) return "none";
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            unchecked
+            {
+                foreach (var ch in token)
+                {
+                    hash ^= (byte)(ch & 0xff);
+                    hash *= prime;
+                    hash ^= (byte)(ch >> 8);
+                    hash *= prime;
+                }
+            }
+            return "token#" + hash.ToString("x16").Substring(0, 10);
+        }
     }
 
     internal static class ShopTokenBindingService

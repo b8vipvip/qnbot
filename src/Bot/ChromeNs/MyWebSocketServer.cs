@@ -215,6 +215,59 @@ namespace Bot.ChromeNs
             }
         }
 
+        private bool TryPromoteDuplicateSellerSession(string sellerNick, WebSocketSession session, string reason)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            if (session == null || string.IsNullOrWhiteSpace(session.SessionID) || sellerNick.Length == 0) return false;
+            var sessionId = session.SessionID.Trim();
+            string previousOwner = string.Empty;
+
+            lock (_sellerSessionSync)
+            {
+                if (!_connectedSessions.ContainsKey(sessionId)) return false;
+                string duplicateSeller;
+                string mappedSeller;
+                var knownDuplicate = _duplicateSellerSessions.TryGetValue(sessionId, out duplicateSeller)
+                    && string.Equals(duplicateSeller, sellerNick, StringComparison.Ordinal);
+                var knownSellerSession = _sessionSellers.TryGetValue(sessionId, out mappedSeller)
+                    && string.Equals(mappedSeller, sellerNick, StringComparison.Ordinal);
+                if (!knownDuplicate && !knownSellerSession) return false;
+
+                _sellerSessions.TryGetValue(sellerNick, out previousOwner);
+                if (string.Equals(previousOwner, sessionId, StringComparison.Ordinal)) return true;
+
+                if (!string.IsNullOrWhiteSpace(previousOwner) && _connectedSessions.ContainsKey(previousOwner))
+                {
+                    _duplicateSellerSessions[previousOwner] = sellerNick;
+                    _sessionSellers[previousOwner] = sellerNick;
+                }
+
+                _sellerSessions[sellerNick] = sessionId;
+                _sessionSellers[sessionId] = sellerNick;
+                string ignored;
+                _duplicateSellerSessions.TryRemove(sessionId, out ignored);
+                _standbyLoggedSessions.TryRemove(sessionId, out _);
+                _sessionLastActivityUtc[sessionId] = DateTime.UtcNow;
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+            }
+
+            try
+            {
+                var qn = QN.FindExistingBySellerNick(sellerNick);
+                if (qn != null) qn.CDP = GetOrCreateClient(session);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("前台CDP权威切换后绑定客服实例失败: " + ex.Message);
+            }
+
+            Log.Info("千牛前台会话切换已提升standby为权威CDP: sellerRef=" + DiagnosticRef("seller", sellerNick)
+                + ", previousSessionRef=" + DiagnosticRef("session", previousOwner)
+                + ", activeSessionRef=" + DiagnosticRef("session", sessionId)
+                + ", reason=" + (reason ?? "foreground"));
+            return true;
+        }
+
         internal bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
@@ -516,7 +569,40 @@ namespace Bot.ChromeNs
                                 // commands; create only the lightweight client, without seller initialization.
                                 GetOrCreateClient(session);
                             }
-                            else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs" || wMsg.Type == "onChatDlgActive")
+                            else if (wMsg.Type == "onChatDlgActive")
+                            {
+                                string duplicateSeller;
+                                if (_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                                {
+                                    if (TryPromoteDuplicateSellerSession(duplicateSeller, session, "onChatDlgActive"))
+                                    {
+                                        var activeSeller = duplicateSeller;
+                                        var activeBuyer = string.Empty;
+                                        try
+                                        {
+                                            var activePayload = JObject.Parse(wMsg.Response ?? "{}");
+                                            var payloadSeller = ReadJsonString(activePayload, "loginNick");
+                                            if (!string.IsNullOrWhiteSpace(payloadSeller)
+                                                && !string.Equals(payloadSeller, activeSeller, StringComparison.Ordinal))
+                                            {
+                                                Log.Info("前台CDP权威切换忽略不一致的payload sellerRef="
+                                                    + DiagnosticRef("seller", payloadSeller)
+                                                    + ", expectedSellerRef=" + DiagnosticRef("seller", activeSeller));
+                                            }
+                                            activeBuyer = ReadJsonString(activePayload, "conversationNick");
+                                            if (string.IsNullOrWhiteSpace(activeBuyer))
+                                                activeBuyer = ReadJsonString(activePayload, "buyerNick");
+                                        }
+                                        catch { }
+                                        Task.Run(() => TryBindStatusConversation(session, activeSeller, activeBuyer));
+                                    }
+                                }
+                                else
+                                {
+                                    Task.Run(() => TryInitSession(session, "event:onChatDlgActive"));
+                                }
+                            }
+                            else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs")
                             {
                                 string duplicateSeller;
                                 if (!_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))

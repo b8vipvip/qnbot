@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using BotLib;
 
 namespace Bot.ChromeNs
 {
@@ -31,6 +32,7 @@ namespace Bot.ChromeNs
         public string FulfillmentTypeDisplay { get; set; }
         public string OrderEventType { get; set; }
         public DateTime EvidenceTime { get; set; }
+        public string SelectionReason { get; set; }
 
         public CommerceContextSnapshot()
         {
@@ -70,16 +72,126 @@ namespace Bot.ChromeNs
                 Buyer = Clean(buyer, 120)
             };
 
-            OrderSnapshot order;
-            if (OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot(seller, buyer, out order)
-                && order != null)
+            string selectionReason;
+            var order = SelectRelevantOrderSnapshot(
+                seller,
+                buyer,
+                currentQuestion,
+                turns,
+                state,
+                out selectionReason);
+            if (order != null)
             {
                 ApplyOrder(result, order);
+                result.SelectionReason = selectionReason;
+                Log.Info("Commerce订单选择: sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", seller)
+                    + ", buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", buyer)
+                    + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", order.OrderId)
+                    + ", itemRef=" + MyWebSocketServer.DiagnosticRef("item", order.ItemId)
+                    + ", skuRef=" + MyWebSocketServer.DiagnosticRef("sku", order.SkuId)
+                    + ", phase=" + result.PurchasePhase
+                    + ", tradeStatus=" + Safe(result.TradeStatus, 80)
+                    + ", eventType=" + result.OrderEventType
+                    + ", evidenceTime=" + result.EvidenceTime.ToString("o")
+                    + ", selectionReason=" + selectionReason);
                 return result;
             }
 
+            result.SelectionReason = "no_structured_order";
             ApplyConversationFallback(result, currentQuestion, turns, state);
             return result;
+        }
+
+        internal static OrderSnapshot SelectRelevantOrderSnapshot(
+            string seller,
+            string buyer,
+            string currentQuestion,
+            IList<ConversationContextTurn> turns,
+            ConversationStateSnapshot state,
+            out string selectionReason)
+        {
+            selectionReason = "none";
+            var candidates = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12);
+            if (candidates == null || candidates.Count == 0) return null;
+
+            var current = Compact(currentQuestion);
+            var recent = Compact(string.Join(" ", (turns ?? new List<ConversationContextTurn>())
+                .Where(x => x != null && !x.Withdrawn)
+                .OrderByDescending(x => x.Timestamp)
+                .Take(12)
+                .Select(x => x.Text ?? string.Empty)));
+            var currentEntity = Compact(state == null ? string.Empty : state.CurrentEntity);
+
+            OrderSnapshot selected = null;
+            var selectedScore = int.MinValue;
+            var selectedReason = "latest_confirmed_fallback";
+            DateTime selectedEvidence = DateTime.MinValue;
+
+            foreach (var candidate in candidates.Where(x => x != null))
+            {
+                var score = 0;
+                var reasons = new List<string>();
+                var orderId = Compact(candidate.OrderId);
+                var itemId = Compact(candidate.ItemId);
+                var skuId = Compact(candidate.SkuId);
+                var title = Compact(candidate.ItemTitle);
+                var skuText = Compact(candidate.SkuText);
+
+                if (ContainsSignal(current, orderId, 6)) { score += 240; reasons.Add("current_order_id"); }
+                else if (ContainsSignal(recent, orderId, 6)) { score += 150; reasons.Add("recent_order_id"); }
+
+                if (ContainsSignal(current, skuId, 3)) { score += 150; reasons.Add("current_sku_id"); }
+                else if (ContainsSignal(recent, skuId, 3)) { score += 90; reasons.Add("recent_sku_id"); }
+
+                if (ContainsSignal(current, itemId, 3)) { score += 130; reasons.Add("current_item_id"); }
+                else if (ContainsSignal(recent, itemId, 3)) { score += 75; reasons.Add("recent_item_id"); }
+
+                if (ContainsSignal(current, title, 4)) { score += 95; reasons.Add("current_title"); }
+                else if (ContainsSignal(recent, title, 4)) { score += 55; reasons.Add("recent_title"); }
+
+                if (ContainsSignal(current, skuText, 3)) { score += 85; reasons.Add("current_sku_text"); }
+                else if (ContainsSignal(recent, skuText, 3)) { score += 45; reasons.Add("recent_sku_text"); }
+
+                if (currentEntity.Length >= 3
+                    && (ContainsSignal(title, currentEntity, 3) || ContainsSignal(skuText, currentEntity, 3)
+                        || ContainsSignal(currentEntity, title, 4) || ContainsSignal(currentEntity, skuText, 3)))
+                {
+                    score += 100;
+                    reasons.Add("current_entity");
+                }
+
+                var statusText = Compact((candidate.TradeStatus ?? string.Empty) + " " + (candidate.EventText ?? string.Empty));
+                var asksAfterSale = Regex.IsMatch(current, "退款|退货|售后|关闭|取消|refund|closed");
+                var isAfterSale = candidate.EventType == OrderEventType.RefundRequested
+                    || candidate.EventType == OrderEventType.Closed
+                    || Regex.IsMatch(statusText, "退款|退货|关闭|取消|refund|closed");
+                if (asksAfterSale && isAfterSale)
+                {
+                    score += 70;
+                    reasons.Add("after_sale_intent");
+                }
+
+                var evidence = candidate.EventTime == DateTime.MinValue ? candidate.DetectedAt : candidate.EventTime;
+                if (selected == null || score > selectedScore || (score == selectedScore && evidence > selectedEvidence))
+                {
+                    selected = candidate;
+                    selectedScore = score;
+                    selectedEvidence = evidence;
+                    selectedReason = reasons.Count == 0
+                        ? "latest_confirmed_fallback"
+                        : string.Join("+", reasons.Distinct(StringComparer.OrdinalIgnoreCase));
+                }
+            }
+
+            selectionReason = selectedReason + ";score=" + Math.Max(0, selectedScore);
+            return selected;
+        }
+
+        private static bool ContainsSignal(string haystack, string needle, int minLength)
+        {
+            if (string.IsNullOrWhiteSpace(haystack) || string.IsNullOrWhiteSpace(needle)) return false;
+            if (needle.Length < minLength) return false;
+            return haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static void EnrichState(

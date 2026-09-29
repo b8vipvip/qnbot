@@ -1,4 +1,5 @@
 ﻿using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
@@ -118,6 +119,104 @@ namespace Bot.ChromeNs
             return msg;
         }
 
+        private sealed class RuntimeEndpointAuthority
+        {
+            public bool IsControlPlane;
+            public ShopContext Shop;
+            public string Url;
+            public string Token;
+        }
+
+        private static bool IsControlPlaneEndpoint(AiEndpointConfig endpoint)
+        {
+            return endpoint != null
+                && (string.Equals(endpoint.Type, "服务端控制面", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(endpoint.Id, "control-plane-gateway", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool TryResolveRuntimeEndpointAuthority(
+            AiEndpointConfig endpoint,
+            out RuntimeEndpointAuthority authority,
+            out string error)
+        {
+            authority = null;
+            error = string.Empty;
+            if (endpoint == null)
+            {
+                error = "AI接口配置为空";
+                return false;
+            }
+
+            if (!IsControlPlaneEndpoint(endpoint))
+            {
+                authority = new RuntimeEndpointAuthority
+                {
+                    IsControlPlane = false,
+                    Url = NormalizeBaseUrl(endpoint.BaseUrl),
+                    Token = (endpoint.ApiKey ?? string.Empty).Trim()
+                };
+                return !string.IsNullOrWhiteSpace(authority.Token);
+            }
+
+            ShopContext shop;
+            string serverUrl;
+            string token;
+            if (!ShopRuntimeCredentialAuthority.ResolveForCurrentShop(
+                out shop,
+                out serverUrl,
+                out token,
+                out error))
+            {
+                return false;
+            }
+            authority = new RuntimeEndpointAuthority
+            {
+                IsControlPlane = true,
+                Shop = shop,
+                Url = NormalizeBaseUrl(serverUrl.TrimEnd('/') + "/v1"),
+                Token = token
+            };
+            return true;
+        }
+
+        private static bool TryRecoverControlPlaneUnauthorized(
+            RuntimeEndpointAuthority rejected,
+            out RuntimeEndpointAuthority recovered,
+            out string error)
+        {
+            recovered = null;
+            error = string.Empty;
+            if (rejected == null || !rejected.IsControlPlane || rejected.Shop == null)
+            {
+                error = "当前接口不是可恢复的同店控制面调用";
+                return false;
+            }
+            try
+            {
+                var result = ShopRuntimeCredentialAuthority
+                    .RecoverUnauthorizedAsync(rejected.Shop, rejected.Token)
+                    .GetAwaiter().GetResult();
+                if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Token))
+                {
+                    error = result == null ? "同店401恢复没有返回结果" : result.Error;
+                    return false;
+                }
+                recovered = new RuntimeEndpointAuthority
+                {
+                    IsControlPlane = true,
+                    Shop = rejected.Shop,
+                    Url = NormalizeBaseUrl(result.ServerUrl.TrimEnd('/') + "/v1"),
+                    Token = result.Token
+                };
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = SafeError(ex.Message);
+                return false;
+            }
+        }
+
         private static async Task<string> ReadResponseBodyWithCancellationAsync(
             HttpContent content,
             CancellationToken cancellationToken)
@@ -205,7 +304,19 @@ namespace Bot.ChromeNs
         private static ApiCallResult CallChatCompletions(AiEndpointConfig endpoint, JArray messages)
         {
             var sw = Stopwatch.StartNew();
-            var url = NormalizeBaseUrl(endpoint.BaseUrl);
+            RuntimeEndpointAuthority authority;
+            string authorityError;
+            if (!TryResolveRuntimeEndpointAuthority(endpoint, out authority, out authorityError))
+            {
+                sw.Stop();
+                return new ApiCallResult
+                {
+                    Success = false,
+                    LatencyMs = sw.ElapsedMilliseconds,
+                    Error = "运行时凭据解析失败：" + SafeError(authorityError)
+                };
+            }
+
             var payload = new JObject
             {
                 ["model"] = endpoint.TextModel,
@@ -218,55 +329,82 @@ namespace Bot.ChromeNs
             try
             {
                 var timeoutSeconds = endpoint.TimeoutSeconds <= 0 ? 35 : endpoint.TimeoutSeconds;
-                using (var request = new HttpRequestMessage(HttpMethod.Post, url))
-                using (var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
+                for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
-                    request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
-                    using (var response = SharedHttp.SendAsync(
-                        request,
-                        HttpCompletionOption.ResponseHeadersRead,
-                        cancellation.Token).GetAwaiter().GetResult())
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, authority.Url))
+                    using (var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
                     {
-                        var body = ReadResponseBodyWithCancellationAsync(
-                            response.Content, cancellation.Token).GetAwaiter().GetResult();
-                        sw.Stop();
-                        if (!response.IsSuccessStatusCode)
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authority.Token);
+                        if (authority.IsControlPlane && authority.Shop != null)
+                            request.Headers.TryAddWithoutValidation("X-Shop-Key", authority.Shop.ShopKey);
+                        request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
+                        using (var response = SharedHttp.SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            cancellation.Token).GetAwaiter().GetResult())
                         {
-                            var failed = new ApiCallResult
+                            var body = ReadResponseBodyWithCancellationAsync(
+                                response.Content, cancellation.Token).GetAwaiter().GetResult();
+                            if (response.StatusCode == HttpStatusCode.Unauthorized
+                                && authority.IsControlPlane
+                                && attempt == 0)
                             {
-                                Success = false,
-                                LatencyMs = sw.ElapsedMilliseconds,
-                                Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body)
-                            };
-                            failed.InputTokens = EstimateTokens(payloadText);
-                            failed.TotalTokens = failed.InputTokens;
-                            return failed;
-                        }
+                                RuntimeEndpointAuthority recovered;
+                                string recoveryError;
+                                if (TryRecoverControlPlaneUnauthorized(authority, out recovered, out recoveryError))
+                                {
+                                    authority = recovered;
+                                    continue;
+                                }
+                                sw.Stop();
+                                return new ApiCallResult
+                                {
+                                    Success = false,
+                                    LatencyMs = sw.ElapsedMilliseconds,
+                                    Error = "HTTP 401 Unauthorized，同店凭据恢复失败并已停止重试：" + SafeError(recoveryError),
+                                    InputTokens = EstimateTokens(payloadText),
+                                    TotalTokens = EstimateTokens(payloadText)
+                                };
+                            }
 
-                        var answer = CleanAnswer(ExtractAnswer(body));
-                        if (string.IsNullOrWhiteSpace(answer))
-                        {
-                            var empty = new ApiCallResult
+                            sw.Stop();
+                            if (!response.IsSuccessStatusCode)
                             {
-                                Success = false,
-                                LatencyMs = sw.ElapsedMilliseconds,
-                                Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body)
-                            };
-                            empty.InputTokens = EstimateTokens(payloadText);
-                            empty.TotalTokens = empty.InputTokens;
-                            return empty;
-                        }
+                                var failed = new ApiCallResult
+                                {
+                                    Success = false,
+                                    LatencyMs = sw.ElapsedMilliseconds,
+                                    Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body)
+                                };
+                                failed.InputTokens = EstimateTokens(payloadText);
+                                failed.TotalTokens = failed.InputTokens;
+                                return failed;
+                            }
 
-                        var ok = new ApiCallResult
-                        {
-                            Success = true,
-                            Answer = answer,
-                            Raw = body,
-                            LatencyMs = sw.ElapsedMilliseconds
-                        };
-                        FillUsage(ok, payloadText, answer, body);
-                        return ok;
+                            var answer = CleanAnswer(ExtractAnswer(body));
+                            if (string.IsNullOrWhiteSpace(answer))
+                            {
+                                var empty = new ApiCallResult
+                                {
+                                    Success = false,
+                                    LatencyMs = sw.ElapsedMilliseconds,
+                                    Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body)
+                                };
+                                empty.InputTokens = EstimateTokens(payloadText);
+                                empty.TotalTokens = empty.InputTokens;
+                                return empty;
+                            }
+
+                            var ok = new ApiCallResult
+                            {
+                                Success = true,
+                                Answer = answer,
+                                Raw = body,
+                                LatencyMs = sw.ElapsedMilliseconds
+                            };
+                            FillUsage(ok, payloadText, answer, body);
+                            return ok;
+                        }
                     }
                 }
             }
@@ -282,6 +420,16 @@ namespace Bot.ChromeNs
                     TotalTokens = EstimateTokens(payloadText)
                 };
             }
+
+            sw.Stop();
+            return new ApiCallResult
+            {
+                Success = false,
+                LatencyMs = sw.ElapsedMilliseconds,
+                Error = "控制面401恢复重试未得到终态结果",
+                InputTokens = EstimateTokens(payloadText),
+                TotalTokens = EstimateTokens(payloadText)
+            };
         }
 
         public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature)
@@ -342,7 +490,19 @@ namespace Bot.ChromeNs
             bool chatProtocolOnly)
         {
             var sw = Stopwatch.StartNew();
-            var url = NormalizeBaseUrl(endpoint.BaseUrl);
+            RuntimeEndpointAuthority authority;
+            string authorityError;
+            if (!TryResolveRuntimeEndpointAuthority(endpoint, out authority, out authorityError))
+            {
+                sw.Stop();
+                return new StructuredChatResult
+                {
+                    Success = false,
+                    LatencyMs = sw.ElapsedMilliseconds,
+                    Error = "运行时凭据解析失败：" + SafeError(authorityError)
+                };
+            }
+
             var payload = new JObject
             {
                 ["model"] = endpoint.TextModel,
@@ -353,21 +513,24 @@ namespace Bot.ChromeNs
             var payloadText = payload.ToString(Newtonsoft.Json.Formatting.None);
             try
             {
-                using (var http = new HttpClient())
+                var effectiveTimeout = timeoutSeconds > 0
+                    ? timeoutSeconds
+                    : (endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
+                for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    var effectiveTimeout = timeoutSeconds > 0 ? timeoutSeconds : (endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
-                    http.Timeout = Timeout.InfiniteTimeSpan;
-                    http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
-                    http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
+                    using (var http = new HttpClient())
                     using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                    using (var request = new HttpRequestMessage(HttpMethod.Post, url))
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, authority.Url))
                     {
+                        http.Timeout = Timeout.InfiniteTimeSpan;
+                        http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+                        http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
                         deadline.CancelAfter(TimeSpan.FromSeconds(effectiveTimeout));
-                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authority.Token);
+                        if (authority.IsControlPlane && authority.Shop != null)
+                            request.Headers.TryAddWithoutValidation("X-Shop-Key", authority.Shop.ShopKey);
                         if (chatProtocolOnly)
-                        {
                             request.Headers.TryAddWithoutValidation("X-QN-Allowed-Protocols", "chat");
-                        }
                         request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
                         using (var response = http.SendAsync(
                             request,
@@ -376,6 +539,29 @@ namespace Bot.ChromeNs
                         {
                             var body = ReadResponseBodyWithCancellationAsync(
                                 response.Content, deadline.Token).GetAwaiter().GetResult();
+                            if (response.StatusCode == HttpStatusCode.Unauthorized
+                                && authority.IsControlPlane
+                                && attempt == 0)
+                            {
+                                RuntimeEndpointAuthority recovered;
+                                string recoveryError;
+                                if (TryRecoverControlPlaneUnauthorized(authority, out recovered, out recoveryError))
+                                {
+                                    authority = recovered;
+                                    continue;
+                                }
+                                sw.Stop();
+                                return new StructuredChatResult
+                                {
+                                    Success = false,
+                                    LatencyMs = sw.ElapsedMilliseconds,
+                                    Error = "HTTP 401 Unauthorized，同店凭据恢复失败并已停止重试：" + SafeError(recoveryError),
+                                    InputTokens = EstimateTokens(payloadText),
+                                    TotalTokens = EstimateTokens(payloadText),
+                                    Raw = body
+                                };
+                            }
+
                             sw.Stop();
                             if (!response.IsSuccessStatusCode)
                             {
@@ -403,6 +589,9 @@ namespace Bot.ChromeNs
                 sw.Stop();
                 return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = SafeError(ex.Message), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText) };
             }
+
+            sw.Stop();
+            return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "控制面401恢复重试未得到终态结果", InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText) };
         }
 
         public static string TestConnection(string baseUrl, string apiKey, string model, string prompt)
