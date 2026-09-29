@@ -144,15 +144,39 @@ namespace Bot.ChromeNs
                 sb.Append("商品类目：").Append(Safe(context.ProductCategory, 120)).Append("\n");
             if (!string.Equals(context.FulfillmentType, "unknown", StringComparison.OrdinalIgnoreCase))
                 sb.Append("履约类型：").Append(context.FulfillmentTypeDisplay).Append("\n");
+            sb.Append("场景键：").Append(BuildPolicyScopeToken(context)).Append("\n");
             sb.Append("同一句买家问题在不同购买阶段、订单状态、SKU或履约类型下可能有不同答案；必须先匹配当前场景，再使用知识。")
                 .Append("订单级临时事实只能用于当前会话，不能当作跨买家通用规则。\n");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// KnowledgePolicyProfileService historically matches condition rows with OR semantics.
+        /// Commerce scope therefore uses one atomic composite token rather than several independent
+        /// conditions; a paid/SKU-specific correction cannot accidentally match only one dimension.
+        /// The token deliberately excludes order id and buyer id so it can be reused across buyers.
+        /// </summary>
+        public static string BuildPolicyScopeToken(CommerceContextSnapshot context)
+        {
+            if (context == null || !context.IsSpecificScenario) return string.Empty;
+            var phase = ScopePart(context.PurchasePhase, "unknown");
+            var fulfillment = ScopePart(context.FulfillmentType, "unknown");
+            var item = ScopePart(context.ItemId, "any");
+            var sku = ScopePart(context.SkuId, "any");
+            var category = ScopePart(context.ProductCategory, "any");
+            return "commerce_scope[phase=" + phase
+                + "|fulfillment=" + fulfillment
+                + "|item=" + item
+                + "|sku=" + sku
+                + "|category=" + category + "]";
         }
 
         public static List<string> BuildScopeTerms(CommerceContextSnapshot context)
         {
             var result = new List<string>();
             if (context == null) return result;
+            var policyScope = BuildPolicyScopeToken(context);
+            if (!string.IsNullOrWhiteSpace(policyScope)) result.Add(policyScope);
             if (!string.IsNullOrWhiteSpace(context.PurchasePhaseDisplay))
                 result.Add("订单阶段：" + context.PurchasePhaseDisplay);
             if (!string.Equals(context.FulfillmentType, "unknown", StringComparison.OrdinalIgnoreCase)
@@ -167,6 +191,8 @@ namespace Bot.ChromeNs
         private static IEnumerable<string> BuildFacts(CommerceContextSnapshot context)
         {
             if (context == null) yield break;
+            var policyScope = BuildPolicyScopeToken(context);
+            if (!string.IsNullOrWhiteSpace(policyScope)) yield return policyScope;
             yield return "订单阶段：" + context.PurchasePhaseDisplay;
             if (context.HasStructuredOrder) yield return "已取得结构化订单证据";
             if (!string.IsNullOrWhiteSpace(context.TradeStatus)) yield return "订单状态：" + context.TradeStatus;
@@ -288,6 +314,13 @@ namespace Bot.ChromeNs
             target.FulfillmentTypeDisplay = display;
         }
 
+        private static string ScopePart(string value, string fallback)
+        {
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (value.Length == 0) value = fallback;
+            return Regex.Replace(value, @"[^a-z0-9\u4e00-\u9fff]+", "_").Trim('_');
+        }
+
         private static string Compact(string value)
         {
             return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s，。！？、；：,.!?:;\-—_()（）\[\]【】]+", string.Empty);
@@ -302,8 +335,7 @@ namespace Bot.ChromeNs
 
         private static string Safe(string value, int max)
         {
-            var cleaned = Clean(value, max);
-            return cleaned.Length <= max ? cleaned : cleaned.Substring(0, max) + "...";
+            return Clean(value, max);
         }
     }
 }
