@@ -12,7 +12,7 @@ on:
         description: Merge commit SHA
         required: true
       release_required:
-        description: Whether Release must succeed
+        description: Whether the product release workflow must succeed
         required: true
         default: 'false'
 permissions:
@@ -45,18 +45,87 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+
+          latest_field() {
+            local json="$1"
+            local name="$2"
+            local field="$3"
+            jq -r --arg name "$name" --arg field "$field" \
+              '[.workflow_runs[] | select(.name == $name)] | sort_by(.created_at) | reverse | .[0][$field] // empty' \
+              <<<"$json"
+          }
+
           deadline=$((SECONDS + 1800))
           while (( SECONDS < deadline )); do
             runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
-            ci_status="$(jq -r '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].status // "missing"' <<<"$runs")"
-            ci_conclusion="$(jq -r '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].conclusion // ""' <<<"$runs")"
+
+            legacy_ci_status="$(latest_field "$runs" "CI" "status")"
+            legacy_ci_conclusion="$(latest_field "$runs" "CI" "conclusion")"
+            legacy_ci_run_id="$(latest_field "$runs" "CI" "id")"
+
+            windows_status="$(latest_field "$runs" "Windows x64 release build" "status")"
+            windows_conclusion="$(latest_field "$runs" "Windows x64 release build" "conclusion")"
+            windows_run_id="$(latest_field "$runs" "Windows x64 release build" "id")"
+            api_status="$(latest_field "$runs" "API control plane CI" "status")"
+            api_conclusion="$(latest_field "$runs" "API control plane CI" "conclusion")"
+            api_run_id="$(latest_field "$runs" "API control plane CI" "id")"
+
+            ci_status="missing"
+            ci_conclusion=""
+            ci_run_id=""
+            secondary_ci_run_id=""
+            ci_detail=""
+            if [[ -n "$legacy_ci_status" ]]; then
+              ci_status="$legacy_ci_status"
+              ci_conclusion="$legacy_ci_conclusion"
+              ci_run_id="$legacy_ci_run_id"
+              ci_detail="CI=$legacy_ci_status/$legacy_ci_conclusion"
+            else
+              ci_detail="Windows=$windows_status/$windows_conclusion API=$api_status/$api_conclusion"
+              if [[ "$windows_status" == "completed" && "$windows_conclusion" != "success" ]]; then
+                echo "::error::Windows x64 release build finished with $windows_conclusion"
+                exit 1
+              fi
+              if [[ "$api_status" == "completed" && "$api_conclusion" != "success" ]]; then
+                echo "::error::API control plane CI finished with $api_conclusion"
+                exit 1
+              fi
+              if [[ "$windows_status" == "completed" && "$windows_conclusion" == "success" \
+                    && "$api_status" == "completed" && "$api_conclusion" == "success" ]]; then
+                ci_status="completed"
+                ci_conclusion="success"
+                ci_run_id="$windows_run_id"
+                secondary_ci_run_id="$api_run_id"
+              elif [[ -n "$windows_status" || -n "$api_status" ]]; then
+                ci_status="in_progress"
+              fi
+            fi
+
             release_status="completed"
             release_conclusion="success"
+            release_run_id=""
+            release_detail="not-required"
             if [[ "$RELEASE_REQUIRED" == "true" ]]; then
-              release_status="$(jq -r '[.workflow_runs[] | select(.name == "Release")] | sort_by(.created_at) | reverse | .[0].status // "missing"' <<<"$runs")"
-              release_conclusion="$(jq -r '[.workflow_runs[] | select(.name == "Release")] | sort_by(.created_at) | reverse | .[0].conclusion // ""' <<<"$runs")"
+              legacy_release_status="$(latest_field "$runs" "Release" "status")"
+              legacy_release_conclusion="$(latest_field "$runs" "Release" "conclusion")"
+              legacy_release_run_id="$(latest_field "$runs" "Release" "id")"
+              bot_release_status="$(latest_field "$runs" "Publish Bot auto-update release" "status")"
+              bot_release_conclusion="$(latest_field "$runs" "Publish Bot auto-update release" "conclusion")"
+              bot_release_run_id="$(latest_field "$runs" "Publish Bot auto-update release" "id")"
+              if [[ -n "$legacy_release_status" ]]; then
+                release_status="$legacy_release_status"
+                release_conclusion="$legacy_release_conclusion"
+                release_run_id="$legacy_release_run_id"
+                release_detail="Release=$legacy_release_status/$legacy_release_conclusion"
+              else
+                release_status="${bot_release_status:-missing}"
+                release_conclusion="$bot_release_conclusion"
+                release_run_id="$bot_release_run_id"
+                release_detail="PublishBot=$release_status/$release_conclusion"
+              fi
             fi
-            echo "task=$TASK_ID ci=$ci_status/$ci_conclusion release=$release_status/$release_conclusion"
+
+            echo "task=$TASK_ID ci=$ci_status/$ci_conclusion [$ci_detail] release=$release_status/$release_conclusion [$release_detail]"
             if [[ "$ci_status" == "completed" && "$ci_conclusion" != "success" ]]; then
               echo "::error::Post-merge CI finished with $ci_conclusion"
               exit 1
@@ -65,13 +134,10 @@ jobs:
               echo "::error::Release finished with $release_conclusion"
               exit 1
             fi
-            if [[ "$ci_status" == "completed" && "$ci_conclusion" == "success" && "$release_status" == "completed" && "$release_conclusion" == "success" ]]; then
-              ci_run_id="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs")"
-              release_run_id=""
-              if [[ "$RELEASE_REQUIRED" == "true" ]]; then
-                release_run_id="$(jq -r '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$runs")"
-              fi
+            if [[ "$ci_status" == "completed" && "$ci_conclusion" == "success" \
+                  && "$release_status" == "completed" && "$release_conclusion" == "success" ]]; then
               echo "main-ci-run-id=$ci_run_id" >> "$GITHUB_OUTPUT"
+              echo "secondary-ci-run-id=$secondary_ci_run_id" >> "$GITHUB_OUTPUT"
               echo "release-run-id=$release_run_id" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -89,6 +155,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           MERGE_SHA: ${{ inputs.merge_sha }}
           MAIN_CI_RUN_ID: ${{ steps.gates.outputs.main-ci-run-id }}
+          SECONDARY_CI_RUN_ID: ${{ steps.gates.outputs.secondary-ci-run-id }}
           RELEASE_RUN_ID: ${{ steps.gates.outputs.release-run-id }}
           RELEASE_REQUIRED: ${{ inputs.release_required }}
           RUN_ID: ${{ github.run_id }}
@@ -105,7 +172,17 @@ jobs:
           [[ "$merged" == "true" ]] || { echo "::error::PR is no longer recorded as merged"; exit 1; }
           [[ "$actual_merge_sha" == "$MERGE_SHA" ]] || { echo "::error::Merge SHA mismatch during terminal capture"; exit 1; }
 
-          pr_ci_run_id="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&status=success&per_page=50" --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+          pr_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&status=success&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
+          pr_ci_run_id="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$pr_runs")"
+          if [[ -z "$pr_ci_run_id" ]]; then
+            pr_windows_run_id="$(jq -r '[.workflow_runs[] | select(.name == "Windows x64 release build" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$pr_runs")"
+            pr_api_run_id="$(jq -r '[.workflow_runs[] | select(.name == "API control plane CI" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$pr_runs")"
+            if [[ -n "$pr_windows_run_id" && -n "$pr_api_run_id" ]]; then
+              pr_ci_run_id="$pr_windows_run_id"
+            fi
+          fi
+          [[ -n "$pr_ci_run_id" ]] || { echo "::error::No successful PR CI evidence found for $pr_head_sha"; exit 1; }
+
           previous_artifact_id="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=10" --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
           if [[ -n "$previous_artifact_id" ]]; then
             mkdir -p ".gptauto/logs/$TASK_ID"
@@ -115,7 +192,16 @@ jobs:
 
           release_conclusion=""
           [[ "$RELEASE_REQUIRED" == "true" ]] && release_conclusion="success"
-          PYTHONPATH=.github python -m gptauto.observer capture             --event "reconcile" --repo "$REPOSITORY" --default-branch "$DEFAULT_BRANCH"             --branch "$DEFAULT_BRANCH" --head-sha "$MERGE_SHA" --pr-number "$PR_NUMBER"             --pr-title "$pr_title" --pr-body "$pr_body" --pr-state "closed" --pr-merged "true"             --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR"             --pr-ci-conclusion "success" --pr-ci-run-id "$pr_ci_run_id"             --main-ci-conclusion "success" --main-ci-run-id "$MAIN_CI_RUN_ID"             --release-conclusion "$release_conclusion" --release-run-id "$RELEASE_RUN_ID"             --current-pr-head-sha "$pr_head_sha" --release-required-override "$RELEASE_REQUIRED"             --provenance "reconciler" > terminal-result.json
+          PYTHONPATH=.github python -m gptauto.observer capture \
+            --event "reconcile" --repo "$REPOSITORY" --default-branch "$DEFAULT_BRANCH" \
+            --branch "$DEFAULT_BRANCH" --head-sha "$MERGE_SHA" --pr-number "$PR_NUMBER" \
+            --pr-title "$pr_title" --pr-body "$pr_body" --pr-state "closed" --pr-merged "true" \
+            --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR" \
+            --pr-ci-conclusion "success" --pr-ci-run-id "$pr_ci_run_id" \
+            --main-ci-conclusion "success" --main-ci-run-id "$MAIN_CI_RUN_ID" \
+            --release-conclusion "$release_conclusion" --release-run-id "$RELEASE_RUN_ID" \
+            --current-pr-head-sha "$pr_head_sha" --release-required-override "$RELEASE_REQUIRED" \
+            --provenance "reconciler" > terminal-result.json
           cat terminal-result.json
           captured_task_id="$(python -c 'import json;print(json.load(open("terminal-result.json"))["task_id"])')"
           captured_state="$(python -c 'import json;print(json.load(open("terminal-result.json"))["state"])')"
@@ -160,6 +246,7 @@ jobs:
           TASK_ID: ${{ inputs.task_id }}
           MERGE_SHA: ${{ inputs.merge_sha }}
           MAIN_CI_RUN_ID: ${{ steps.gates.outputs.main-ci-run-id }}
+          SECONDARY_CI_RUN_ID: ${{ steps.gates.outputs.secondary-ci-run-id }}
           RELEASE_RUN_ID: ${{ steps.gates.outputs.release-run-id }}
           RELEASE_REQUIRED: ${{ inputs.release_required }}
         shell: bash
@@ -170,9 +257,11 @@ jobs:
             echo "- State: DONE"
             echo "- Merge: $MERGE_SHA"
             echo "- Main CI run: $MAIN_CI_RUN_ID"
+            echo "- Secondary CI run: ${SECONDARY_CI_RUN_ID:-not-applicable}"
             echo "- Release required: $RELEASE_REQUIRED"
             echo "- Release run: ${RELEASE_RUN_ID:-not-required}"
             echo "- Terminal evidence provenance: reconciler"
+            echo "- qnbot accepts the legacy CI/Release workflow names or its native Windows/API/Publish workflow names."
             echo "- Terminal release intent is pinned to the Executor/Reconcile lease input, not recomputed from mutable PR text."
             echo "- Terminal evidence was captured and uploaded by Reconcile itself; no follow-up Observer run is required."
           } >> "$GITHUB_STEP_SUMMARY"
