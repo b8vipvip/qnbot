@@ -1,4 +1,4 @@
-﻿using Bot.Knowledge;
+using Bot.Knowledge;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -197,6 +197,25 @@ namespace Bot.ChromeNs
             }
             if (!ReplyModeService.IsLocalFirst(burst.SellerNick) || !KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
             {
+                await inner(lease);
+                return;
+            }
+
+            // V2 is only a fast terminal path when the shared commerce authority allows local
+            // termination. The same authority is consumed by Smart Reply, so verified orders and
+            // strongly post-order conversations cannot be decided differently by parallel layers.
+            var commerceAuthority = CommerceReplyAuthorityService.Evaluate(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion);
+            if (!commerceAuthority.AllowLocalTerminalReply)
+            {
+                var commerce = commerceAuthority.CommerceContext;
+                Log.Info("Knowledge Engine V2已让出终态直答权，交给Commerce Smart Reply: buyer="
+                    + burst.BuyerNick
+                    + ", phase=" + (commerce == null ? string.Empty : commerce.PurchasePhase)
+                    + ", structured=" + (commerce != null && commerce.HasStructuredOrder)
+                    + ", reason=" + commerceAuthority.Reason);
                 await inner(lease);
                 return;
             }

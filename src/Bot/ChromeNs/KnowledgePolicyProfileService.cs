@@ -233,6 +233,31 @@ namespace Bot.ChromeNs
             string recentContext)
         {
             var profile = GetProfile(entry);
+
+            // A commerce_scope token is not an ordinary soft ApplyWhen hint. It is a scenario
+            // identity boundary created from human correction evidence. Enforce it here, before the
+            // global policy toggle and before generic condition splitting, so every retrieval path
+            // (lexical, semantic embedding, direct/contextual) gets the same terminal decision.
+            var requiredCommerceScope = ReadAtomicCommerceScope(profile.RequiredContext);
+            if (!string.IsNullOrWhiteSpace(requiredCommerceScope))
+            {
+                var currentCommerceScope = CommerceContextService.BuildPolicyScopeToken(
+                    state == null ? null : state.CommerceContext);
+                if (!string.Equals(requiredCommerceScope, currentCommerceScope, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new KnowledgePolicyEvaluation
+                    {
+                        Profile = profile,
+                        Excluded = true,
+                        ForceContextual = true,
+                        ConstraintOnly = false,
+                        AllowDirect = false,
+                        ScoreAdjustment = -1,
+                        Reason = "电商场景键不匹配，禁止跨订单阶段/履约/商品/SKU复用该答案"
+                    };
+                }
+            }
+
             if (!IsEnabled())
             {
                 return new KnowledgePolicyEvaluation
@@ -487,6 +512,15 @@ namespace Bot.ChromeNs
                     .Append(string.Join(" ", state.ConfirmedFacts ?? new List<string>()));
             }
             return Compact(sb.ToString());
+        }
+
+        private static string ReadAtomicCommerceScope(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value.StartsWith("commerce_scope[", StringComparison.OrdinalIgnoreCase)
+                && value.EndsWith("]", StringComparison.Ordinal)
+                ? value
+                : string.Empty;
         }
 
         private static bool MatchConditions(string conditions, string compactHaystack)

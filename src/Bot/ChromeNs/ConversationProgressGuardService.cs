@@ -197,7 +197,11 @@ namespace Bot.ChromeNs
 
         public static bool RequiresContextualHandling(ConversationStateSnapshot state)
         {
-            var p = state == null ? null : state.Progress;
+            if (state == null) return false;
+            var commerceAuthority = CommerceReplyAuthorityService.Evaluate(state);
+            if (commerceAuthority.RequiresContextualAgent) return true;
+
+            var p = state.Progress;
             if (p == null) return false;
             return p.CurrentInputKind == "phone_number"
                 || p.CurrentInputKind == "verification_code"

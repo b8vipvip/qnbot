@@ -83,8 +83,8 @@ namespace Bot.ChromeNs
             }
 
             var compactAnswer = Compact(answer);
-            var authoritativeEvidence = BuildAuthoritativeEvidence(knowledge);
             var state = BuildState(seller, buyer, question);
+            var authoritativeEvidence = BuildAuthoritativeEvidence(knowledge, state);
 
             if (MachinePhrases.Any(x => compactAnswer.Contains(Compact(x))))
             {
@@ -115,7 +115,7 @@ namespace Bot.ChromeNs
                 .ToList();
             if (unsupportedNumbers.Count > 0)
             {
-                result.Issues.Add("出现店铺提示词或知识中没有依据的具体数字/时效：" + string.Join("、", unsupportedNumbers));
+                result.Issues.Add("出现店铺提示词、知识或已确认订单事实中没有依据的具体数字/时效：" + string.Join("、", unsupportedNumbers));
             }
 
             var unsupportedAbsolute = AbsolutePromisePhrases
@@ -201,9 +201,30 @@ namespace Bot.ChromeNs
             return sb.ToString().Trim();
         }
 
-        private static string BuildAuthoritativeEvidence(KnowledgeBaseEntry knowledge)
+        private static string BuildAuthoritativeEvidence(
+            KnowledgeBaseEntry knowledge,
+            ConversationStateSnapshot state)
         {
-            return Compact(BuildEvidenceText(knowledge));
+            var sb = new StringBuilder(BuildEvidenceText(knowledge));
+            var commerce = state == null ? null : state.CommerceContext;
+            if (commerce != null && commerce.HasStructuredOrder)
+            {
+                // Only verified order snapshots become validator evidence. Conversation-only phase
+                // guesses remain prompt context and can never authorize a concrete order claim.
+                sb.Append("\n【已确认订单事实】\n")
+                    .Append("购买阶段：").Append(commerce.PurchasePhaseDisplay).Append("\n");
+                if (!string.IsNullOrWhiteSpace(commerce.TradeStatus))
+                    sb.Append("订单状态：").Append(Safe(commerce.TradeStatus, 160)).Append("\n");
+                if (commerce.IsPaid.HasValue)
+                    sb.Append("付款状态：").Append(commerce.IsPaid.Value ? "已付款" : "未付款").Append("\n");
+                if (!string.IsNullOrWhiteSpace(commerce.ItemTitle))
+                    sb.Append("商品：").Append(Safe(commerce.ItemTitle, 220)).Append("\n");
+                if (!string.IsNullOrWhiteSpace(commerce.SkuText))
+                    sb.Append("SKU：").Append(Safe(commerce.SkuText, 180)).Append("\n");
+                if (!string.Equals(commerce.FulfillmentType, "unknown", StringComparison.OrdinalIgnoreCase))
+                    sb.Append("履约类型：").Append(commerce.FulfillmentTypeDisplay).Append("\n");
+            }
+            return Compact(sb.ToString());
         }
 
         private static ConversationStateSnapshot BuildState(string seller, string buyer, string question)
@@ -318,7 +339,7 @@ namespace Bot.ChromeNs
             return "上一版答案未通过发送前校验，必须重新生成。问题如下："
                 + string.Join("；", issues ?? Enumerable.Empty<string>())
                 + "。只输出修正后的买家回复，不要解释校验过程，不要提AI、知识库、系统提示词或内部规则。"
-                + "严格使用店铺固定提示词和给出的知识作为事实边界；没有依据的价格、数字、时效、订单状态、退款、赔偿或售后承诺一律不要猜。"
+                + "严格使用店铺固定提示词、给出的知识和已确认订单事实作为事实边界；没有依据的价格、数字、时效、订单状态、退款、赔偿或售后承诺一律不要猜。"
                 + "直接回答买家当前问题，保持简短自然；无法确认时明确说明需要买家补充信息或转人工核查。";
         }
 

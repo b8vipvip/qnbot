@@ -136,6 +136,7 @@ namespace Bot.ChromeNs
     /// <summary>
     /// 同一订单的充值流程首次最多发送一次；无论由 Bot 还是人工客服发送都视为已经完成。
     /// 买家明确说“拍了 / 下单了 / 怎么充”等续问时，只允许额外补发一次。
+    /// 同一账本同时保留最新已确认订单事实，供CommerceContext只读消费；发送幂等状态与订单事实更新彼此独立。
     /// </summary>
     internal static class OrderGuidanceDeliveryGuard
     {
@@ -154,8 +155,10 @@ namespace Bot.ChromeNs
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller)
                 || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
-            if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return;
 
+            // Do not discard non-Created/Paid facts here. OrderPlacedAutoReplyService only sends on
+            // Created/Paid, but the commerce context must still learn a later refund/close/shipped
+            // status so an early paid snapshot cannot remain the semantic truth forever.
             lock (Sync)
             {
                 EnsureLoaded();
@@ -184,6 +187,26 @@ namespace Bot.ChromeNs
             return PositiveFollowUpRegex.IsMatch(compact);
         }
 
+        /// <summary>
+        /// Read-only projection of the latest strictly confirmed order for one seller/buyer.
+        /// This is the supported query boundary for CommerceContext; callers receive a clone and
+        /// therefore cannot mutate the order-guidance ledger or its delivery idempotency state.
+        /// </summary>
+        public static bool TryGetLatestOrderSnapshot(string seller, string buyer, out OrderSnapshot snapshot)
+        {
+            snapshot = null;
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
+            lock (Sync)
+            {
+                EnsureLoaded();
+                CleanupInternal();
+                var record = FindLatestInternal(seller, buyer);
+                if (record == null || record.Snapshot == null) return false;
+                snapshot = CloneSnapshot(record.Snapshot);
+                return snapshot != null;
+            }
+        }
+
         public static bool CanCreateFollowUp(
             string seller,
             string buyer,
@@ -207,6 +230,11 @@ namespace Bot.ChromeNs
                 if (record == null || record.Snapshot == null)
                 {
                     reason = "该买家没有经过严格确认的近期订单";
+                    return false;
+                }
+                if (IsGuidanceTerminal(record.Snapshot))
+                {
+                    reason = "该订单已经进入关闭/退款等终态，不再补发充值流程";
                     return false;
                 }
                 if (record.FollowUpDeliveredAt.HasValue)
@@ -237,6 +265,12 @@ namespace Bot.ChromeNs
                 {
                     record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime);
                     _state.Records.Add(record);
+                }
+
+                if (IsGuidanceTerminal(record.Snapshot))
+                {
+                    reason = "订单已进入关闭/退款等终态，已阻止继续发送充值流程";
+                    return true;
                 }
 
                 if (plan.IsBuyerFollowUp)
@@ -515,19 +549,45 @@ namespace Bot.ChromeNs
         private static void MergeSnapshot(OrderSnapshot target, OrderSnapshot incoming)
         {
             if (target == null || incoming == null) return;
+            if (string.IsNullOrWhiteSpace(target.Buyer)) target.Buyer = incoming.Buyer;
             if (string.IsNullOrWhiteSpace(target.ItemId)) target.ItemId = incoming.ItemId;
             if (string.IsNullOrWhiteSpace(target.ItemTitle)) target.ItemTitle = incoming.ItemTitle;
             if (string.IsNullOrWhiteSpace(target.SkuId)) target.SkuId = incoming.SkuId;
             if (string.IsNullOrWhiteSpace(target.SkuText)) target.SkuText = incoming.SkuText;
+            if (string.IsNullOrWhiteSpace(target.BuyerRemark)) target.BuyerRemark = incoming.BuyerRemark;
             if (target.Quantity <= 0) target.Quantity = incoming.Quantity;
             if (!target.TotalAmount.HasValue) target.TotalAmount = incoming.TotalAmount;
             if (!target.PaidAmount.HasValue) target.PaidAmount = incoming.PaidAmount;
-            if (string.IsNullOrWhiteSpace(target.TradeStatus)) target.TradeStatus = incoming.TradeStatus;
-            if (!target.IsPaid.HasValue) target.IsPaid = incoming.IsPaid;
             if (!target.CreatedAt.HasValue) target.CreatedAt = incoming.CreatedAt;
             if (!target.PaidAt.HasValue) target.PaidAt = incoming.PaidAt;
-            if (incoming.EventTime > target.EventTime) target.EventTime = incoming.EventTime;
-            if (incoming.EventType == OrderEventType.Paid) target.EventType = OrderEventType.Paid;
+            if (string.IsNullOrWhiteSpace(target.ProductUrl)) target.ProductUrl = incoming.ProductUrl;
+            if (string.IsNullOrWhiteSpace(target.ImageUrl)) target.ImageUrl = incoming.ImageUrl;
+            if (string.IsNullOrWhiteSpace(target.RawCardHash)) target.RawCardHash = incoming.RawCardHash;
+
+            var targetTime = target.EventTime == DateTime.MinValue ? target.DetectedAt : target.EventTime;
+            var incomingTime = incoming.EventTime == DateTime.MinValue ? incoming.DetectedAt : incoming.EventTime;
+            var targetTerminal = IsGuidanceTerminal(target);
+            var incomingTerminal = IsGuidanceTerminal(incoming);
+            var incomingMayAdvance = incomingTerminal || !targetTerminal;
+            if (incomingMayAdvance && (incomingTerminal || targetTime == DateTime.MinValue || incomingTime >= targetTime))
+            {
+                if (!string.IsNullOrWhiteSpace(incoming.TradeStatus)) target.TradeStatus = incoming.TradeStatus;
+                if (incoming.IsPaid.HasValue) target.IsPaid = incoming.IsPaid;
+                if (!string.IsNullOrWhiteSpace(incoming.EventText)) target.EventText = incoming.EventText;
+                if (!string.IsNullOrWhiteSpace(incoming.Source)) target.Source = incoming.Source;
+                target.EventType = incoming.EventType;
+                if (incomingTime != DateTime.MinValue) target.EventTime = incomingTime;
+            }
+            if (incoming.DetectedAt > target.DetectedAt) target.DetectedAt = incoming.DetectedAt;
+        }
+
+        private static bool IsGuidanceTerminal(OrderSnapshot snapshot)
+        {
+            if (snapshot == null) return false;
+            if (snapshot.EventType == OrderEventType.Closed || snapshot.EventType == OrderEventType.RefundRequested)
+                return true;
+            var status = (snapshot.TradeStatus ?? string.Empty) + " " + (snapshot.EventText ?? string.Empty);
+            return Regex.IsMatch(status, "申请退款|退款中|退货退款|仅退款|订单关闭|交易关闭|已关闭|已取消|TRADE_CLOSED|REFUND", RegexOptions.IgnoreCase);
         }
 
         private static string Hash(string value)

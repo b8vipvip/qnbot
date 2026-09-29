@@ -17,6 +17,7 @@ namespace Bot.ChromeNs
         public List<string> ConfirmedFacts { get; set; }
         public List<string> Entities { get; set; }
         public ConversationProgressSnapshot Progress { get; set; }
+        public CommerceContextSnapshot CommerceContext { get; set; }
 
         // Compatibility aliases keep policy/validator modules decoupled from the original Phase 1 naming.
         public string PendingSellerQuestion
@@ -96,6 +97,11 @@ namespace Bot.ChromeNs
 
             ConversationProgressGuardService.EnrichState(
                 state, seller, buyer, currentQuestion, ordered);
+
+            // CommerceContext is the final enrichment step. Verified order facts are stronger than
+            // regex/text inference and may upgrade the stage produced by the legacy progress guard.
+            CommerceContextService.EnrichState(
+                state, seller, buyer, currentQuestion, ordered);
             return state;
         }
 
@@ -121,6 +127,7 @@ namespace Bot.ChromeNs
                     .Append("\n");
             }
 
+            sb.Append(CommerceContextService.BuildPromptAddon(state.CommerceContext));
             sb.Append(ConversationProgressGuardService.BuildPromptAddon(state));
 
             // 详细店铺规则不再作为每次都携带的固定提示词；这里按当前会话状态本地选择Top 3。
