@@ -112,7 +112,8 @@ def test_validator_only_promotes_verified_order_context_to_authoritative_evidenc
     assert "购买阶段" in evidence
     assert "订单状态" in evidence
     assert "付款状态" in evidence
-    assert "conversation" not in evidence.lower()
+    assert "ConversationContextStore" not in evidence
+    assert "post_order_unverified" not in evidence
 
 
 def test_human_correction_preserves_old_answer_and_scopes_new_answer():
