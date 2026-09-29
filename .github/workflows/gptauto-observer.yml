@@ -24,7 +24,13 @@ on:
       - main
       - master
   workflow_run:
-    workflows: [CI, Release]
+    workflows:
+      - "CI"
+      - "Release"
+      - "Windows x64 release build"
+      - "API control plane CI"
+      - "GPTAuto Protocol Check"
+      - "Publish Bot auto-update release"
     types: [completed]
   release:
     types: [published]
@@ -37,12 +43,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   observe:
-    # A cancelled CI/Release run is replacement/no-result evidence: it cannot
-    # satisfy a gate and must not open a repair cycle. Keep the existing
-    # Completion Lease active and wait for the replacement/current-head run.
-    # Successful CI/Release runs on the default branch are reconciler-owned
-    # post-merge evidence, so do not create another Observer -> Executor cycle.
-    # Failures still wake Observer so repair evidence is never suppressed.
+    # A cancelled gate is replacement/no-result evidence: it cannot satisfy a gate and must not
+    # open a repair cycle. Successful default-branch gates are reconciler-owned post-merge evidence,
+    # while failures still wake Observer so repair evidence is never suppressed.
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'cancelled' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.head_branch != github.event.repository.default_branch)) || github.event_name == 'release' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.actor != 'github-actions[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -80,6 +83,32 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          successful_trusted_ci() {
+            local sha="$1"
+            [[ -n "$sha" ]] || return 0
+            local runs gates count bad
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
+            gates="$(jq '[.workflow_runs[] | select(.name == "CI" or .name == "Windows x64 release build" or .name == "API control plane CI" or .name == "GPTAuto Protocol Check")] | group_by(.name) | map(max_by(.created_at))' <<<"$runs")"
+            count="$(jq 'length' <<<"$gates")"
+            bad="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$gates")"
+            if [[ "$count" -gt 0 && "$bad" -eq 0 ]]; then
+              jq -r 'sort_by(.created_at) | reverse | .[0].id // empty' <<<"$gates"
+            fi
+          }
+
+          successful_trusted_release() {
+            local sha="$1"
+            [[ -n "$sha" ]] || return 0
+            local runs gates count bad
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
+            gates="$(jq '[.workflow_runs[] | select(.name == "Release" or .name == "Publish Bot auto-update release")] | group_by(.name) | map(max_by(.created_at))' <<<"$runs")"
+            count="$(jq 'length' <<<"$gates")"
+            bad="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$gates")"
+            if [[ "$count" -gt 0 && "$bad" -eq 0 ]]; then
+              jq -r 'sort_by(.created_at) | reverse | .[0].id // empty' <<<"$gates"
+            fi
+          }
+
           if [[ "$EVENT_NAME" == "release" && -n "$RELEASE_TAG" ]]; then
             git fetch --tags --force origin
             resolved="$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null || true)"
@@ -98,6 +127,7 @@ jobs:
           MAIN_CI_RUN_ID=""
           RELEASE_CONCLUSION=""
           RELEASE_RUN_ID=""
+          RELEASE_REQUIRED_OVERRIDE=""
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ -n "$RECONCILED_MAIN_CI_RUN_ID" ]]; then
               MAIN_CI_RUN_ID="$RECONCILED_MAIN_CI_RUN_ID"
@@ -117,18 +147,29 @@ jobs:
             MERGE_SHA="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
             PR_HEAD_SHA="$(jq -r '.head.sha // ""' <<<"$pr_json")"
 
+            # qnbot's Bot release workflow itself uses this exact product-file boundary. Pinning
+            # release intent to changed files prevents PR prose mentioning "Release" from inventing
+            # a release requirement for workflow/docs-only fixes.
+            pr_files="$(gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename' 2>/dev/null || true)"
+            if grep -Eq '^(src/|tools/qn_discovery_lab/)' <<<"$pr_files"; then
+              RELEASE_REQUIRED_OVERRIDE="true"
+            else
+              RELEASE_REQUIRED_OVERRIDE="false"
+            fi
+
             if [[ -n "$PR_HEAD_SHA" ]]; then
-              PR_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&status=success&per_page=50" \
-                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              PR_CI_RUN_ID="$(successful_trusted_ci "$PR_HEAD_SHA")"
               [[ -n "$PR_CI_RUN_ID" ]] && PR_CI_CONCLUSION="success"
             fi
             if [[ "$PR_MERGED" == "true" && -n "$MERGE_SHA" ]]; then
-              MAIN_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
-                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
-              [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
-              RELEASE_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
-                --jq '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
-              [[ -n "$RELEASE_RUN_ID" ]] && RELEASE_CONCLUSION="success"
+              if [[ -z "$MAIN_CI_RUN_ID" ]]; then
+                MAIN_CI_RUN_ID="$(successful_trusted_ci "$MERGE_SHA")"
+                [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
+              fi
+              if [[ -z "$RELEASE_RUN_ID" ]]; then
+                RELEASE_RUN_ID="$(successful_trusted_release "$MERGE_SHA")"
+                [[ -n "$RELEASE_RUN_ID" ]] && RELEASE_CONCLUSION="success"
+              fi
             fi
           fi
 
@@ -151,7 +192,7 @@ jobs:
             --pr-ci-conclusion "$PR_CI_CONCLUSION" --pr-ci-run-id "$PR_CI_RUN_ID" \
             --main-ci-conclusion "$MAIN_CI_CONCLUSION" --main-ci-run-id "$MAIN_CI_RUN_ID" \
             --release-conclusion "$RELEASE_CONCLUSION" --release-run-id "$RELEASE_RUN_ID" \
-            --current-pr-head-sha "$PR_HEAD_SHA" > observer-result.json
+            --current-pr-head-sha "$PR_HEAD_SHA" --release-required-override "$RELEASE_REQUIRED_OVERRIDE" > observer-result.json
           cat observer-result.json
           task_id="$(python -c 'import json;print(json.load(open("observer-result.json"))["task_id"])')"
           echo "task-id=$task_id" >> "$GITHUB_OUTPUT"
@@ -168,7 +209,8 @@ jobs:
             echo "- Task ID: \`$TASK_ID\`"
             echo "- Artifact: \`gptauto-$TASK_ID\`"
             echo "- Provenance: \`repository_observer\`"
-            echo "- PR/push/main-CI/release events are re-associated through the PR before TASK_ID generation."
-            echo "- A merged PR is VERIFY, not DONE; release/main-CI evidence is reconstructed from successful historical runs, so event order does not affect DONE."
-            echo "- DONE artifacts include completion.json: a single terminal receipt with merge, CI, release, gate, and DoD evidence."
+            echo "- qnbot native Windows/API/Protocol/Publish workflows and legacy CI/Release names are observed."
+            echo "- Historical CI evidence is path-aware: all trusted gates that actually ran for a SHA must be successful."
+            echo "- Bot release intent is derived from the same src/tools product boundary used by the release workflow, not from incidental PR prose."
+            echo "- A merged PR is VERIFY, not DONE; Reconcile owns terminal completion evidence."
           } >> "$GITHUB_STEP_SUMMARY"
