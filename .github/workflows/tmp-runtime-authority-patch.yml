@@ -1,0 +1,42 @@
+name: Temporary runtime authority source patch
+on:
+  push:
+    branches:
+      - fix/runtime-authority-20260929
+    paths:
+      - scripts/tmp_apply_runtime_authority_patch.py
+      - .github/workflows/tmp-runtime-authority-patch.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-authority-20260929
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply source patch
+        run: python scripts/tmp_apply_runtime_authority_patch.py
+      - name: Validate and commit source changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          if git diff --quiet; then
+            echo "No source changes required."
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs \
+                  src/Bot/ChromeNs/CommerceContextService.cs \
+                  src/Bot/ChromeNs/MyOpenAI.cs \
+                  src/Bot/ChromeNs/MyWebSocketServer.cs \
+                  src/Bot/ShopScope/ShopTokenBindingService.cs
+          git commit -m "fix: enforce runtime shop order and CDP authority"
+          git push origin HEAD:fix/runtime-authority-20260929
