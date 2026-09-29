@@ -184,6 +184,26 @@ namespace Bot.ChromeNs
             return PositiveFollowUpRegex.IsMatch(compact);
         }
 
+        /// <summary>
+        /// Read-only projection of the latest strictly confirmed order for one seller/buyer.
+        /// This is the supported query boundary for CommerceContext; callers receive a clone and
+        /// therefore cannot mutate the order-guidance ledger or its delivery idempotency state.
+        /// </summary>
+        public static bool TryGetLatestOrderSnapshot(string seller, string buyer, out OrderSnapshot snapshot)
+        {
+            snapshot = null;
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
+            lock (Sync)
+            {
+                EnsureLoaded();
+                CleanupInternal();
+                var record = FindLatestInternal(seller, buyer);
+                if (record == null || record.Snapshot == null) return false;
+                snapshot = CloneSnapshot(record.Snapshot);
+                return snapshot != null;
+            }
+        }
+
         public static bool CanCreateFollowUp(
             string seller,
             string buyer,
