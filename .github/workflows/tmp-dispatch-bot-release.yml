@@ -1,0 +1,36 @@
+name: Temporary dispatch verified Bot release
+on:
+  push:
+    branches:
+      - fix/runtime-authority-20260929
+    paths:
+      - .github/workflows/tmp-dispatch-bot-release.yml
+permissions:
+  actions: write
+  contents: read
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch release only for verified merged head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_MASTER_SHA: daea5dd684ca05461752a2ce0e6b28d31a3b3eab
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          master_sha="$(gh api "repos/$REPOSITORY/commits/master" --jq '.sha')"
+          [[ "$master_sha" == "$EXPECTED_MASTER_SHA" ]] || {
+            echo "::error::master moved from expected verified repair head: $master_sha"
+            exit 1
+          }
+          windows="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$EXPECTED_MASTER_SHA&per_page=100" --jq '[.workflow_runs[] | select(.name == "Windows x64 release build" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty')"
+          api="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$EXPECTED_MASTER_SHA&per_page=100" --jq '[.workflow_runs[] | select(.name == "API control plane CI" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty')"
+          [[ -n "$windows" && -n "$api" ]] || {
+            echo "::error::verified post-merge Windows/API gates are not both green"
+            exit 1
+          }
+          gh workflow run publish-bot-auto-update-release.yml --repo "$REPOSITORY" --ref master
+          echo "Dispatched formal Bot release for verified master $EXPECTED_MASTER_SHA (windows=$windows api=$api)."
