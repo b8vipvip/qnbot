@@ -225,21 +225,6 @@ namespace Bot.ChromeNs
         public static bool AllowKnowledge(KnowledgeBaseEntry entry, ConversationStateSnapshot state, string currentQuestion)
         {
             if (entry == null) return false;
-
-            // Human-corrected commerce variants carry one atomic scope token. Unlike ordinary
-            // descriptive ApplyWhen conditions this is an identity boundary: partial matching is
-            // unsafe because the same question may have opposite answers before/after payment or
-            // across SKUs. A mismatched scope never enters retrieval/prompt candidates.
-            var policy = KnowledgePolicyProfileService.GetProfile(entry);
-            var requiredCommerceScope = ReadAtomicCommerceScope(policy == null ? string.Empty : policy.RequiredContext);
-            if (!string.IsNullOrWhiteSpace(requiredCommerceScope))
-            {
-                var currentScope = CommerceContextService.BuildPolicyScopeToken(
-                    state == null ? null : state.CommerceContext);
-                if (!string.Equals(requiredCommerceScope, currentScope, StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-
             var p = state == null ? null : state.Progress;
             if (p == null) return true;
             var title = entry.Title ?? string.Empty;
@@ -311,15 +296,6 @@ namespace Bot.ChromeNs
         internal static bool RequestsScreenshot(string answer)
         {
             return R("screenshotRequest").IsMatch(answer ?? string.Empty);
-        }
-
-        private static string ReadAtomicCommerceScope(string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            return value.StartsWith("commerce_scope[", StringComparison.OrdinalIgnoreCase)
-                && value.EndsWith("]", StringComparison.Ordinal)
-                ? value
-                : string.Empty;
         }
 
         private static void ApplyStage(ConversationProgressSnapshot progress, string key)
