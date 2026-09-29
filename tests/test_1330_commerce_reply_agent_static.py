@@ -56,6 +56,23 @@ def test_order_context_query_is_read_only_clone_boundary():
     assert "MarkDelivered" not in method
 
 
+def test_post_order_smart_reply_cannot_finish_as_fixed_faq_direct_answer():
+    text = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
+    method = text[text.index("public static bool RequiresContextualHandling"):text.index("public static bool AllowKnowledge")]
+    assert "commerce.HasStructuredOrder" in method
+    assert 'commerce.PurchasePhase, "post_order_unverified"' in method
+    assert "return true;" in method
+
+
+def test_v2_direct_reply_yields_to_commerce_agent_when_verified_order_exists():
+    text = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    gate = text.index("OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot")
+    resolve = text.index("KnowledgeEngineV2Service.Resolve")
+    assert gate < resolve
+    assert "Knowledge Engine V2已让出终态直答权" in text
+    assert "await inner(lease);" in text[gate:resolve]
+
+
 def test_human_correction_preserves_old_answer_and_scopes_new_answer():
     text = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
     assert "ConversationSessionLearningService.ReportsChanged += OnReportsChanged" in text
