@@ -22,6 +22,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationStateService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationStateService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\CommerceContextService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\CommerceContextService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\CommerceKnowledgeLearningBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\CommerceKnowledgeLearningBridge.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationProgressGuardService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationProgressGuardService.cs" />
   </ItemGroup>
