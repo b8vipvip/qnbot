@@ -35,10 +35,33 @@ jobs:
         run: |
           set -euo pipefail
           reconcile='.github/workflows/gptauto-reconcile.yml'
+          observer='.github/workflows/gptauto-observer.yml'
+          executor='.github/workflows/gptauto-executor.yml'
+
           grep -Fq 'Windows x64 release build' "$reconcile"
           grep -Fq 'API control plane CI' "$reconcile"
+          grep -Fq 'GPTAuto Protocol Check' "$reconcile"
           grep -Fq 'Publish Bot auto-update release' "$reconcile"
-          grep -Fq 'secondary-ci-run-id' "$reconcile"
+          grep -Fq 'recover-active-leases' "$reconcile"
+          grep -Fq 'all-ci-run-ids' "$reconcile"
+
+          grep -Fq 'Windows x64 release build' "$observer"
+          grep -Fq 'API control plane CI' "$observer"
+          grep -Fq 'GPTAuto Protocol Check' "$observer"
+          grep -Fq 'Publish Bot auto-update release' "$observer"
+          grep -Fq 'release-required-override' "$observer"
+
+          grep -Fq 'windows-build.yml' "$executor"
+          grep -Fq 'api-control-plane-ci.yml' "$executor"
+          grep -Fq 'gptauto-check.yml' "$executor"
+          if grep -Fq 'gh workflow run CI ' "$executor"; then
+            echo 'Executor must not dispatch a nonexistent generic CI workflow in qnbot.' >&2
+            exit 1
+          fi
+          if grep -Fq 'gh workflow run Release ' "$executor"; then
+            echo 'Executor must not dispatch a nonexistent generic Release workflow in qnbot.' >&2
+            exit 1
+          fi
       - name: Test embedded GPTAuto
         run: PYTHONPATH=.github python -m unittest discover -s .github/tests -p 'test_gptauto.py' -v
       - name: Create diagnostic smoke task
