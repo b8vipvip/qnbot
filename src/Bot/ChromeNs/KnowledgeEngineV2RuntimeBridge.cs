@@ -201,18 +201,21 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // V2 remains a fast terminal path only for conversations without a verified recent order.
-            // Once an order exists, reply semantics depend on payment/fulfillment/SKU state and must be
-            // owned by the commerce-aware contextual agent. This gate is intentionally before Resolve
-            // so V2 cannot race the inner Smart Reply pipeline for terminal reply authority.
-            OrderSnapshot commerceOrder;
-            if (OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot(
-                burst.SellerNick, burst.BuyerNick, out commerceOrder))
+            // V2 is only a fast terminal path when the shared commerce authority allows local
+            // termination. The same authority is consumed by Smart Reply, so verified orders and
+            // strongly post-order conversations cannot be decided differently by parallel layers.
+            var commerceAuthority = CommerceReplyAuthorityService.Evaluate(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion);
+            if (!commerceAuthority.AllowLocalTerminalReply)
             {
-                Log.Info("Knowledge Engine V2已让出终态直答权：检测到结构化订单上下文，交给Commerce Smart Reply。 buyer="
+                var commerce = commerceAuthority.CommerceContext;
+                Log.Info("Knowledge Engine V2已让出终态直答权，交给Commerce Smart Reply: buyer="
                     + burst.BuyerNick
-                    + ", orderId=" + (commerceOrder == null ? string.Empty : commerceOrder.OrderId)
-                    + ", status=" + (commerceOrder == null ? string.Empty : commerceOrder.TradeStatus));
+                    + ", phase=" + (commerce == null ? string.Empty : commerce.PurchasePhase)
+                    + ", structured=" + (commerce != null && commerce.HasStructuredOrder)
+                    + ", reason=" + commerceAuthority.Reason);
                 await inner(lease);
                 return;
             }
