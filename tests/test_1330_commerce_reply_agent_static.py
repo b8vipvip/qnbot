@@ -103,6 +103,18 @@ def test_v2_direct_reply_yields_to_commerce_agent_when_verified_order_exists():
     assert "await inner(lease);" in text[gate:resolve]
 
 
+def test_validator_only_promotes_verified_order_context_to_authoritative_evidence():
+    text = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
+    validate = text[text.index("public static AnswerValidationResult Validate"):text.index("public static string BuildEvidenceText")]
+    assert validate.index("BuildState(seller, buyer, question)") < validate.index("BuildAuthoritativeEvidence(knowledge, state)")
+    evidence = text[text.index("private static string BuildAuthoritativeEvidence"):text.index("private static ConversationStateSnapshot BuildState")]
+    assert "commerce != null && commerce.HasStructuredOrder" in evidence
+    assert "购买阶段" in evidence
+    assert "订单状态" in evidence
+    assert "付款状态" in evidence
+    assert "conversation" not in evidence.lower()
+
+
 def test_human_correction_preserves_old_answer_and_scopes_new_answer():
     text = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
     assert "ConversationSessionLearningService.ReportsChanged += OnReportsChanged" in text
