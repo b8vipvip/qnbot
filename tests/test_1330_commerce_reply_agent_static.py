@@ -10,6 +10,7 @@ def read(path: str) -> str:
 def test_commerce_services_are_compiled_for_wpf_and_main_project():
     targets = read("src/Directory.Build.targets")
     assert "ChromeNs\\CommerceContextService.cs" in targets
+    assert "ChromeNs\\CommerceReplyAuthorityService.cs" in targets
     assert "ChromeNs\\CommerceKnowledgeLearningBridge.cs" in targets
 
 
@@ -71,12 +72,20 @@ def test_terminal_order_events_can_refresh_commerce_truth_without_reopening_guid
     assert "IsGuidanceTerminal(record.Snapshot)" in followup
 
 
-def test_post_order_smart_reply_cannot_finish_as_fixed_faq_direct_answer():
-    text = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
-    method = text[text.index("public static bool RequiresContextualHandling"):text.index("public static bool AllowKnowledge")]
-    assert "commerce.HasStructuredOrder" in method
-    assert 'commerce.PurchasePhase, "post_order_unverified"' in method
-    assert "return true;" in method
+def test_single_commerce_reply_authority_owns_terminal_vs_contextual_decision():
+    authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
+    assert "internal static class CommerceReplyAuthorityService" in authority
+    assert "commerce.HasStructuredOrder" in authority
+    assert 'commerce.PurchasePhase,\n                "post_order_unverified"' in authority
+    assert "RequiresContextualAgent = true" in authority
+    assert "SendTextWithRetryAsync" not in authority
+    assert "KnowledgeEngineV2Service.Resolve" not in authority
+
+    progress = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
+    method = progress[progress.index("public static bool RequiresContextualHandling"):progress.index("public static bool AllowKnowledge")]
+    assert "CommerceReplyAuthorityService.Evaluate(state)" in method
+    assert "commerce.HasStructuredOrder" not in method
+    assert "post_order_unverified" not in method
 
 
 def test_commerce_scoped_knowledge_has_one_central_policy_authority():
@@ -94,13 +103,15 @@ def test_commerce_scoped_knowledge_has_one_central_policy_authority():
     assert "BuildPolicyScopeToken" not in allow
 
 
-def test_v2_direct_reply_yields_to_commerce_agent_when_verified_order_exists():
+def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
     text = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    gate = text.index("OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot")
+    gate = text.index("CommerceReplyAuthorityService.Evaluate")
     resolve = text.index("KnowledgeEngineV2Service.Resolve")
     assert gate < resolve
+    assert "commerceAuthority.AllowLocalTerminalReply" in text[gate:resolve]
     assert "Knowledge Engine V2已让出终态直答权" in text
     assert "await inner(lease);" in text[gate:resolve]
+    assert "OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot" not in text[gate:resolve]
 
 
 def test_validator_only_promotes_verified_order_context_to_authoritative_evidence():
@@ -138,10 +149,10 @@ def test_style_and_business_facts_remain_separate_learning_concerns():
 
 
 def test_commerce_change_does_not_touch_reliable_send_implementation():
-    # Architectural guard: new commerce services consume facts and governance only.
     context = read("src/Bot/ChromeNs/CommerceContextService.cs")
+    authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
     learning = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
-    joined = context + learning
+    joined = context + authority + learning
     assert "SendTextWithRetryAsync" not in joined
     assert "QNRpa" not in joined
     assert "CDPClient" not in joined
