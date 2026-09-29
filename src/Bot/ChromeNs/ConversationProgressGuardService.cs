@@ -198,16 +198,8 @@ namespace Bot.ChromeNs
         public static bool RequiresContextualHandling(ConversationStateSnapshot state)
         {
             if (state == null) return false;
-            var commerce = state.CommerceContext;
-            if (commerce != null
-                && (commerce.HasStructuredOrder
-                    || string.Equals(commerce.PurchasePhase, "post_order_unverified", StringComparison.OrdinalIgnoreCase)))
-            {
-                // Once an order is known (or strongly suspected), a fixed FAQ answer is no longer
-                // a safe terminal action. The same buyer utterance can require a different answer by
-                // payment/fulfillment/SKU state, so the single contextual generation path owns it.
-                return true;
-            }
+            var commerceAuthority = CommerceReplyAuthorityService.Evaluate(state);
+            if (commerceAuthority.RequiresContextualAgent) return true;
 
             var p = state.Progress;
             if (p == null) return false;
