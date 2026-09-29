@@ -42,9 +42,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           tmp="$(mktemp)"
-          gh api --paginate "repos/$REPOSITORY/pulls?state=closed&sort=updated&direction=desc&per_page=100" \
-            --jq '.[] | select(.merged_at != null) | [.number, .merge_commit_sha] | @tsv' \
-            | head -n 40 > "$tmp"
+          # Keep the query bounded instead of piping a paginated producer into head. With
+          # pipefail enabled that old pattern intentionally surfaced SIGPIPE as exit 141.
+          gh api "repos/$REPOSITORY/pulls?state=closed&sort=updated&direction=desc&per_page=40" \
+            --jq '.[] | select(.merged_at != null) | [.number, .merge_commit_sha] | @tsv' > "$tmp"
 
           dispatched=0
           while IFS=$'\t' read -r pr_number merge_sha; do
@@ -210,7 +211,7 @@ jobs:
             --pr-title "$pr_title" --pr-body "$pr_body" --pr-state "closed" --pr-merged "true" \
             --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR" \
             --pr-ci-conclusion "success" --pr-ci-run-id "$pr_ci_run_id" \
-            --main-ci-conclusion "success" --main-ci-run-id "$MAIN_CI_RUN_ID" \
+            --main-ci-conclusion "success" --main-ci-run-id="$MAIN_CI_RUN_ID" \
             --release-conclusion "$release_conclusion" --release-run-id "$RELEASE_RUN_ID" \
             --current-pr-head-sha "$pr_head_sha" --release-required-override "$RELEASE_REQUIRED" \
             --provenance "reconciler" > terminal-result.json
