@@ -173,9 +173,12 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Scenario scope is intentionally one atomic condition. The legacy policy parser uses OR
+            // across rows, so merging several phase/product/SKU rows would re-introduce partial-match
+            // ambiguity. RequiredContext is replaced by the exact scenario token for this correction.
             var currentProfile = KnowledgePolicyProfileService.GetProfile(current);
-            currentProfile.ApplyWhen = MergeCondition(currentProfile.ApplyWhen, scopeToken);
-            currentProfile.RequiredContext = MergeCondition(currentProfile.RequiredContext, scopeToken);
+            currentProfile.ApplyWhen = scopeToken;
+            currentProfile.RequiredContext = scopeToken;
             currentProfile.AnswerMode = KnowledgeAnswerModes.Contextual;
             currentProfile.Confidence = Math.Max(currentProfile.Confidence, 0.94);
             currentProfile.LastEvidenceType = "commerce_" + evidenceType;
