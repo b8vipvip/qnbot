@@ -79,13 +79,19 @@ def test_post_order_smart_reply_cannot_finish_as_fixed_faq_direct_answer():
     assert "return true;" in method
 
 
-def test_commerce_scoped_knowledge_is_hard_filtered_by_exact_context_key():
-    text = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
-    method = text[text.index("public static bool AllowKnowledge"):text.index("public static void AddValidationIssues")]
-    assert "ReadAtomicCommerceScope" in method
-    assert "CommerceContextService.BuildPolicyScopeToken" in method
-    assert "StringComparison.OrdinalIgnoreCase" in method
-    assert "return false;" in method
+def test_commerce_scoped_knowledge_has_one_central_policy_authority():
+    policy = read("src/Bot/ChromeNs/KnowledgePolicyProfileService.cs")
+    evaluate = policy[policy.index("public static KnowledgePolicyEvaluation Evaluate"):policy.index("public static void RecordRouteSelection")]
+    assert "ReadAtomicCommerceScope(profile.RequiredContext)" in evaluate
+    assert "CommerceContextService.BuildPolicyScopeToken" in evaluate
+    assert "Excluded = true" in evaluate
+    assert "电商场景键不匹配" in evaluate
+    assert evaluate.index("ReadAtomicCommerceScope") < evaluate.index("if (!IsEnabled())")
+
+    progress = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
+    allow = progress[progress.index("public static bool AllowKnowledge"):progress.index("public static void AddValidationIssues")]
+    assert "ReadAtomicCommerceScope" not in allow
+    assert "BuildPolicyScopeToken" not in allow
 
 
 def test_v2_direct_reply_yields_to_commerce_agent_when_verified_order_exists():
