@@ -56,12 +56,36 @@ def test_order_context_query_is_read_only_clone_boundary():
     assert "MarkDelivered" not in method
 
 
+def test_terminal_order_events_can_refresh_commerce_truth_without_reopening_guidance():
+    text = read("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
+    observe = text[text.index("public static void ObserveOrder"):text.index("public static bool IsExplicitBuyerFollowUp")]
+    assert "snapshot.EventType != OrderEventType.Created" not in observe
+    assert "MergeSnapshot(record.Snapshot, snapshot)" in observe
+    merge = text[text.index("private static void MergeSnapshot"):text.index("private static bool IsGuidanceTerminal")]
+    assert "incomingTerminal || !targetTerminal" in merge
+    assert "target.EventType = incoming.EventType" in merge
+    terminal = text[text.index("private static bool IsGuidanceTerminal"):text.index("private static string Hash")]
+    assert "OrderEventType.Closed" in terminal
+    assert "OrderEventType.RefundRequested" in terminal
+    followup = text[text.index("public static bool CanCreateFollowUp"):text.index("public static bool ShouldSuppressBeforeSend")]
+    assert "IsGuidanceTerminal(record.Snapshot)" in followup
+
+
 def test_post_order_smart_reply_cannot_finish_as_fixed_faq_direct_answer():
     text = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
     method = text[text.index("public static bool RequiresContextualHandling"):text.index("public static bool AllowKnowledge")]
     assert "commerce.HasStructuredOrder" in method
     assert 'commerce.PurchasePhase, "post_order_unverified"' in method
     assert "return true;" in method
+
+
+def test_commerce_scoped_knowledge_is_hard_filtered_by_exact_context_key():
+    text = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
+    method = text[text.index("public static bool AllowKnowledge"):text.index("public static void AddValidationIssues")]
+    assert "ReadAtomicCommerceScope" in method
+    assert "CommerceContextService.BuildPolicyScopeToken" in method
+    assert "StringComparison.OrdinalIgnoreCase" in method
+    assert "return false;" in method
 
 
 def test_v2_direct_reply_yields_to_commerce_agent_when_verified_order_exists():
