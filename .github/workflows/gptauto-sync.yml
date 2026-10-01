@@ -132,6 +132,10 @@ jobs:
             workflow_drift=true
           fi
 
+          # GitHub's repository GITHUB_TOKEN is a GitHub App token and cannot
+          # create/update workflow files unless the credential has Workflows write.
+          # Do not discover this only after git push: publish a durable, deduplicated
+          # repository issue and leave the consumer untouched/atomic.
           if [[ "$workflow_drift" == "true" && "$HAS_DEDICATED_SYNC_TOKEN" != "true" ]]; then
             marker="<!-- gptauto-sync-workflow-permission -->"
             title="GPTAuto sync blocked: Workflows write permission required"
