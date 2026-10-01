@@ -61,6 +61,9 @@ Give ChatGPT the repository name plus task ID `{task.task_id}`. If repository ac
             "pr_ci_run_id": task.metadata.get("pr_ci_run_id", ""),
             "main_ci_run_id": task.metadata.get("main_ci_run_id", ""),
             "release_run_id": task.metadata.get("release_run_id", ""),
+            "release_published": bool(task.metadata.get("release_published")),
+            "release_id": task.metadata.get("release_id", ""),
+            "release_tag": task.metadata.get("release_tag", ""),
             "gates": [
                 {
                     "gate": step.gate.value,

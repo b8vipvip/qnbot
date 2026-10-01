@@ -1,23 +1,21 @@
 name: GPTAuto Executor
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: [GPTAuto Observer]
-    types: [completed]
+  repository_dispatch:
+    types: [gptauto_observation]
 permissions:
   contents: write
   actions: write
   pull-requests: write
   issues: write
 concurrency:
-  group: gptauto-executor-${{ github.event.workflow_run.id }}
+  group: gptauto-executor-${{ github.event.client_payload.observer_run_id || github.run_id }}
   cancel-in-progress: true
 jobs:
   execute:
-    # Executor normally wakes after CI/Release observations. A merged pull_request
-    # observation is also authoritative: it must be allowed to adopt the Completion
-    # Lease when somebody other than Executor performed the merge.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch' || github.event.workflow_run.event == 'pull_request')) }}
+    # Observer explicitly schedules Executor only after actionable evidence was
+    # captured. Executor no longer subscribes to Observer workflow completion,
+    # eliminating GitHub-created skipped Executor runs.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,7 +28,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          OBSERVER_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          OBSERVER_RUN_ID: ${{ github.event.client_payload.observer_run_id || '' }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -56,7 +54,30 @@ jobs:
           echo "release-required=$(jq -r '.release_required // false' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "repair-key=$(jq -r '.repair_key // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "lease-active=$(jq -r '.completion_lease.active // false' <<<"$action")" >> "$GITHUB_OUTPUT"
-          echo "foreground-status=$(jq -r '.completion_lease.foreground_completion_status // "blocked"' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "foreground-status=$(jq -r '.completion_lease.foreground_completion_status // "continue_required"' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "foreground-disposition=$(jq -r '.completion_lease.foreground_disposition // "CONTINUE_REQUIRED"' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "allow-foreground-exit=$(jq -r '.completion_lease.allow_foreground_exit // false' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "requires-foreground-poll=$(jq -r '.completion_lease.host_control.requires_foreground_poll // true' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "host-control=$(jq -c '.completion_lease.host_control' <<<"$action")" >> "$GITHUB_OUTPUT"
+      - name: Publish canonical host control
+        if: ${{ steps.state.outputs.lease-active == 'true' }}
+        env:
+          HOST_CONTROL: ${{ steps.state.outputs.host-control }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .gptauto/host-control
+          jq -e '.schema == "gptauto.host-control/v2" and .task_alive == true' <<<"$HOST_CONTROL" > ".gptauto/host-control/$TASK_ID.json"
+          echo "::notice::GPTAUTO_HOST_CONTROL task=$TASK_ID disposition=$(jq -r '.foreground_disposition' <<<"$HOST_CONTROL") next=$(jq -r '.next_host_action' <<<"$HOST_CONTROL")"
+      - name: Upload canonical host control
+        if: ${{ steps.state.outputs.lease-active == 'true' && hashFiles(format('.gptauto/host-control/{0}.json', steps.state.outputs.task-id)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gptauto-host-control-${{ steps.state.outputs.task-id }}
+          path: .gptauto/host-control/${{ steps.state.outputs.task-id }}.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Execute safe merge gate
         if: ${{ steps.state.outputs.action == 'merge' }}
         env:
@@ -65,7 +86,6 @@ jobs:
           PR_NUMBER: ${{ steps.state.outputs.pr-number }}
           EXPECTED_HEAD: ${{ steps.state.outputs.head-sha }}
           TASK_ID: ${{ steps.state.outputs.task-id }}
-          RELEASE_REQUIRED: ${{ steps.state.outputs.release-required }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -76,21 +96,19 @@ jobs:
           [[ "$(jq -r '.mergeable' <<<"$pr")" != "false" ]] || { echo "::error::PR is not mergeable"; exit 1; }
 
           runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$EXPECTED_HEAD&per_page=100")"
-          blocking="$(jq '[.workflow_runs[] | select(.name != "GPTAuto Observer" and .name != "GPTAuto Executor") | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' <<<"$runs")"
-          [[ "$blocking" == "0" ]] || { echo "::error::$blocking workflow run(s) are not safely complete"; exit 1; }
-
-          pr_files="$(gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
-          need_windows=false
-          need_api=false
-          need_protocol=false
-          grep -Eq '^(src/|tools/qn_discovery_lab/|\.github/workflows/windows-build\.yml$)' <<<"$pr_files" && need_windows=true || true
-          grep -Eq '^(services/api-control-plane/|scripts/update-api-control-plane\.sh$|scripts/update-bot\.ps1$|tests/|\.github/workflows/api-control-plane-ci\.yml$)' <<<"$pr_files" && need_api=true || true
-          grep -Eq '^(\.github/gptauto/|\.github/tests/test_gptauto\.py$|\.github/actions/upload-gptauto-log/|\.github/GPTAUTO\.md$|\.github/workflows/gptauto-.*\.yml$)' <<<"$pr_files" && need_protocol=true || true
-          [[ "$RELEASE_REQUIRED" == "true" ]] && need_windows=true
-          if [[ "$need_windows" == "false" && "$need_api" == "false" && "$need_protocol" == "false" ]]; then
-            # Every Executor merge needs at least one verifiable post-merge gate. Protocol Check is
-            # the lightweight fallback for changes outside the product/API path sets.
-            need_protocol=true
+          latest_runs="$(jq '[.workflow_runs
+            | sort_by([.workflow_id, .event, .created_at, .id])
+            | group_by([.workflow_id, .event])
+            | map(last)
+            | .[]
+            | select(.name != "GPTAuto Observer" and .name != "GPTAuto Executor")
+          ]' <<<"$runs")"
+          blocking_runs="$(jq '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))]' <<<"$latest_runs")"
+          blocking="$(jq 'length' <<<"$blocking_runs")"
+          if [[ "$blocking" != "0" ]]; then
+            jq -r '.[] | "::error::blocking latest workflow: \(.name) event=\(.event) run=\(.id) status=\(.status) conclusion=\(.conclusion // "null")"' <<<"$blocking_runs"
+            echo "::error::$blocking latest workflow run(s) are not safely complete"
+            exit 1
           fi
 
           gh api --method PUT "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" \
@@ -99,36 +117,11 @@ jobs:
           jq -e '.merged == true' /tmp/gptauto-merge.json >/dev/null
           merge_sha="$(jq -r '.sha' /tmp/gptauto-merge.json)"
           default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
-          echo "Merged as $merge_sha; ensuring path-relevant post-merge workflows are running on $default_branch."
+          echo "Merged as $merge_sha; ensuring post-merge workflows are running on $default_branch."
 
-          # Merges performed with GITHUB_TOKEN may not emit push-triggered workflows. Dispatch only
-          # the gates whose path families were changed, unless a matching push run already exists.
-          sleep 2
-          runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$merge_sha&per_page=100")"
-          ensure_gate() {
-            local required="$1"
-            local name="$2"
-            local workflow_file="$3"
-            [[ "$required" == "true" ]] || return 0
-            local count
-            count="$(jq --arg name "$name" '[.workflow_runs[] | select(.name == $name)] | length' <<<"$runs")"
-            if [[ "$count" == "0" ]]; then
-              echo "Dispatching $name ($workflow_file) for merge $merge_sha"
-              gh workflow run "$workflow_file" --repo "$REPOSITORY" --ref "$default_branch"
-            else
-              echo "$name already has $count run(s) for merge $merge_sha; no duplicate dispatch."
-            fi
-          }
-          ensure_gate "$need_windows" "Windows x64 release build" "windows-build.yml"
-          ensure_gate "$need_api" "API control plane CI" "api-control-plane-ci.yml"
-          ensure_gate "$need_protocol" "GPTAuto Protocol Check" "gptauto-check.yml"
-
-          # Publish Bot auto-update release is intentionally not dispatched here. When a product
-          # release is required, the verified Windows build completion triggers it against that exact
-          # head SHA, avoiding a manual publish accidentally selecting an older successful build.
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
-            -f release_required="$RELEASE_REQUIRED"
+            -f release_required="${{ steps.state.outputs.release-required }}"
       - name: Adopt externally merged completion lease
         if: ${{ steps.state.outputs.action == 'reconcile_adopt' }}
         env:
@@ -146,11 +139,6 @@ jobs:
             echo "::error::Reconcile adoption is missing task/PR/merge identity."
             exit 1
           }
-
-          # A terminal artifact is durable proof that this lease already finished.
-          # Otherwise dispatch is safe even when another adopter raced us: Reconcile
-          # has task-scoped concurrency with cancel-in-progress, so all dispatches
-          # converge to one current owner instead of creating a second authority.
           terminal_artifact="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=20" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
           if [[ -n "$terminal_artifact" ]]; then
@@ -163,7 +151,6 @@ jobs:
               exit 0
             fi
           fi
-
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
             -f release_required="$RELEASE_REQUIRED"
@@ -184,16 +171,17 @@ jobs:
           mkdir -p .gptauto/repair-requests
           request=".gptauto/repair-requests/$TASK_ID.json"
           jq -n --arg task "$TASK_ID" --arg run "$FAILED_RUN_ID" --arg pr "$PR_NUMBER" \
-            '{kind:"repair_request",task_id:$task,run_id:$run,pr_number:$pr,status:"open"}' > "$request"
+            '{kind:"repair_request",task_id:$task,run_id:$run,pr_number:$pr,status:"open",repair_owner:"repair_pipeline"}' > "$request"
           if [[ -n "$PR_NUMBER" ]]; then
             marker="<!-- gptauto-repair:$REPAIR_KEY -->"
             existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
             if ! grep -Fq "$marker" <<<"$existing"; then
               gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
-          GPTAuto repair cycle is open for task $TASK_ID on current head $HEAD_SHA (latest failed run $FAILED_RUN_ID). Do not finish the engineering task until this repair cycle is resolved and the completion lease reaches DONE."
+          GPTAuto three-tier repair cycle is open for task $TASK_ID on current head $HEAD_SHA (latest failed run $FAILED_RUN_ID). Tier 1 deterministic repair runs first, Tier 2 Copilot CLI runs only if Tier 1 produces no patch, and Tier 3 explicitly hands the same repair lease to the foreground host if automation cannot repair it."
             fi
           fi
-      - name: Dispatch autonomous repair agent
+      - name: Dispatch three-tier repair pipeline
+        id: repair-dispatch
         if: ${{ steps.state.outputs.action == 'repair_request' }}
         env:
           GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
@@ -212,11 +200,7 @@ jobs:
           marker="<!-- gptauto-repair-dispatched:$TASK_ID:$HEAD_SHA -->"
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
           if grep -Fq "$marker" <<<"$comments"; then
-            echo "Repair agent already dispatched for $TASK_ID / $HEAD_SHA; keeping the same repair lease."
-            exit 0
-          fi
-          if [[ -z "${{ secrets.GPTAUTO_AI_API_KEY }}" ]]; then
-            echo "::notice::No GPTAUTO_AI_API_KEY configured. Keeping repair_request and Completion Lease active without dispatching an AI repair workflow."
+            echo "Three-tier repair already dispatched for $TASK_ID / $HEAD_SHA; keeping the same repair lease."
             exit 0
           fi
           gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
@@ -224,8 +208,8 @@ jobs:
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" \
             -f head_sha="$HEAD_SHA" -f failed_run_id="$FAILED_RUN_ID"
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
-          GPTAuto dispatched the autonomous repair agent for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates."
-          echo "Dispatched autonomous repair agent for $TASK_ID / $HEAD_SHA."
+          GPTAuto dispatched the three-tier repair pipeline for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates; Tier 3 will publish FOREGROUND_RECOVERY_REQUIRED if Tier 1 and Tier 2 cannot safely produce/apply a patch."
+          echo "Dispatched three-tier repair pipeline for $TASK_ID / $HEAD_SHA."
       - name: Persist completion lease
         if: ${{ steps.state.outputs.lease-active == 'true' }}
         env:
@@ -252,7 +236,7 @@ jobs:
           body="$marker
           GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: $ACTION).
 
-          This engineering task is NOT complete. A PR, commit, successful partial check, repair request, merge, or release-in-progress is non-terminal evidence. Foreground agents must continue/recover and must not report completion until a terminal DONE receipt exists."
+          This engineering task is NOT complete. EXIT_GUARD=DENY while this Completion Lease is ACTIVE. A PR, commit, successful partial check, repair request, merge, release-in-progress, or merely waiting for GitHub Actions is non-terminal evidence. Before ending the engineering turn, the foreground host MUST re-read the current task guard. If allow_foreground_exit=false or terminal_done=false, it MUST remain attached, inspect the failed run, repair the same PR, push, and poll/recover asynchronous gates. Exit is permitted only after terminal DONE releases the lease, or a genuine BLOCKED condition explicitly requires user action."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
@@ -286,7 +270,7 @@ jobs:
             echo "- Task: $TASK_ID"
             echo "- Decision: $ACTION"
             echo "- Safe merge is executed only after all current head workflows are completed successfully/neutral/skipped."
-            echo "- Post-merge dispatch is path-aware and uses qnbot's real Windows/API/Protocol workflow files; publish waits for the verified Windows build."
             echo "- Failures become one repair cycle per TASK_ID + current PR head; superseded/cancelled runs do not create repair storms."
+            echo "- Repair authority is one pipeline: deterministic → Copilot CLI → explicit foreground recovery; tiers never run as competing repair owners."
             echo "- A non-DONE task keeps an explicit completion lease active; foreground completion is valid only after DoD."
           } >> "$GITHUB_STEP_SUMMARY"
