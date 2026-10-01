@@ -23,19 +23,19 @@ on:
     branches:
       - main
       - master
+  # Control-plane workflows are deliberately excluded from workflow_run.
+  # Observer consumes product evidence only; Reconcile owns post-merge CI/Release
+  # and emits terminal evidence directly, so feeding Release back into Observer
+  # would create a control-plane feedback loop.
   workflow_run:
-    workflows:
-      - "CI"
-      - "Release"
-      - "Windows x64 release build"
-      - "API control plane CI"
-      - "GPTAuto Protocol Check"
-      - "Publish Bot auto-update release"
+    workflows: [CI]
     types: [completed]
   release:
     types: [published]
 permissions:
-  contents: read
+  # contents:write is required only to emit the explicit repository_dispatch
+  # handoff. The handoff is the scheduler edge; workflow completion is not.
+  contents: write
   actions: read
   pull-requests: read
 concurrency:
@@ -43,20 +43,52 @@ concurrency:
   cancel-in-progress: true
 jobs:
   observe:
-    # A cancelled gate is replacement/no-result evidence: it cannot satisfy a gate and must not
-    # open a repair cycle. Successful default-branch gates are reconciler-owned post-merge evidence,
-    # while failures still wake Observer so repair evidence is never suppressed.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'cancelled' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.head_branch != github.event.repository.default_branch)) || github.event_name == 'release' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.actor != 'github-actions[bot]') }}
+    # GitHub creates workflow_run workflows before a job-level if can reject
+    # them. Classify inside the job so intentionally ignored evidence is a
+    # successful no-op, not a visible Skipped workflow. Only actionable
+    # observations emit the explicit repository_dispatch scheduler edge.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Classify product evidence ingress
+        id: ingress
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          WORKFLOW_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ACTOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          actionable=false
+          case "$EVENT_NAME" in
+            workflow_dispatch|release|pull_request) actionable=true ;;
+            push)
+              [[ "$ACTOR" != "github-actions[bot]" ]] && actionable=true
+              ;;
+            workflow_run)
+              if [[ "$WORKFLOW_NAME" == "CI" && "$WORKFLOW_CONCLUSION" != "cancelled" ]]; then
+                if [[ "$WORKFLOW_CONCLUSION" != "success" || "$WORKFLOW_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+                  actionable=true
+                fi
+              fi
+              ;;
+          esac
+          echo "actionable=$actionable" >> "$GITHUB_OUTPUT"
+          if [[ "$actionable" != "true" ]]; then
+            echo "::notice::GPTAuto Observer accepted a non-actionable product event as a successful no-op; no Executor will be scheduled."
+          fi
       - uses: actions/checkout@v4
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
         with:
           python-version: '3.12'
       - name: Capture repository-side GPTAuto task
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
         id: capture
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,32 +115,6 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          successful_trusted_ci() {
-            local sha="$1"
-            [[ -n "$sha" ]] || return 0
-            local runs gates count bad
-            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
-            gates="$(jq '[.workflow_runs[] | select(.name == "CI" or .name == "Windows x64 release build" or .name == "API control plane CI" or .name == "GPTAuto Protocol Check")] | group_by(.name) | map(max_by(.created_at))' <<<"$runs")"
-            count="$(jq 'length' <<<"$gates")"
-            bad="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$gates")"
-            if [[ "$count" -gt 0 && "$bad" -eq 0 ]]; then
-              jq -r 'sort_by(.created_at) | reverse | .[0].id // empty' <<<"$gates"
-            fi
-          }
-
-          successful_trusted_release() {
-            local sha="$1"
-            [[ -n "$sha" ]] || return 0
-            local runs gates count bad
-            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
-            gates="$(jq '[.workflow_runs[] | select(.name == "Release" or .name == "Publish Bot auto-update release")] | group_by(.name) | map(max_by(.created_at))' <<<"$runs")"
-            count="$(jq 'length' <<<"$gates")"
-            bad="$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$gates")"
-            if [[ "$count" -gt 0 && "$bad" -eq 0 ]]; then
-              jq -r 'sort_by(.created_at) | reverse | .[0].id // empty' <<<"$gates"
-            fi
-          }
-
           if [[ "$EVENT_NAME" == "release" && -n "$RELEASE_TAG" ]]; then
             git fetch --tags --force origin
             resolved="$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null || true)"
@@ -127,7 +133,6 @@ jobs:
           MAIN_CI_RUN_ID=""
           RELEASE_CONCLUSION=""
           RELEASE_RUN_ID=""
-          RELEASE_REQUIRED_OVERRIDE=""
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ -n "$RECONCILED_MAIN_CI_RUN_ID" ]]; then
               MAIN_CI_RUN_ID="$RECONCILED_MAIN_CI_RUN_ID"
@@ -147,29 +152,20 @@ jobs:
             MERGE_SHA="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
             PR_HEAD_SHA="$(jq -r '.head.sha // ""' <<<"$pr_json")"
 
-            # qnbot's Bot release workflow itself uses this exact product-file boundary. Pinning
-            # release intent to changed files prevents PR prose mentioning "Release" from inventing
-            # a release requirement for workflow/docs-only fixes.
-            pr_files="$(gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename' 2>/dev/null || true)"
-            if grep -Eq '^(src/|tools/qn_discovery_lab/)' <<<"$pr_files"; then
-              RELEASE_REQUIRED_OVERRIDE="true"
-            else
-              RELEASE_REQUIRED_OVERRIDE="false"
-            fi
-
             if [[ -n "$PR_HEAD_SHA" ]]; then
-              PR_CI_RUN_ID="$(successful_trusted_ci "$PR_HEAD_SHA")"
+              PR_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
               [[ -n "$PR_CI_RUN_ID" ]] && PR_CI_CONCLUSION="success"
             fi
             if [[ "$PR_MERGED" == "true" && -n "$MERGE_SHA" ]]; then
-              if [[ -z "$MAIN_CI_RUN_ID" ]]; then
-                MAIN_CI_RUN_ID="$(successful_trusted_ci "$MERGE_SHA")"
-                [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
-              fi
-              if [[ -z "$RELEASE_RUN_ID" ]]; then
-                RELEASE_RUN_ID="$(successful_trusted_release "$MERGE_SHA")"
-                [[ -n "$RELEASE_RUN_ID" ]] && RELEASE_CONCLUSION="success"
-              fi
+              MAIN_CI_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
+              RELEASE_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
+                --jq '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
+              # A green Release workflow is process evidence only. Publication is
+              # terminal only when a GitHub Release published event (or Reconcile)
+              # proves a release artifact/tag for the merged commit.
             fi
           fi
 
@@ -192,15 +188,29 @@ jobs:
             --pr-ci-conclusion "$PR_CI_CONCLUSION" --pr-ci-run-id "$PR_CI_RUN_ID" \
             --main-ci-conclusion "$MAIN_CI_CONCLUSION" --main-ci-run-id "$MAIN_CI_RUN_ID" \
             --release-conclusion "$RELEASE_CONCLUSION" --release-run-id "$RELEASE_RUN_ID" \
-            --current-pr-head-sha "$PR_HEAD_SHA" --release-required-override "$RELEASE_REQUIRED_OVERRIDE" > observer-result.json
+            --current-pr-head-sha "$PR_HEAD_SHA" > observer-result.json
           cat observer-result.json
           task_id="$(python -c 'import json;print(json.load(open("observer-result.json"))["task_id"])')"
           echo "task-id=$task_id" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/upload-gptauto-log
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
         with:
           task-id: ${{ steps.capture.outputs.task-id }}
           retention-days: '30'
+      - name: Dispatch canonical Executor handoff
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OBSERVER_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          gh api --method POST "repos/$REPOSITORY/dispatches" \
+            -f event_type='gptauto_observation' \
+            -F "client_payload[observer_run_id]=$OBSERVER_RUN_ID"
+          echo "Explicit Executor handoff emitted for Observer run $OBSERVER_RUN_ID."
       - name: Summary
+        if: ${{ steps.ingress.outputs.actionable == 'true' }}
         env:
           TASK_ID: ${{ steps.capture.outputs.task-id }}
         run: |
@@ -209,8 +219,7 @@ jobs:
             echo "- Task ID: \`$TASK_ID\`"
             echo "- Artifact: \`gptauto-$TASK_ID\`"
             echo "- Provenance: \`repository_observer\`"
-            echo "- qnbot native Windows/API/Protocol/Publish workflows and legacy CI/Release names are observed."
-            echo "- Historical CI evidence is path-aware: all trusted gates that actually ran for a SHA must be successful."
-            echo "- Bot release intent is derived from the same src/tools product boundary used by the release workflow, not from incidental PR prose."
-            echo "- A merged PR is VERIFY, not DONE; Reconcile owns terminal completion evidence."
+            echo "- PR/push/main-CI/release events are re-associated through the PR before TASK_ID generation."
+            echo "- A merged PR is VERIFY, not DONE; main-CI may be reconstructed from runs, but Release workflow success alone never proves publication."
+            echo "- DONE artifacts include completion.json: a single terminal receipt with merge, CI, release, gate, and DoD evidence."
           } >> "$GITHUB_STEP_SUMMARY"
