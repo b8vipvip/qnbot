@@ -1,6 +1,15 @@
 name: GPTAuto Consumer Sync
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Install/update GPTAuto or prepare a clean uninstall PR
+        required: true
+        default: sync
+        type: choice
+        options:
+          - sync
+          - uninstall
   schedule:
     - cron: '17 * * * *'
 permissions:
@@ -19,13 +28,85 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GPTAUTO_SYNC_TOKEN || github.token }}
-      - name: Sync canonical GPTAuto runtime
+      - name: Manage canonical GPTAuto runtime
         env:
           GH_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           HAS_DEDICATED_SYNC_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN != '' }}
+          OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'sync' }}
         shell: bash
         run: |
           set -Eeuo pipefail
+
+          managed_paths=(
+            .github/gptauto
+            .github/actions/upload-gptauto-log
+            .github/workflows/gptauto-sync.yml
+            .github/workflows/gptauto-observer.yml
+            .github/workflows/gptauto-executor.yml
+            .github/workflows/gptauto-repair.yml
+            .github/workflows/gptauto-reconcile.yml
+          )
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          if [[ "$OPERATION" == "uninstall" ]]; then
+            if [[ "$HAS_DEDICATED_SYNC_TOKEN" != "true" ]]; then
+              marker="<!-- gptauto-uninstall-workflow-permission -->"
+              title="GPTAuto uninstall blocked: Workflows write permission required"
+              body="$marker
+          GPTAuto uninstall removes its managed files under `.github/workflows/`, so the default GitHub Actions token is intentionally not used for this operation.
+
+          Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write**, then run **GPTAuto Consumer Sync** again with operation **uninstall**.
+
+          GPTAuto task/audit data outside the managed `.github` paths and repository secrets are preserved intentionally."
+              issue="$(gh issue list --state open --search "$marker in:body" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+              if [[ -n "$issue" ]]; then
+                gh issue edit "$issue" --title "$title" --body "$body" >/dev/null || true
+              else
+                gh issue create --title "$title" --body "$body" >/dev/null || true
+              fi
+              echo "::warning::GPTAuto uninstall requires GPTAUTO_SYNC_TOKEN with Workflows write; no files were changed."
+              exit 0
+            fi
+
+            rm -rf -- "${managed_paths[@]}"
+            if git diff --quiet -- "${managed_paths[@]}"; then
+              echo "GPTAuto managed files are already absent."
+              exit 0
+            fi
+
+            branch="chore/gptauto-uninstall"
+            git checkout -B "$branch"
+            git add -A -- "${managed_paths[@]}"
+            git commit -m "chore: uninstall GPTAuto"
+
+            remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+            if [[ -n "$remote_sha" ]]; then
+              git push --force-with-lease="refs/heads/$branch:$remote_sha" -u origin "$branch"
+            else
+              git push -u origin "$branch"
+            fi
+
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+            if [[ -z "$pr" ]]; then
+              gh pr create \
+                --title "chore: uninstall GPTAuto" \
+                --body "Removes only GPTAuto-managed runtime/action/workflow files. Existing product code, GPTAuto task/audit data, and repository secrets are intentionally preserved. After merge, delete GPTAUTO_COPILOT_TOKEN / GPTAUTO_SYNC_TOKEN / GPTAUTO_EXECUTOR_TOKEN manually if they are no longer used." \
+                --base "${{ github.event.repository.default_branch }}" --head "$branch"
+              pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+            fi
+            gh pr merge "$pr" --auto --squash || echo "::notice::Auto-merge is unavailable; uninstall PR remains open for normal CI-gated merge."
+            {
+              echo "## GPTAuto uninstall prepared"
+              echo "- PR: #$pr"
+              echo "- Managed `.github` runtime/action/workflow files will be removed after merge."
+              echo "- Product code and `.gptauto` task/audit data are preserved."
+              echo "- Repository secrets are not deleted automatically."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           tmp="$(mktemp -d)"
           git clone --depth 1 https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
           mkdir -p .github/gptauto .github/actions/upload-gptauto-log .github/workflows
@@ -58,12 +139,12 @@ jobs:
           if [[ "$workflow_drift" == "true" && "$HAS_DEDICATED_SYNC_TOKEN" != "true" ]]; then
             marker="<!-- gptauto-sync-workflow-permission -->"
             title="GPTAuto sync blocked: Workflows write permission required"
-            body="$marker
-            GPTAuto detected canonical workflow changes while syncing to v$ver, but this repository has no `GPTAUTO_SYNC_TOKEN`.
+            printf -v body '%s
+            GPTAuto detected canonical workflow changes while syncing to v%s, but this repository has no `GPTAUTO_SYNC_TOKEN`.
 
             The default GitHub Actions token cannot push updates under `.github/workflows/` in this repository. The consumer was intentionally left unchanged so its VERSION never claims a partially installed GPTAuto release.
 
-            Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write** for this repository. The next scheduled sync will retry automatically."
+            Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write** for this repository. The next scheduled sync will retry automatically.' "$marker" "$ver"
             issue="$(gh issue list --state open --search "$marker in:body" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
             if [[ -n "$issue" ]]; then
               gh issue edit "$issue" --title "$title" --body "$body" >/dev/null || true
@@ -72,9 +153,9 @@ jobs:
             fi
             {
               echo "## GPTAuto sync blocked before push"
-              echo "- Target version: `$ver`"
-              echo "- Workflow drift: `true`"
-              echo "- Dedicated sync token configured: `false`"
+              printf -- '- Target version: `%s`\n' "$ver"
+              printf -- '- Workflow drift: `true`\n'
+              printf -- '- Dedicated sync token configured: `false`\n'
               echo "- Consumer left unchanged (atomic sync)."
               echo "- Required token permissions: Contents write, Pull requests write, Workflows write."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -82,14 +163,12 @@ jobs:
             exit 0
           fi
 
-          if git diff --quiet -- .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml; then
+          if git diff --quiet -- "${managed_paths[@]}"; then
             echo "GPTAuto runtime already current."
             exit 0
           fi
 
           branch="chore/gptauto-sync-v$ver"
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git checkout -B "$branch"
           git add .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml
           git commit -m "chore: sync GPTAuto v$ver"
