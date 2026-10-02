@@ -13,7 +13,7 @@ _VERSION_RE = re.compile(r"(?<![\w.])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?![\
 _RELEASE_RE = re.compile(r"\b(?:release|publish|published|shipping)\b|正式版|发布|发版", re.I)
 _RELEASE_WORKFLOW_RE = re.compile(r"(?:^|[\s_-])(?:release|publish)(?:$|[\s_-])", re.I)
 _NON_RELEASE_PREFIX_RE = re.compile(r"^\s*(?:chore|docs|test|ci|build|deps|refactor)(?:\([^)]*\))?\s*:", re.I)
-_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
+_FAILURES = {"failure", "timed_out", "startup_failure"}
 
 
 def release_expected(*texts):
@@ -86,22 +86,28 @@ def capture(
     provenance="repository_observer",
     release_published="",
     release_id="",
+    pr_ci_status="",
+    pr_ci_actor="",
+    pr_ci_run_attempt="",
+    blocked_reason="",
 ):
     tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
     goal = pr_title.strip() or ("Observe repository change " + (merge_sha or head_sha)[:12])
     merged = str(pr_merged).lower() == "true"
-    release_required = _release_required_with_override(
-        release_required_override, pr_title, pr_body, release_tag
-    )
+    release_required = _release_required_with_override(release_required_override, pr_title, pr_body, release_tag)
     evidence_provenance = str(provenance or "repository_observer").strip() or "repository_observer"
     workflow_success = _passed(workflow_conclusion)
-    release_event_published = (
-        event == "release" and str(release_state or "").lower() in {"published", "released"}
-    )
+    workflow_conclusion_lc = str(workflow_conclusion or "").lower()
+    pr_ci_conclusion_lc = str(pr_ci_conclusion or "").lower()
+    pr_ci_status_lc = str(pr_ci_status or "").lower()
+    approval_required = workflow_conclusion_lc == "action_required" or pr_ci_conclusion_lc == "action_required"
+    effective_blocked_reason = str(blocked_reason or "")
+    if approval_required and not effective_blocked_reason:
+        effective_blocked_reason = "workflow_approval_required"
+
+    release_event_published = event == "release" and str(release_state or "").lower() in {"published", "released"}
     explicit_release_published = str(release_published or "").strip().lower() in {"true", "1", "yes"}
-    release_done = release_event_published or (
-        explicit_release_published and _passed(release_conclusion)
-    )
+    release_done = release_event_published or (explicit_release_published and _passed(release_conclusion))
     main_ci_done = _passed(main_ci_conclusion) or (
         event == "workflow_run"
         and workflow_success
@@ -117,10 +123,17 @@ def capture(
         and branch != default_branch
         and not _release_workflow(workflow_name)
     )
+    pr_ci_failed = (
+        pr_ci_status_lc == "completed" and pr_ci_conclusion_lc in _FAILURES
+    ) or (
+        event == "workflow_run"
+        and workflow_conclusion_lc in _FAILURES
+        and bool(pr_number)
+        and not merged
+        and branch != default_branch
+        and not _release_workflow(workflow_name)
+    )
 
-    # Normalize the evidence run IDs when completion is learned directly from the
-    # current workflow_run event. This keeps the terminal receipt self-contained
-    # even when the caller did not separately resolve the same historical run.
     effective_pr_ci_run_id = str(pr_ci_run_id or "")
     effective_main_ci_run_id = str(main_ci_run_id or "")
     effective_release_run_id = str(release_run_id or "")
@@ -137,19 +150,20 @@ def capture(
         GateStep(Gate.COMMIT, status=GateStatus.PASSED, evidence=head_sha or merge_sha),
     ]
     if pr_number:
+        pr_ci_gate = GateStatus.PASSED if pr_ci_done else GateStatus.FAILED if pr_ci_failed else GateStatus.WAITING
+        pr_ci_evidence = (
+            f"CI run {effective_pr_ci_run_id or run_id}"
+            if pr_ci_done
+            else f"CI run {effective_pr_ci_run_id or run_id} failed"
+            if pr_ci_failed
+            else f"CI run {effective_pr_ci_run_id or run_id} requires maintainer approval"
+            if approval_required
+            else "No successful PR CI evidence observed yet"
+        )
         plan.extend(
             [
                 GateStep(Gate.PR, status=GateStatus.PASSED, evidence=f"PR #{pr_number}"),
-                GateStep(
-                    Gate.PR_CI,
-                    required=False,
-                    status=GateStatus.PASSED if pr_ci_done else GateStatus.WAITING,
-                    evidence=(
-                        f"CI run {effective_pr_ci_run_id or run_id}"
-                        if pr_ci_done
-                        else "No successful PR CI evidence observed yet"
-                    ),
-                ),
+                GateStep(Gate.PR_CI, required=False, status=pr_ci_gate, evidence=pr_ci_evidence),
                 GateStep(
                     Gate.MERGE,
                     status=GateStatus.PASSED if merged else GateStatus.WAITING,
@@ -162,20 +176,12 @@ def capture(
             GateStep(
                 Gate.MAIN_CI,
                 status=GateStatus.PASSED if main_ci_done else GateStatus.WAITING,
-                evidence=(
-                    f"main CI run {effective_main_ci_run_id or run_id}"
-                    if main_ci_done
-                    else "Post-merge CI not yet successful"
-                ),
+                evidence=f"main CI run {effective_main_ci_run_id or run_id}" if main_ci_done else "Post-merge CI not yet successful",
             )
         )
         if release_required:
             release_status = GateStatus.PASSED if release_done else GateStatus.WAITING
-            if (
-                event == "workflow_run"
-                and _release_workflow(workflow_name)
-                and str(workflow_conclusion or "").lower() in _FAILURES
-            ):
+            if event == "workflow_run" and _release_workflow(workflow_name) and workflow_conclusion_lc in _FAILURES:
                 release_status = GateStatus.FAILED
             plan.append(
                 GateStep(
@@ -218,16 +224,13 @@ def capture(
                 Criterion(
                     "Requested release completed successfully",
                     CriterionStatus.PASSED if release_done else CriterionStatus.PENDING,
-                    (
-                        release_tag
-                        or (f"release_id={release_id}" if release_id else f"release_run={effective_release_run_id or run_id}")
-                        if release_done
-                        else ""
-                    ),
+                    release_tag or (f"release_id={release_id}" if release_id else f"release_run={effective_release_run_id or run_id}") if release_done else "",
                 )
             )
 
-    if pr_number and not merged:
+    if approval_required and pr_number and not merged:
+        state = State.BLOCKED
+    elif pr_number and not merged:
         state = State.EXECUTE
     elif merged:
         if release_required:
@@ -241,11 +244,7 @@ def capture(
     else:
         state = State.EXECUTE
 
-    if (
-        event == "workflow_run"
-        and str(workflow_conclusion or "").lower() in _FAILURES
-        and (merged or bool(pr_number))
-    ):
+    if event == "workflow_run" and workflow_conclusion_lc in _FAILURES and (merged or bool(pr_number)):
         state = State.EXECUTE
 
     completion_gate = "release" if release_required else ("main_ci" if merged else "merge")
@@ -275,11 +274,16 @@ def capture(
             "release_tag": release_tag,
             "release_required": release_required,
             "completion_gate": completion_gate,
+            "pr_ci_status": pr_ci_status,
+            "pr_ci_conclusion": pr_ci_conclusion,
+            "pr_ci_actor": pr_ci_actor,
+            "pr_ci_run_attempt": pr_ci_run_attempt,
             "pr_ci_run_id": effective_pr_ci_run_id,
             "main_ci_run_id": effective_main_ci_run_id,
             "release_run_id": effective_release_run_id,
             "release_published": bool(release_done),
             "release_id": str(release_id or ""),
+            "blocked_reason": effective_blocked_reason,
         },
     )
     t.history = [
@@ -295,15 +299,17 @@ def capture(
                     "pr_state": pr_state,
                     "workflow": workflow_name,
                     "conclusion": workflow_conclusion,
+                    "pr_ci_status": pr_ci_status,
+                    "pr_ci_conclusion": pr_ci_conclusion,
                     "release_tag": release_tag,
                     "completion_gate": completion_gate,
+                    "blocked_reason": effective_blocked_reason,
                 },
                 ensure_ascii=False,
             ),
         )
     ]
-    # Hydrate the previous observer artifact into one cumulative task ledger.
-    # The consumer workflow restores the latest artifact into log_root before capture().
+
     previous_state = Path(log_root) / tid / "state.json"
     if previous_state.exists():
         try:
@@ -312,30 +318,35 @@ def capture(
             previous = None
         if previous and previous.task_id == tid:
             t.created_at = previous.created_at
-            # Preserve durable metadata that a later GitHub event may not carry.
             merged_metadata = dict(previous.metadata)
             merged_metadata.update({k: v for k, v in t.metadata.items() if v not in ("", None)})
-            # Event-scoped fields must always describe this observation, including
-            # explicit empties. Otherwise a PR synchronize/open event can inherit
-            # workflow_conclusion="failure" from the previous CI artifact and
-            # manufacture a repair_request for the new/current head.
-            for key in ("event", "run_id", "workflow_name", "workflow_conclusion", "event_head_sha", "branch", "actor"):
+            for key in (
+                "event",
+                "run_id",
+                "workflow_name",
+                "workflow_conclusion",
+                "event_head_sha",
+                "branch",
+                "actor",
+                "pr_ci_status",
+                "pr_ci_conclusion",
+                "pr_ci_actor",
+                "pr_ci_run_attempt",
+                "blocked_reason",
+            ):
                 merged_metadata[key] = t.metadata.get(key, "")
             t.metadata = merged_metadata
             seen = {(e.at, e.kind, e.reason, e.gate, e.status, e.evidence) for e in previous.history}
             current = [e for e in t.history if (e.at, e.kind, e.reason, e.gate, e.status, e.evidence) not in seen]
             t.history = list(previous.history) + current
 
-    # Observer only produces evidence. Orchestrator is the sole authority that
-    # projects that evidence into phase/DONE/foreground-exit state.
     from .orchestrator import canonicalize_task
+
     authority = canonicalize_task(t)
 
-    # Persist a session time-budget checkpoint with every observation. This makes
-    # ChatGPT/UI lifetime a recoverable concern instead of a task lifetime.
     from .time_budget import apply as apply_time_budget
-    time_budget = apply_time_budget(t)
 
+    apply_time_budget(t)
     paths = write_audit(t, log_root)
     return {
         "task_id": tid,
@@ -348,6 +359,7 @@ def capture(
         "artifact_name": "gptauto-" + tid,
         "completion_gate": completion_gate,
         "release_required": release_required,
+        "blocked_reason": authority.get("blocked_reason", ""),
         "paths": paths,
     }
 
@@ -385,6 +397,10 @@ def main():
         "provenance",
         "release-published",
         "release-id",
+        "pr-ci-status",
+        "pr-ci-actor",
+        "pr-ci-run-attempt",
+        "blocked-reason",
     ]:
         c.add_argument("--" + name, default="")
     a = p.parse_args()
@@ -419,6 +435,10 @@ def main():
                 provenance=a.provenance,
                 release_published=a.release_published,
                 release_id=a.release_id,
+                pr_ci_status=a.pr_ci_status,
+                pr_ci_actor=a.pr_ci_actor,
+                pr_ci_run_attempt=a.pr_ci_run_attempt,
+                blocked_reason=a.blocked_reason,
             ),
             ensure_ascii=False,
         )
