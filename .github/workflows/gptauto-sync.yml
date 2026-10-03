@@ -1,5 +1,7 @@
 name: GPTAuto Consumer Sync
 on:
+  repository_dispatch:
+    types: [gptauto_release_published]
   workflow_dispatch:
     inputs:
       operation:
@@ -33,9 +35,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           HAS_DEDICATED_SYNC_TOKEN: ${{ secrets.GPTAUTO_SYNC_TOKEN != '' }}
           OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'sync' }}
+          REQUESTED_VERSION: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.version || '' }}
+          SOURCE_REPOSITORY: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.source_repository || '' }}
+          SOURCE_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.source_sha || '' }}
         shell: bash
         run: |
           set -Eeuo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "repository_dispatch" ]]; then
+            [[ "$SOURCE_REPOSITORY" == "b8vipvip/GPTAuto" ]] || { echo "::error::Rejected non-canonical GPTAuto release source: $SOURCE_REPOSITORY"; exit 1; }
+            [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid dispatched GPTAuto version: $REQUESTED_VERSION"; exit 1; }
+            echo "Release dispatch accepted: source=$SOURCE_REPOSITORY sha=$SOURCE_SHA version=$REQUESTED_VERSION"
+          fi
 
           managed_paths=(
             .github/gptauto
@@ -108,7 +119,11 @@ jobs:
           fi
 
           tmp="$(mktemp -d)"
-          git clone --depth 1 https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            git clone --depth 1 --branch "$REQUESTED_VERSION" https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
+          else
+            git clone --depth 1 https://github.com/b8vipvip/GPTAuto.git "$tmp/GPTAuto"
+          fi
           mkdir -p .github/gptauto .github/actions/upload-gptauto-log .github/workflows
           cp "$tmp"/GPTAuto/gptauto/*.py .github/gptauto/
           cp "$tmp"/GPTAuto/.github/actions/upload-gptauto-log/action.yml .github/actions/upload-gptauto-log/action.yml
@@ -119,6 +134,11 @@ jobs:
           cp "$tmp"/GPTAuto/consumer-template/gptauto-reconcile.yml .github/workflows/gptauto-reconcile.yml
           ver="$(grep '^version = ' "$tmp/GPTAuto/pyproject.toml" | head -1 | cut -d'"' -f2)"
           printf '%s\n' "$ver" > .github/gptauto/VERSION
+
+          if [[ -n "$REQUESTED_VERSION" && "v$ver" != "$REQUESTED_VERSION" ]]; then
+            echo "::error::Dispatched version $REQUESTED_VERSION resolved to v$ver"
+            exit 1
+          fi
 
           workflow_paths=(
             .github/workflows/gptauto-sync.yml

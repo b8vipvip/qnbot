@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
   actions: write
-  pull-requests: read
+  pull-requests: write
   issues: write
 concurrency:
   group: gptauto-reconcile-${{ inputs.task_id }}
