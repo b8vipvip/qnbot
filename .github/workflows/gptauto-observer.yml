@@ -59,8 +59,8 @@ jobs:
             --jq '.[] | [.number,.head.sha] | @tsv' | while IFS=$'\t' read -r pr head; do
               task_id="$(PYTHONPATH=.github python -c 'from gptauto.observer import observed_task_id; import os,sys; print(observed_task_id(os.environ["REPOSITORY"], sys.argv[1], sys.argv[2]))' "$pr" "$head")"
               marker="<!-- gptauto-completion-lease:$task_id -->"
-              active="$(gh api "repos/$REPOSITORY/issues/$pr/comments?per_page=100" \
-                --jq --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))] | last | .body // ""' 2>/dev/null || true)"
+              active="$(gh api "repos/$REPOSITORY/issues/$pr/comments?per_page=100" 2>/dev/null | \
+                jq -r --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))] | last | .body // ""' || true)"
               grep -Fq 'Completion Lease is ACTIVE' <<<"$active" || continue
 
               ci="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$head&per_page=100" \
@@ -134,9 +134,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          gh api "repos/$REPOSITORY/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=100" --paginate \
-            --jq --argjson pr "$PR_NUMBER" --arg head "$CURRENT_HEAD" \
-            '.workflow_runs[] | select(.head_sha != $head) | select(.status != "completed") | select(any(.pull_requests[]?; .number == $pr)) | select(.name | startswith("GPTAuto ") | not) | .id' |
+          gh api "repos/$REPOSITORY/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=100" --paginate --slurp |
+          jq -r --argjson pr "$PR_NUMBER" --arg head "$CURRENT_HEAD" \
+            '.[].workflow_runs[] | select(.head_sha != $head) | select(.status != "completed") | select(any(.pull_requests[]?; .number == $pr)) | select(.name | startswith("GPTAuto ") | not) | .id' |
           while read -r run_id; do
             [[ -n "$run_id" ]] || continue
             echo "Cancelling superseded PR run $run_id; current head is $CURRENT_HEAD"
