@@ -11,6 +11,13 @@ from .model import Criterion, CriterionStatus, Event, Gate, GateStatus, GateStep
 
 _VERSION_RE = re.compile(r"(?<![\w.])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?![\w.])", re.I)
 _RELEASE_RE = re.compile(r"\b(?:release|publish|published|shipping)\b|正式版|发布|发版", re.I)
+_SECONDARY_RELEASE_INTENT_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?(?:please\s+)?(?:release|publish|ship)\b"
+    r"|\b(?:release|publish)\b.{0,32}\b(?:required|must|required after|after merge|when green)\b"
+    r"|\b(?:must|should|then)\b.{0,32}\b(?:release|publish|ship)\b"
+    r"|正式发布|发布正式版|发版",
+    re.I,
+)
 _RELEASE_WORKFLOW_RE = re.compile(r"(?:^|[\s_-])(?:release|publish)(?:$|[\s_-])", re.I)
 _NON_RELEASE_PREFIX_RE = re.compile(r"^\s*(?:chore|docs|test|ci|build|deps|refactor)(?:\([^)]*\))?\s*:", re.I)
 _FAILURES = {"failure", "timed_out", "startup_failure"}
@@ -25,8 +32,8 @@ def release_expected(*texts):
         return False
     if _VERSION_RE.search(primary):
         return True
-    secondary = " ".join(values[1:])
-    return bool(_RELEASE_RE.search(secondary))
+    secondary = "\n".join(values[1:])
+    return bool(_SECONDARY_RELEASE_INTENT_RE.search(secondary))
 
 
 def observed_task_id(repo, pr_number="", head_sha="", merge_sha=""):

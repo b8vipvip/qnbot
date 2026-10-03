@@ -2,6 +2,14 @@ name: CI
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/gptauto/**'
+      - '.github/actions/upload-gptauto-log/**'
+      - '.github/workflows/gptauto-*.yml'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/api-control-plane-ci.yml'
+      - '.github/workflows/windows-build.yml'
 
 permissions:
   contents: read
