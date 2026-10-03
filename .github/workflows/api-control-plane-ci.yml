@@ -1,6 +1,7 @@
 name: API control plane CI
 
 on:
+  workflow_call:
   push:
     branches: [master]
     paths:
@@ -9,6 +10,7 @@ on:
       - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
+      - .github/workflows/ci.yml
   pull_request:
     paths:
       - services/api-control-plane/**
@@ -16,6 +18,7 @@ on:
       - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 permissions:
