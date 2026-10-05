@@ -84,7 +84,7 @@ jobs:
       - name: Execute safe merge gate
         if: ${{ steps.state.outputs.action == 'merge' }}
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.state.outputs.pr-number }}
           EXPECTED_HEAD: ${{ steps.state.outputs.head-sha }}
@@ -138,7 +138,7 @@ jobs:
       - name: Adopt externally merged completion lease
         if: ${{ steps.state.outputs.action == 'reconcile_adopt' }}
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TASK_ID: ${{ steps.state.outputs.task-id }}
@@ -203,14 +203,14 @@ jobs:
         id: repair-credential
         if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' }}
         env:
-          GPTAUTO_EXECUTOR_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+          GPTAUTO_GITHUB_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
         shell: bash
         run: |
-          if [[ -n "$GPTAUTO_EXECUTOR_TOKEN" ]]; then
+          if [[ -n "$GPTAUTO_GITHUB_TOKEN" ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GPTAUTO_EXECUTOR_TOKEN is required for autonomous repair pushes; refusing GITHUB_TOKEN fallback because it can create maintainer-approval workflow gates."
+            echo "::warning::GPTAUTO_GITHUB_TOKEN is required for autonomous repair pushes (legacy GPTAUTO_EXECUTOR_TOKEN is also accepted); refusing GITHUB_TOKEN fallback because it can create maintainer-approval workflow gates."
           fi
 
       - name: Publish automation credential user action
@@ -225,7 +225,7 @@ jobs:
         run: |
           marker="<!-- gptauto-executor-token-required:$TASK_ID:$HEAD_SHA -->"
           body="$marker
-          GPTAuto USER ACTION REQUIRED: configure repository secret GPTAUTO_EXECUTOR_TOKEN with a fine-grained PAT or GitHub App token that can update this repository. GPTAuto will not fall back to GITHUB_TOKEN for repair pushes because that can place the resulting PR workflows into 'awaiting approval'. The watchdog will retry the same task after the credential is configured."
+          GPTAuto USER ACTION REQUIRED: configure repository secret GPTAUTO_GITHUB_TOKEN with a fine-grained PAT or GitHub App token that can update this repository. Legacy GPTAUTO_EXECUTOR_TOKEN is also accepted during migration. GPTAuto will not fall back to GITHUB_TOKEN for repair pushes because that can place the resulting PR workflows into 'awaiting approval'. The watchdog will retry the same task after the credential is configured."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
           grep -Fq "$marker" <<<"$comments" || gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$body"
 
@@ -233,7 +233,7 @@ jobs:
         id: repair-dispatch
         if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           TASK_ID: ${{ steps.state.outputs.task-id }}
           PR_NUMBER: ${{ steps.state.outputs.pr-number }}

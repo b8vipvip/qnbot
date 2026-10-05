@@ -270,14 +270,14 @@ jobs:
         id: credential
         if: steps.lease.outputs.apply == 'true' && needs.generate-fix.outputs.proposal-ready == 'true' && needs.generate-fix.outputs.validation-passed == 'true' && steps.lease.outputs.same-repo == 'true'
         env:
-          GPTAUTO_EXECUTOR_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+          GPTAUTO_GITHUB_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
         shell: bash
         run: |
-          if [[ -n "$GPTAUTO_EXECUTOR_TOKEN" ]]; then
+          if [[ -n "$GPTAUTO_GITHUB_TOKEN" ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GPTAUTO_EXECUTOR_TOKEN missing; refusing GITHUB_TOKEN push fallback."
+            echo "::warning::GPTAUTO_GITHUB_TOKEN missing (legacy GPTAUTO_EXECUTOR_TOKEN is also accepted); refusing GITHUB_TOKEN push fallback."
           fi
 
       - uses: actions/download-artifact@v4
@@ -291,7 +291,7 @@ jobs:
         continue-on-error: true
         if: steps.lease.outputs.apply == 'true' && steps.credential.outputs.ready == 'true' && needs.generate-fix.outputs.proposal-ready == 'true' && needs.generate-fix.outputs.validation-passed == 'true' && steps.lease.outputs.same-repo == 'true'
         env:
-          GPTAUTO_EXECUTOR_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+          GPTAUTO_GITHUB_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           BRANCH: ${{ steps.lease.outputs.branch }}
           TASK_ID: ${{ inputs.task_id }}
@@ -304,7 +304,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "fix: GPTAuto $TIER repair ($TASK_ID)"
-          git remote set-url origin "https://x-access-token:${GPTAUTO_EXECUTOR_TOKEN}@github.com/${REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${GPTAUTO_GITHUB_TOKEN}@github.com/${REPOSITORY}.git"
           git push origin "HEAD:$BRANCH"
 
       - name: Publish automation credential user action
@@ -319,7 +319,7 @@ jobs:
         run: |
           marker="<!-- gptauto-executor-token-required:$TASK_ID:$HEAD_SHA -->"
           body="$marker
-          GPTAuto USER ACTION REQUIRED: configure GPTAUTO_EXECUTOR_TOKEN. The generated repair patch passed targeted validation but is intentionally not pushed with GITHUB_TOKEN because bot-authored PR synchronize events can be placed into maintainer approval."
+          GPTAuto USER ACTION REQUIRED: configure GPTAUTO_GITHUB_TOKEN (legacy GPTAUTO_EXECUTOR_TOKEN is also accepted). The generated repair patch passed targeted validation but is intentionally not pushed with GITHUB_TOKEN because bot-authored PR synchronize events can be placed into maintainer approval."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
@@ -398,6 +398,6 @@ jobs:
             echo "- Proposal ready: \`$READY\`"
             echo "- Selected tier: \`$TIER\`"
             [[ -z "$FALLBACK" ]] || echo "- Fallback reason: $FALLBACK"
-            echo "- Repair pushes require GPTAUTO_EXECUTOR_TOKEN and never fall back to GITHUB_TOKEN."
+            echo "- Repair pushes require GPTAUTO_GITHUB_TOKEN (legacy GPTAUTO_EXECUTOR_TOKEN is accepted) and never fall back to GITHUB_TOKEN."
             echo "- No repair tier may merge or publish; normal CI/Executor/Reconcile remain the only full validation and release path."
           } >> "$GITHUB_STEP_SUMMARY"
