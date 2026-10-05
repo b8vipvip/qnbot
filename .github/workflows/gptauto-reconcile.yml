@@ -37,7 +37,7 @@ jobs:
       - name: Resolve and dispatch canonical post-merge validation gate
         id: validation-plan
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           MERGE_SHA: ${{ inputs.merge_sha }}
@@ -112,7 +112,7 @@ jobs:
       - name: Wait for terminal post-merge validation gates
         id: gates
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TASK_ID: ${{ inputs.task_id }}
           MERGE_SHA: ${{ inputs.merge_sha }}
@@ -156,7 +156,7 @@ jobs:
       - name: Require published release evidence
         id: release-proof
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           MERGE_SHA: ${{ inputs.merge_sha }}
@@ -249,7 +249,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TASK_ID: ${{ inputs.task_id }}
           PR_NUMBER: ${{ inputs.pr_number }}
