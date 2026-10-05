@@ -12,8 +12,6 @@ on:
         options:
           - sync
           - uninstall
-  schedule:
-    - cron: '17 * * * *'
 permissions:
   contents: write
   pull-requests: write
@@ -164,7 +162,7 @@ jobs:
 
             The default GitHub Actions token cannot push updates under `.github/workflows/` in this repository. The consumer was intentionally left unchanged so its VERSION never claims a partially installed GPTAuto release.
 
-            Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write** for this repository. The next scheduled sync will retry automatically.' "$marker" "$ver"
+            Configure repository secret `GPTAUTO_SYNC_TOKEN` with a fine-grained token that has **Contents: Read and write**, **Pull requests: Read and write**, and **Workflows: Read and write** for this repository. A future GPTAuto release dispatch or an explicit manual sync will retry.' "$marker" "$ver"
             issue="$(gh issue list --state open --search "$marker in:body" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
             if [[ -n "$issue" ]]; then
               gh issue edit "$issue" --title "$title" --body "$body" >/dev/null || true
@@ -179,8 +177,8 @@ jobs:
               echo "- Consumer left unchanged (atomic sync)."
               echo "- Required token permissions: Contents write, Pull requests write, Workflows write."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::GPTAuto v$ver contains workflow changes. Configure GPTAUTO_SYNC_TOKEN with Workflows write; no partial update was pushed."
-            exit 0
+            echo "::error::GPTAuto v$ver contains workflow changes. Configure GPTAUTO_SYNC_TOKEN with Workflows write; no partial update was pushed."
+            exit 1
           fi
 
           if git diff --quiet -- "${managed_paths[@]}"; then
@@ -225,8 +223,8 @@ jobs:
                 echo "- Enable **Allow GitHub Actions to create and approve pull requests**, or configure a repository secret \`GPTAUTO_SYNC_TOKEN\` using a fine-grained token with Contents, Pull requests, and Workflows write permission."
                 echo "- Dedicated sync token configured: \`$HAS_DEDICATED_SYNC_TOKEN\`"
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::PR creation blocked after branch sync: $create_output"
-              exit 0
+              echo "::error::PR creation blocked after branch sync: $create_output"
+              exit 1
             fi
             pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
           fi
