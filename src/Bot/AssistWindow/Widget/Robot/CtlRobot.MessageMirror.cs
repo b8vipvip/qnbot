@@ -202,9 +202,39 @@ namespace Bot.AssistWindow.Widget.Robot
 
             grdTipNoConv.Visibility = Visibility.Collapsed;
             DateTime? previousDate = null;
-            var usedNativeBotConversationIds = new HashSet<string>(StringComparer.Ordinal);
+            var usedNativeBotConversations = new HashSet<CtlConversation>();
             foreach (var turn in turns.Where(x => x != null))
             {
+                UIElement messageElement = null;
+                string botAnswer;
+                if (TryExtractBotEchoAnswer(turn, out botAnswer))
+                {
+                    // [A] belongs only to the Qianniu transport echo. Never render that
+                    // mirrored seller message itself. If we can associate it with the
+                    // local Bot answer, render the original native CtlConversation answer
+                    // row exactly once; duplicate/stale [A] echoes are ignored.
+                    var nativeBotConversation = FindMessageMirrorActionConversation(
+                        seller,
+                        buyer,
+                        botAnswer,
+                        turn.Timestamp,
+                        usedNativeBotConversations);
+                    if (nativeBotConversation == null)
+                    {
+                        continue;
+                    }
+
+                    usedNativeBotConversations.Add(nativeBotConversation);
+                    nativeBotConversation.UseAnswerOnlyMirrorPresentation();
+                    messageElement = nativeBotConversation;
+                }
+                else
+                {
+                    messageElement = BuildMessageMirrorBubble(turn);
+                }
+
+                if (messageElement == null) continue;
+
                 var messageDate = turn.Timestamp == DateTime.MinValue
                     ? (DateTime?)null
                     : turn.Timestamp.Date;
@@ -215,29 +245,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     previousDate = messageDate;
                 }
 
-                string botAnswer;
-                if (TryExtractBotEchoAnswer(turn, out botAnswer))
-                {
-                    var nativeBotConversation = FindMessageMirrorActionConversation(
-                        seller,
-                        buyer,
-                        botAnswer,
-                        turn.Timestamp,
-                        usedNativeBotConversationIds);
-                    if (nativeBotConversation != null
-                        && !string.IsNullOrWhiteSpace(nativeBotConversation.HistoryId))
-                    {
-                        usedNativeBotConversationIds.Add(nativeBotConversation.HistoryId);
-                    }
-
-                    stkDialog.Children.Add(BuildNativeBotMessageBubble(
-                        turn,
-                        botAnswer,
-                        nativeBotConversation));
-                    continue;
-                }
-
-                stkDialog.Children.Add(BuildMessageMirrorBubble(turn));
+                stkDialog.Children.Add(messageElement);
             }
 
             if (keepBottom)
@@ -336,81 +344,6 @@ namespace Bot.AssistWindow.Widget.Robot
             return stack;
         }
 
-        private UIElement BuildNativeBotMessageBubble(
-            ConversationContextTurn turn,
-            string echoedAnswer,
-            CtlConversation nativeConversation)
-        {
-            var maxWidth = Math.Max(210, Math.Min(380, scvBody.ActualWidth > 80
-                ? scvBody.ActualWidth - 64
-                : 300));
-            var answer = nativeConversation == null
-                ? (echoedAnswer ?? string.Empty)
-                : nativeConversation.MirrorAnswerText;
-
-            var meta = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(2, 0, 2, 3)
-            };
-            meta.Children.Add(new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(219, 234, 254)),
-                CornerRadius = new CornerRadius(5),
-                Padding = new Thickness(5, 1, 5, 1),
-                Child = new TextBlock
-                {
-                    Text = "Bot",
-                    Foreground = new SolidColorBrush(Color.FromRgb(29, 78, 216)),
-                    FontSize = 9,
-                    FontWeight = FontWeights.Bold
-                }
-            });
-            meta.Children.Add(new TextBlock
-            {
-                Text = turn.Timestamp == DateTime.MinValue ? string.Empty : "  " + turn.Timestamp.ToString("HH:mm:ss"),
-                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-
-            var bubble = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(221, 243, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(190, 226, 247)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(10, 7, 10, 7),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                MaxWidth = maxWidth,
-                Child = new TextBlock
-                {
-                    Text = answer,
-                    Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
-                    FontSize = 12,
-                    TextWrapping = TextWrapping.Wrap,
-                    LineHeight = 18
-                }
-            };
-
-            // [A] is only the transport-side Bot marker. Once recognized, never render
-            // the mirrored seller echo. Use the native CtlConversation answer and its
-            // original context-menu implementation so 查看/复制/重发/修改 keep identical behavior.
-            bubble.ContextMenu = nativeConversation == null
-                ? BuildCopyOnlyContextMenu(answer, bubble)
-                : nativeConversation.CreateAnswerContextMenu(bubble);
-
-            var stack = new StackPanel
-            {
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(38, 3, 9, 7)
-            };
-            stack.Children.Add(meta);
-            stack.Children.Add(bubble);
-            return stack;
-        }
-
         private ContextMenu BuildCopyOnlyContextMenu(string messageText, FrameworkElement placementTarget)
         {
             var menu = new ContextMenu();
@@ -458,7 +391,7 @@ namespace Bot.AssistWindow.Widget.Robot
             string buyer,
             string messageText,
             DateTime messageTimestamp,
-            ISet<string> usedConversationIds)
+            ISet<CtlConversation> usedConversations)
         {
             var key = string.Format("{0}#{1}", seller, buyer);
             List<CtlConversation> conversations;
@@ -475,9 +408,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 var matches = conversations
                     .Where(x => x != null
-                        && (usedConversationIds == null
-                            || string.IsNullOrWhiteSpace(x.HistoryId)
-                            || !usedConversationIds.Contains(x.HistoryId))
+                        && (usedConversations == null || !usedConversations.Contains(x))
                         && string.Equals(
                             NormalizeMessageMirrorText(x.MirrorAnswerText),
                             normalized,
