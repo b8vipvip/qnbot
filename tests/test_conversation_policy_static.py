@@ -10,7 +10,8 @@ def read(path):
 def test_same_buyer_timeline_is_loaded_and_time_ordered():
     store = read('src/Bot/ChromeNs/ConversationContextStore.cs')
     assert 'im.singlemsg.GetRemoteHisMsg' in store
-    assert 'count = 40' in store
+    assert 'requestedCount = 40' in store
+    assert 'Math.Min(100, requestedCount)' in store
     assert 'OrderBy(GetSortValue)' in store
     assert 'GetRecentTurns' in store
     assert 'yyyy-MM-dd HH:mm:ss' in store
