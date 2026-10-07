@@ -202,6 +202,7 @@ namespace Bot.AssistWindow.Widget.Robot
 
             grdTipNoConv.Visibility = Visibility.Collapsed;
             DateTime? previousDate = null;
+            var usedNativeBotConversationIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var turn in turns.Where(x => x != null))
             {
                 var messageDate = turn.Timestamp == DateTime.MinValue
@@ -214,7 +215,29 @@ namespace Bot.AssistWindow.Widget.Robot
                     previousDate = messageDate;
                 }
 
-                stkDialog.Children.Add(BuildMessageMirrorBubble(seller, buyer, turn));
+                string botAnswer;
+                if (TryExtractBotEchoAnswer(turn, out botAnswer))
+                {
+                    var nativeBotConversation = FindMessageMirrorActionConversation(
+                        seller,
+                        buyer,
+                        botAnswer,
+                        turn.Timestamp,
+                        usedNativeBotConversationIds);
+                    if (nativeBotConversation != null
+                        && !string.IsNullOrWhiteSpace(nativeBotConversation.HistoryId))
+                    {
+                        usedNativeBotConversationIds.Add(nativeBotConversation.HistoryId);
+                    }
+
+                    stkDialog.Children.Add(BuildNativeBotMessageBubble(
+                        turn,
+                        botAnswer,
+                        nativeBotConversation));
+                    continue;
+                }
+
+                stkDialog.Children.Add(BuildMessageMirrorBubble(turn));
             }
 
             if (keepBottom)
@@ -243,15 +266,9 @@ namespace Bot.AssistWindow.Widget.Robot
             };
         }
 
-        private UIElement BuildMessageMirrorBubble(
-            string seller,
-            string buyer,
-            ConversationContextTurn turn)
+        private UIElement BuildMessageMirrorBubble(ConversationContextTurn turn)
         {
             var isSeller = string.Equals(turn.Role, "assistant", StringComparison.Ordinal);
-            var actionConversation = isSeller && !turn.Withdrawn
-                ? FindMessageMirrorActionConversation(seller, buyer, turn.Text)
-                : null;
             var maxWidth = Math.Max(210, Math.Min(380, scvBody.ActualWidth > 80
                 ? scvBody.ActualWidth - 64
                 : 300));
@@ -270,23 +287,6 @@ namespace Bot.AssistWindow.Widget.Robot
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             });
-            if (actionConversation != null)
-            {
-                meta.Children.Add(new Border
-                {
-                    Background = new SolidColorBrush(Color.FromRgb(219, 234, 254)),
-                    CornerRadius = new CornerRadius(5),
-                    Padding = new Thickness(5, 1, 5, 1),
-                    Margin = new Thickness(5, 0, 0, 0),
-                    Child = new TextBlock
-                    {
-                        Text = "Bot",
-                        Foreground = new SolidColorBrush(Color.FromRgb(29, 78, 216)),
-                        FontSize = 9,
-                        FontWeight = FontWeights.Bold
-                    }
-                });
-            }
             meta.Children.Add(new TextBlock
             {
                 Text = turn.Timestamp == DateTime.MinValue ? string.Empty : "  " + turn.Timestamp.ToString("HH:mm:ss"),
@@ -322,9 +322,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 MaxWidth = maxWidth,
                 Child = text
             };
-            bubble.ContextMenu = BuildMessageMirrorContextMenu(
-                messageText,
-                actionConversation);
+            bubble.ContextMenu = BuildCopyOnlyContextMenu(messageText, bubble);
 
             var stack = new StackPanel
             {
@@ -338,12 +336,85 @@ namespace Bot.AssistWindow.Widget.Robot
             return stack;
         }
 
-        private ContextMenu BuildMessageMirrorContextMenu(
-            string messageText,
-            CtlConversation actionConversation)
+        private UIElement BuildNativeBotMessageBubble(
+            ConversationContextTurn turn,
+            string echoedAnswer,
+            CtlConversation nativeConversation)
+        {
+            var maxWidth = Math.Max(210, Math.Min(380, scvBody.ActualWidth > 80
+                ? scvBody.ActualWidth - 64
+                : 300));
+            var answer = nativeConversation == null
+                ? (echoedAnswer ?? string.Empty)
+                : nativeConversation.MirrorAnswerText;
+
+            var meta = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(2, 0, 2, 3)
+            };
+            meta.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(219, 234, 254)),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(5, 1, 5, 1),
+                Child = new TextBlock
+                {
+                    Text = "Bot",
+                    Foreground = new SolidColorBrush(Color.FromRgb(29, 78, 216)),
+                    FontSize = 9,
+                    FontWeight = FontWeights.Bold
+                }
+            });
+            meta.Children.Add(new TextBlock
+            {
+                Text = turn.Timestamp == DateTime.MinValue ? string.Empty : "  " + turn.Timestamp.ToString("HH:mm:ss"),
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            var bubble = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(221, 243, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(190, 226, 247)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(10, 7, 10, 7),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                MaxWidth = maxWidth,
+                Child = new TextBlock
+                {
+                    Text = answer,
+                    Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    LineHeight = 18
+                }
+            };
+
+            // [A] is only the transport-side Bot marker. Once recognized, never render
+            // the mirrored seller echo. Use the native CtlConversation answer and its
+            // original context-menu implementation so 查看/复制/重发/修改 keep identical behavior.
+            bubble.ContextMenu = nativeConversation == null
+                ? BuildCopyOnlyContextMenu(answer, bubble)
+                : nativeConversation.CreateAnswerContextMenu(bubble);
+
+            var stack = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(38, 3, 9, 7)
+            };
+            stack.Children.Add(meta);
+            stack.Children.Add(bubble);
+            return stack;
+        }
+
+        private ContextMenu BuildCopyOnlyContextMenu(string messageText, FrameworkElement placementTarget)
         {
             var menu = new ContextMenu();
-            var copy = new MenuItem { Header = "复制消息" };
+            var copy = new MenuItem { Header = "复制" };
             copy.Click += (s, e) =>
             {
                 try
@@ -355,31 +426,39 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
             };
             menu.Items.Add(copy);
+            menu.PlacementTarget = placementTarget;
+            return menu;
+        }
 
-            if (actionConversation == null) return menu;
-
-            menu.Items.Add(new Separator());
-            var view = new MenuItem { Header = "查看知识记录" };
-            view.Click += (s, e) => actionConversation.MirrorOpenKnowledge(Window.GetWindow(this));
-            menu.Items.Add(view);
-
-            if (actionConversation.MirrorCanResend)
+        private static bool TryExtractBotEchoAnswer(
+            ConversationContextTurn turn,
+            out string answer)
+        {
+            answer = string.Empty;
+            if (turn == null
+                || turn.Withdrawn
+                || !string.Equals(turn.Role, "assistant", StringComparison.Ordinal))
             {
-                var resend = new MenuItem { Header = "重发Bot回复" };
-                resend.Click += (s, e) => actionConversation.MirrorRequestResend();
-                menu.Items.Add(resend);
+                return false;
             }
 
-            var edit = new MenuItem { Header = "修改Bot回复并学习" };
-            edit.Click += (s, e) => actionConversation.MirrorRequestEdit();
-            menu.Items.Add(edit);
-            return menu;
+            var text = (turn.Text ?? string.Empty).TrimEnd();
+            const string marker = "[A]";
+            if (!text.EndsWith(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            answer = text.Substring(0, text.Length - marker.Length).TrimEnd();
+            return answer.Length > 0;
         }
 
         private CtlConversation FindMessageMirrorActionConversation(
             string seller,
             string buyer,
-            string messageText)
+            string messageText,
+            DateTime messageTimestamp,
+            ISet<string> usedConversationIds)
         {
             var key = string.Format("{0}#{1}", seller, buyer);
             List<CtlConversation> conversations;
@@ -394,13 +473,30 @@ namespace Bot.AssistWindow.Widget.Robot
             if (normalized.Length == 0) return null;
             try
             {
-                return conversations
-                    .Where(x => x != null)
-                    .Reverse()
-                    .FirstOrDefault(x => string.Equals(
-                        NormalizeMessageMirrorText(x.MirrorAnswerText),
-                        normalized,
-                        StringComparison.Ordinal));
+                var matches = conversations
+                    .Where(x => x != null
+                        && (usedConversationIds == null
+                            || string.IsNullOrWhiteSpace(x.HistoryId)
+                            || !usedConversationIds.Contains(x.HistoryId))
+                        && string.Equals(
+                            NormalizeMessageMirrorText(x.MirrorAnswerText),
+                            normalized,
+                            StringComparison.Ordinal))
+                    .ToList();
+                if (matches.Count == 0) return null;
+
+                if (messageTimestamp == DateTime.MinValue)
+                {
+                    return matches
+                        .OrderByDescending(x => x.HistorySortTicks)
+                        .FirstOrDefault();
+                }
+
+                var targetTicks = messageTimestamp.Ticks;
+                return matches
+                    .OrderBy(x => Math.Abs((double)x.HistorySortTicks - targetTicks))
+                    .ThenByDescending(x => x.HistorySortTicks)
+                    .FirstOrDefault();
             }
             catch
             {
