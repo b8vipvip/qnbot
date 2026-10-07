@@ -37,6 +37,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private ConcurrentDictionary<string, List<CtlConversation>> buyerConversations;
         private DispatcherTimer _statsTimer;
         private bool _dashboardVisible;
+        private int _goodsRefreshGeneration;
 
         public CtlRobot(Desk desk, RightPanel rp)
         {
@@ -255,43 +256,116 @@ namespace Bot.AssistWindow.Widget.Robot
         private static string BuildGoodsIdentity(ZnkfItem item)
         {
             if (item == null) return string.Empty;
-            var itemId = Convert.ToString(item.itemId);
-            if (!string.IsNullOrWhiteSpace(itemId)) return "id:" + itemId.Trim();
+            if (item.itemId > 0) return "id:" + item.itemId;
             if (!string.IsNullOrWhiteSpace(item.itemUrl)) return "url:" + item.itemUrl.Trim();
-            return "fallback:" + (item.title ?? string.Empty).Trim() + "|" + (item.price ?? string.Empty).Trim();
+            return BuildGoodsDisplayIdentity(item);
+        }
+
+        private static string BuildGoodsDisplayIdentity(ZnkfItem item)
+        {
+            if (item == null) return string.Empty;
+            var title = NormalizeGoodsIdentityText(item.title);
+            var price = NormalizeGoodsIdentityText(item.price);
+            var pic = NormalizeGoodsIdentityText(item.pic);
+            if (title.Length == 0 && price.Length == 0 && pic.Length == 0)
+            {
+                return "empty:" + BuildGoodsIdentityFallback(item);
+            }
+            return "display:" + title + "|" + price + "|" + pic;
+        }
+
+        private static string BuildGoodsIdentityFallback(ZnkfItem item)
+        {
+            if (item == null) return string.Empty;
+            return NormalizeGoodsIdentityText(item.itemUrl)
+                + "|" + item.itemId
+                + "|" + item.quantity;
+        }
+
+        private static string NormalizeGoodsIdentityText(string value)
+        {
+            return (value ?? string.Empty)
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Trim();
+        }
+
+        private bool IsGoodsRefreshCurrent(int generation, QN qn, string buyerTargetId)
+        {
+            if (generation != _goodsRefreshGeneration) return false;
+            var current = _preQN;
+            if (!ReferenceEquals(current, qn) || current == null || current.Buyer == null) return false;
+            return string.Equals(
+                (current.Buyer.TargetId ?? string.Empty).Trim(),
+                (buyerTargetId ?? string.Empty).Trim(),
+                StringComparison.Ordinal);
         }
 
         private async void RefreshItems()
         {
+            var generation = System.Threading.Interlocked.Increment(ref _goodsRefreshGeneration);
+            var requestQn = _preQN;
+            var requestBuyer = requestQn == null ? null : requestQn.Buyer;
+            var buyerTargetId = requestBuyer == null
+                ? string.Empty
+                : (requestBuyer.TargetId ?? string.Empty).Trim();
+            if (requestQn == null || requestBuyer == null || buyerTargetId.Length == 0)
+            {
+                if (generation == _goodsRefreshGeneration)
+                {
+                    RemoveCtlGoods();
+                    pgDownGoods.Visibility = Visibility.Collapsed;
+                }
+                return;
+            }
+
             try
             {
-                if (_preQN == null || _preQN.Buyer == null) return;
                 pgDownGoods.Visibility = Visibility.Visible;
                 RemoveCtlGoods();
-                var itemRecord = await _preQN.GetItemRecords(_preQN.Buyer.TargetId);
+
+                var itemRecord = await requestQn.GetItemRecords(buyerTargetId);
+                if (!IsGoodsRefreshCurrent(generation, requestQn, buyerTargetId)) return;
+
                 if (itemRecord == null || itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
                 {
-                    pgDownGoods.Visibility = Visibility.Collapsed;
+                    RemoveCtlGoods();
                     return;
                 }
 
+                // Qianniu can return repeated inquiry records, and buyer/session switch events can
+                // also overlap while GetItemRecords is awaiting. The generation gate above makes
+                // only the newest request authoritative; the second grouping removes visually
+                // identical records even when upstream item IDs/URLs differ.
                 var distinctItems = itemRecord.data.underInquiryItemList
                     .Where(item => item != null)
                     .GroupBy(BuildGoodsIdentity, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.First())
+                    .GroupBy(BuildGoodsDisplayIdentity, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
                     .Take(8)
                     .ToList();
 
+                RemoveCtlGoods();
                 foreach (var item in distinctItems)
                 {
                     panelGoods.Children.Add(new CtlOneGoods(item));
                 }
-                pgDownGoods.Visibility = Visibility.Collapsed;
             }
             catch (Exception ex)
             {
-                Log.Exception(ex);
-                pgDownGoods.Visibility = Visibility.Collapsed;
+                if (generation == _goodsRefreshGeneration)
+                {
+                    Log.Exception(ex);
+                    RemoveCtlGoods();
+                }
+            }
+            finally
+            {
+                if (generation == _goodsRefreshGeneration)
+                {
+                    pgDownGoods.Visibility = Visibility.Collapsed;
+                }
             }
         }
 
