@@ -263,6 +263,14 @@ namespace Bot.AssistWindow.Widget.Robot
             if (handler != null) handler(this, new ConversationEditEventArgs(_seller, _buyer, _question, _answer));
         }
 
+        internal void UseAnswerOnlyMirrorPresentation()
+        {
+            if (gridQuestion != null)
+            {
+                gridQuestion.Visibility = Visibility.Collapsed;
+            }
+        }
+
         internal ContextMenu CreateAnswerContextMenu(FrameworkElement placementTarget = null)
         {
             var menu = new ContextMenu();
