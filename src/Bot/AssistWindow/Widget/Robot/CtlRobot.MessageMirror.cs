@@ -396,7 +396,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 return conversations
                     .Where(x => x != null)
-                    .Reverse<CtlConversation>()
+                    .Reverse()
                     .FirstOrDefault(x => string.Equals(
                         NormalizeMessageMirrorText(x.MirrorAnswerText),
                         normalized,
