@@ -242,10 +242,11 @@ namespace Bot.ChromeNs
             {
                 Cleanup(state, now);
                 var take = Math.Max(10, Math.Min(100, maxTurns));
+                // OrderBy is stable: when Qianniu gives several messages the same timestamp,
+                // keep their original arrival/history order instead of reordering by a hash/key.
                 var eligible = state.Turns
                     .Where(t => t != null && !string.IsNullOrWhiteSpace(t.Text))
                     .OrderBy(t => t.Timestamp)
-                    .ThenBy(t => t.MessageKey ?? string.Empty, StringComparer.Ordinal)
                     .ToList();
                 return eligible.Skip(Math.Max(0, eligible.Count - take))
                     .Select(CloneTurn)
@@ -271,7 +272,7 @@ namespace Bot.ChromeNs
                 try
                 {
                     if (shop != null) scope = ShopSettingsScope.Enter(shop);
-                    RefreshRemoteHistory(state, shop, seller, buyer, ccode);
+                    RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);
                 }
                 catch (Exception ex)
                 {
@@ -345,7 +346,8 @@ namespace Bot.ChromeNs
             ShopContext shop,
             string seller,
             string buyer,
-            string ccode)
+            string ccode,
+            int requestedCount = 40)
         {
             lock (state.Sync)
             {
@@ -360,7 +362,7 @@ namespace Bot.ChromeNs
                 var response = qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
-                    count = 40,
+                    count = Math.Max(20, Math.Min(100, requestedCount)),
                     gohistory = 1,
                     msgid = "-1",
                     msgtime = "-1"
