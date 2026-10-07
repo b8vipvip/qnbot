@@ -81,15 +81,15 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition x:Name="colDashboard" Width="0"/>
             </Grid.ColumnDefinitions>
-            <ScrollViewer x:Name="scvBody" Grid.Column="0" Margin="0" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="scvBody" Grid.Column="0" Margin="0" Background="#F4F6F8" VerticalScrollBarVisibility="Auto">
                 <StackPanel x:Name="stkDialog">
                     <Grid Name="grdShowConv" Background="#FFFFFFFF" Visibility="Collapsed">
                         <ProgressBar Height="20" Margin="20" IsIndeterminate="True" />
                     </Grid>
                     <Border Name="grdTipNoConv" Background="#FFFFFFFF" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Height="180" Margin="8" Visibility="Collapsed">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock Text="暂无聊天内容" FontSize="18" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"/>
-                            <TextBlock Text="开启无障碍模式后，买家消息会显示在这里" FontSize="12" Foreground="#9CA3AF" Margin="0 8 0 0" HorizontalAlignment="Center"/>
+                            <TextBlock Text="暂无聊天消息" FontSize="18" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"/>
+                            <TextBlock Text="正在同步当前买家的千牛聊天记录" FontSize="12" Foreground="#9CA3AF" Margin="0 8 0 0" HorizontalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
