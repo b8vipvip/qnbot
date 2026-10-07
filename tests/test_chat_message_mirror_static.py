@@ -40,8 +40,10 @@ def test_mirror_uses_real_buyer_and_seller_chat_events_and_remote_history():
     assert "GetMirrorTurns(" in context
     assert "Math.Min(100, maxTurns)" in context
     assert "RequestMirrorRemoteRefresh(" in context
-    assert 'count = 40' in context
-    assert "RefreshRemoteHistory(state, shop, seller, buyer, ccode);" in context
+    assert "requestedCount = 40" in context
+    assert "Math.Min(100, requestedCount)" in context
+    assert "RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);" in context
+    assert ".ThenBy(t => t.MessageKey" not in context
 
 
 def test_message_mirror_keeps_bot_reply_actions_without_showing_legacy_cards():
