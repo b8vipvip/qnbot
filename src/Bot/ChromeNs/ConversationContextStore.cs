@@ -230,6 +230,62 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static List<ConversationContextTurn> GetMirrorTurns(
+            string seller,
+            string buyer,
+            int maxTurns)
+        {
+            TimelineState state;
+            if (!States.TryGetValue(Key(seller, buyer), out state)) return new List<ConversationContextTurn>();
+            var now = DateTime.Now;
+            lock (state.Sync)
+            {
+                Cleanup(state, now);
+                var take = Math.Max(10, Math.Min(100, maxTurns));
+                // OrderBy is stable: when Qianniu gives several messages the same timestamp,
+                // keep their original arrival/history order instead of reordering by a hash/key.
+                var eligible = state.Turns
+                    .Where(t => t != null && !string.IsNullOrWhiteSpace(t.Text))
+                    .OrderBy(t => t.Timestamp)
+                    .ToList();
+                return eligible.Skip(Math.Max(0, eligible.Count - take))
+                    .Select(CloneTurn)
+                    .ToList();
+            }
+        }
+
+        public static void RequestMirrorRemoteRefresh(
+            string seller,
+            string buyer,
+            string ccode)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            ccode = (ccode ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return;
+
+            var shop = ResolveShop(seller);
+            var state = GetState(seller, buyer);
+            Task.Run(() =>
+            {
+                IDisposable scope = null;
+                try
+                {
+                    if (shop != null) scope = ShopSettingsScope.Enter(shop);
+                    RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("镜像聊天记录同步失败: seller=" + seller
+                        + ", buyer=" + buyer + ", error=" + SafeLog(ex.Message));
+                }
+                finally
+                {
+                    if (scope != null) scope.Dispose();
+                }
+            });
+        }
+
         public static bool TryGetLatestBuyerQuestion(
             string seller,
             string buyer,
@@ -290,7 +346,8 @@ namespace Bot.ChromeNs
             ShopContext shop,
             string seller,
             string buyer,
-            string ccode)
+            string ccode,
+            int requestedCount = 40)
         {
             lock (state.Sync)
             {
@@ -305,7 +362,7 @@ namespace Bot.ChromeNs
                 var response = qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
-                    count = 40,
+                    count = Math.Max(20, Math.Min(100, requestedCount)),
                     gohistory = 1,
                     msgid = "-1",
                     msgtime = "-1"

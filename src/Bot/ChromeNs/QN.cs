@@ -529,6 +529,7 @@ namespace Bot.ChromeNs
                 Log.Info("已实际处理的买家消息不再重复入队: key=" + messageKey);
                 return Task.CompletedTask;
             }
+            ConversationContextStore.RefreshAndRecord(message, messageText);
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
             OrderPlacedReplyPlan orderPlan;

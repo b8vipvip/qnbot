@@ -67,6 +67,7 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             RefreshRunStatus();
             RefreshStats();
+            StartMessageMirror();
             _statsTimer = new DispatcherTimer();
             _statsTimer.Interval = TimeSpan.FromSeconds(3);
             _statsTimer.Tick += (s, args) => RefreshStats();
@@ -128,10 +129,8 @@ namespace Bot.AssistWindow.Widget.Robot
             if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null
                 && QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
             {
-                grdTipNoConv.Visibility = Visibility.Collapsed;
-                stkDialog.Children.Add(ctlConversation);
+                RefreshMessageMirror(false);
             }
-            scvBody.ScrollToEnd();
             return ctlConversation;
         }
 
@@ -250,21 +249,7 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void RefreshConversations()
         {
-            if (_preQN == null || _preQN.Seller == null || _preQN.Buyer == null) return;
-            var key = string.Format("{0}#{1}", _preQN.Seller.Nick, _preQN.Buyer.Nick);
-            var conversations = buyerConversations.xTryGetValue(key);
-            stkDialog.Children.Clear();
-            if (conversations != null && conversations.Count > 0)
-            {
-                conversations.ForEach(conv => stkDialog.Children.Add(conv));
-                scvBody.ScrollToEnd();
-                grdTipNoConv.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                ShowGridTip(grdTipNoConv);
-                stkDialog.Children.Add(grdTipNoConv);
-            }
+            RefreshMessageMirror(true);
         }
 
         private static string BuildGoodsIdentity(ZnkfItem item)
