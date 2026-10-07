@@ -221,6 +221,36 @@ namespace Bot.AssistWindow.Widget.Robot
             });
         }
 
+        internal string MirrorAnswerText
+        {
+            get { return _answer ?? string.Empty; }
+        }
+
+        internal bool MirrorCanResend
+        {
+            get { return _canResend; }
+        }
+
+        internal void MirrorRequestResend()
+        {
+            RaiseResendRequested();
+        }
+
+        internal void MirrorRequestEdit()
+        {
+            RaiseEditRequested();
+        }
+
+        internal void MirrorOpenKnowledge(Window owner)
+        {
+            KnowledgeCenterWindow.ShowManagerAndLocate(
+                owner,
+                _seller,
+                _buyer,
+                _question,
+                _answer);
+        }
+
         private void RaiseResendRequested()
         {
             var handler = ResendRequested;
