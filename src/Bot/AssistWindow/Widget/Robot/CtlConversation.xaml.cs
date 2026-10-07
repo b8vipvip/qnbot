@@ -263,9 +263,8 @@ namespace Bot.AssistWindow.Widget.Robot
             if (handler != null) handler(this, new ConversationEditEventArgs(_seller, _buyer, _question, _answer));
         }
 
-        private void txtAnswer_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        internal ContextMenu CreateAnswerContextMenu(FrameworkElement placementTarget = null)
         {
-            e.Handled = true;
             var menu = new ContextMenu();
 
             var view = new MenuItem { Header = "查看" };
@@ -296,10 +295,18 @@ namespace Bot.AssistWindow.Widget.Robot
                 resend.Click += (s, args) => RaiseResendRequested();
                 menu.Items.Add(resend);
             }
+
             var edit = new MenuItem { Header = "修改" };
             edit.Click += (s, args) => RaiseEditRequested();
             menu.Items.Add(edit);
-            menu.PlacementTarget = txtAnswer;
+            menu.PlacementTarget = placementTarget ?? txtAnswer;
+            return menu;
+        }
+
+        private void txtAnswer_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            var menu = CreateAnswerContextMenu(txtAnswer);
             menu.IsOpen = true;
         }
     }
