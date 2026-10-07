@@ -118,6 +118,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.MessageMirror.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.MessageMirror.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
   </ItemGroup>
