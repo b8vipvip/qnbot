@@ -19,7 +19,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Background="{StaticResource QuestionBg}" MinHeight="38">
+            <Grid x:Name="gridQuestion" Grid.Row="0" Background="{StaticResource QuestionBg}" MinHeight="38">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="38"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <Border Background="#BFE8FF" CornerRadius="6" Margin="6" />
                 <TextBlock Text="问" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" Foreground="#164E63" />
