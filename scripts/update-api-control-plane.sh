@@ -8,6 +8,9 @@ BRANCH="${BRANCH:-master}"
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/qnbot-backups}"
 CONTAINER_NAME="${CONTAINER_NAME:-qianniu-api-control-plane}"
 VERIFY_URL="${VERIFY_URL:-}"
+# Fail closed before image builds and before stopping the live service for a backup.
+MIN_FREE_BEFORE_BUILD_MIB="${CONTROL_PLANE_MIN_BUILD_FREE_MIB:-4096}"
+MIN_FREE_BEFORE_BACKUP_MIB="${CONTROL_PLANE_MIN_BACKUP_FREE_MIB:-2048}"
 
 # GitHub source-network tuning. Git repository traffic uses GitHub's official SSH-over-443
 # endpoint by default, avoiding networks where outbound TCP/22 is unstable or filtered.
@@ -73,13 +76,43 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"
 }
 
+# Use filesystem-available KiB (excludes root-reserved blocks).
+check_free_kib() {
+  local path="$1" minimum_kib="$2" stage="$3" available_kib
+  available_kib="$(df -Pk "$path" | awk 'END { print $4 }')"
+  [[ "$available_kib" =~ ^[0-9]+$ ]] || die "无法读取磁盘可用空间: $path"
+  if (( available_kib < minimum_kib )); then
+    die "${stage}磁盘空间不足: $path 可用 $((available_kib / 1024)) MiB，要求至少 $((minimum_kib / 1024)) MiB；旧服务未停止。"
+  fi
+  log "${stage}磁盘空间检查通过: $path 可用 $((available_kib / 1024)) MiB"
+}
+
+check_space_before_build() {
+  check_free_kib "$SERVICE_DIR" "$(( MIN_FREE_BEFORE_BUILD_MIB * 1024 ))" "构建前"
+}
+
+check_space_before_backup() {
+  local source_dir="$SERVICE_DIR/data" source_kib=0 required_kib
+  if [[ "$OLD_DEPLOY_KIND" == "legacy" ]]; then
+    source_dir="$LEGACY_DIR/data"
+  fi
+  if [[ -d "$source_dir" ]]; then
+    source_kib="$(du -sk "$source_dir" | awk '{ print $1 }')"
+    [[ "$source_kib" =~ ^[0-9]+$ ]] || die "无法估算生产数据大小: $source_dir"
+  fi
+  mkdir -p "$BACKUP_ROOT"
+  required_kib=$(( source_kib + MIN_FREE_BEFORE_BACKUP_MIB * 1024 ))
+  check_free_kib "$BACKUP_ROOT" "$required_kib" "停服备份前"
+  check_free_kib "$SERVICE_DIR" "$(( MIN_FREE_BEFORE_BACKUP_MIB * 1024 ))" "停服备份前"
+}
+
 is_positive_integer() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
 }
 
 validate_tuning() {
   local name value
-  for name in BUILD_RETRIES BUILD_RETRY_DELAY_SECONDS BUILD_TIMEOUT_SECONDS BASE_IMAGE_PULL_RETRIES BASE_IMAGE_PULL_TIMEOUT_SECONDS CONTROL_PLANE_BUILD_PIP_TIMEOUT CONTROL_PLANE_BUILD_PIP_RETRIES GITHUB_SSH_CONNECT_TIMEOUT GITHUB_SSH_SERVER_ALIVE_INTERVAL GITHUB_SSH_SERVER_ALIVE_COUNT_MAX GIT_FETCH_RETRIES GIT_FETCH_TIMEOUT_SECONDS GIT_FETCH_RETRY_BASE_SECONDS; do
+  for name in BUILD_RETRIES BUILD_RETRY_DELAY_SECONDS BUILD_TIMEOUT_SECONDS BASE_IMAGE_PULL_RETRIES BASE_IMAGE_PULL_TIMEOUT_SECONDS CONTROL_PLANE_BUILD_PIP_TIMEOUT CONTROL_PLANE_BUILD_PIP_RETRIES GITHUB_SSH_CONNECT_TIMEOUT GITHUB_SSH_SERVER_ALIVE_INTERVAL GITHUB_SSH_SERVER_ALIVE_COUNT_MAX GIT_FETCH_RETRIES GIT_FETCH_TIMEOUT_SECONDS GIT_FETCH_RETRY_BASE_SECONDS MIN_FREE_BEFORE_BUILD_MIB MIN_FREE_BEFORE_BACKUP_MIB; do
     value="${!name}"
     is_positive_integer "$value" || die "$name 必须是正整数，当前值: $value"
   done
@@ -350,6 +383,7 @@ elif [[ -f "$LEGACY_DIR/.env" || -d "$LEGACY_DIR/data" ]]; then
   OLD_SOURCE_DIR="$LEGACY_DIR"
 fi
 
+check_space_before_build
 log "拉取 GitHub 最新 $BRANCH 分支（Git SSH over 443 + 自动重试）"
 github_fetch_with_retry
 if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -390,6 +424,7 @@ probe_url "腾讯云 Debian" "${CONTROL_PLANE_BUILD_APT_MIRROR%/}/" || true
 docker system df || true
 prepare_base_image
 build_new_image
+check_space_before_backup
 
 log "停止旧控制面并创建冷备份"
 if container_running; then
