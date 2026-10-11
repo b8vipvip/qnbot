@@ -19,3 +19,8 @@ services:
       - ./data:/data
     ports:
       - "127.0.0.1:${CONTROL_PLANE_BIND_PORT:-18081}:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
