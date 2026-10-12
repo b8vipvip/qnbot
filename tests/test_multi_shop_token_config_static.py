@@ -218,3 +218,28 @@ def test_web_cloud_and_backup_use_per_shop_connection_store_without_global_token
         assert "ControlPlaneClientToken" not in source
         assert '"ai-control-plane"' not in source
         assert "X-Shop-Key" in source
+
+
+def test_rejected_shop_token_cannot_replace_previous_saved_credentials():
+    source = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    # Save must validate before touching DPAPI storage; an explicit HTTP response is
+    # authoritative even if network-unreachable settings may still be staged offline.
+    assert source.index("ValidateTokenBinding(candidate);") < source.index("_connection.SaveToken(candidate);")
+    start = source.index("private void ValidateTokenBinding(string candidate)")
+    end = source.index("private void ", start + 15)
+    validation = source[start:end]
+    assert "if (result.Success) return;" in validation
+    assert "if (result.Conflict)" in validation
+    assert 'throw new InvalidOperationException(\n                    "服务端拒绝本店令牌，未保存新令牌：" + result.Error)' in validation
+    assert "catch (InvalidOperationException)" in validation
+    assert '令牌会先保存在本机，联网后自动再次校验' in validation
+    assert '暂时无法验证令牌绑定：' not in validation
+
+
+def test_runtime_connection_status_surfaces_explicit_unauthorized():
+    source = read("src/Bot/ShopScope/ShopTokenBindingService.cs")
+    segment = source[source.index("public static string GetStatusText"):source.index("public static string GetStatusToolTip")]
+    assert "state.LastFailureUtc > state.LastSuccessUtc" in segment
+    assert 'state.LastError.IndexOf("HTTP 401", StringComparison.OrdinalIgnoreCase)' in segment
+    assert 'return "令牌已失效";' in segment
+    assert segment.index('return "令牌已失效";') < segment.index('return "已连接";')

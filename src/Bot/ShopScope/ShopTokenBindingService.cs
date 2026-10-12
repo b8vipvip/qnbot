@@ -214,10 +214,18 @@ namespace Bot.ShopScope
                 ConnectionState state;
                 if (!States.TryGetValue(shop.ShopKey, out state)) return "连接中";
                 if (state.Conflict) return "令牌冲突";
+                // Explicit 401 is a credential problem, not an unreachable control plane.
+                // Prefer the newer failure over a still-recent prior success.
+                if (state.LastFailureUtc > state.LastSuccessUtc)
+                {
+                    if (!string.IsNullOrWhiteSpace(state.LastError)
+                        && state.LastError.IndexOf("HTTP 401", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return "令牌已失效";
+                    return "连接失败";
+                }
                 if (state.LastSuccessUtc != DateTime.MinValue
                     && DateTime.UtcNow - state.LastSuccessUtc <= TimeSpan.FromSeconds(20))
                     return "已连接";
-                if (state.LastFailureUtc > state.LastSuccessUtc) return "连接失败";
                 return "连接中";
             }
             catch
