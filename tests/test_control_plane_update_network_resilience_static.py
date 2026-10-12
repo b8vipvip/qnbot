@@ -58,3 +58,35 @@ def test_update_script_reports_pip_timeout_and_apt_network_failures_explicitly()
     assert "PyPI/pip 下载超时" in script
     assert "APT/Debian 软件源访问异常" in script
     assert "docker system df" in script
+
+
+def test_env_reader_does_not_emit_awk_invalid_quote_escape_warning(tmp_path):
+    import subprocess
+
+    script = read("scripts/update-api-control-plane.sh")
+    start = script.index("read_env_value() {")
+    end = script.index("\ncompose() {", start)
+    function = script[start:end]
+    sample = tmp_path / ".env"
+    sample.write_text(
+        'PUBLIC_BASE_URL="https://example.test/path"\n'
+        "CONTROL_PLANE_BIND_PORT='18081'\n"
+        "EMPTY_VALUE=\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function
+            + '\nread_env_value PUBLIC_BASE_URL "$1"\n'
+            + 'read_env_value CONTROL_PLANE_BIND_PORT "$1"\n',
+            "bash",
+            str(sample),
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["https://example.test/path", "18081"]
+    assert result.stderr == ""
