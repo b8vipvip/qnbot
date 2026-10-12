@@ -28,6 +28,7 @@ import knowledge_v2_sync
 import manual_recharge
 import recharge_status_query
 import runtime_embedding_guard
+import runtime_auth_failures
 import runtime_ocr
 import runtime_ocr_priority
 import runtime_routing_guard
@@ -44,6 +45,7 @@ from wecom_crypto import install_on_bridge
 
 console_cache_guard.install(control_plane)
 runtime_routing_guard.install(control_plane)
+runtime_auth_failures.install(control_plane)
 chat2api_runtime_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)

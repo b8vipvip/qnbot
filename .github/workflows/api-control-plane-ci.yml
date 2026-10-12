@@ -195,6 +195,7 @@ jobs:
             services/api-control-plane/bot_web_bot_enabled.py
             services/api-control-plane/scheduled_deep_test_retry.py
             services/api-control-plane/runtime_embedding_guard.py
+            services/api-control-plane/runtime_auth_failures.py
             services/api-control-plane/runtime_ocr.py
             services/api-control-plane/runtime_ocr_priority.py
             services/api-control-plane/runtime_routing_guard.py
