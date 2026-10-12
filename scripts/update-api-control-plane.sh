@@ -127,7 +127,7 @@ read_env_value() {
   awk -F= -v key="$key" '
     $0 !~ /^[[:space:]]*#/ && $1 == key {
       value=substr($0, index($0, "=")+1)
-      gsub(/^[[:space:]\047\"]+|[[:space:]\047\"]+$/, "", value)
+      gsub(/^[[:space:]\047"]+|[[:space:]\047"]+$/, "", value)
       found=value
     }
     END { if (found != "") print found }
