@@ -165,8 +165,11 @@ namespace Bot.Options
                     return;
                 }
 
-                _status.Text = "暂时无法验证令牌绑定：" + result.Error + "。令牌会先保存在本机，联网后自动再次校验。";
-                _status.Foreground = Brushes.DarkOrange;
+                // A definitive HTTP rejection (especially 401 for a disabled token) is not
+                // a transient network outage. Never overwrite a working shop token with it.
+                // Unreachable/offline requests still follow the existing catch path below.
+                throw new InvalidOperationException(
+                    "服务端拒绝本店令牌，未保存新令牌：" + result.Error);
             }
             catch (InvalidOperationException)
             {
