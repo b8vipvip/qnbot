@@ -346,14 +346,28 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var localFirst = ReplyModeService.IsLocalFirst(session.Seller);
-                var styleBefore = GetStyleProfile(session.Seller);
-                var analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
+                // The idle timer runs on a background thread without a UI shop
+                // context. Resolve the exact online shop BEFORE reading reply mode,
+                // per-shop AI endpoints, prompt settings or producing AI suggestions.
+                // Task.Run inside CallStructuredChat inherits this AsyncLocal scope.
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller);
+                if (shop == null)
+                    throw new InvalidOperationException("接待自动学习无法确认本轮所属店铺，已停止AI调用与知识写入");
+                bool localFirst;
+                string styleBefore;
+                JObject analysis;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    localFirst = ReplyModeService.IsLocalFirst(session.Seller);
+                    styleBefore = GetStyleProfile(session.Seller);
+                    analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
+                }
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
                 if (CountHumanSellerTurns(turns, cards) >= 2 && !string.IsNullOrWhiteSpace(styleAfter))
                 {
-                    SaveStyleProfile(session.Seller, styleAfter);
+                    using (ShopSettingsScope.Enter(shop))
+                        SaveStyleProfile(session.Seller, styleAfter);
                 }
                 else
                 {
@@ -365,11 +379,8 @@ namespace Bot.ChromeNs
                     .ToList();
                 var applied = 0;
                 var skipped = 0;
-                var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);
-                if (shop == null)
-                    throw new InvalidOperationException("无法确认本轮接待所属店铺，禁止写入任何知识库");
-                // This timer runs without UI ambient shop context. Never allow an
-                // AI proposal to write into another shop's legacy/V2 learning path.
+                // Reuse the same resolved ShopKey for analysis and knowledge writes.
+                // No alternate or ambient-shop fallback is allowed in an idle timer.
                 using (ShopSettingsScope.Enter(shop))
                 {
                     foreach (var suggestion in suggestions)
