@@ -91,3 +91,21 @@ def test_ai_history_exposes_existing_session_learning_reports():
     assert "string.Equals(x.Seller, _seller, StringComparison.Ordinal)" in ui
     assert '"会话自动学习"' in ui
     assert "x.AppliedCount" in ui and "x.SkippedCount" in ui
+
+
+def test_learning_timeline_uses_same_shop_scoped_key_as_context_store():
+    ctx=read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    bridge=read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    assert 'return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()' in ctx
+    assert 'States.TryGetValue(Key(seller, buyer), out state)' in ctx
+    assert 'ConversationContextStore.GetExistingLearningState(seller, buyer)' in bridge
+    assert '(seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim()' not in bridge
+
+
+def test_learning_history_refresh_is_typed_and_shop_scoped():
+    ctx=read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    bridge=read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    assert 'ConversationContextStore.RefreshLearningHistory(seller, buyer, ccode)' in bridge
+    assert 'method.Invoke(null, new[] { state, seller, buyer, ccode })' not in bridge
+    assert 'ShopContextLocator.ResolveRuntimeBySellerNick(seller)' in ctx
+    assert 'RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);' in ctx

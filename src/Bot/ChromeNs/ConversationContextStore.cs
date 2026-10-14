@@ -498,6 +498,35 @@ namespace Bot.ChromeNs
             if (state.PendingPreset != null && state.PendingPreset.ExpiresAt < now) state.PendingPreset = null;
         }
 
+        // Typed access point for session learning. Never reconstruct a timeline
+        // dictionary key in a consumer: keys are ShopKey#Seller#Buyer.
+        internal static object GetExistingLearningState(string seller, string buyer)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            if (shop == null) return null;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                TimelineState state;
+                return States.TryGetValue(Key(seller, buyer), out state) ? (object)state : null;
+            }
+        }
+
+        // The underlying history refresh takes a shop and an optional count.
+        // Calling it through a 4-argument reflection invocation silently failed
+        // on every completed learning round; keep the invocation typed.
+        internal static bool RefreshLearningHistory(string seller, string buyer, string ccode)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            if (shop == null || string.IsNullOrWhiteSpace(ccode)) return false;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                TimelineState state;
+                if (!States.TryGetValue(Key(seller, buyer), out state)) return false;
+                RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);
+                return true;
+            }
+        }
+
         private static TimelineState GetState(string seller, string buyer)
         {
             return States.GetOrAdd(Key(seller, buyer), _ => new TimelineState());
