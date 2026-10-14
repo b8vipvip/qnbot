@@ -109,3 +109,23 @@ def test_learning_history_refresh_is_typed_and_shop_scoped():
     assert 'method.Invoke(null, new[] { state, seller, buyer, ccode })' not in bridge
     assert 'ShopContextLocator.ResolveRuntimeBySellerNick(seller)' in ctx
     assert 'RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);' in ctx
+
+
+def test_idle_learning_resolves_shop_before_structured_ai_call():
+    source=read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analysis=source[source.index("private static async Task FinalizeAsync"):source.index("private static async Task<JObject> AnalyzeAsync")]
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller)" in analysis
+    assert "var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);" not in analysis
+    assert "using (ShopSettingsScope.Enter(shop))" in analysis
+    assert "analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);" in analysis
+    assert analysis.index("using (ShopSettingsScope.Enter(shop))") < analysis.index("analysis = await AnalyzeAsync")
+    assert analysis.index("analysis = await AnalyzeAsync") < analysis.index("ReviewedKnowledgeLearningService.ApplyReviewedKnowledge")
+
+
+def test_myopenai_endpoint_discovery_is_scoped_in_learning():
+    myopenai=read("src/Bot/ChromeNs/MyOpenAI.cs")
+    assert "var endpoints = AiEndpointStore.GetEnabledEndpoints();" in myopenai
+    assert "Task.Run(() => MyOpenAI.CallStructuredChat(" in read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    source=read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    assert "using (ShopSettingsScope.Enter(shop))" in source
+    assert "localFirst = ReplyModeService.IsLocalFirst(session.Seller);" in source
