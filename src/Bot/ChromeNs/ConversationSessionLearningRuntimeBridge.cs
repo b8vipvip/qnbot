@@ -81,14 +81,7 @@ namespace Bot.ChromeNs
                 // Learning must never use QN.CurQN as a cross-shop fallback.
                 var qn = QN.FindExistingBySellerNick(seller);
                 if (qn == null || qn.CDP == null) return false;
-                var state = GetTimelineState(seller, buyer);
-                if (state == null) return false;
-                var method = typeof(ConversationContextStore).GetMethod(
-                    "RefreshRemoteHistory",
-                    BindingFlags.Static | BindingFlags.NonPublic);
-                if (method == null) return false;
-                method.Invoke(null, new[] { state, seller, buyer, ccode });
-                return true;
+                return ConversationContextStore.RefreshLearningHistory(seller, buyer, ccode);
             }
             catch (Exception ex)
             {
@@ -213,20 +206,10 @@ namespace Bot.ChromeNs
 
         private static object GetTimelineState(string seller, string buyer)
         {
-            var statesField = typeof(ConversationContextStore).GetField(
-                "States",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            var states = statesField == null ? null : statesField.GetValue(null);
-            if (states == null) return null;
-            var tryGetValue = states.GetType().GetMethod("TryGetValue");
-            if (tryGetValue == null) return null;
-            var args = new object[]
-            {
-                (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim(),
-                null
-            };
-            var found = Convert.ToBoolean(tryGetValue.Invoke(states, args));
-            return found ? args[1] : null;
+            // Use the canonical shop-scoped key owned by ConversationContextStore.
+            // The old reflection lookup used Seller#Buyer and never matched
+            // the actual ShopKey#Seller#Buyer dictionary keys.
+            return ConversationContextStore.GetExistingLearningState(seller, buyer);
         }
 
         private static bool TryGetStateParts(
