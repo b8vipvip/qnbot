@@ -80,7 +80,7 @@ def test_five_minute_session_and_shop_safe_learning():
     assert "Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));" in s
     assert "TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt)" in s
     assert "TimeSpan.FromSeconds(SellerQuietSeconds) - (DateTime.Now - session.LastActivityAt)" not in s
-    assert "ShopContextLocator.ResolveBySellerNick(session.Seller)" in s
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller)" in s
     assert "using (ShopSettingsScope.Enter(shop))" in s
     assert "CountHumanSellerTurns(turns, cards) == 0" in s
 
