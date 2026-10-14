@@ -168,7 +168,14 @@ namespace Bot.Knowledge
         private static KnowledgeV2Record CloneAndNormalize(KnowledgeV2Record source)
         {
             var clone = JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(source)) ?? new KnowledgeV2Record();
+            // Replicating an existing cloud record is not a new edit. The normal
+            // Save() path updates timestamps, but cloud replay must preserve them
+            // or every 10-second poll causes a spurious revision/upload loop.
+            var updatedAt = clone.UpdatedAt;
+            var verifiedAt = clone.LastVerifiedAt;
             NormalizeForSave(clone);
+            if (updatedAt != DateTime.MinValue) clone.UpdatedAt = updatedAt;
+            if (verifiedAt != DateTime.MinValue) clone.LastVerifiedAt = verifiedAt;
             return clone;
         }
 

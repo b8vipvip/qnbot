@@ -45,3 +45,11 @@ def test_control_plane_packages_and_initializes_bridge():
     assert "knowledge_v2_sync.install(control_plane, bot_web_console)" in read(BOOT)
     assert "knowledge_v2_sync.init_db()" in read(BOOT)
     assert "knowledge_v2_sync.py" in read(DOCKER)
+
+
+def test_cloud_replay_preserves_record_updated_at_for_idempotent_poll():
+    s=read(ROOT/"src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    part=s[s.index("private static KnowledgeV2Record CloneAndNormalize"):s.index("private static void NormalizeForSave")]
+    assert "var updatedAt = clone.UpdatedAt;" in part
+    assert "clone.UpdatedAt = updatedAt;" in part
+    assert "clone.LastVerifiedAt = verifiedAt;" in part

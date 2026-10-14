@@ -73,3 +73,21 @@ def test_session_learning_is_initialized_and_visible_in_logs_ui():
     assert "ConversationSessionLearningRuntimeBridge.cs" in targets
     assert "ReviewedKnowledgeLearningService.cs" in targets
     assert "ConversationSessionLearningUi.cs" in targets
+
+
+def test_five_minute_session_and_shop_safe_learning():
+    s = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    assert "Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));" in s
+    assert "TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt)" in s
+    assert "TimeSpan.FromSeconds(SellerQuietSeconds) - (DateTime.Now - session.LastActivityAt)" not in s
+    assert "ShopContextLocator.ResolveBySellerNick(session.Seller)" in s
+    assert "using (ShopSettingsScope.Enter(shop))" in s
+    assert "CountHumanSellerTurns(turns, cards) == 0" in s
+
+
+def test_ai_history_exposes_existing_session_learning_reports():
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    assert "ConversationSessionLearningService.GetReports(1000)" in ui
+    assert "string.Equals(x.Seller, _seller, StringComparison.Ordinal)" in ui
+    assert '"会话自动学习"' in ui
+    assert "x.AppliedCount" in ui and "x.SkippedCount" in ui

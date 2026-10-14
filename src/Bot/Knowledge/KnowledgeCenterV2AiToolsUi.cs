@@ -320,6 +320,7 @@ namespace Bot.Knowledge
             public string Target { get; set; }
             public string Summary { get; set; }
             public string Result { get; set; }
+            public DateTime SortAt { get; set; }
         }
 
         private readonly string _seller;
@@ -327,6 +328,7 @@ namespace Bot.Knowledge
         private readonly ComboBox _filter;
         private readonly TextBlock _status;
         private List<KnowledgeV2GovernanceAuditEntry> _all = new List<KnowledgeV2GovernanceAuditEntry>();
+        private List<ConversationSessionLearningReportView> _sessions = new List<ConversationSessionLearningReportView>();
 
         public KnowledgeV2AiOptimizationHistoryPage(Window owner, string seller)
         {
@@ -343,7 +345,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "查看新版知识库的 AI 智能导入、AI 修订候选以及候选应用/驳回/回滚记录。记录来自 V2 店铺级审计库，不读取旧版知识库历史。",
+                Text = "汇总 V2 智能导入、AI 修订和本店对话自动学习的实际状态、修改数量及失败原因；自动学习记录来自独立审计表。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 4, 0, 0)
@@ -356,6 +358,7 @@ namespace Bot.Knowledge
             _filter.Items.Add("全部AI记录");
             _filter.Items.Add("智能导入");
             _filter.Items.Add("AI修订优化");
+            _filter.Items.Add("会话自动学习");
             _filter.SelectedIndex = 0;
             _filter.SelectionChanged += delegate { ApplyFilter(); };
             tools.Children.Add(_filter);
@@ -393,6 +396,7 @@ namespace Bot.Knowledge
             if (string.IsNullOrWhiteSpace(_seller))
             {
                 _all = new List<KnowledgeV2GovernanceAuditEntry>();
+                _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
                 _status.Text = "当前未识别店铺，无法读取 AI 优化记录。";
                 return;
@@ -401,6 +405,9 @@ namespace Bot.Knowledge
             {
                 _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
                     .Where(IsAiHistory)
+                    .ToList();
+                _sessions = ConversationSessionLearningService.GetReports(1000)
+                    .Where(x => x != null && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
                     .ToList();
                 ApplyFilter();
             }
@@ -420,6 +427,8 @@ namespace Bot.Knowledge
                 source = source.Where(x => string.Equals(x.ActionType, "ai_smart_import", StringComparison.OrdinalIgnoreCase));
             else if (mode == "AI修订优化")
                 source = source.Where(x => !string.Equals(x.ActionType, "ai_smart_import", StringComparison.OrdinalIgnoreCase));
+            else if (mode == "会话自动学习")
+                source = Enumerable.Empty<KnowledgeV2GovernanceAuditEntry>();
 
             var items = source.Select(x => new HistoryItem
             {
@@ -427,10 +436,25 @@ namespace Bot.Knowledge
                 Type = ActionText(x.ActionType),
                 Target = string.IsNullOrWhiteSpace(x.TargetTitle) ? "-" : x.TargetTitle,
                 Summary = x.Summary ?? string.Empty,
-                Result = string.Equals(x.Result, "success", StringComparison.OrdinalIgnoreCase) ? "成功" : (x.Result ?? string.Empty)
+                Result = string.Equals(x.Result, "success", StringComparison.OrdinalIgnoreCase) ? "成功" : (x.Result ?? string.Empty),
+                SortAt = x.CreatedAt
             }).ToList();
-            _grid.ItemsSource = items;
-            _status.Text = "共 " + items.Count + " 条记录；审计数据按当前店铺隔离保存。";
+            if (mode == "全部AI记录" || mode == "会话自动学习")
+            {
+                items.AddRange(_sessions.Select(x => new HistoryItem
+                {
+                    SortAt = x.CompletedAt != DateTime.MinValue ? x.CompletedAt : x.LastBuyerAt,
+                    Time = (x.CompletedAt != DateTime.MinValue ? x.CompletedAt : x.LastBuyerAt).ToString("yyyy-MM-dd HH:mm:ss"),
+                    Type = "会话自动学习",
+                    Target = x.Buyer ?? "-",
+                    Summary = (x.Summary ?? string.Empty) + " [应用 " + x.AppliedCount
+                        + " / 跳过 " + x.SkippedCount + "] "
+                        + (string.IsNullOrWhiteSpace(x.Error) ? string.Empty : "原因：" + x.Error),
+                    Result = x.Status ?? "-"
+                }));
+            }
+            _grid.ItemsSource = items.OrderByDescending(x => x.SortAt).Take(800).ToList();
+            _status.Text = "共 " + items.Count + " 条记录（显示最近800条）；记录按本店隔离查询。";
         }
 
         private static bool IsAiHistory(KnowledgeV2GovernanceAuditEntry entry)
