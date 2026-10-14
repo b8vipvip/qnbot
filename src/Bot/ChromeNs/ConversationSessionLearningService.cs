@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using Bot.Common;
+using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
@@ -192,6 +193,7 @@ namespace Bot.ChromeNs
                     existing.LastActivityAt = now;
                     if (!string.IsNullOrWhiteSpace(ccode)) existing.CCode = ccode;
                     SaveSnapshot(existing, "等待接待结束");
+                    Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));
                 }
             }
         }
@@ -301,13 +303,8 @@ namespace Bot.ChromeNs
             var key = Key(session.Seller, session.Buyer);
             lock (session.Sync)
             {
-                var buyerRemaining = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastBuyerAt);
-                if (buyerRemaining > TimeSpan.Zero)
-                {
-                    Schedule(session, buyerRemaining);
-                    return;
-                }
-                var activityRemaining = TimeSpan.FromSeconds(SellerQuietSeconds) - (DateTime.Now - session.LastActivityAt);
+                // A round ends five minutes after the last buyer OR seller message.
+                var activityRemaining = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                 if (activityRemaining > TimeSpan.Zero)
                 {
                     Schedule(session, activityRemaining);
@@ -368,24 +365,34 @@ namespace Bot.ChromeNs
                     .ToList();
                 var applied = 0;
                 var skipped = 0;
-                foreach (var suggestion in suggestions)
+                var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);
+                if (shop == null)
+                    throw new InvalidOperationException("无法确认本轮接待所属店铺，禁止写入任何知识库");
+                // This timer runs without UI ambient shop context. Never allow an
+                // AI proposal to write into another shop's legacy/V2 learning path.
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    if (!CanApply(suggestion, localFirst))
+                    foreach (var suggestion in suggestions)
                     {
-                        skipped++;
-                        continue;
+                        if (!CanApply(suggestion, localFirst))
+                        {
+                            skipped++;
+                            continue;
+                        }
+                        if (IsHumanEvidence(suggestion.EvidenceType) && CountHumanSellerTurns(turns, cards) == 0)
+                        {
+                            suggestion.ApplyMessage = "缺少可核实的真人客服回复，不接受AI声称的人工证据";
+                            skipped++;
+                            continue;
+                        }
+                        var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
+                            suggestion.Question, suggestion.Answer, suggestion.Category, suggestion.Keywords,
+                            localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
+                            suggestion.Confidence, suggestion.EvidenceType);
+                        suggestion.Applied = result != null && result.Success && (result.Added || result.Updated);
+                        suggestion.ApplyMessage = result == null ? "知识写入结果为空" : result.Message;
+                        if (suggestion.Applied) applied++; else skipped++;
                     }
-                    var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
-                        suggestion.Question,
-                        suggestion.Answer,
-                        suggestion.Category,
-                        suggestion.Keywords,
-                        localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
-                        suggestion.Confidence,
-                        suggestion.EvidenceType);
-                    suggestion.Applied = result != null && result.Success && (result.Added || result.Updated);
-                    suggestion.ApplyMessage = result == null ? "知识写入结果为空" : result.Message;
-                    if (suggestion.Applied) applied++; else skipped++;
                 }
 
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
@@ -790,7 +797,7 @@ namespace Bot.ChromeNs
                     if (session.LastActivityAt == DateTime.MinValue) session.LastActivityAt = session.LastBuyerAt;
                     session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
                     Active[Key(session.Seller, session.Buyer)] = session;
-                    var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastBuyerAt);
+                    var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                     Schedule(session, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
                 }
             }
