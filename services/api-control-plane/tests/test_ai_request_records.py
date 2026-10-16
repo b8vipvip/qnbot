@@ -127,7 +127,7 @@ def test_bounded_content_and_expiry(tmp_path, monkeypatch):
         assert len(row["response_text"]) == 48000
         assert len(row["prompt_json"]) < 49000
         conn.execute("UPDATE ai_request_records SET created_at='2001-01-01T00:00:00+00:00'")
-    monkeypatch.setattr(ai_request_records, "_LAST_CLEANUP", 0)
+    monkeypatch.setattr(ai_request_records, "_LAST_CLEANUP", float("-inf"))
     ai_request_records._maybe_cleanup()
     with cp.db() as conn:
         assert conn.execute("SELECT count(*) FROM ai_request_records").fetchone()[0] == 0
