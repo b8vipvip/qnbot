@@ -78,6 +78,7 @@ def install(control_plane: Any) -> None:
                 max(1, min(32000, max_tokens)),
                 temperature,
                 max(5, min(300, timeout)),
+                int(client["id"]),
             ),
             media_type="text/event-stream",
             headers={
@@ -89,6 +90,91 @@ def install(control_plane: Any) -> None:
 
 
 async def stream_chat(
+    control_plane: Any,
+    request: Request,
+    client_name: str,
+    requested_model: str,
+    messages: Sequence[Dict[str, Any]],
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    client_id: int = 0,
+) -> AsyncIterator[bytes]:
+    """Audit the entire SSE result as one logical request, not each provider attempt.
+
+    Streaming responses cannot be buffered before delivery; this wrapper only
+    observes each outgoing chunk while preserving byte-for-byte SSE semantics.
+    """
+    import ai_request_records
+    started = time.monotonic()
+    fragments: List[str] = []
+    characters = 0
+    model = ""
+    ended = False
+    abort = False
+    error = ""
+    try:
+        async for chunk in _stream_chat_impl(
+            control_plane, request, client_name, requested_model, messages,
+            max_tokens, temperature, timeout
+        ):
+            # The stream is already generated. Never mutate the bytes delivered.
+            try:
+                for line in chunk.decode("utf-8", errors="replace").splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    text = line[5:].strip()
+                    if text == "[DONE]":
+                        ended = True
+                        continue
+                    event = json.loads(text)
+                    if not isinstance(event, dict):
+                        continue
+                    if isinstance(event.get("error"), dict):
+                        error = str(event["error"].get("message") or "流式上游失败")
+                    model = str(event.get("model") or model)
+                    for choice in event.get("choices") or []:
+                        delta = (choice or {}).get("delta") or {}
+                        content = delta.get("content") or ""
+                        if STREAM_ABORT_MARKER in str(content):
+                            abort = True
+                        elif isinstance(content, str) and characters < 48000:
+                            fragments.append(content[:48000 - characters])
+                            characters += len(fragments[-1])
+            except Exception:
+                pass  # Malformed upstream SSE must not break the original stream.
+            yield chunk
+    except BaseException as exc:
+        if not error:
+            error = type(exc).__name__
+        raise
+    finally:
+        if client_id:
+            try:
+                successful = ended and not abort and not error and characters > 0
+                reported = {
+                    "provider_name": "stream",
+                    "model": model or requested_model,
+                    "protocol": "chat-stream",
+                    "success": successful,
+                    "answer": "".join(fragments) if successful else "",
+                    "error": error or ("流式响应未完整结束" if not ended else "无有效回复或流已中止"),
+                }
+                await asyncio.to_thread(
+                    ai_request_records.record,
+                    client_id=client_id, client_name=client_name, shop_key="",
+                    endpoint="/v1/chat/completions [stream]", requested_model=requested_model,
+                    messages=messages,
+                    dispatched={"success": successful,
+                                "attempt": reported if successful else None,
+                                "attempts": [reported]},
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            except Exception:
+                pass
+
+
+async def _stream_chat_impl(
     control_plane: Any,
     request: Request,
     client_name: str,

@@ -28,6 +28,7 @@
       <button class="nav" data-page="tests">测试中心</button>
       <button class="nav" data-page="clients">Bot 客户端</button>
       <button class="nav" data-page="message-traces">消息处理日志</button>
+      <button class="nav" data-page="ai-requests">AI请求记录</button>
       <a class="nav" href="/bot/" target="_blank" rel="noopener">Bot Web端</a>
       <a class="nav" href="/static/wecom.html">企业微信</a>
       <a class="nav" href="/static/recharge-query.html">充值结果自动查询</a>
@@ -63,6 +64,28 @@
         </div>
         <div class="actions" style="margin:12px 0 16px"><button class="primary" onclick="loadMessageTraces()">查询</button><button onclick="clearTraceFilters()">清除筛选</button></div>
         <div id="messageTraceTable"><div class="empty">正在等待查询消息处理日志。</div></div>
+      </section>
+    </section>
+    <section id="page-ai-requests" class="page">
+      <section class="panel">
+        <div class="panel-head"><div><h2>AI请求记录</h2><p>记录客户端每次 AI 请求的提示词、回复、路由与失败原因；保留14天，原始密钥和媒体数据会脱敏或省略。仅管理员可查看和导出。</p></div><button class="secondary" type="button" onclick="loadAiRequestRecords()">刷新</button></div>
+        <div class="form-grid">
+          <label>客户端 ID<input id="aiRequestClientId" type="number" min="1" placeholder="全部客户端"></label>
+          <label>ShopKey<input id="aiRequestShopKey" placeholder="全部店铺"></label>
+          <label>状态<select id="aiRequestStatus"><option value="">全部</option><option value="success">成功</option><option value="failed">失败</option></select></label>
+          <label>请求模型<input id="aiRequestModel" placeholder="全部模型"></label>
+        </div>
+        <div class="actions" style="margin:14px 0">
+          <button class="primary" type="button" onclick="aiRequestSearch()">查询</button>
+          <button class="secondary" type="button" onclick="aiRequestReset()">清除筛选</button>
+          <label>每页<select id="aiRequestPageSize" onchange="aiRequestSearch()"><option value="20">20条</option><option value="50" selected>50条</option><option value="100">100条</option><option value="200">200条</option></select></label>
+          <label>导出最近<input id="aiRequestExportCount" type="number" min="1" max="5000" value="100"></label>
+          <label>格式<select id="aiRequestExportFormat"><option value="json">JSON（完整详情）</option><option value="csv">CSV</option></select></label>
+          <button class="secondary" type="button" id="aiRequestExportButton" onclick="exportAiRequests()">按条数导出</button>
+        </div>
+        <div id="aiRequestCount" class="hint" style="margin-bottom:12px"></div>
+        <div id="aiRequestTable"><div class="empty">正在加载 AI 请求记录…</div></div>
+        <div class="actions" style="margin-top:12px"><button class="secondary" id="aiRequestPrev" type="button" onclick="aiRequestPage(-1)">上一页</button><button class="secondary" id="aiRequestNext" type="button" onclick="aiRequestPage(1)">下一页</button></div>
       </section>
     </section>
     <section id="page-version-update" class="page">
@@ -122,6 +145,7 @@
 <script src="/static/console-startup-guard.js?v=1"></script>
 <script src="/static/app.js?v=3"></script>
 <script src="/static/message-traces.js?v=2"></script>
+<script src="/static/ai-requests.js?v=1"></script>
 <script src="/static/client-token-copy.js"></script>
 <script src="/static/version-update.js?v=2"></script>
 </body>

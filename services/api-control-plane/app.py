@@ -1757,6 +1757,9 @@ async def runtime_chat(request: Request, client: Dict[str, Any] = Depends(requir
         max(1, min(32000, max_tokens)),
         temperature,
         max(5, min(300, timeout)),
+        int(client["id"]),
+        "",
+        "/v1/chat/completions",
     )
     if not dispatched["success"]:
         return JSONResponse(
@@ -1800,6 +1803,9 @@ async def runtime_responses(request: Request, client: Dict[str, Any] = Depends(r
         max(1, min(32000, max_tokens)),
         temperature,
         REQUEST_TIMEOUT_SECONDS,
+        int(client["id"]),
+        "",
+        "/v1/responses",
     )
     if not dispatched["success"]:
         return JSONResponse(
