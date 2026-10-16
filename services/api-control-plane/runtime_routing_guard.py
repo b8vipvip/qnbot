@@ -74,17 +74,44 @@ def install(control_plane: Any) -> None:
         max_tokens: int,
         temperature: float,
         timeout: int,
+        client_id: int = 0,
+        shop_key: str = "",
+        endpoint: str = "/v1/chat/completions",
     ) -> Dict[str, Any]:
-        return dispatch_chat(
-            control_plane,
-            client_name,
-            requested_model,
-            messages,
-            max_tokens,
-            temperature,
-            timeout,
-            allowed_protocols=_REQUEST_ALLOWED_PROTOCOLS.get(),
-        )
+        # A logical client call may attempt multiple providers. Save exactly one
+        # request/response record after the canonical bounded router finishes.
+        started = time.monotonic()
+        outcome = None
+        error = ""
+        try:
+            outcome = dispatch_chat(
+                control_plane,
+                client_name,
+                requested_model,
+                messages,
+                max_tokens,
+                temperature,
+                timeout,
+                allowed_protocols=_REQUEST_ALLOWED_PROTOCOLS.get(),
+            )
+            return outcome
+        except Exception as exc:
+            error = type(exc).__name__ + ": " + str(exc)
+            raise
+        finally:
+            if client_id:
+                try:
+                    import ai_request_records
+                    ai_request_records.record(
+                        client_id=client_id, client_name=client_name, shop_key=shop_key,
+                        endpoint=endpoint, requested_model=requested_model,
+                        messages=messages, dispatched=outcome or {"success": False, "attempts": []},
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                        internal_error=error,
+                    )
+                except Exception:
+                    # Audit storage must never change the production AI response.
+                    pass
 
     control_plane.dispatch_chat = guarded_dispatch_chat
 

@@ -5,6 +5,7 @@ import os
 import uvicorn
 
 import app as control_plane
+import ai_request_records
 import bot_client_shop_binding
 import bot_update_cache
 import bot_update_prefetch
@@ -76,6 +77,7 @@ bot_web_conversation_knowledge.install(control_plane)
 client_data_backup.install(control_plane)
 store_rule_sync.install(control_plane)
 runtime_shop_ai_proxy.install(control_plane)
+ai_request_records.install(control_plane)
 message_processing_traces.install(control_plane)
 knowledge_v2_sync.install(control_plane, bot_web_console)
 
@@ -98,6 +100,7 @@ def initialize_control_plane_extensions() -> None:
     client_data_backup.init_db()
     store_rule_sync.init_db()
     message_processing_traces.init_db()
+    ai_request_records.init_db()
     knowledge_v2_sync.init_db()
     github_vless_proxy.init_github_vless_proxy()
     bot_update_cache.init_bot_update_cache()

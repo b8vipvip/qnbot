@@ -53,6 +53,9 @@ async def runtime_shop_chat(shop_key: str, request: Request) -> JSONResponse:
         max(1, min(32000, max_tokens)),
         temperature,
         max(5, min(300, timeout)),
+        int(client["id"]),
+        shop_key,
+        "/api/runtime/v1/ai-proxy/chat/completions",
     )
     if not dispatched["success"]:
         return JSONResponse(
