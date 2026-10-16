@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 router = APIRouter()
 _cp: Any = None
-_LAST_CLEANUP = 0.0
+_LAST_CLEANUP = float('-inf')
 _CLEANUP_LOCK = threading.Lock()
 _RETENTION_DAYS = 14
 _MAX_PROMPT_CHARS = 48000
@@ -202,6 +202,7 @@ _SUMMARY_FIELDS = (
 
 @router.get("/api/admin/ai-requests")
 def list_ai_requests(
+    response: Response,
     client_id: Optional[int] = Query(None, ge=1),
     shop_key: str = Query("", max_length=160),
     status: str = Query("", max_length=12),
@@ -210,6 +211,7 @@ def list_ai_requests(
     offset: int = Query(0, ge=0, le=100000),
     _: str = Depends(_require_admin),
 ) -> Dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
     where, args = _where(client_id, shop_key.strip(), status, model.strip())
     with _cp.db() as conn:
         total = int(conn.execute("SELECT COUNT(*) FROM ai_request_records" + where, args).fetchone()[0])
@@ -270,8 +272,10 @@ def export_ai_requests(
 @router.get("/api/admin/ai-requests/{record_id}")
 def ai_request_detail(
     record_id: int,
+    response: Response,
     _: str = Depends(_require_admin),
 ) -> Dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
     with _cp.db() as conn:
         row = conn.execute("SELECT * FROM ai_request_records WHERE id=?", (record_id,)).fetchone()
     if row is None:
