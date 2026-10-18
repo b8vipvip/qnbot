@@ -1184,7 +1184,8 @@ namespace Bot.ChromeNs
             for (var i = 0; i < segments.Count; i++)
             {
                 if (i > 0) await Task.Delay(220);
-                segments[i] = FixedAutoReplyVariantService.Select("订单固定预设", segments[i]);
+                // Live order/payment facts must remain identical to the configured
+                // deterministic template; never spend AI calls to paraphrase them.
                 if (await IsOrderPresetSegmentAlreadySatisfiedAsync(plan, segments[i]).ConfigureAwait(false))
                 {
                     result.SatisfiedSegments++;

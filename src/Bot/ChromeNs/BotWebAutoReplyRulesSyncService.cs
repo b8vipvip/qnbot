@@ -213,8 +213,8 @@ namespace Bot.ChromeNs
         private static JObject BuildCurrentSettings()
         {
             var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
-            if (!string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
-                FixedAutoReplyVariantService.Warmup("下班自动回复", cfg.OffHoursFixedText);
+            // Reading current settings is side-effect free. Background polling
+            // must not invoke AI or retry an unchanged optional paraphrase.
             return new JObject
             {
                 ["auto_reply_rules_enabled"] = cfg.Enabled,
@@ -237,6 +237,7 @@ namespace Bot.ChromeNs
         {
             var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
             var changed = false;
+            var previousOffHoursText = cfg.OffHoursFixedText;
 
             changed |= SetBool(desired, "auto_reply_rules_enabled", cfg.Enabled, v => cfg.Enabled = v);
             changed |= SetText(desired, "manual_handoff_keywords", cfg.ManualKeywords, 2000, v => cfg.ManualKeywords = v);
@@ -311,10 +312,11 @@ namespace Bot.ChromeNs
             if (changed)
             {
                 BotFeatureStore.SaveAutoReplyRules(cfg);
-                if (!string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
+                // Only a real text-version change can prewarm an optional phrase.
+                // The order preset is business-critical and is never AI-paraphrased.
+                if (!string.Equals(previousOffHoursText, cfg.OffHoursFixedText, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
                     FixedAutoReplyVariantService.Warmup("下班自动回复", cfg.OffHoursFixedText);
-                if (!string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyText))
-                    FixedAutoReplyVariantService.Warmup("订单固定预设", cfg.OrderPlacedReplyText);
             }
         }
 
