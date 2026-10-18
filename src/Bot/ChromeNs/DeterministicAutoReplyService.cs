@@ -541,131 +541,282 @@ namespace Bot.ChromeNs
         }
     }
 
+    /// <summary>
+    /// Bounded, per-shop cache for optional paraphrases. Buyer replies always have
+    /// a deterministic original-text fallback. There is deliberately NO periodic
+    /// timer: an unchanged failed prompt must not generate AI bills while idle.
+    /// </summary>
     internal static class FixedAutoReplyVariantService
     {
+        private const int MaxAttemptsPerVersion = 3;
+        private const int CacheFormat = 2;
+        private sealed class VariantSnapshot
+        {
+            public int Version { get; set; }
+            public int Attempts { get; set; }
+            public DateTime NextRetryUtc { get; set; }
+            public string[] Variants { get; set; }
+        }
+
         private sealed class VariantEntry
         {
+            public readonly object Gate = new object();
+            public ShopContext Shop;
             public string Source;
             public string Canonical;
+            public string CachePath;
+            public int Attempts;
+            public DateTime NextRetryUtc;
             public string[] Variants;
-            public DateTime NextRetryAt;
             public int Compiling;
         }
 
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ConcurrentDictionary<string, VariantEntry> Entries =
             new ConcurrentDictionary<string, VariantEntry>(StringComparer.Ordinal);
+        // Business values and curly-brace placeholders must never be rewritten by AI.
         private static readonly Regex StableTokenRegex =
-            new Regex(@"https?://\S+|\d+(?:[\d\.:/\-]*\d)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(5);
-        private static readonly Timer RetryTimer =
-            new Timer(_ => RetryPending(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+            new Regex(@"https?://\S+|\{[^{}\r\n]{1,80}\}|\[\[T\d+\]\]|\d+(?:[\d\.:/\-]*\d)?",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex PlaceholderRegex =
+            new Regex(@"\[\[T\d+\]\]", RegexOptions.Compiled);
 
         public static string Select(string source, string configuredText)
         {
             var text = BotOutboundMessageFormatter.StripAiMarker(configuredText ?? string.Empty).Trim();
             if (text.Length == 0) return text;
-
-            Dictionary<string, string> tokens;
-            var canonical = Canonicalize(text, out tokens);
-            var key = (source ?? "固定自动回复").Trim() + "\n" + canonical;
-            var entry = Entries.GetOrAdd(key, _ => new VariantEntry
-            {
-                Source = (source ?? "固定自动回复").Trim(),
-                Canonical = canonical,
-                NextRetryAt = DateTime.MinValue
-            });
-            EnsureCompilation(entry);
-
+            // Order messages may contain live order numbers, payment states and
+            // other facts. Never rewrite or delay an authoritative order action.
+            if (string.Equals(source, "订单固定预设", StringComparison.Ordinal)) return text;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null) return text; // Never borrow another shop's endpoint.
+            var entry = GetEntry(shop, source, text);
+            if (entry == null) return text;
+            EnsureCompilation(entry, true);
             var variants = entry.Variants;
             if (variants == null || variants.Length != 10) return text;
             var selected = variants[(Guid.NewGuid().GetHashCode() & int.MaxValue) % variants.Length];
+            Dictionary<string, string> tokens;
+            Canonicalize(text, out tokens);
             return RestoreTokens(selected, tokens);
         }
 
         public static void Warmup(string source, string configuredText)
         {
-            Select(source, configuredText);
+            var text = BotOutboundMessageFormatter.StripAiMarker(configuredText ?? string.Empty).Trim();
+            if (text.Length == 0 || string.Equals(source, "订单固定预设", StringComparison.Ordinal)) return;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null) return;
+            var entry = GetEntry(shop, source, text);
+            // Warmup is allowed only once for this content version. It never
+            // retries an unchanged failed configuration during background sync.
+            if (entry != null) EnsureCompilation(entry, false);
         }
 
-        private static void RetryPending()
+        private static VariantEntry GetEntry(ShopContext shop, string source, string text)
         {
-            foreach (var entry in Entries.Values)
+            var normalizedSource = (source ?? "固定自动回复").Trim();
+            var contentId = shop.ShopKey + "\n" + normalizedSource + "\n" + text;
+            string hash;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
             {
-                if (entry.Variants != null && entry.Variants.Length == 10) continue;
-                if (entry.NextRetryAt > DateTime.Now) continue;
-                EnsureCompilation(entry);
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(contentId));
+                hash = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+            }
+            try
+            {
+                var cacheFile = Path.Combine(Paths.GetCacheRoot(shop),
+                    "fixed-reply-variants-" + hash + ".json");
+                return Entries.GetOrAdd(hash, _ =>
+                {
+                    Dictionary<string, string> tokens;
+                    var entry = new VariantEntry
+                    {
+                        Shop = shop,
+                        Source = normalizedSource,
+                        Canonical = Canonicalize(text, out tokens),
+                        CachePath = cacheFile,
+                        NextRetryUtc = DateTime.MinValue
+                    };
+                    LoadSnapshot(entry);
+                    return entry;
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("固定回复同义缓存不可用，保留原话术: " + ex.GetType().Name, 10);
+                return null;
             }
         }
 
-        private static void EnsureCompilation(VariantEntry entry)
+        private static void LoadSnapshot(VariantEntry entry)
         {
-            if (entry == null || (entry.Variants != null && entry.Variants.Length == 10)) return;
-            if (entry.NextRetryAt > DateTime.Now) return;
-            if (Interlocked.CompareExchange(ref entry.Compiling, 1, 0) != 0) return;
+            try
+            {
+                if (!File.Exists(entry.CachePath)) return;
+                var snapshot = JsonConvert.DeserializeObject<VariantSnapshot>(
+                    File.ReadAllText(entry.CachePath, Encoding.UTF8));
+                if (snapshot == null || snapshot.Version != CacheFormat) return;
+                entry.Attempts = Math.Min(MaxAttemptsPerVersion, Math.Max(0, snapshot.Attempts));
+                entry.NextRetryUtc = snapshot.NextRetryUtc;
+                if (IsSafeVariantSet(entry.Canonical, snapshot.Variants, entry.Source))
+                    entry.Variants = snapshot.Variants;
+                else if (snapshot.Variants != null)
+                    entry.Attempts = MaxAttemptsPerVersion; // Corrupted cache: fail closed.
+            }
+            catch (Exception ex)
+            {
+                entry.Attempts = MaxAttemptsPerVersion; // Do not re-bill on unreadable state.
+                Log.ErrorWithMaxCount("固定回复同义缓存读取失败，保持原话术: " + ex.GetType().Name, 10);
+            }
+        }
+
+        private static void SaveSnapshot(VariantEntry entry)
+        {
+            var snapshot = new VariantSnapshot
+            {
+                Version = CacheFormat,
+                Attempts = entry.Attempts,
+                NextRetryUtc = entry.NextRetryUtc,
+                Variants = entry.Variants
+            };
+            // Atomic replace prevents restart between an AI request and the
+            // corresponding attempt count from resetting the retry budget.
+            var temp = entry.CachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, JsonConvert.SerializeObject(snapshot), Encoding.UTF8);
+                if (File.Exists(entry.CachePath))
+                    File.Replace(temp, entry.CachePath, null);
+                else
+                    File.Move(temp, entry.CachePath);
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+        }
+
+        private static DateTime NextRetryTimeUtc(int attempt)
+        {
+            if (attempt >= MaxAttemptsPerVersion) return DateTime.MaxValue;
+            return DateTime.UtcNow.AddMinutes(attempt == 1 ? 5 : 30);
+        }
+
+        private static void EnsureCompilation(VariantEntry entry, bool allowRetry)
+        {
+            if (entry == null) return;
+            lock (entry.Gate)
+            {
+                if (entry.Variants != null || entry.Attempts >= MaxAttemptsPerVersion
+                    || entry.NextRetryUtc > DateTime.UtcNow
+                    || (!allowRetry && entry.Attempts > 0))
+                    return;
+                if (Interlocked.CompareExchange(ref entry.Compiling, 1, 0) != 0) return;
+                // Persist the attempt BEFORE entering the network call. Restarts
+                // therefore never cause unlimited charges for the same content.
+                entry.Attempts++;
+                entry.NextRetryUtc = NextRetryTimeUtc(entry.Attempts);
+                try { SaveSnapshot(entry); }
+                catch (Exception ex)
+                {
+                    entry.Attempts = MaxAttemptsPerVersion;
+                    Interlocked.Exchange(ref entry.Compiling, 0);
+                    Log.ErrorWithMaxCount("无法保存固定话术编译预算，取消AI调用: "
+                        + ex.GetType().Name, 10);
+                    return;
+                }
+            }
 
             Task.Run(() =>
             {
                 try
                 {
-                    var messages = new JArray
+                    using (ShopSettingsScope.Enter(entry.Shop))
                     {
-                        new JObject
+                        var messages = new JArray
                         {
-                            ["role"] = "system",
-                            ["content"] =
-                                "你负责为淘宝客服固定自动回复生成同义改写。必须保持事实、承诺、链接、编号、占位符和业务含义完全一致；"
-                                + "不要新增优惠、时效、退款承诺或不存在的信息。输出严格JSON数组，恰好10个字符串；"
-                                + "10条文本措辞和字数要有明显差异，但语义一致。任何[[T数字]]占位符必须原样保留且每条都出现。"
-                        },
-                        new JObject
+                            new JObject
+                            {
+                                ["role"] = "system",
+                                ["content"] =
+                                    "你负责淘宝客服固定话术的安全同义改写。保持下班状态、事实、承诺、业务含义和所有占位符完全一致；"
+                                    + "不得变更工作时间、链接、订单状态、付款、退款或支持结论。"
+                                    + "只返回JSON数组，严格包含10条非空、互不重复的字符串；"
+                                    + "每条必须包含全部[[T数字]]占位符且每个只出现一次。不满足要求请不要编造。"
+                            },
+                            new JObject
+                            {
+                                ["role"] = "user",
+                                ["content"] = "来源：" + entry.Source + "\n原文：" + entry.Canonical
+                            }
+                        };
+                        var result = MyOpenAI.CallStructuredChat(
+                            messages, 1400, 0.5, 18, CancellationToken.None, true);
+                        if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
+                            throw new InvalidOperationException(result == null ? "AI接口无返回" : result.Error);
+                        var array = JArray.Parse(result.Answer.Trim());
+                        if (array.Count != 10 || array.Any(x => x.Type != JTokenType.String))
+                            throw new InvalidOperationException("AI同义编译结果不是10条唯一文本");
+                        var list = array.Values<string>()
+                            .Select(x => (x ?? string.Empty).Trim())
+                            .ToArray();
+                        if (!IsSafeVariantSet(entry.Canonical, list, entry.Source))
+                            throw new InvalidOperationException("AI同义编译结果不是10条唯一文本或未通过占位符/业务安全校验");
+                        lock (entry.Gate)
                         {
-                            ["role"] = "user",
-                            ["content"] = "来源：" + entry.Source + "\n原文：" + entry.Canonical
+                            entry.Variants = list;
+                            entry.NextRetryUtc = DateTime.MaxValue;
+                            SaveSnapshot(entry);
                         }
-                    };
-                    var result = MyOpenAI.CallStructuredChat(
-                        messages, 1400, 0.85, 18, CancellationToken.None, true);
-                    if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
-                        throw new InvalidOperationException(result == null ? "AI接口无返回" : result.Error);
-
-                    var array = JArray.Parse(result.Answer.Trim());
-                    var list = array.Values<string>()
-                        .Select(x => (x ?? string.Empty).Trim())
-                        .Where(x => x.Length > 0)
-                        .Distinct(StringComparer.Ordinal)
-                        .ToList();
-                    if (list.Count != 10)
-                        throw new InvalidOperationException("AI同义编译结果不是10条唯一文本");
-
-                    var placeholders = Regex.Matches(entry.Canonical, @"\[\[T\d+\]\]")
-                        .Cast<Match>().Select(x => x.Value).Distinct(StringComparer.Ordinal).ToArray();
-                    foreach (var variant in list)
-                    {
-                        foreach (var placeholder in placeholders)
-                        {
-                            if (variant.IndexOf(placeholder, StringComparison.Ordinal) < 0)
-                                throw new InvalidOperationException("AI同义编译丢失稳定占位符 " + placeholder);
-                        }
+                        Log.Info("固定自动回复同义编译完成: source=" + entry.Source
+                            + ", variants=10, canonicalChars=" + entry.Canonical.Length);
                     }
-
-                    entry.Variants = list.ToArray();
-                    entry.NextRetryAt = DateTime.MaxValue;
-                    Log.Info("固定自动回复同义编译完成: source=" + entry.Source
-                        + ", variants=10, canonicalChars=" + entry.Canonical.Length);
                 }
                 catch (Exception ex)
                 {
-                    entry.NextRetryAt = DateTime.Now.Add(RetryInterval);
                     Log.ErrorWithMaxCount(
-                        "固定自动回复同义编译失败，5分钟后重试: source=" + entry.Source
-                        + ", error=" + ex.Message,
-                        30);
+                        "固定自动回复同义编译失败，保留原文；仅在后续真实回复触发且达到退避时间时有限重试: source="
+                        + entry.Source + ", attempt=" + entry.Attempts + "/" + MaxAttemptsPerVersion
+                        + ", error=" + ex.GetType().Name + ": " + ex.Message, 30);
                 }
                 finally
                 {
                     Interlocked.Exchange(ref entry.Compiling, 0);
                 }
             });
+        }
+
+        private static bool IsSafeVariantSet(string canonical, string[] variants, string source)
+        {
+            if (variants == null || variants.Length != 10
+                || variants.Any(x => string.IsNullOrWhiteSpace(x) || x.Length > 2000)
+                || variants.Distinct(StringComparer.Ordinal).Count() != 10)
+                return false;
+            // Exact multiplicity check, not merely Contains: a model must not
+            // drop, duplicate, invent or mangle any protected business token.
+            var placeholders = PlaceholderRegex.Matches(canonical)
+                .Cast<Match>().Select(x => x.Value).ToArray();
+            var expected = placeholders.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            foreach (var variant in variants)
+            {
+                var found = PlaceholderRegex.Matches(variant)
+                    .Cast<Match>().Select(x => x.Value)
+                    .OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                if (!expected.SequenceEqual(found, StringComparer.Ordinal))
+                    return false;
+                if (variant.Contains("[[T") && Regex.Matches(variant, @"\[\[T").Count != found.Length)
+                    return false;
+                if (canonical.Contains("不支持") && !variant.Contains("不支持")) return false;
+                if (canonical.Contains("已付款") && !variant.Contains("已付款")) return false;
+                if (canonical.Contains("未付款") && !variant.Contains("未付款")) return false;
+                if (string.Equals(source, "下班自动回复", StringComparison.Ordinal)
+                    && (variant.Contains("已上班") || variant.Contains("正在上班")
+                        || !(variant.Contains("下班") || variant.Contains("休息")
+                             || variant.Contains("非工作时间") || variant.Contains("非营业时间"))))
+                    return false;
+            }
+            return true;
         }
 
         private static string Canonicalize(string text, out Dictionary<string, string> tokens)
