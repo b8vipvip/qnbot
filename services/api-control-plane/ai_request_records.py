@@ -46,6 +46,8 @@ def init_db() -> None:
             client_id INTEGER NOT NULL,
             client_name TEXT NOT NULL,
             shop_key TEXT NOT NULL DEFAULT '',
+            purpose TEXT NOT NULL DEFAULT '其它AI请求',
+            business_result TEXT NOT NULL DEFAULT '未上报',
             endpoint TEXT NOT NULL,
             request_model TEXT NOT NULL,
             resolved_model TEXT NOT NULL DEFAULT '',
@@ -66,6 +68,30 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_ai_request_shop ON ai_request_records(shop_key, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ai_request_time ON ai_request_records(created_at);
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(ai_request_records)")}
+        for name, default in (("purpose", "其它AI请求"), ("business_result", "未上报")):
+            if name not in columns:
+                # Additive migration: never delete or recreate existing request history.
+                conn.execute(
+                    "ALTER TABLE ai_request_records ADD COLUMN " + name
+                    + " TEXT NOT NULL DEFAULT '" + default + "'"
+                )
+        # Backfill existing retained records once for operators reviewing the
+        # recently observed retry storm. Classification is clearly labelled
+        # as format precheck, NOT confirmation of client-side acceptance.
+        for row in conn.execute(
+            "SELECT id,prompt_json,response_text,success FROM ai_request_records "
+            "WHERE purpose='其它AI请求' AND business_result='未上报' "
+            "ORDER BY id DESC LIMIT 5000"
+        ).fetchall():
+            try:
+                purpose, result = _classify_business(json.loads(row["prompt_json"]),
+                                                     row["response_text"], bool(row["success"]))
+                if purpose != "其它AI请求":
+                    conn.execute("UPDATE ai_request_records SET purpose=?,business_result=? WHERE id=?",
+                                 (purpose, result, row["id"]))
+            except (ValueError, TypeError, KeyError):
+                continue
 
 
 def _text(value: Any, limit: int) -> str:
@@ -126,6 +152,39 @@ def _maybe_cleanup() -> None:
         _CLEANUP_LOCK.release()
 
 
+def _classify_business(messages: Any, answer: str, successful: bool) -> tuple[str, str]:
+    """Infer request purpose and *format precheck*; Bot acceptance is not knowable here."""
+    if not isinstance(messages, list):
+        return "其它AI请求", "未上报"
+    system = "\n".join(str(item.get("content") or "") for item in messages
+                       if isinstance(item, dict) and item.get("role") == "system")
+    if "固定自动回复生成同义改写" not in system and "固定话术的安全同义改写" not in system:
+        return "其它AI请求", "未上报"
+    user = "\n".join(str(item.get("content") or "") for item in messages
+                     if isinstance(item, dict) and item.get("role") == "user")
+    match = re.search(r"(?:^|\n)来源：([^\r\n]+)", user)
+    source = match.group(1).strip()[:50] if match else "未指定"
+    purpose = "固定回复同义编译 · " + source
+    if not successful:
+        return purpose, "上游失败，客户端未验收"
+    try:
+        parsed = json.loads(answer)
+    except (TypeError, ValueError):
+        return purpose, "格式初筛失败：不是JSON数组"
+    if (not isinstance(parsed, list) or len(parsed) != 10
+            or any(not isinstance(x, str) or not x.strip() or len(x) > 2000 for x in parsed)
+            or len(set(parsed)) != 10):
+        return purpose, "格式初筛失败：不是10条唯一文本"
+    # The server can only check the raw format; it cannot attest to
+    # semantic equivalence or a successful client-side cache commit.
+    raw = user.split("原文：", 1)[-1]
+    expected = sorted(re.findall(r"\[\[T\d+\]\]", raw))
+    for text in parsed:
+        if sorted(re.findall(r"\[\[T\d+\]\]", text)) != expected:
+            return purpose, "格式初筛失败：占位符异常"
+    return purpose, "格式初筛通过，客户端验收未知"
+
+
 def record(
     *, client_id: int, client_name: str, shop_key: str, endpoint: str,
     requested_model: str, messages: Any, dispatched: Dict[str, Any],
@@ -150,16 +209,18 @@ def record(
     prompts, truncated_prompt = _json_bounded(messages, _MAX_PROMPT_CHARS)
     attempt_json, truncated_attempts = _json_bounded(compact_attempts, 16000)
     answer = _text(winner.get("answer") if successful else "", _MAX_REPLY_CHARS)
+    purpose, business_result = _classify_business(messages, answer, successful)
     error = _text(internal_error or ("" if successful else winner.get("error") or "所有上游调用均失败"), _MAX_ERROR_CHARS)
     with _cp.db() as conn:
         conn.execute("""
             INSERT INTO ai_request_records(
-              client_id,client_name,shop_key,endpoint,request_model,
+              client_id,client_name,shop_key,purpose,business_result,endpoint,request_model,
               resolved_model,provider_name,protocol,success,http_status,
               duration_ms,prompt_json,response_text,attempts_json,error,truncated,created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             int(client_id), _text(client_name, 120), _text(shop_key, 160),
+            purpose, business_result,
             _text(endpoint, 90), _text(requested_model, 160),
             _text(winner.get("model"), 160), _text(winner.get("provider_name"), 120),
             _text(winner.get("protocol"), 40), int(successful),
@@ -194,7 +255,7 @@ def _where(client_id: Optional[int], shop_key: str, status: str, model: str) -> 
 
 
 _SUMMARY_FIELDS = (
-    "id,client_id,client_name,shop_key,endpoint,request_model,"
+    "id,client_id,client_name,shop_key,purpose,business_result,endpoint,request_model,"
     "resolved_model,provider_name,protocol,success,http_status,"
     "duration_ms,truncated,created_at,error"
 )
@@ -249,7 +310,7 @@ def export_ai_requests(
             media_type="application/json; charset=utf-8", headers=headers
         )
     buffer = io.StringIO()
-    fields = ["id", "created_at", "client_id", "client_name", "shop_key", "endpoint",
+    fields = ["id", "created_at", "client_id", "client_name", "shop_key", "purpose", "business_result", "endpoint",
               "request_model", "resolved_model", "provider_name", "protocol", "success",
               "http_status", "duration_ms", "truncated", "prompt", "response_text", "error", "attempts"]
     writer = csv.DictWriter(buffer, fieldnames=fields)

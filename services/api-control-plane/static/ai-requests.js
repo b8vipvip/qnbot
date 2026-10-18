@@ -50,12 +50,13 @@ async function loadAiRequestRecords(){
     box.innerHTML='<div class="empty">暂无符合条件的 AI 请求记录。新版本服务端升级后，将记录后续认证成功的客户端 AI 调用。</div>';
   }else{
     box.innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
-      '<th>时间</th><th>客户端 / 店铺</th><th>接口 / 请求模型</th><th>实际供应商 / 模型</th>'+
+      '<th>时间</th><th>客户端 / 店铺</th><th>调用用途 / 业务格式</th><th>接口 / 请求模型</th><th>实际供应商 / 模型</th>'+
       '<th>结果</th><th>耗时</th><th>详情</th></tr></thead><tbody>'+
       rows.map(function(r){
         const status=r.success?badge("成功","good"):badge("失败","bad");
         return '<tr><td>'+esc(cnTime(r.created_at))+'</td>'+
           '<td><strong>'+esc(r.client_name||("#"+r.client_id))+'</strong><div class="hint">ID '+esc(r.client_id)+' · '+esc(r.shop_key||"-")+'</div></td>'+
+          '<td>'+esc(r.purpose||"其它AI请求")+'<div class="hint">'+esc(r.business_result||"未上报")+'</div></td>'+
           '<td>'+esc(r.endpoint)+'<div class="hint">'+esc(r.request_model)+'</div></td>'+
           '<td>'+esc(r.provider_name||"-")+'<div class="hint">'+esc(r.resolved_model||"-")+' · '+esc(r.protocol||"-")+'</div></td>'+
           '<td>'+status+'<div class="hint">HTTP '+esc(r.http_status)+'</div></td>'+
@@ -105,6 +106,7 @@ async function viewAiRequest(id){
     document.getElementById("aiRequestDetailMeta").textContent=
       cnTime(r.created_at)+" · 客户端 "+r.client_name+" (ID "+r.client_id+") · 店铺 "+(r.shop_key||"-")+
       " · "+r.endpoint+" · "+r.request_model+" → "+(r.resolved_model||"-")+
+      " · 用途 "+(r.purpose||"其它AI请求")+" · 格式/业务结果 "+(r.business_result||"未上报")+
       " · "+(r.success?"成功":"失败")+" HTTP "+r.http_status+
       " · "+r.duration_ms+" ms"+(r.truncated?" · 部分内容因大小限制截断":"");
     document.getElementById("aiRequestPrompt").textContent=JSON.stringify(r.prompt,null,2);
