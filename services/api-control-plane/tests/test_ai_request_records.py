@@ -155,7 +155,7 @@ def test_hooked_all_runtime_routes_and_frontend_navigation():
 
 def test_synonym_business_format_precheck_is_not_http_success():
     base = [{"role": "system", "content": "你负责为淘宝客服固定自动回复生成同义改写"},
-            {"role": "user", "content": "来源：下班自动回复\\n原文：时间[[T0]]"}]
+            {"role": "user", "content": "来源：下班自动回复\n原文：时间[[T0]]"}]
     purpose, status = ai_request_records._classify_business(
         base, '["只有一条"]', True
     )
@@ -174,7 +174,7 @@ def test_request_history_purpose_persisted_for_admin_and_export(tmp_path):
         client_id=1, client_name="one", shop_key="qn_test", endpoint="/v1/chat/completions",
         requested_model="text-default",
         messages=[{"role": "system", "content": "固定自动回复生成同义改写"},
-                  {"role": "user", "content": "来源：下班自动回复\\n原文：下班[[T0]]"}],
+                  {"role": "user", "content": "来源：下班自动回复\n原文：下班[[T0]]"}],
         dispatched={"success": True, "attempt": {"answer": '["一条"]',
                                                   "model": "test", "provider_name": "upstream"}},
         duration_ms=1,
