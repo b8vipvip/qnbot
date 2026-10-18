@@ -151,3 +151,40 @@ def test_hooked_all_runtime_routes_and_frontend_navigation():
     assert 'data-page="ai-requests"' in html
     assert 'id="aiRequestExportCount"' in html
     assert 'onclick="viewAiRequest(' in frontend
+
+
+def test_synonym_business_format_precheck_is_not_http_success():
+    base = [{"role": "system", "content": "你负责为淘宝客服固定自动回复生成同义改写"},
+            {"role": "user", "content": "来源：下班自动回复\\n原文：时间[[T0]]"}]
+    purpose, status = ai_request_records._classify_business(
+        base, '["只有一条"]', True
+    )
+    assert purpose == "固定回复同义编译 · 下班自动回复"
+    assert status == "格式初筛失败：不是10条唯一文本"
+    ok = json.dumps(["话术 %d [[T0]]" % n for n in range(10)], ensure_ascii=False)
+    assert ai_request_records._classify_business(base, ok, True)[1] == "格式初筛通过，客户端验收未知"
+    assert ai_request_records._classify_business(base, ok, False)[1] == "上游失败，客户端未验收"
+    assert ai_request_records._classify_business(base, "not json", True)[1] == "格式初筛失败：不是JSON数组"
+    assert ai_request_records._classify_business(base, json.dumps(["abc"]*10), True)[1] == "格式初筛失败：不是10条唯一文本"
+
+
+def test_request_history_purpose_persisted_for_admin_and_export(tmp_path):
+    cp = prepare(tmp_path)
+    ai_request_records.record(
+        client_id=1, client_name="one", shop_key="qn_test", endpoint="/v1/chat/completions",
+        requested_model="text-default",
+        messages=[{"role": "system", "content": "固定自动回复生成同义改写"},
+                  {"role": "user", "content": "来源：下班自动回复\\n原文：下班[[T0]]"}],
+        dispatched={"success": True, "attempt": {"answer": '["一条"]',
+                                                  "model": "test", "provider_name": "upstream"}},
+        duration_ms=1,
+    )
+    with TestClient(cp.app) as client:
+        admin = {"x-test-admin": "yes"}
+        record = client.get("/api/admin/ai-requests", headers=admin).json()["items"][0]
+        assert record["purpose"].startswith("固定回复同义编译")
+        assert record["business_result"].startswith("格式初筛失败")
+        detail = client.get("/api/admin/ai-requests/1", headers=admin).json()
+        assert detail["business_result"] == record["business_result"]
+        export = client.get("/api/admin/ai-requests/export?count=1", headers=admin).json()
+        assert export["records"][0]["purpose"] == record["purpose"]
