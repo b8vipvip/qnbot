@@ -97,6 +97,10 @@ RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /data \
     && chown -R appuser:appuser /app /data
 
+# Stamp the actual source revision into the new image, not into persisted
+# update status. Kept near the end to preserve expensive Python/OCR caches.
+ARG CONTROL_PLANE_BUILD_COMMIT=unknown
+ENV CONTROL_PLANE_BUILD_COMMIT=${CONTROL_PLANE_BUILD_COMMIT}
 USER appuser
 EXPOSE 8080
 VOLUME ["/data"]
