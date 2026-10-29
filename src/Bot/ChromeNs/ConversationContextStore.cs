@@ -91,6 +91,55 @@ namespace Bot.ChromeNs
             }
         }
 
+        /// <summary>
+        /// Seller messages arrive through the raw-message observer, not the buyer-only
+        /// IncomingMessageSafety.Evaluate path. Feed the same canonical, shop-scoped
+        /// timeline used by the Bot mirror immediately on seller echo; do not wait
+        /// for GetRemoteHisMsg, which can return only a partial history.
+        /// The original message id is preserved so later history sync deduplicates
+        /// the same echo instead of rendering it twice.
+        /// </summary>
+        internal static bool RecordObservedSellerMessage(
+            string seller,
+            string buyer,
+            QNChatMessage message,
+            string messageText)
+        {
+            if (message == null) return false;
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0
+                || string.Equals(seller, buyer, StringComparison.Ordinal)) return false;
+            var from = message.fromid == null ? string.Empty
+                : (message.fromid.nick ?? string.Empty).Trim();
+            var to = message.toid == null ? string.Empty
+                : (message.toid.nick ?? string.Empty).Trim();
+            // Never trust a guessed seller/buyer relation or create a cross-shop
+            // conversation from an unverified third-party message.
+            if (!string.Equals(from, seller, StringComparison.Ordinal)
+                || !string.Equals(to, buyer, StringComparison.Ordinal)) return false;
+            var shop = ResolveShop(seller);
+            if (shop == null) return false;
+            IDisposable scope = null;
+            try
+            {
+                scope = ShopSettingsScope.Enter(shop);
+                var state = GetState(seller, buyer);
+                RecordMessage(state, seller, buyer, message, messageText);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("实时卖家回显写入Bot镜像时间线失败: "
+                    + SafeLog(ex.Message), 10);
+                return false;
+            }
+            finally
+            {
+                if (scope != null) scope.Dispose();
+            }
+        }
+
         public static bool IsPlatformSystemTip(QNChatMessage message, string messageText)
         {
             var text = CollectVisibleText(message, messageText);
@@ -245,7 +294,11 @@ namespace Bot.ChromeNs
                 // OrderBy is stable: when Qianniu gives several messages the same timestamp,
                 // keep their original arrival/history order instead of reordering by a hash/key.
                 var eligible = state.Turns
-                    .Where(t => t != null && !string.IsNullOrWhiteSpace(t.Text))
+                    // The AI context timeline also contains internal style/system
+                    // prompts. Only real buyer/seller messages belong in the GUI.
+                    .Where(t => t != null
+                        && (t.Role == "user" || t.Role == "assistant")
+                        && !string.IsNullOrWhiteSpace(t.Text))
                     .OrderBy(t => t.Timestamp)
                     .ToList();
                 return eligible.Skip(Math.Max(0, eligible.Count - take))
