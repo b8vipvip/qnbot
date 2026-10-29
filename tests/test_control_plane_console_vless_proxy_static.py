@@ -73,7 +73,7 @@ def test_version_console_exposes_vless_controls_without_echoing_saved_secret():
     assert "保存并应用" in html
     assert "测试节点" in html
     assert "清除节点" in html
-    assert '/static/version-update.js?v=2' in html
+    assert '/static/version-update.js?v=3' in html
     assert 'api("/api/admin/version-update/proxy"' in js
     assert 'api("/api/admin/version-update/proxy/test"' in js
     assert "vless_url:value" in js
