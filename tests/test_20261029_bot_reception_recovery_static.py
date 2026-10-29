@@ -18,7 +18,8 @@ def test_confirmed_bot_echo_survives_missing_local_answer_card():
     assert 'nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");' in mirror
     assert "nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;" in mirror
     assert "nativeBotConversation.EditRequested += CtlConversation_EditRequested;" in mirror
-    assert "messageElement = nativeBotConversation;" in mirror
+    assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
+    assert "messageElement = nativeBotConversation;" not in mirror
     assert 'const string marker = "[A]";' in mirror
     # A real sent message must not be removed when local matching fails.
     fallback = mirror.split("if (nativeBotConversation == null)", 1)[1].split(
