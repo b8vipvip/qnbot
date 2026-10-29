@@ -26,6 +26,7 @@ SERVER_UPDATE_DIR = DATA_DIR / "server-update"
 SERVER_UPDATE_REQUEST = SERVER_UPDATE_DIR / "request.json"
 SERVER_UPDATE_STATUS = SERVER_UPDATE_DIR / "status.json"
 SERVER_UPDATE_AGENT = SERVER_UPDATE_DIR / "agent.json"
+SERVER_UPDATE_LOG = SERVER_UPDATE_DIR / "update.log"
 SERVER_GITHUB_CACHE_SECONDS = max(15, min(600, int(os.getenv("SERVER_UPDATE_GITHUB_CACHE_SECONDS", "60"))))
 SERVER_UPDATE_AGENT_STALE_SECONDS = max(5, min(120, int(os.getenv("SERVER_UPDATE_AGENT_STALE_SECONDS", "15"))))
 SERVER_GITHUB_SYNC_ATTEMPTS = max(1, min(8, int(os.getenv("SERVER_UPDATE_GITHUB_SYNC_ATTEMPTS", "4"))))
@@ -147,6 +148,29 @@ def _server_update_status() -> Dict[str, Any]:
             "message": "尚未执行服务端在线更新",
         }
     status["agent"] = _agent_status()
+    now = time.time()
+    status_stamp = float(status.get("updated_at_unix") or 0)
+    status["status_age_seconds"] = max(0, int(now - status_stamp)) if status_stamp else None
+    try:
+        last_build_output = SERVER_UPDATE_LOG.stat().st_mtime
+    except OSError:
+        last_build_output = 0
+    status["log_age_seconds"] = max(0, int(now - last_build_output)) if last_build_output else None
+    status["log_size_bytes"] = SERVER_UPDATE_LOG.stat().st_size if last_build_output else 0
+    state = str(status.get("state") or "")
+    phase = str(status.get("phase") or "")
+    building = state == "running" and ("构建" in phase or int(status.get("progress_percent") or 0) == 35)
+    silent = status["log_age_seconds"]
+    status["build_suspected_stalled"] = bool(building and silent is not None and silent >= 300)
+    status["build_phase_not_percentage"] = building
+    if state in {"queued", "running"} and not status["agent"].get("online"):
+        status["diagnostic"] = "更新代理离线，请检查 systemd 服务；不可据此推断旧服务已经停止。"
+    elif status["build_suspected_stalled"]:
+        status["diagnostic"] = "构建日志已超过 5 分钟无输出，检查网络/磁盘/BuildKit 或构建超时；旧服务在构建阶段继续运行。"
+    elif building:
+        status["diagnostic"] = "35% 表示处于 Docker 镜像构建阶段，不是已经完成了 35% 的构建。"
+    else:
+        status["diagnostic"] = ""
     return status
 
 
