@@ -431,7 +431,7 @@ namespace Bot.Knowledge
                 return;
             }
             if (_selectedPreset == null)
-                _selectedPreset = new BotReplyPreset { Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now };
+                _selectedPreset = new BotReplyPreset { Id = Guid.NewGuid().ToString("N"), UpdatedAt = DateTime.Now };
             _selectedPreset.Name = _presetName.Text.Trim();
             _selectedPreset.Text = _presetText.Text.Trim();
             _selectedPreset.Trigger = string.IsNullOrWhiteSpace(_presetTrigger.Text) ? "买家消息包含商品链接" : _presetTrigger.Text.Trim();
