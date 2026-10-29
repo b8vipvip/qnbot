@@ -400,13 +400,25 @@ namespace Bot.AssistWindow.Widget.Robot
         private static string ResolveMirrorBotSource(
             string seller, string buyer, string question, CtlConversation action, string messageText)
         {
-            if (ConversationContextStore.IsProductLinkPresetReply(seller, messageText))
-                return BotReplyPresetService.ResolveSourceLabel(seller, messageText);
             var source = action == null ? string.Empty : (action.MirrorAnswerSource ?? string.Empty).Trim();
-            if (source.IndexOf("本地答复卡片未找到", StringComparison.Ordinal) >= 0)
+            if (source.IndexOf("本地答复卡片未找到", StringComparison.Ordinal) >= 0
+                || source == "千牛已发送回显（来源未记录，需人工补录）"
+                || source == "千牛已发送回显（来源记录未留存，不能确定知识库命中）")
                 source = string.Empty;
+
+            BotReplyPreset preset;
+            var isPreset = BotReplyPresetService.TryFindPreset(seller, messageText, out preset);
+            if (isPreset && (string.IsNullOrWhiteSpace(source)
+                || source == "本地"
+                || source == "商品链接预设回复"
+                || source == "商品链接预设回复（内置固定话术，非知识库条目）"
+                || source.StartsWith("内置话术：", StringComparison.Ordinal)))
+                return BotReplyPresetService.BuildSourceLabel(preset);
+
             if (string.IsNullOrWhiteSpace(source))
                 source = KnowledgeLearningService.ResolveAnswerSource(seller, buyer, question, messageText);
+            if (string.IsNullOrWhiteSpace(source) && isPreset)
+                source = BotReplyPresetService.BuildSourceLabel(preset);
             return string.IsNullOrWhiteSpace(source)
                 ? "来源未记录（千牛回显已确认，需人工补录）"
                 : source;
@@ -469,6 +481,7 @@ namespace Bot.AssistWindow.Widget.Robot
                         "来源管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
+                KnowledgeLearningService.OverrideAnswerSource(seller, buyer, question, messageText, edited);
                 if (action != null) action.MirrorSetAnswerSource(edited);
                 source = edited;
                 Log.Info("Bot回复来源标签已由消息菜单修改: seller=" + seller
