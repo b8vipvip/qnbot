@@ -323,6 +323,12 @@ namespace Bot.ChromeNs
                 // The delivery ledger knows the exact seller+buyer+answer that the Bot submitted and
                 // keeps a short known-answer record after confirmation for duplicate/recovered echoes.
                 var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text);
+                // A successful transport echo must be represented in the UI timeline
+                // immediately, including first-contact and fixed order segments.
+                // Historical refresh is a fallback, not the only writer. Keep the
+                // original message id so duplicate events/history cannot double-add.
+                ConversationContextStore.RecordObservedSellerMessage(
+                    seller, buyer, message, text);
                 var result = Agent.RecordEvent(
                     seller,
                     buyer,
