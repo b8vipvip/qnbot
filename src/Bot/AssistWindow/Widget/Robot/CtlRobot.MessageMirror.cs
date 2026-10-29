@@ -225,9 +225,17 @@ namespace Bot.AssistWindow.Widget.Robot
                         usedNativeBotConversations);
                     if (nativeBotConversation == null)
                     {
+                        // Reconstruct only provenance that can be proven from the
+                        // exact built-in response; a missing transient UI card
+                        // is not itself a message source.
+                        var source = ConversationContextStore.IsProductLinkPresetReply(botAnswer)
+                            ? "商品链接预设回复（内置固定话术，非知识库条目）"
+                            : KnowledgeLearningService.ResolveAnswerSource(
+                                seller, buyer, lastBuyerQuestion, botAnswer);
+                        if (string.IsNullOrWhiteSpace(source))
+                            source = "千牛已发送回显（来源记录未留存，不能确定知识库命中）";
                         nativeBotConversation = CtlConversation.Create(
-                            seller, buyer, lastBuyerQuestion, botAnswer, true,
-                            "千牛Bot发送回显（本地答复卡片未找到）");
+                            seller, buyer, lastBuyerQuestion, botAnswer, true, source);
                         nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");
                         nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;
                         nativeBotConversation.EditRequested += CtlConversation_EditRequested;
@@ -356,7 +364,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 Child = text
             };
             bubble.ContextMenu = isBot
-                ? BuildMessageMirrorBotContextMenu(botAction, messageText, bubble)
+                ? BuildMessageMirrorBotContextMenu(botAction, turn, messageText, bubble)
                 : BuildCopyOnlyContextMenu(messageText, bubble);
 
             var stack = new StackPanel
@@ -371,12 +379,61 @@ namespace Bot.AssistWindow.Widget.Robot
             return stack;
         }
 
+        private static string ResolveMirrorBotSource(CtlConversation action, string messageText)
+        {
+            if (ConversationContextStore.IsProductLinkPresetReply(messageText))
+                return "商品链接预设回复（系统内置固定话术，不属于知识库 V2）";
+            var source = action == null ? string.Empty : (action.MirrorAnswerSource ?? string.Empty).Trim();
+            if (source.IndexOf("本地答复卡片未找到", StringComparison.Ordinal) >= 0)
+                return "千牛已发送回显；原始来源记录未留存，不能确认知识库命中";
+            return string.IsNullOrWhiteSpace(source)
+                ? "千牛已发送回显；来源尚未记录，不能确认知识库命中"
+                : source;
+        }
+
+        private static bool IsVerifiedKnowledgeMirrorSource(string source)
+        {
+            return source == "智能路由-本地直答"
+                || source == "智能路由-离线知识兜底"
+                || source == "知识库直答"
+                || source == "知识库匹配";
+        }
+
         private ContextMenu BuildMessageMirrorBotContextMenu(
-            CtlConversation action, string messageText, FrameworkElement placementTarget)
+            CtlConversation action,
+            ConversationContextTurn turn,
+            string messageText,
+            FrameworkElement placementTarget)
         {
             var menu = BuildCopyOnlyContextMenu(messageText, placementTarget);
+            var source = ResolveMirrorBotSource(action, messageText);
+            var timestamp = turn == null || turn.Timestamp == DateTime.MinValue
+                ? "时间未记录" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
+            var detail = "发送时间：" + timestamp
+                + "\n发送者：Bot"
+                + "\n消息来源：" + source
+                + "\n\n回复内容：\n" + messageText;
             var view = new MenuItem { Header = "查看" };
-            view.Click += (s, e) => action.MirrorOpenKnowledge(Window.GetWindow(this));
+            view.Click += (s, e) =>
+            {
+                // Only a confirmed knowledge-source answer can navigate to the
+                // legacy knowledge locator. Presets and unknown-source echoes
+                // are perfectly valid Bot replies without a Knowledge V2 entry.
+                if (IsVerifiedKnowledgeMirrorSource(source))
+                {
+                    var result = MessageBox.Show(Window.GetWindow(this),
+                        detail + "\n\n来源标记指向知识检索。是否进一步尝试定位知识库条目？",
+                        "Bot 回复详情", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                    if (result == MessageBoxResult.Yes)
+                        action.MirrorOpenKnowledge(Window.GetWindow(this));
+                }
+                else
+                {
+                    MessageBox.Show(Window.GetWindow(this),
+                        detail + "\n\n此回复并非已验证的知识库命中，不会错误跳转知识库。",
+                        "Bot 回复详情", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            };
             menu.Items.Insert(0, view);
 
             if (action.MirrorCanResend)
@@ -393,9 +450,9 @@ namespace Bot.AssistWindow.Widget.Robot
             var provenance = new MenuItem { Header = "来源" };
             provenance.Click += (s, e) => MessageBox.Show(
                 Window.GetWindow(this),
-                "消息来源：" + (string.IsNullOrWhiteSpace(action.MirrorAnswerSource)
-                    ? "未知" : action.MirrorAnswerSource)
-                    + "\n此处修改的是本地答案和知识库，不会修改已送达买家的千牛消息。",
+                "消息来源：" + source
+                    + "\n该消息已由千牛回显确认发送。来源标签仅表示回复生成路径，不代表知识库一定存在同名条目。"
+                    + "\n修改本地答案或知识不会修改已送达买家的消息。",
                 "消息来源", MessageBoxButton.OK, MessageBoxImage.Information);
             menu.Items.Add(provenance);
             return menu;

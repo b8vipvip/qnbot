@@ -52,6 +52,20 @@ namespace Bot.ChromeNs
             "这款商品链接我收到了，您想重点了解什么呢？"
         };
 
+        /// <summary>
+        /// Exact match only. A product-link acknowledgement is a hard-coded
+        /// reception preset, not a Knowledge V2 record or an AI-generated answer.
+        /// Never infer provenance merely from a similar or partial reply.
+        /// </summary>
+        internal static bool IsProductLinkPresetReply(string answer)
+        {
+            var normalized = (answer ?? string.Empty).Trim();
+            if (normalized.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized.Substring(0, normalized.Length - 3).TrimEnd();
+            return ProductLinkReplies.Any(reply =>
+                string.Equals(reply, normalized, StringComparison.Ordinal));
+        }
+
         public static void RefreshAndRecord(QNChatMessage message, string messageText)
         {
             if (message == null) return;

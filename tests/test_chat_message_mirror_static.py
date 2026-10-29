@@ -59,7 +59,7 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
     assert "BuildMessageMirrorBubble(" in mirror
     assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
     assert "messageElement = nativeBotConversation;" not in mirror
-    assert "BuildMessageMirrorBotContextMenu(botAction, messageText, bubble)" in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, messageText, bubble)" in mirror
 
     # Bot bubbles retain their original actions even though the old Q/A card
     # is no longer the rendered element.
