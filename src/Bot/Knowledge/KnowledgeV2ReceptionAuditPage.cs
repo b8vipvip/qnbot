@@ -15,6 +15,7 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2ReceptionAuditPage : UserControl, IKnowledgeV2Refreshable
     {
         private readonly string _seller;
+        private bool _showEvidence;
         private readonly TextBox _output;
         private readonly TextBlock _status;
 
@@ -42,6 +43,10 @@ namespace Bot.Knowledge
             };
             refresh.Click += (s, e) => RefreshView();
             bar.Children.Add(refresh);
+            var evidence = new Button { Content = "切换证据链", Width = 118, Height = 30,
+                Margin = new Thickness(0, 0, 8, 0) };
+            evidence.Click += (s, e) => { _showEvidence = !_showEvidence; RefreshView(); };
+            bar.Children.Add(evidence);
             var export = new Button
             {
                 Content = "导出脱敏JSON", Width = 130, Height = 30,
@@ -74,7 +79,10 @@ namespace Bot.Knowledge
         public void RefreshView()
         {
             _status.Text = "正在读取当前店铺的脱敏接待决策...";
-            Task.Run(() => KugouReceptionPolicy.GetAuditJson(_seller))
+            var evidenceMode = _showEvidence;
+            Task.Run(() => evidenceMode
+                    ? ReceptionEvidenceLedger.GetAuditJson(_seller)
+                    : KugouReceptionPolicy.GetAuditJson(_seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (t.IsFaulted)
@@ -84,7 +92,9 @@ namespace Bot.Knowledge
                         return;
                     }
                     _output.Text = t.Result ?? string.Empty;
-                    _status.Text = "已刷新。WAIT=等待；REPLY=规则答复；SUPPRESS=禁止不安全回答。";
+                    _status.Text = evidenceMode
+                        ? "已刷新脱敏证据链。图片、指代续问和已送达指令只存哈希，均不构成履约授权。"
+                        : "已刷新接待决策。WAIT=等待；REPLY=规则答复；SUPPRESS=禁止不安全回答。";
                 })));
         }
 
@@ -93,12 +103,15 @@ namespace Bot.Knowledge
             var dialog = new SaveFileDialog
             {
                 Filter = "JSON文件|*.json|所有文件|*.*",
-                FileName = "qnbot-reception-audit-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json"
+                FileName = (_showEvidence ? "reception-evidence-" : "reception-decisions-")
+                    + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json"
             };
             if (dialog.ShowDialog() != true) return;
             try
             {
-                var json = KugouReceptionPolicy.GetAuditJson(_seller);
+                var json = _showEvidence
+                    ? ReceptionEvidenceLedger.GetAuditJson(_seller)
+                    : KugouReceptionPolicy.GetAuditJson(_seller);
                 // The source is a shop-isolated, hashed audit: never export raw buyer messages.
                 if (!json.TrimStart().StartsWith("[", StringComparison.Ordinal))
                 {
