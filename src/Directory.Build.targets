@@ -247,4 +247,10 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionConfigService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionConfigService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs" />
+  </ItemGroup>
 </Project>
