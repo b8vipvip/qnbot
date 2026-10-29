@@ -44,26 +44,20 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, TimelineState> States =
             new ConcurrentDictionary<string, TimelineState>(StringComparer.Ordinal);
 
-        private static readonly string[] ProductLinkReplies =
-        {
-            "我看到您发来的商品链接了，想咨询哪方面呢？",
-            "商品链接已收到，您想了解规格、使用还是售后呢？",
-            "我看到了这款商品，请问您主要想确认哪项信息？",
-            "这款商品链接我收到了，您想重点了解什么呢？"
-        };
-
         /// <summary>
-        /// Exact match only. A product-link acknowledgement is a hard-coded
-        /// reception preset, not a Knowledge V2 record or an AI-generated answer.
-        /// Never infer provenance merely from a similar or partial reply.
+        /// Exact match only. Preset content is read from the shop-scoped editable
+        /// catalog so disabled/deleted entries stop being used immediately.
         /// </summary>
         internal static bool IsProductLinkPresetReply(string answer)
         {
-            var normalized = (answer ?? string.Empty).Trim();
-            if (normalized.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
-                normalized = normalized.Substring(0, normalized.Length - 3).TrimEnd();
-            return ProductLinkReplies.Any(reply =>
-                string.Equals(reply, normalized, StringComparison.Ordinal));
+            var current = QN.CurQN;
+            var seller = current == null || current.Seller == null ? string.Empty : current.Seller.Nick;
+            return IsProductLinkPresetReply(seller, answer);
+        }
+
+        internal static bool IsProductLinkPresetReply(string seller, string answer)
+        {
+            return BotReplyPresetService.IsPresetReply(seller, answer);
         }
 
         public static void RefreshAndRecord(QNChatMessage message, string messageText)
@@ -203,9 +197,19 @@ namespace Bot.ChromeNs
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
+            var presets = BotReplyPresetService.GetEnabledPresets(seller);
+            if (presets.Count == 0)
+            {
+                var emptyState = GetState(seller, buyer);
+                lock (emptyState.Sync) emptyState.PendingPreset = null;
+                Log.Info("商品链接预设回复已全部停用，本条交由后续接待流程处理: seller=" + seller);
+                return;
+            }
+
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             var seed = StableHash(ScopeKey(seller) + "|" + messageKey + "|" + messageText);
-            var reply = ProductLinkReplies[Math.Abs(seed % ProductLinkReplies.Length)];
+            var index = (seed & int.MaxValue) % presets.Count;
+            var reply = presets[index].Text;
             var state = GetState(seller, buyer);
             lock (state.Sync)
             {
