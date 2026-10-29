@@ -228,6 +228,11 @@ namespace Bot.AssistWindow.Widget.Robot
             get { return _answer ?? string.Empty; }
         }
 
+        internal string MirrorAnswerSource
+        {
+            get { return _answerSource ?? string.Empty; }
+        }
+
         internal bool MirrorCanResend
         {
             get { return _canResend; }
