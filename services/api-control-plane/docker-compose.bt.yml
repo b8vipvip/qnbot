@@ -6,6 +6,7 @@ services:
         # The updater tags the currently working service image locally so no
         # blocked GitHub Release download is required during normal upgrades.
         SING_BOX_SOURCE_IMAGE: ${CONTROL_PLANE_SING_BOX_SOURCE_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.19@sha256:78ca1bc9f3b563b0944fd6b1126522ee631e7b44d540b91fc435ba7062ef08b2}
+        CONTROL_PLANE_BUILD_COMMIT: ${CONTROL_PLANE_BUILD_COMMIT:-unknown}
         APT_MIRROR: ${CONTROL_PLANE_BUILD_APT_MIRROR:-https://mirrors.cloud.tencent.com/debian}
         APT_SECURITY_MIRROR: ${CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR:-https://mirrors.cloud.tencent.com/debian-security}
         PIP_INDEX_URL: ${CONTROL_PLANE_BUILD_PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}

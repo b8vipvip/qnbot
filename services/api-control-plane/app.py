@@ -1458,7 +1458,7 @@ def index() -> FileResponse:
 
 @app.get("/healthz")
 def healthz() -> Dict[str, Any]:
-    return {"status": "ok", "time": iso_now(), "service": "qianniu-api-control-plane"}
+    return {"status": "ok", "time": iso_now(), "service": "qianniu-api-control-plane", "build_commit": os.getenv("CONTROL_PLANE_BUILD_COMMIT", "unknown") }
 
 
 @app.post("/api/admin/login")

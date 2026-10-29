@@ -96,6 +96,11 @@ function renderVersionUpdate(data){
   const client=data.client||{}, pkg=client.package||{}, push=client.push||{}, clientNet=client.network||{};
   const serverCurrent=server.current_short_sha||"未知";
   const serverLatest=gh.short_sha||"同步失败";
+  const buildCommit=server.running_image_commit||"";
+  const buildHint=buildCommit
+    ?`<p class="hint">当前运行镜像已标注 Git 提交 ${esc(buildCommit.slice(0,12))}；此值来自容器镜像，不受正在执行的更新影响。</p>`
+    :'<p class="hint">旧镜像未嵌入构建提交：当前版本仅来自更新状态记录，不能证明实际容器已切换。</p>';
+
   const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):(!server.current_commit?badge("等待识别当前版本","gray"):(server.update_available?badge("发现新版本","warn"):badge("已是最新","good")));
   const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
   const gitTransport=(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
@@ -103,10 +108,11 @@ function renderVersionUpdate(data){
     <div class="provider-card">
       <div class="provider-top"><strong>API 控制面</strong>${serverStatus}</div>
       <div class="form-grid" style="margin-top:12px">
-        <label>当前服务端提交<div class="code-card"><code>${esc(serverCurrent)}</code></div></label>
+        <label>${buildCommit?"当前运行容器提交":"更新状态记录提交"}<div class="code-card"><code>${esc(serverCurrent)}</code></div></label>
         <label>GitHub master<div class="code-card"><code>${esc(serverLatest)}</code></div></label>
       </div>
       <p class="hint">${esc(gh.message||server.sync_error||"")}${gh.committed_at?` · ${esc(cnTime(gh.committed_at))}`:""}</p>
+      ${buildHint}
       <div class="provider-meta">${agent.online?badge("主机更新代理在线","good"):badge("主机更新代理离线","bad")}${badge(gitTransport,"blue")}${badge(`源码失败最多重试 ${Number(agent.git_fetch_attempts||serverNet.git_fetch_attempts||5)} 次`,"gray")}${vuStateBadge(update.state)}</div>
       ${agentHint}
       <div style="margin-top:12px">${vuProgress(update.progress_percent)}</div>

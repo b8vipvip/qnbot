@@ -432,6 +432,10 @@ fi
 git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"
 NEW_COMMIT="$(git -C "$REPO_DIR" rev-parse HEAD)"
 log "代码版本: $OLD_COMMIT -> $NEW_COMMIT"
+# BuildKit uses this immutable revision as image metadata. It is not a signal
+# that the container has been switched: only a healthy started container is.
+export CONTROL_PLANE_BUILD_COMMIT="$NEW_COMMIT"
+log "即将构建的镜像来源提交: $CONTROL_PLANE_BUILD_COMMIT"
 
 [[ -f "$SERVICE_DIR/Dockerfile" ]] || die "缺少 $SERVICE_DIR/Dockerfile"
 [[ -f "$SERVICE_DIR/runtime_streaming_guard.py" ]] || die "缺少 runtime_streaming_guard.py，拒绝部署不完整版本"
