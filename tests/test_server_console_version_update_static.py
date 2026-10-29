@@ -25,7 +25,8 @@ def test_server_update_is_admin_triggered_through_host_agent():
     agent = read(ROOT / "scripts" / "api-control-plane-update-agent.sh")
     installer = read(ROOT / "scripts" / "install-api-control-plane-update-agent.sh")
     assert '/api/admin/version-update/server/start' in api
-    assert 'source": "web-console"' in api
+    assert '"web-console-runtime-reverify"' in api
+    assert 'else "web-console"' in api
     assert "update-api-control-plane.sh" in agent
     assert "构建新服务镜像" in agent
     assert "本机健康检查" in agent
