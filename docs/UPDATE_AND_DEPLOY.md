@@ -6,12 +6,12 @@
 
 ### Ubuntu / 宝塔 API 控制面
 
-- GitHub 仓库：`git@github.com:b8vipvip/qnbot.git`
+- GitHub 仓库：`$REPO_CLONE_URL`
 - Git 分支：`master`
 - Git 仓库目录：`/opt/qnbot`
 - API 服务目录：`/opt/qnbot/services/api-control-plane`
 - 旧 ZIP 部署目录兼容：`/opt/qianniu-api-control-plane`
-- 生产域名：`https://aboter.mv3.cn`
+- 生产域名：`https://<CONTROL_PLANE_HOST>`
 - 宝塔反向代理目标：`http://127.0.0.1:18081`
 - SSL 与反向代理由宝塔维护，更新脚本不会修改 Nginx、域名或 SSL 配置。
 - Compose 文件：`docker-compose.bt.yml`
@@ -31,7 +31,7 @@ cd /opt
 
 # 已存在 /opt/qnbot/.git 时跳过 clone。
 [ -d /opt/qnbot/.git ] || \
-  git clone git@github.com:b8vipvip/qnbot.git /opt/qnbot
+  git clone $REPO_CLONE_URL /opt/qnbot
 
 cd /opt/qnbot
 sudo bash scripts/update-api-control-plane.sh
@@ -48,7 +48,7 @@ sudo bash scripts/update-api-control-plane.sh
 7. 使用 `docker-compose.bt.yml` 重建并启动服务；
 8. 验证容器实际运行 `bootstrap.py`；
 9. 验证本机 `http://127.0.0.1:18081/healthz`；
-10. 验证公网 `https://aboter.mv3.cn/healthz`；
+10. 验证公网 `https://<CONTROL_PLANE_HOST>/healthz`；
 11. 本机启动失败时自动尝试回滚旧代码和冷备份数据。
 
 备份默认保存在：
@@ -99,7 +99,7 @@ docker logs --tail 200 -f qianniu-api-control-plane
 
 ```bash
 curl -fsS http://127.0.0.1:18081/healthz
-curl -fsS https://aboter.mv3.cn/healthz
+curl -fsS https://<CONTROL_PLANE_HOST>/healthz
 ```
 
 ## Ubuntu：自定义目录或域名验证
@@ -111,7 +111,7 @@ sudo env \
   REPO_DIR=/opt/qnbot \
   LEGACY_DIR=/opt/qianniu-api-control-plane \
   BRANCH=master \
-  VERIFY_URL=https://aboter.mv3.cn/healthz \
+  VERIFY_URL=https://<CONTROL_PLANE_HOST>/healthz \
   bash /opt/qnbot/scripts/update-api-control-plane.sh
 ```
 
