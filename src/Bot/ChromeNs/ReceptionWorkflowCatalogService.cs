@@ -88,7 +88,8 @@ namespace Bot.ChromeNs
                 var id = Convert.ToString(flow["flow_id"]);
                 if (!ValidKey(id) || !ids.Add(id))
                     throw new InvalidDataException("流程ID无效或重复");
-                if (flow.Value<int?>("flow_version") < 1 || flow.Value<int?>("flow_version") > 1000000)
+                var flowVersion = flow.Value<int?>("flow_version");
+                if (!flowVersion.HasValue || flowVersion.Value < 1 || flowVersion.Value > 1000000)
                     throw new InvalidDataException("流程版本无效");
                 if (Convert.ToString(flow["status"]) != "draft")
                     throw new InvalidDataException("保存草稿不能启用/发布业务流程");
