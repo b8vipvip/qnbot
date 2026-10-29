@@ -193,16 +193,25 @@ namespace Bot.ChromeNs
             var evidence = ((summary ?? string.Empty) + " " + (ocr ?? string.Empty));
             if (evidence.Trim().Length == 0) return false;
             var compact = Regex.Replace(evidence, @"\s+", "").ToLowerInvariant();
+            // A vision summary containing speculation or negated account labels is not
+            // positive proof of the music provider or binding. Request clearer evidence.
+            if (Regex.IsMatch(compact,
+                @"无法确认|不能确定|不确定|无法识别|看不清|模糊|疑似|可能是|推测|未显示|未看到|没有看到|尚未确认"))
+            {
+                answer = "这张图片还不能可靠确认当前音乐栏目使用的账号体系或酷狗账号绑定状态。请打开对应的“我的账号”或会员开通页面，拍一张清晰完整的照片发来核实。";
+                reason = "visual_evidence_uncertain";
+                Audit(seller, buyer, "ASK_EVIDENCE", "need_resource_confirmation",
+                    reason, "kg_visual_evidence");
+                return true;
+            }
             var official = compact.Contains("官方酷狗app") || compact.Contains("酷狗官方app")
                 || compact.Contains("自行安装") || compact.Contains("独立安装");
             var tcl = compact.Contains("tcl") || compact.Contains("雷鸟");
             var builtIn = compact.Contains("自带音乐") || compact.Contains("系统音乐")
                 || compact.Contains("聚好看") || compact.Contains("内置音乐");
-            var otherProvider = compact.Contains("绑定qq") || compact.Contains("qq音乐账号")
-                || compact.Contains("qq音乐资源");
-            var kugouAccount = compact.Contains("已绑定酷狗")
-                || compact.Contains("酷狗账号已绑定")
-                || (compact.Contains("绑定成功") && compact.Contains("酷狗"));
+            var otherProvider = HasPositiveCue(compact, "绑定qq", "qq音乐账号", "qq音乐资源");
+            var kugouAccount = HasPositiveCue(compact, "已绑定酷狗", "酷狗账号已绑定")
+                || (HasPositiveCue(compact, "绑定成功") && compact.Contains("酷狗"));
             if ((compact.Contains("海信") || compact.Contains("vidaa")
                 || compact.Contains("聚好看") || compact.Contains("东芝")) && builtIn && !official)
             {
@@ -242,6 +251,24 @@ namespace Bot.ChromeNs
                     ? "awaiting_order_review" : "device_rejected";
             Audit(seller, buyer, "REPLY", newStage, reason, "kg_visual");
             return true;
+        }
+
+        private static bool HasPositiveCue(string text, params string[] cues)
+        {
+            foreach (var cue in cues)
+            {
+                var cursor = 0;
+                while (cursor < text.Length)
+                {
+                    var i = text.IndexOf(cue, cursor, StringComparison.Ordinal);
+                    if (i < 0) break;
+                    var prefix = text.Substring(Math.Max(0, i - 10), Math.Min(10, i));
+                    if (!Regex.IsMatch(prefix, @"(?:未|无|没有|并非|不是|不|无法|看不到)[^，。；]{0,5}$"))
+                        return true;
+                    cursor = i + cue.Length;
+                }
+            }
+            return false;
         }
 
         public static string BuildPromptAddon(string seller, string buyer)
