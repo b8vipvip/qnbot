@@ -25,7 +25,7 @@ sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-plugin git
 sudo systemctl enable --now docker
 
-git clone https://github.com/b8vipvip/qnbot.git
+git clone $REPO_CLONE_URL
 cd qnbot
 # PR 验证阶段使用下行；合并后可省略。
 git checkout agent/reply-dedup-knowledge-navigation
@@ -53,7 +53,7 @@ curl -fsS http://127.0.0.1:18081/healthz
 
 宝塔反向代理目标为 `http://127.0.0.1:18081`。不要在 Compose 中覆盖 `command`；容器必须运行 `bootstrap.py`，否则企业微信桥接路由不会注册。
 
-浏览器访问 `https://你的域名/`。
+浏览器访问 `https://<CONTROL_PLANE_HOST>/`。
 
 ## 首次配置
 
@@ -62,7 +62,7 @@ curl -fsS http://127.0.0.1:18081/healthz
 3. 打开“深度测试”，勾选需要验证的协议和视觉项。
 4. 测试结束后确认主模型、备用模型和协议能力已自动更新。
 5. 在“Bot 客户端”创建一枚令牌。
-6. 在 Windows Bot 的“API 服务连接”中填写 `https://你的域名` 和该令牌。
+6. 在 Windows Bot 的“API 服务连接”中填写 `https://<CONTROL_PLANE_HOST>` 和该令牌。
 
 ## 企业微信应用消息转人工
 
@@ -84,7 +84,7 @@ curl -fsS http://127.0.0.1:18081/healthz
 先在控制面“企业微信”页面生成或填写回调参数并保存，再进入自建应用的“接收消息”设置，填写：
 
 ```text
-URL: https://你的域名/api/wecom/callback
+URL: https://<CONTROL_PLANE_HOST>/api/wecom/callback
 Token: 与控制面保存的 Token 完全相同
 EncodingAESKey: 与控制面保存的 EncodingAESKey 完全相同
 ```
