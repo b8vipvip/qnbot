@@ -230,9 +230,14 @@ namespace Bot.AssistWindow.Widget.Robot
                     if (string.IsNullOrWhiteSpace(source))
                         source = KnowledgeLearningService.ResolveAnswerSource(
                             seller, buyer, lastBuyerQuestion, botAnswer);
-                    if (string.IsNullOrWhiteSpace(source)
-                        && ConversationContextStore.IsProductLinkPresetReply(seller, botAnswer))
-                        source = BotReplyPresetService.ResolveSourceLabel(seller, botAnswer);
+                    BotReplyPreset matchedPreset;
+                    var isPresetReply = BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset);
+                    if (isPresetReply && (string.IsNullOrWhiteSpace(source)
+                        || source == "本地"
+                        || source == "商品链接预设回复"
+                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"
+                        || source.StartsWith("内置话术：", StringComparison.Ordinal)))
+                        source = BotReplyPresetService.BuildSourceLabel(matchedPreset);
                     if (string.IsNullOrWhiteSpace(source))
                         source = "来源未记录（千牛回显已确认，需人工补录）";
 
