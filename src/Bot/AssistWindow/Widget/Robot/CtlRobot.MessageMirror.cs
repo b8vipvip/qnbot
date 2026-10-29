@@ -395,7 +395,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 Window.GetWindow(this),
                 "消息来源：" + (string.IsNullOrWhiteSpace(action.MirrorAnswerSource)
                     ? "未知" : action.MirrorAnswerSource)
-                    + "\\n此处修改的是本地答案和知识库，不会修改已送达买家的千牛消息。",
+                    + "\n此处修改的是本地答案和知识库，不会修改已送达买家的千牛消息。",
                 "消息来源", MessageBoxButton.OK, MessageBoxImage.Information);
             menu.Items.Add(provenance);
             return menu;
