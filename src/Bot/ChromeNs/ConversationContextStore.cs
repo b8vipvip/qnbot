@@ -294,7 +294,11 @@ namespace Bot.ChromeNs
                 // OrderBy is stable: when Qianniu gives several messages the same timestamp,
                 // keep their original arrival/history order instead of reordering by a hash/key.
                 var eligible = state.Turns
-                    .Where(t => t != null && !string.IsNullOrWhiteSpace(t.Text))
+                    // The AI context timeline also contains internal style/system
+                    // prompts. Only real buyer/seller messages belong in the GUI.
+                    .Where(t => t != null
+                        && (t.Role == "user" || t.Role == "assistant")
+                        && !string.IsNullOrWhiteSpace(t.Text))
                     .OrderBy(t => t.Timestamp)
                     .ToList();
                 return eligible.Skip(Math.Max(0, eligible.Count - take))
