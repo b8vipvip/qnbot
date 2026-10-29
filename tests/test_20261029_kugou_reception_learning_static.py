@@ -72,3 +72,33 @@ def test_knowledge_center_exposes_scoped_read_only_audit():
     assert "IsReadOnly = true" in audit
     assert "导出脱敏JSON" in audit
     assert "KnowledgeV2ReceptionAuditPage.cs" in build
+
+def test_shop_rule_editor_is_validated_versioned_and_reversible():
+    rules = text("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
+    nav = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    target = text("src/Directory.Build.targets")
+    assert "qnbot.kugou.reception-rules.v1" in rules
+    assert 'obj.Value<bool>("manual_review_required") != true' in rules
+    assert 'obj.Value<bool?>("automatic_recharge_enabled") != false' in rules
+    assert 'string.Equals(uri.Host, "howhub.k2n.cn"' in rules
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in rules
+    assert ".backup." in rules
+    assert "RestoreLatestBackup(" in rules
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in rules
+    assert 'Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller))' in nav
+    assert "KugouReceptionConfigService.SaveJson(_seller, _editor.Text)" in ui
+    assert "KugouReceptionConfigService.RestoreLatestBackup(_seller)" in ui
+    assert "KugouReceptionConfigService.cs" in target
+    assert "KnowledgeV2ReceptionRulesPage.cs" in target
+
+def test_optional_guidance_flags_never_disable_critical_safety():
+    policy = text(POLICY)
+    chat = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "EnablePhoneWait" in policy
+    assert "EnableAutoGuidance" in policy
+    assert "KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait" in chat
+    assert "KugouReceptionPolicy.BlockOutgoing(" in chat
+    assert "KugouReceptionPolicy.IsQuarantined" in text(
+        "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs"
+    )
