@@ -6,6 +6,6 @@ If no verified local source is present, Docker BuildKit falls back to the upstre
 
 **Existing stuck task:** Code changes in GitHub cannot modify a build that has already fetched an older commit. Do not kill Docker or prune live build caches merely to activate this fix. Confirm the current task status and complete/fail outcome before starting a new update from the web console.
 
-**Preflight diagnostics:** In the actual server repository root (for example `/opt/qianniu-ai-bot`), inspect `services/api-control-plane/data/server-update/status.json` and `update.log`. Verify current service binary using `docker exec qianniu-api-control-plane /usr/local/bin/sing-box version`. The next update should log "复用正在运行的旧服务镜像中的 sing-box" and Docker BuildKit should show `sing-box-provider` from the local image, not GitHub Release curl.
+**Preflight diagnostics:** In the actual server repository root (as configured by the updater's `REPO_DIR` variable), inspect `services/api-control-plane/data/server-update/status.json` and `update.log`. Verify current service binary using `docker exec qianniu-api-control-plane /usr/local/bin/sing-box version`. The next update should log "复用正在运行的旧服务镜像中的 sing-box" and Docker BuildKit should show `sing-box-provider` from the local image, not GitHub Release curl.
 
 If local image is missing, the pinned official GHCR fallback still requires network; it can fail before the old service stops. Keep normal backup and health-check rollback rules. No third-party mirror or auto-bypass of VLESS verification is permitted.
