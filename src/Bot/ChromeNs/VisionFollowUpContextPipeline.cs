@@ -12,7 +12,7 @@ namespace Bot.ChromeNs
 {
     internal static class VisionFollowUpContextPipeline
     {
-        private const int FollowUpWindowSeconds = 45;
+        private const int FollowUpWindowSeconds = 90;
         private const int CaptionWindowSeconds = 15;
         private const int SourceClockSkewToleranceSeconds = 15;
 
@@ -145,7 +145,7 @@ namespace Bot.ChromeNs
         {
             var compact = Normalize(text);
             if (string.IsNullOrWhiteSpace(compact) || compact.Length > 36) return false;
-            if (compact == "对吗" || compact == "是吗" || compact == "这个吗" || compact == "是这个吗" || compact == "就是这个吗" || compact == "是不是这个" || compact == "是不是这个吗" || compact == "这个对吗" || compact == "这张吗" || compact == "是这张吗" || compact == "这里吗" || compact == "是这里吗" || compact == "这样吗" || compact == "是这样吗" || compact == "这种能使用吗" || compact == "这种能用吗" || compact == "这类能使用吗" || compact == "这类能用吗") return true;
+            if (compact == "对吗" || compact == "是吗" || compact == "这个吗" || compact == "是这个吗" || compact == "是这个不" || compact == "就是这个吗" || compact == "是不是这个" || compact == "是不是这个吗" || compact == "这个对吗" || compact == "这张吗" || compact == "是这张吗" || compact == "这里吗" || compact == "是这里吗" || compact == "这样吗" || compact == "是这样吗" || compact == "这种能使用吗" || compact == "这种能用吗" || compact == "这类能使用吗" || compact == "这类能用吗") return true;
             var hasReference = compact.Contains("这个") || compact.Contains("这种") || compact.Contains("这类") || compact.Contains("这款") || compact.Contains("这张") || compact.Contains("这里") || compact.Contains("这样") || compact.Contains("图里") || compact.Contains("图片里") || compact.Contains("上面") || compact.Contains("界面") || compact.Contains("页面") || compact.Contains("设备") || compact.Contains("软件");
             var asksConfirmation = compact.Contains("吗") || compact.Contains("么") || compact.Contains("是不是") || compact.Contains("对不对") || compact.Contains("可以") || compact.Contains("行不行") || compact.Contains("能用") || compact.Contains("能使用") || compact.Contains("支持");
             return hasReference && asksConfirmation;
