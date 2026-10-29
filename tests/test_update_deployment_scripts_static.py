@@ -52,7 +52,7 @@ def test_windows_updater_backs_up_persistent_data_and_refuses_source_repo_overwr
 def test_update_manual_records_current_production_environment():
     manual = read("docs/UPDATE_AND_DEPLOY.md")
 
-    assert "https://aboter.mv3.cn" in manual
+    assert "https://<CONTROL_PLANE_HOST>" in manual
     assert "/opt/qnbot" in manual
     assert "http://127.0.0.1:18081" in manual
     assert "scripts/update-api-control-plane.sh" in manual

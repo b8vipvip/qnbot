@@ -44,7 +44,7 @@
 |---|---|
 | 标题 | 写成买家会问的完整标准问题，不要只写宽泛名词 |
 | Intent | 买家目的；常用 `general / capability / purchase / price / time / how_to / troubleshoot / requirements / after_sale` |
-| Subject | 业务对象；同一对象保持同一写法，例如 `酷狗音乐/电视/会员` |
+| Subject | 业务对象；同一对象保持同一写法，例如 `示例音频应用/电视/会员` |
 | Predicate | 询问属性；常用 `membership_type / purchase_channel / price / device_support / feature_support / activation_method / account_binding / refund_policy / time / troubleshooting / requirements` |
 | Entities | 品牌、平台、设备、会员、功能等实体；建议每行一个 |
 | Aliases | 同义问法和常见口语；高度匹配 Alias 是本地直答的重要条件 |

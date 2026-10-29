@@ -44,7 +44,7 @@ BACKGROUND_ATTEMPT_TIMEOUT_SECONDS=90
 
 ## 宝塔 / Nginx 反向代理
 
-生产 Bot 通过 `https://aboter.mv3.cn` 访问统一 API。后台请求可能超过 60 秒，因此宝塔反向代理的读取超时必须覆盖后台任务最长等待时间。
+生产 Bot 通过 `https://<CONTROL_PLANE_HOST>` 访问统一 API。后台请求可能超过 60 秒，因此宝塔反向代理的读取超时必须覆盖后台任务最长等待时间。
 
 建议至少设置：
 

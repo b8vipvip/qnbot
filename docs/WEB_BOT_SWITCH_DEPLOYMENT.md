@@ -111,7 +111,7 @@ Web 页面、JavaScript 和接口均包含在服务端 Docker 镜像中，不需
 服务端更新完成后打开：
 
 ```text
-https://<控制面域名>/bot/
+https://<CONTROL_PLANE_HOST>/bot/
 ```
 
 浏览器执行一次强制刷新：
