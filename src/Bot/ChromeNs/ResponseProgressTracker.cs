@@ -204,6 +204,21 @@ namespace Bot.ChromeNs
                 return null;
             }
             OperationTurnKey.Value = turnKey;
+
+            // Normalize provenance before exposing the answer in the UI. Every ready Bot
+            // answer receives a durable source stamp; missing route metadata is explicitly
+            // marked for operator review instead of leaving a blank/unqueryable source.
+            BotReplyPreset preset;
+            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset))
+                source = BotReplyPresetService.BuildSourceLabel(preset);
+            if (string.IsNullOrWhiteSpace(source))
+                source = KnowledgeLearningService.ResolveAnswerSource(seller, buyer, question, answer);
+            if (string.IsNullOrWhiteSpace(source))
+                source = "自动回复链路（来源标签未提供，需人工核验）";
+            if (!string.IsNullOrWhiteSpace(answer)
+                && !answer.StartsWith("错误：", StringComparison.Ordinal))
+                KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, source);
+
             var control = SetExactQuestionByTurn(turnKey, question, detected);
             var answerStartedAt = detected;
             lock (entry.Sync)
