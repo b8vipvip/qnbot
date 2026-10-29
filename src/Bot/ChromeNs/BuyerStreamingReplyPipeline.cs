@@ -457,19 +457,18 @@ namespace Bot.ChromeNs
             try
             {
                 var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
-                // Human seller reply is an explicit handoff signal for ordinary AI answers.
-                // Order-ledger-authorized contractual messages travel through their own lane.
-                var newerHuman = recent
-                    .Where(x => x != null
-                        && x.Role == "assistant"
-                        && !x.Withdrawn
-                        && x.Timestamp != DateTime.MinValue
-                        && x.Timestamp > dispatchedAt.AddMilliseconds(120)
-                        && !string.IsNullOrWhiteSpace(x.Text)
-                        && !x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(x => x.Timestamp)
-                    .FirstOrDefault();
-                if (newerHuman != null)
+                // Use the typed BuyerSessionAgent event stream, not every unmarked seller
+                // bubble: Qianniu's automatic shop greetings can lack [A], and must not
+                // be mistaken for an intentional human takeover.
+                // Order-ledger-authorized contractual messages use a separate sender.
+                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);
+                var newerHuman = snapshot != null
+                    && snapshot.RecentEvents != null
+                    && snapshot.RecentEvents.Any(x => x != null
+                        && x.Kind == BuyerSessionEventKind.SellerHumanReply
+                        && x.SourceTimestamp != DateTime.MinValue
+                        && x.SourceTimestamp > dispatchedAt.AddMilliseconds(120));
+                if (newerHuman)
                 {
                     reason = "人工客服已在本轮回复，抑制未发送的普通AI答案";
                     return false;
