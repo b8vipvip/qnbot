@@ -126,6 +126,8 @@ namespace Bot.ChromeNs
                 + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
                 + ", responseAnchorAt=" + responseAnchorAt.ToString("HH:mm:ss.fff")
                 + ", reason=" + (referential ? "图片指代" : "图片说明文字") + ", question=" + SafeLog(question, 100));
+            ReceptionEvidenceLedger.RecordImageFollowUp(
+                burst.SellerNick, burst.BuyerNick, recent.Item.MessageKey, question);
             await next(combinedLease);
         }
 
