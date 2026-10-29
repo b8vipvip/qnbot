@@ -5,6 +5,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -27,6 +29,18 @@ namespace Bot.ChromeNs
         public long QuestionDetectedAtTicks { get; set; }
         public long AnswerReadyAtTicks { get; set; }
         public long CreatedAtTicks { get; set; }
+        public long UpdatedAtTicks { get; set; }
+    }
+
+    internal sealed class BotReplySourceStampEntity
+    {
+        [PrimaryKey]
+        public string StampId { get; set; }
+        public string Seller { get; set; }
+        public string Buyer { get; set; }
+        public string QuestionKey { get; set; }
+        public string AnswerKey { get; set; }
+        public string AnswerSource { get; set; }
         public long UpdatedAtTicks { get; set; }
     }
 
@@ -71,6 +85,230 @@ namespace Bot.ChromeNs
             Log.Info("Bot问答历史持久化已启用：保留" + RetentionDays
                 + "天，全局最多" + MaxTotalRecords
                 + "条，单买家最多" + MaxRecordsPerConversation + "条。");
+        }
+
+        /// <summary>
+        /// Persist the source label before sending so a later/restarted message echo can
+        /// still recover the generation route. Keys normalize the transport-only [A] suffix.
+        /// </summary>
+        public static void SaveAnswerSourceStamp(
+            string seller, string buyer, string question, string answer, string source)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            source = (source ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || source.Length == 0 || string.IsNullOrWhiteSpace(answer)) return;
+            try
+            {
+                Initialize();
+                EnsureSchema();
+                var row = new BotReplySourceStampEntity
+                {
+                    StampId = BuildSourceStampId(seller, buyer, question, answer),
+                    Seller = seller,
+                    Buyer = buyer,
+                    QuestionKey = NormalizeSourceValue(question),
+                    AnswerKey = NormalizeSourceValue(answer),
+                    AnswerSource = source,
+                    UpdatedAtTicks = DateTime.Now.Ticks
+                };
+                lock (DbSync) DbHelper.Db.SaveOneRecord(row);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("持久化Bot回复来源标签失败：" + ex.Message, 10);
+            }
+        }
+
+        public static string ResolveAnswerSourceStamp(string seller, string buyer, string question, string answer)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || string.IsNullOrWhiteSpace(answer)) return string.Empty;
+            try
+            {
+                Initialize();
+                EnsureSchema();
+                var id = BuildSourceStampId(seller, buyer, question, answer);
+                BotReplySourceStampEntity row;
+                lock (DbSync) row = DbHelper.Db.ReadOneRecord<BotReplySourceStampEntity>(x => x.StampId == id);
+                return row == null ? string.Empty : (row.AnswerSource ?? string.Empty).Trim();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取Bot回复来源标签失败：" + ex.Message, 10);
+                return string.Empty;
+            }
+        }
+
+        public static List<BotConversationHistoryEntity> LoadRecentBySeller(string seller, int maxCount = 2000)
+        {
+            Initialize();
+            FlushNow();
+            EnsureSchema();
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return new List<BotConversationHistoryEntity>();
+            var take = Math.Max(1, Math.Min(5000, maxCount <= 0 ? 2000 : maxCount));
+            var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
+            try
+            {
+                lock (DbSync)
+                {
+                    var rows = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "where Seller = ? and UpdatedAtTicks >= ? order by CreatedAtTicks desc limit " + take,
+                        seller,
+                        cutoffTicks);
+                    return (rows ?? new List<object>())
+                        .OfType<BotConversationHistoryEntity>()
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
+                        .Where(x => string.Equals(x.StatusKind, "sent", StringComparison.OrdinalIgnoreCase)
+                            || x.EntityId.StartsWith("bot-echo-", StringComparison.Ordinal))
+                        .OrderByDescending(x => x.CreatedAtTicks)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取店铺Bot回复来源列表失败：" + ex.Message, 10);
+                return new List<BotConversationHistoryEntity>();
+            }
+        }
+
+        /// <summary>
+        /// Records every observed Bot transport echo. If a persisted answer card already
+        /// represents the same delivered answer, upgrade that row instead of duplicating it.
+        /// </summary>
+        public static string RecordBotEcho(
+            string seller, string buyer, string question, string answer, string source,
+            DateTime sentAt, string messageKey)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            answer = (answer ?? string.Empty).Trim();
+            source = (source ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || answer.Length == 0) return string.Empty;
+            if (sentAt == DateTime.MinValue) sentAt = DateTime.Now;
+
+            try
+            {
+                FlushNow();
+                var candidates = LoadRecent(seller, buyer, 200);
+                var answerKey = NormalizeSourceValue(answer);
+                var targetTicks = sentAt.Ticks;
+                var match = candidates
+                    .Where(x => x != null && NormalizeSourceValue(x.Answer) == answerKey)
+                    .Select(x => new
+                    {
+                        Row = x,
+                        Time = x.AnswerReadyAtTicks > 0 ? x.AnswerReadyAtTicks : x.CreatedAtTicks
+                    })
+                    .Where(x => x.Time > 0 && Math.Abs((double)(x.Time - targetTicks)) <= TimeSpan.FromMinutes(30).Ticks)
+                    .OrderBy(x => Math.Abs((double)(x.Time - targetTicks)))
+                    .Select(x => x.Row)
+                    .FirstOrDefault();
+                if (match != null)
+                {
+                    match.Question = string.IsNullOrWhiteSpace(match.Question) ? question : match.Question;
+                    match.AnswerSource = source;
+                    match.StatusText = "千牛回显确认已发送";
+                    match.StatusKind = "sent";
+                    match.StatusDetail = "已观察到Bot消息回显";
+                    match.AnswerReadyAtTicks = sentAt.Ticks;
+                    match.UpdatedAtTicks = DateTime.Now.Ticks;
+                    QueueSave(match);
+                    return match.EntityId;
+                }
+
+                var id = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
+                QueueSave(new BotConversationHistoryEntity
+                {
+                    EntityId = id,
+                    Seller = seller,
+                    Buyer = buyer,
+                    Question = question ?? string.Empty,
+                    Answer = answer,
+                    AnswerSource = source,
+                    StatusText = "千牛回显确认已发送",
+                    StatusKind = "sent",
+                    StatusDetail = "已观察到Bot消息回显",
+                    CanResend = true,
+                    QuestionDetectedAtTicks = sentAt.Ticks,
+                    AnswerReadyAtTicks = sentAt.Ticks,
+                    CreatedAtTicks = sentAt.Ticks,
+                    UpdatedAtTicks = DateTime.Now.Ticks
+                });
+                return id;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("记录Bot消息来源回显失败：" + ex.Message, 10);
+                return BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
+            }
+        }
+
+        public static string BuildBotEchoEntityId(
+            string seller, string buyer, string messageKey, DateTime sentAt, string answer)
+        {
+            var identity = (seller ?? string.Empty).Trim() + "\n"
+                + (buyer ?? string.Empty).Trim() + "\n"
+                + ((messageKey ?? string.Empty).Trim().Length > 0
+                    ? (messageKey ?? string.Empty).Trim()
+                    : (sentAt == DateTime.MinValue ? 0 : sentAt.Ticks).ToString())
+                + "\n" + NormalizeSourceValue(answer);
+            return "bot-echo-" + Sha256(identity);
+        }
+
+        public static bool UpdateAnswerSource(string seller, string entityId, string source)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            entityId = (entityId ?? string.Empty).Trim();
+            source = (source ?? string.Empty).Trim();
+            if (seller.Length == 0 || entityId.Length == 0 || source.Length == 0) return false;
+            try
+            {
+                FlushNow();
+                EnsureSchema();
+                lock (DbSync)
+                {
+                    var row = DbHelper.Db.ReadOneRecord<BotConversationHistoryEntity>(x => x.EntityId == entityId);
+                    if (row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)) return false;
+                    row.AnswerSource = source;
+                    row.UpdatedAtTicks = DateTime.Now.Ticks;
+                    DbHelper.Db.SaveOneRecord(row);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("更新Bot回复来源标签失败：" + ex.Message, 10);
+                return false;
+            }
+        }
+
+        private static string BuildSourceStampId(string seller, string buyer, string question, string answer)
+        {
+            return Sha256((seller ?? string.Empty).Trim() + "\n"
+                + (buyer ?? string.Empty).Trim() + "\n"
+                + NormalizeSourceValue(question) + "\n"
+                + NormalizeSourceValue(answer));
+        }
+
+        private static string NormalizeSourceValue(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(0, value.Length - 3).TrimEnd();
+            return System.Text.RegularExpressions.Regex.Replace(value.ToLowerInvariant(), @"\s+", string.Empty);
+        }
+
+        private static string Sha256(string value)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty));
+                return BitConverter.ToString(bytes).Replace("-", string.Empty).ToLowerInvariant();
+            }
         }
 
         public static void QueueSave(BotConversationHistoryEntity entity)
@@ -206,6 +444,13 @@ namespace Bot.ChromeNs
                     expired = DbHelper.Db.Execute(
                         "delete from BotConversationHistoryEntity where UpdatedAtTicks < ?",
                         cutoffTicks);
+                    DbHelper.Db.Execute(
+                        "delete from BotReplySourceStampEntity where UpdatedAtTicks < ?",
+                        cutoffTicks);
+                    DbHelper.Db.Execute(
+                        "delete from BotReplySourceStampEntity where StampId not in "
+                        + "(select StampId from BotReplySourceStampEntity order by UpdatedAtTicks desc limit "
+                        + MaxTotalRecords + ")");
                     overflow = DbHelper.Db.Execute(
                         "delete from BotConversationHistoryEntity where EntityId not in "
                         + "(select EntityId from BotConversationHistoryEntity order by UpdatedAtTicks desc limit "
@@ -333,6 +578,19 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create index if not exists IX_BotConversationHistory_Updated "
                     + "on BotConversationHistoryEntity(UpdatedAtTicks)");
+                DbHelper.Db.Execute(
+                    "create table if not exists BotReplySourceStampEntity ("
+                    + "StampId text primary key not null,"
+                    + "Seller text not null,"
+                    + "Buyer text not null,"
+                    + "QuestionKey text,"
+                    + "AnswerKey text,"
+                    + "AnswerSource text,"
+                    + "UpdatedAtTicks integer not null default 0"
+                    + ")");
+                DbHelper.Db.Execute(
+                    "create index if not exists IX_BotReplySourceStamp_Lookup "
+                    + "on BotReplySourceStampEntity(Seller, Buyer, UpdatedAtTicks)");
                 Volatile.Write(ref _schemaReady, 1);
             }
         }
