@@ -90,8 +90,9 @@ namespace Bot.ChromeNs
             }
             var question = burst.CombinedQuestion ?? string.Empty;
             var referential = IsVisionReferentialFollowUp(question);
-            var permittedWindow = referential ? ExplicitReferentialWindowSeconds : FollowUpWindowSeconds;
-            if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(permittedWindow))
+            var staleOrdinary = !referential && elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds);
+            var staleReferential = referential && elapsed > TimeSpan.FromSeconds(ExplicitReferentialWindowSeconds);
+            if (elapsed < TimeSpan.Zero || staleOrdinary || staleReferential)
             {
                 RecentVisionContext expired; RecentVision.TryRemove(conversationKey, out expired);
                 Log.Info("最近图片上下文已过期，文字按普通消息处理: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
