@@ -486,6 +486,11 @@ namespace Bot.Knowledge
         {
             var question = (_kbQuestion.Text ?? string.Empty).Trim();
             var answer = (_kbReply.Text ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(_seller))
+            {
+                _kbStatus.Text = "当前未识别店铺，不能检索店铺级 Knowledge Center V2。";
+                return;
+            }
             if (question.Length == 0 && answer.Length == 0)
             {
                 _kbStatus.Text = "请粘贴一条 Bot 回复，或同时提供买家问题。";
