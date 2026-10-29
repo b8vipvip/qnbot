@@ -107,7 +107,7 @@ def install(control_plane: Any) -> None:
     handler.setFormatter(PrivateLogFormatter(
         "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
     # Capture Python/uvicorn logging, not print() or arbitrary Docker events.
-    for name in ("", "uvicorn.error", "uvicorn.access"):
+    for name in ("", "uvicorn.error"):
         logger = logging.getLogger(name)
         logger.addHandler(handler)
         if name == "":
@@ -125,7 +125,7 @@ def install(control_plane: Any) -> None:
             elapsed = int((time.monotonic() - started) * 1000)
             # No query parameters, request bodies, customer messages or tokens.
             endpoint = request.scope.get("route")
-            template = getattr(endpoint, "path", None) or route_path
+            template = getattr(endpoint, "path", None) or "/"
             if len(template) > 140:
                 template = template[:140] + "..."
             logging.getLogger("qnbot.runtime").info(
