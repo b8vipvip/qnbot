@@ -57,9 +57,14 @@ namespace Bot.ChromeNs
             string source)
         {
             if (string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(source)) return;
+            BotReplyPreset preset;
+            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset))
+                source = BotReplyPresetService.BuildSourceLabel(preset);
             var stamp = new SourceStamp { Source = source, ExpiresAt = DateTime.Now.AddMinutes(30) };
             Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
             Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
+            // Keep provenance across process restarts and delayed Qianniu echoes.
+            BotConversationHistoryStore.SaveAnswerSourceStamp(seller, buyer, question, answer, source);
         }
 
         public static string ResolveAnswerSource(
@@ -69,12 +74,15 @@ namespace Bot.ChromeNs
             string answer)
         {
             Cleanup();
+            BotReplyPreset preset;
+            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset))
+                return BotReplyPresetService.BuildSourceLabel(preset);
             SourceStamp stamp;
             if (Sources.TryGetValue(AnswerKey(seller, buyer, question, answer), out stamp)
                 && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
             if (Sources.TryGetValue(QuestionSourceKey(seller, buyer, question), out stamp)
                 && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
-            return string.Empty;
+            return BotConversationHistoryStore.ResolveAnswerSourceStamp(seller, buyer, question, answer);
         }
 
         public static bool TryFindLocalAnswer(
@@ -833,7 +841,7 @@ namespace Bot.ChromeNs
 
         private static string AnswerKey(string seller, string buyer, string question, string answer)
         {
-            return QuestionSourceKey(seller, buyer, question) + "|" + Normalize(answer);
+            return QuestionSourceKey(seller, buyer, question) + "|" + Normalize(BotReplyPresetService.NormalizeReply(answer));
         }
 
         private static string QuestionSourceKey(string seller, string buyer, string question)
