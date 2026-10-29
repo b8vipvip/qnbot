@@ -12,7 +12,8 @@ namespace Bot.ChromeNs
 {
     internal static class VisionFollowUpContextPipeline
     {
-        private const int FollowUpWindowSeconds = 90;
+        private const int FollowUpWindowSeconds = 45;
+        private const int ExplicitReferentialWindowSeconds = 90;
         private const int CaptionWindowSeconds = 15;
         private const int SourceClockSkewToleranceSeconds = 15;
 
@@ -87,15 +88,16 @@ namespace Bot.ChromeNs
                 Log.Info("最近图片上下文检测到可容忍的消息时间逆序，按同轮续问处理: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
                 elapsed = TimeSpan.Zero;
             }
-            if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds))
+            var question = burst.CombinedQuestion ?? string.Empty;
+            var referential = IsVisionReferentialFollowUp(question);
+            var permittedWindow = referential ? ExplicitReferentialWindowSeconds : FollowUpWindowSeconds;
+            if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(permittedWindow))
             {
                 RecentVisionContext expired; RecentVision.TryRemove(conversationKey, out expired);
                 Log.Info("最近图片上下文已过期，文字按普通消息处理: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
                 await next(lease); return;
             }
 
-            var question = burst.CombinedQuestion ?? string.Empty;
-            var referential = IsVisionReferentialFollowUp(question);
             var likelyCaption = elapsed <= TimeSpan.FromSeconds(CaptionWindowSeconds) && IsLikelyImageCaption(question);
             if (!referential && !likelyCaption)
             {
@@ -190,7 +192,7 @@ namespace Bot.ChromeNs
 
         private static void CleanupExpired()
         {
-            var cutoff = DateTime.Now.AddSeconds(-FollowUpWindowSeconds);
+            var cutoff = DateTime.Now.AddSeconds(-ExplicitReferentialWindowSeconds);
             foreach (var pair in RecentVision.Where(x => x.Value == null || x.Value.ObservedAt < cutoff).ToList()) { RecentVisionContext ignored; RecentVision.TryRemove(pair.Key, out ignored); }
         }
 
