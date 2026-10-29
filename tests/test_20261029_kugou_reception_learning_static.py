@@ -53,3 +53,12 @@ def test_order_photo_wait_only_advances_after_confirmed_delivery():
         "KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);"
     )
     assert "RemoteSellerEchoVerification.Delivered" in order
+
+def test_ai_and_observed_human_learning_cannot_publish_store_policy():
+    learn = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    policy = text(POLICY)
+    assert "RequiresManualKnowledgeReview(string seller, string question, string answer)" in policy
+    assert learn.count("KugouReceptionPolicy.RequiresManualKnowledgeReview(") == 2
+    assert "店铺业务知识自动学习改为会话复盘待审核" in learn
+    assert 'string.Equals(sourceType, "人工修改", StringComparison.Ordinal)' in learn
+    assert "等待人工审核，未自动写入" in learn
