@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1.7
+# For upgrades, the host updater supplies the already-working local image. Fresh
+# deployments use the upstream official version/digest, never a third-party mirror.
+ARG SING_BOX_SOURCE_IMAGE=ghcr.io/sagernet/sing-box:v1.13.19@sha256:78ca1bc9f3b563b0944fd6b1126522ee631e7b44d540b91fc435ba7062ef08b2
+FROM ${SING_BOX_SOURCE_IMAGE} AS sing-box-provider
 FROM python:3.11-slim
 
 ARG APT_MIRROR=""
@@ -7,9 +11,6 @@ ARG PIP_INDEX_URL="https://pypi.org/simple"
 ARG PIP_TRUSTED_HOST=""
 ARG PIP_DEFAULT_TIMEOUT="120"
 ARG PIP_RETRIES="8"
-ARG SING_BOX_VERSION="1.13.19"
-ARG SING_BOX_SHA256="ef88a9e577d474210867bd708933d042e9b70106529df2656182c9db90106aa1"
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATA_DIR=/data \
@@ -48,20 +49,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libxext6 \
         libxrender1
 
-RUN --mount=type=cache,target=/root/.cache/sing-box,sharing=locked \
-    set -eux; \
-    cache_archive="/root/.cache/sing-box/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"; \
-    directory="/tmp/sing-box-${SING_BOX_VERSION}-linux-amd64"; \
-    url="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"; \
-    if [ ! -s "$cache_archive" ] || ! echo "${SING_BOX_SHA256}  ${cache_archive}" | sha256sum -c - >/dev/null 2>&1; then \
-      rm -f "$cache_archive"; \
-      curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 1500 "$url" -o "$cache_archive"; \
-    fi; \
-    echo "${SING_BOX_SHA256}  ${cache_archive}" | sha256sum -c -; \
-    tar -xzf "$cache_archive" -C /tmp; \
-    install -m 0755 "${directory}/sing-box" /usr/local/bin/sing-box; \
-    /usr/local/bin/sing-box version; \
-    rm -rf "$directory"
 
 WORKDIR /app
 COPY requirements.txt .
@@ -94,6 +81,14 @@ RUN set -eux; \
       sleep $((attempt * 5)); \
     done; \
     python -c "from rapidocr import RapidOCR; RapidOCR(); print('RapidOCR default models initialized')"
+
+# Reuse the already-working sing-box from the old running container image,
+# rather than fetching GitHub Release tarballs during *every* control-plane build.
+# The host upgrade script checks the binary version and provides a local tag.
+# This stage copies only the executable, never old application files or secrets.
+COPY --from=sing-box-provider /usr/local/bin/sing-box /usr/local/bin/sing-box
+RUN set -eux; \
+    /usr/local/bin/sing-box version | grep -F 'sing-box version 1.13.19'
 
 COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py bot_web_console.py bot_web_ai_model_settings.py bot_web_auto_reply_rules.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py bot_web_settings_ack.py ai_request_records.py chat2api_runtime_guard.py client_data_backup.py console_cache_guard.py deep_test_guard.py github_vless_proxy.py message_processing_traces.py knowledge_v2_sync.py manual_recharge.py runtime_shop_ai_proxy.py runtime_auth_failures.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py runtime_ocr.py runtime_ocr_priority.py scheduled_deep_test_retry.py version_update_admin.py server_runtime_logs.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
 COPY static ./static

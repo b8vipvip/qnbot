@@ -213,6 +213,41 @@ github_fetch_with_retry() {
   die "GitHub fetch 连续失败 ${GIT_FETCH_RETRIES} 次；旧服务未停止。"
 }
 
+# Verify and reuse the proxy binary from the currently running, previously
+# deployed control-plane image. This prevents a blocked GitHub Release tarball
+# from delaying an otherwise cached upgrade for 30-90 minutes. Never stop or
+# mutate the running container; tagging its immutable image is safe.
+prepare_sing_box_source() {
+  local cache_tag="qnbot-sing-box-source:1.13.19"
+  local candidate="" version=""
+  if [[ -n "${CONTROL_PLANE_SING_BOX_SOURCE_IMAGE:-}" ]]; then
+    log "使用已指定的 sing-box 来源镜像: $CONTROL_PLANE_SING_BOX_SOURCE_IMAGE"
+    return 0
+  fi
+  if container_running; then
+    version="$(timeout 12s docker exec "$CONTAINER_NAME" /usr/local/bin/sing-box version 2>/dev/null | head -n 1 || true)"
+    if [[ "$version" == *"sing-box version 1.13.19"* ]]; then
+      candidate="$(docker inspect -f '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+      if [[ -n "$candidate" ]] && docker image inspect "$candidate" >/dev/null 2>&1; then
+        docker image tag "$candidate" "$cache_tag"
+        export CONTROL_PLANE_SING_BOX_SOURCE_IMAGE="$cache_tag"
+        log "复用正在运行的旧服务镜像中的 sing-box 1.13.19: $candidate（免下载 GitHub Release）"
+        return 0
+      fi
+    fi
+  fi
+  # Reuse the previously vetted local tag if a restart left it behind.
+  if docker image inspect "$cache_tag" >/dev/null 2>&1; then
+    version="$(timeout 15s docker run --rm --network none --entrypoint /usr/local/bin/sing-box "$cache_tag" version 2>/dev/null | head -n 1 || true)"
+    if [[ "$version" == *"sing-box version 1.13.19"* ]]; then
+      export CONTROL_PLANE_SING_BOX_SOURCE_IMAGE="$cache_tag"
+      log "复用宿主机已缓存的 sing-box 来源镜像: $cache_tag"
+      return 0
+    fi
+  fi
+  warn "未找到经过版本校验的本地 sing-box 镜像，将从官方 GHCR 固定摘要获取；如受限请先恢复旧容器或配置可信镜像通道。"
+}
+
 prepare_base_image() {
   local have_local=0
   if docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
@@ -254,6 +289,9 @@ print_build_failure_hint() {
   fi
   if grep -Eq 'apt-get|deb\.debian\.org|debian-security|Temporary failure resolving|Connection timed out' "$BUILD_LOG"; then
     warn "检测到 APT/Debian 软件源访问异常。当前 Dockerfile 已支持腾讯云 Debian 镜像和 Acquire::Retries。"
+  fi
+  if grep -Eq 'ghcr.io/sagernet/sing-box|sing-box-provider|failed to resolve.*ghcr.io' "$BUILD_LOG"; then
+    warn "sing-box 官方镜像未拉取成功，请确认旧控制面容器是否包含 sing-box 1.13.19；后续更新将优先复用旧容器的已安装二进制。"
   fi
   if grep -Eq 'no space left on device|ENOSPC' "$BUILD_LOG"; then
     warn "检测到磁盘空间不足。请先运行 docker system df 和 df -h 检查空间。"
@@ -423,6 +461,7 @@ probe_url "腾讯云 Debian" "${CONTROL_PLANE_BUILD_APT_MIRROR%/}/" || true
 
 docker system df || true
 prepare_base_image
+prepare_sing_box_source
 build_new_image
 check_space_before_backup
 
