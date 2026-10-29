@@ -253,6 +253,31 @@ namespace Bot.ChromeNs
         }
 
 
+
+        public static string GetAuditJson(string seller)
+        {
+            if (!Applies(seller)) return "当前店铺尚未识别为该酷狗业务店铺，未启用专属接待审计。";
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (shop == null) return "没有可用的店铺作用域，禁止跨店铺读取审计。";
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
+                    if (string.IsNullOrWhiteSpace(directory)) return "没有审计目录。";
+                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    string error;
+                    var content = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
+                    if (!string.IsNullOrWhiteSpace(error)) return "读取审计失败：" + error;
+                    return string.IsNullOrWhiteSpace(content) ? "当前店铺还没有接待决策记录。" : content;
+                }
+            }
+            catch (Exception ex)
+            {
+                return "读取接待审计异常：" + ex.Message;
+            }
+        }
+
         // Restore a short-lived stage from the privacy-minimized per-shop decision journal.
         // Explicitly ignore send validation and general FAQ audit entries; these are not
         // business state transitions. The real order and account evidence remain external.
