@@ -253,4 +253,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionEvidenceLedger.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionEvidenceLedger.cs" />
+  </ItemGroup>
 </Project>
