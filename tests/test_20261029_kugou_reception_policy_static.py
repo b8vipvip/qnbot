@@ -67,9 +67,9 @@ def test_visual_branch_uses_evidence_not_product_title_to_authorize():
 
 def test_explicit_photo_referential_followups_last_90_seconds():
     followup = src("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
-    assert "FollowUpWindowSeconds = 90" in followup
+    assert "ExplicitReferentialWindowSeconds = 90" in followup
     assert 'compact == "是这个不"' in followup
-    assert '@"^\d{5,20}$"' in followup
+    assert r'@"^\d{5,20}$"' in followup
     assert "最近图片未与后续文字合并" in followup
 
 def test_decision_audit_is_bounded_and_anonymizes_buyer():
