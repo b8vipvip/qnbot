@@ -49,14 +49,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libxext6 \
         libxrender1
 
-# Reuse the already-working sing-box from the old running container image,
-# rather than fetching GitHub Release tarballs during *every* control-plane build.
-# The host upgrade script checks the binary version and provides a local tag.
-# This stage copies only the executable, never old application files or secrets.
-COPY --from=sing-box-provider /usr/local/bin/sing-box /usr/local/bin/sing-box
-RUN set -eux; \
-    /usr/local/bin/sing-box version | grep -F 'sing-box version 1.13.19'
-
 
 WORKDIR /app
 COPY requirements.txt .
@@ -89,6 +81,14 @@ RUN set -eux; \
       sleep $((attempt * 5)); \
     done; \
     python -c "from rapidocr import RapidOCR; RapidOCR(); print('RapidOCR default models initialized')"
+
+# Reuse the already-working sing-box from the old running container image,
+# rather than fetching GitHub Release tarballs during *every* control-plane build.
+# The host upgrade script checks the binary version and provides a local tag.
+# This stage copies only the executable, never old application files or secrets.
+COPY --from=sing-box-provider /usr/local/bin/sing-box /usr/local/bin/sing-box
+RUN set -eux; \
+    /usr/local/bin/sing-box version | grep -F 'sing-box version 1.13.19'
 
 COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py bot_web_console.py bot_web_ai_model_settings.py bot_web_auto_reply_rules.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py bot_web_settings_ack.py ai_request_records.py chat2api_runtime_guard.py client_data_backup.py console_cache_guard.py deep_test_guard.py github_vless_proxy.py message_processing_traces.py knowledge_v2_sync.py manual_recharge.py runtime_shop_ai_proxy.py runtime_auth_failures.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py runtime_ocr.py runtime_ocr_priority.py scheduled_deep_test_retry.py version_update_admin.py server_runtime_logs.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
 COPY static ./static
