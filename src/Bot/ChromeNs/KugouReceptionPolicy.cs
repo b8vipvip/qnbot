@@ -155,8 +155,9 @@ namespace Bot.ChromeNs
         {
             reason = string.Empty;
             if (!Applies(seller)) return false;
-            if (!KugouReceptionConfigService.GetConfig(seller).EnableAutoGuidance
-                && (answer ?? string.Empty).Contains(TClGuideUrl))
+            var config = KugouReceptionConfigService.GetConfig(seller);
+            if (!config.EnableAutoGuidance
+                && (answer ?? string.Empty).Contains(config.TclGuideUrl))
                 reason = "自动设备教程已在本店配置中关闭";
             else if (BadOutgoingClaim.IsMatch(answer ?? string.Empty))
                 reason = "命中已隔离的错误跨端/店铺/退款表述";
