@@ -111,6 +111,10 @@ function renderVersionUpdate(data){
       ${agentHint}
       <div style="margin-top:12px">${vuProgress(update.progress_percent)}</div>
       <p><strong>${esc(update.phase||"等待更新")}</strong> · ${esc(update.message||"")}</p>
+      ${update.build_phase_not_percentage?'<p class="hint">35% 是镜像构建阶段标记，不代表镜像已构建 35%。</p>':""}
+      ${update.diagnostic?`<p class="hint" style="${update.build_suspected_stalled?'color:#b45309':''}">${esc(update.diagnostic)}</p>`:""}
+      <p class="hint">更新状态：${update.status_age_seconds==null?"--":Number(update.status_age_seconds)+"秒前"} · 最后日志输出：${update.log_age_seconds==null?"--":Number(update.log_age_seconds)+"秒前"} · 日志大小：${vuBytes(update.log_size_bytes)}</p>
+      <div class="actions"><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='build';loadServerRuntimeLogs()">查看构建日志</button><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='update';loadServerRuntimeLogs()">查看更新日志</button></div>
       <p class="hint">服务端源码仍由主机更新代理通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取；上方 VLESS 配置只作用于控制面内部的 GitHub HTTPS / Release 下载，不改变主机 SSH 更新链路。</p>
       <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>更新服务端到 GitHub 最新版</button></div>
     </div>`;

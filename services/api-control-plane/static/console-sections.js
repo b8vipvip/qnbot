@@ -4,7 +4,7 @@
     "recharge-query":{frameId:"rechargeQueryFrame",src:"/static/recharge-query.html?embedded=1"},
     ocr:{frameId:"ocrSettingsFrame",src:"/static/ocr-settings.html?embedded=1"}
   };
-  const knownPages=new Set(["dashboard","providers","tests","clients","message-traces","ai-requests","wecom","recharge-query","ocr","version-update","deploy"]);
+  const knownPages=new Set(["dashboard","providers","tests","clients","message-traces","ai-requests","wecom","recharge-query","ocr","version-update","server-runtime","deploy"]);
 
   if(typeof titles!=="undefined"){
     titles.wecom=["企业微信","配置企业微信应用、加密回调和 AI 转人工策略。"];

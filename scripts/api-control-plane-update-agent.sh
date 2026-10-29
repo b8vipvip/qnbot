@@ -9,6 +9,11 @@ STATUS_FILE="$UPDATE_DIR/status.json"
 AGENT_FILE="$UPDATE_DIR/agent.json"
 LOG_FILE="$UPDATE_DIR/update.log"
 LOCK_FILE="$UPDATE_DIR/agent.lock"
+# The log is a host-owned append-only diagnostic source shared with the API container.
+BUILD_PHASE=0
+BUILD_START_AT=0
+BUILD_LAST_REPORT_AT=0
+BUILD_ATTEMPT="?"
 POLL_SECONDS="${POLL_SECONDS:-2}"
 GITHUB_SSH_HOST="${GITHUB_SSH_HOST:-ssh.github.com}"
 GITHUB_SSH_PORT="${GITHUB_SSH_PORT:-443}"
@@ -76,8 +81,20 @@ phase_from_line() {
     *"代码版本:"*) write_status running "确认目标版本" 15 "$line" "$request_id" "$current" "$target" ;;
     *"校验宝塔 Compose 配置"*) write_status running "校验部署配置" 20 "$line" "$request_id" "$current" "$target" ;;
     *"准备基础镜像:"*) write_status running "准备构建环境" 25 "$line" "$request_id" "$current" "$target" ;;
-    *"构建新镜像"*) write_status running "构建新服务镜像" 35 "$line" "$request_id" "$current" "$target" ;;
-    *"新镜像构建成功"*) write_status running "镜像构建完成" 60 "$line" "$request_id" "$current" "$target" ;;
+    *"构建新镜像"*)
+      BUILD_PHASE=1
+      BUILD_START_AT="$(date +%s)"
+      BUILD_LAST_REPORT_AT="$BUILD_START_AT"
+      if [[ "$line" =~ 第[[:space:]]*([0-9]+/[0-9]+)[[:space:]]*次 ]]; then
+        BUILD_ATTEMPT="${BASH_REMATCH[1]}"
+      fi
+      write_status running "构建新服务镜像" 35 "镜像构建第 ${BUILD_ATTEMPT} 次；旧服务继续运行。可打开服务端运行日志查看 Docker 构建输出。" "$request_id" "$current" "$target"
+      ;;
+    *"构建第 "*"次失败"*|*"新镜像构建第 "*"次失败"*)
+      BUILD_PHASE=0
+      write_status running "构建失败，等待重试" 35 "$line" "$request_id" "$current" "$target"
+      ;;
+    *"新镜像构建成功"*) BUILD_PHASE=0; write_status running "镜像构建完成" 60 "$line" "$request_id" "$current" "$target" ;;
     *"停止旧控制面并创建冷备份"*) write_status running "备份并切换服务" 66 "$line" "$request_id" "$current" "$target" ;;
     *"备份完成:"*) write_status running "备份完成" 74 "$line" "$request_id" "$current" "$target" ;;
     *"启动已经构建并验证过的新控制面镜像"*) write_status running "启动新版本" 82 "$line" "$request_id" "$current" "$target" ;;
@@ -85,6 +102,17 @@ phase_from_line() {
     *"验证宝塔现有反代和 SSL:"*) write_status running "公网健康检查" 95 "$line" "$request_id" "$current" "$target" ;;
     *"更新成功"*) write_status running "更新完成，正在收尾" 99 "$line" "$request_id" "$current" "$target" ;;
   esac
+  # Keep a bounded heartbeat while BuildKit emits logs. 35% is a phase marker,
+  # not byte-level progress. Never pretend to know actual compilation percentage.
+  if [[ "$BUILD_PHASE" -eq 1 ]]; then
+    local now elapsed
+    now="$(date +%s)"
+    if (( now - BUILD_LAST_REPORT_AT >= 10 )); then
+      elapsed=$(( now - BUILD_START_AT ))
+      write_status running "构建新服务镜像" 35 "构建第 ${BUILD_ATTEMPT} 次，已耗时 ${elapsed}s，Docker 输出仍在更新；查看服务端运行日志获取详情。" "$request_id" "$current" "$target"
+      BUILD_LAST_REPORT_AT="$now"
+    fi
+  fi
 }
 
 process_request() {
