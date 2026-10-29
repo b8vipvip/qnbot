@@ -117,6 +117,7 @@ namespace Bot.ChromeNs
                 || (text.IndexOf("酷狗", StringComparison.Ordinal) < 0
                     && text.IndexOf("账号", StringComparison.Ordinal) < 0)
                 || text.IndexOf("电视", StringComparison.Ordinal) < 0) return;
+            ReceptionEvidenceLedger.RecordDeliveredEvidenceRequest(seller, buyer, text);
             Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
                 "verified_order_photo_instruction_delivered", "kg_order_photo");
         }
