@@ -58,13 +58,25 @@ namespace Bot.ChromeNs
         {
             if (string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(source)) return;
             BotReplyPreset preset;
-            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset))
+            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset)
+                && (string.Equals(source, "本地", StringComparison.Ordinal)
+                    || string.Equals(source, "商品链接预设回复", StringComparison.Ordinal)))
                 source = BotReplyPresetService.BuildSourceLabel(preset);
             var stamp = new SourceStamp { Source = source, ExpiresAt = DateTime.Now.AddMinutes(30) };
             Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
             Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
             // Keep provenance across process restarts and delayed Qianniu echoes.
             BotConversationHistoryStore.SaveAnswerSourceStamp(seller, buyer, question, answer, source);
+        }
+
+        public static void OverrideAnswerSource(
+            string seller, string buyer, string question, string answer, string source)
+        {
+            if (string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(source)) return;
+            var stamp = new SourceStamp { Source = source.Trim(), ExpiresAt = DateTime.Now.AddMinutes(30) };
+            Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
+            Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
+            BotConversationHistoryStore.SaveAnswerSourceStamp(seller, buyer, question, answer, source.Trim());
         }
 
         public static string ResolveAnswerSource(
@@ -74,15 +86,17 @@ namespace Bot.ChromeNs
             string answer)
         {
             Cleanup();
-            BotReplyPreset preset;
-            if (BotReplyPresetService.TryFindPreset(seller, answer, out preset))
-                return BotReplyPresetService.BuildSourceLabel(preset);
             SourceStamp stamp;
             if (Sources.TryGetValue(AnswerKey(seller, buyer, question, answer), out stamp)
                 && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
             if (Sources.TryGetValue(QuestionSourceKey(seller, buyer, question), out stamp)
                 && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
-            return BotConversationHistoryStore.ResolveAnswerSourceStamp(seller, buyer, question, answer);
+            var persisted = BotConversationHistoryStore.ResolveAnswerSourceStamp(seller, buyer, question, answer);
+            if (!string.IsNullOrWhiteSpace(persisted)) return persisted;
+            BotReplyPreset preset;
+            return BotReplyPresetService.TryFindPreset(seller, answer, out preset)
+                ? BotReplyPresetService.BuildSourceLabel(preset)
+                : string.Empty;
         }
 
         public static bool TryFindLocalAnswer(
