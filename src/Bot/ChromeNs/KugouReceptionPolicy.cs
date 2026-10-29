@@ -212,6 +212,10 @@ namespace Bot.ChromeNs
             if (!Applies(seller)) return;
             try
             {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (shop == null) return;
+                using (ShopSettingsScope.Enter(shop))
+                {
                 var basePath = BusinessPolicyProfileService.GetUserPath();
                 var directory = Path.GetDirectoryName(basePath);
                 if (string.IsNullOrWhiteSpace(directory)) return;
@@ -234,6 +238,7 @@ namespace Bot.ChromeNs
                     if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                         path, JsonConvert.SerializeObject(entries, Formatting.Indented), 2, 25, out error))
                         Log.ErrorWithMaxCount("接待决策审计保存失败: " + error, 10);
+                }
                 }
             }
             catch (Exception ex)
