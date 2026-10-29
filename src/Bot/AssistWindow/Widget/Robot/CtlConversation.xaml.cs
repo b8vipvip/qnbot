@@ -223,6 +223,11 @@ namespace Bot.AssistWindow.Widget.Robot
             });
         }
 
+        internal string MirrorQuestionText
+        {
+            get { return _question ?? string.Empty; }
+        }
+
         internal string MirrorAnswerText
         {
             get { return _answer ?? string.Empty; }
@@ -231,6 +236,11 @@ namespace Bot.AssistWindow.Widget.Robot
         internal string MirrorAnswerSource
         {
             get { return _answerSource ?? string.Empty; }
+        }
+
+        internal void MirrorSetAnswerSource(string source)
+        {
+            SetSource(source);
         }
 
         internal bool MirrorCanResend
