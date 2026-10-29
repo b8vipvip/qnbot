@@ -191,20 +191,67 @@ namespace Bot.ChromeNs
                 reason = "xiaomi_builtin_karaoke";
             }
             if (answer.Length == 0) return false;
-            Audit(seller, buyer, "REPLY", "device_review", reason, "kg_visual");
+            var newStage = reason == "tcl_need_verified_binding"
+                ? "awaiting_binding_proof"
+                : "device_rejected";
+            Audit(seller, buyer, "REPLY", newStage, reason, "kg_visual");
             return true;
         }
 
-        public static string BuildPromptAddon(string seller)
+        public static string BuildPromptAddon(string seller, string buyer)
         {
             if (!Applies(seller)) return string.Empty;
+            var knownStage = GetRecentStage(seller, buyer);
             return "\n\n【本店酷狗会员接待政策，必须遵守】"
+                + "\n最近经过规则决策的接待阶段：" + (knownStage.Length == 0 ? "未确认" : knownStage) + "。该阶段不是订单实时状态，必须用最新消息或订单证据重新验证。"
                 + "\n本店两商品1057505313937、1066362196568对应同一酷狗超级会员权益；按买家实际使用场景如实解释跨端权益，不得说手机端不通用；准确的价格、库存、会员类型仍需以实际订单及商品为准。"
                 + "\n卖家店铺先核验设备，再执行充值；已付款≠已核验≠已绑定≠已充值。手机/电脑/平板官方酷狗应用无需电视截图。其他智能设备需以当前应用、资源提供方和账号体系核验。"
                 + "\n海信/聚好看等系统自带音乐栏目按店铺经营政策暂不受理充值，独立安装的酷狗官方APP须单独核验。小米内置K歌不支持；自带听歌必须看开通会员页资源。"
                 + "\nTCL/雷鸟内置音乐先确认酷狗而非QQ资源、本人可重复登录的电视账号，必要时解绑旧账号，然后绑定本人酷狗账号；没有已绑定证据不得批准充值。可用的店铺教程：" + TClGuideUrl
                 + "\n图片提问‘是这个吗’先回答当前图片是否为指定账号界面；无法确认就要求当前步骤证据，禁止机械回答会员包含哪些权益。人工已经处理时不抢答。"
                 + "\n不得擅自声称订单已充值/已到账，不能仅凭品牌或图片相似性确认可用；不能建议恢复出厂删除数据、拒绝升级或一律拒绝退款；有关退款和验证码由真实订单及人工/平台政策处理。\n";
+        }
+
+
+        // Restore a short-lived stage from the privacy-minimized per-shop decision journal.
+        // Explicitly ignore send validation and general FAQ audit entries; these are not
+        // business state transitions. The real order and account evidence remain external.
+        internal static string GetRecentStage(string seller, string buyer)
+        {
+            if (!Applies(seller)) return string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (shop == null) return string.Empty;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
+                    if (string.IsNullOrWhiteSpace(directory)) return string.Empty;
+                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    string error;
+                    var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
+                    if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+                    var recent = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw);
+                    if (recent == null) return string.Empty;
+                    var key = HashBuyer(seller, buyer);
+                    var allowed = new HashSet<string>(StringComparer.Ordinal)
+                    {
+                        "awaiting_account_screenshot", "awaiting_binding_proof",
+                        "device_rejected", "human_handoff", "completed"
+                    };
+                    var entry = recent.Where(x => x != null
+                            && x.BuyerHash == key
+                            && x.AtUtc > DateTime.UtcNow.AddHours(-2)
+                            && allowed.Contains(x.Stage))
+                        .OrderByDescending(x => x.AtUtc).FirstOrDefault();
+                    return entry == null ? string.Empty : entry.Stage;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取店铺接待阶段失败，回退到会话历史：" + ex.Message, 5);
+                return string.Empty;
+            }
         }
 
         internal static void Audit(string seller, string buyer, string action, string stage, string evidence, string ruleId)
