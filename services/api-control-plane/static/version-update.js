@@ -163,7 +163,7 @@ async function syncVersionUpdate(){
   catch(err){toast(err.message)}finally{$("syncVersionBtn").disabled=false}
 }
 async function startServerVersionUpdate(){
-  const needsReverify=!!(versionUpdateState.status&&versionUpdateState.status.server&&versionUpdateState.status.server.needs_runtime_verification);
+  const needsReverify=!!(versionUpdateState.last&&versionUpdateState.last.server&&versionUpdateState.last.server.needs_runtime_verification);
   const text=needsReverify
     ?"确认重新构建并核验实际运行的服务端镜像？该镜像缺少构建提交标记，当前后台的『已更新』仅来自更新状态。操作会先构建，再备份并切换容器，期间可能短暂出现 502；失败将按现有流程回滚。"
     :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，随后先构建新镜像、备份数据，再切换服务；失败会按现有部署脚本回滚。";
