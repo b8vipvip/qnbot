@@ -31,3 +31,9 @@ def test_browser_labels_unverifiable_image_and_requires_confirmation():
     assert "上方 100% 仅表示上一次更新任务完成" in js
     assert "versionUpdateState.last&&versionUpdateState.last.server" in js
     assert "if(!confirm(text))return;" in js
+
+def test_gateway_html_is_not_dumped_into_console_error_area():
+    js=read(SERVICE / "static" / "version-update.js")
+    assert "服务端暂时无法连接" in js
+    assert "页面会自动重试" in js
+    assert "esc(message)" in js
