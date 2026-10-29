@@ -86,6 +86,17 @@ namespace Bot.ChromeNs
             return matched;
         }
 
+        internal static bool RequiresManualKnowledgeReview(string seller, string question, string answer)
+        {
+            if (!Applies(seller)) return false;
+            var text = (question ?? string.Empty) + " " + (answer ?? string.Empty);
+            // Device eligibility, recharge and account-binding rules may never be
+            // inferred solely from AI or incidental past conversations.
+            return Regex.IsMatch(text,
+                @"酷狗|会员|设备|电视|车机|账号|登录|绑定|充值|退款|支持|不支持|支付|付款|到账|发货|教程|app|tcl|海信|雷鸟|小米",
+                RegexOptions.IgnoreCase);
+        }
+
         public static bool IsQuarantined(string seller, string id, string title, string answer)
         {
             if (!Applies(seller)) return false;
