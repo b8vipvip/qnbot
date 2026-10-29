@@ -174,11 +174,18 @@ def _server_update_status() -> Dict[str, Any]:
     return status
 
 
+def _runtime_build_commit() -> str:
+    """Revision baked into THIS process's image; never infer it from host Git."""
+    value = str(os.getenv("CONTROL_PLANE_BUILD_COMMIT", "")).strip()
+    if len(value) == 40 and all(ch in "0123456789abcdef" for ch in value.lower()):
+        return value.lower()
+    return ""
+
+
 def _current_server_commit(status: Dict[str, Any]) -> str:
-    value = str(status.get("current_commit") or "").strip()
-    if value:
-        return value
-    return str(os.getenv("CONTROL_PLANE_BUILD_COMMIT", "")).strip()
+    # Prefer an immutable image stamp. The host updater can checkout new code
+    # while the old container is still serving production traffic.
+    return _runtime_build_commit() or str(status.get("current_commit") or "").strip()
 
 
 def _client_release(request: Request, refresh: bool = False) -> Dict[str, Any]:
@@ -216,6 +223,8 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
         github = _fetch_server_github(force=refresh)
     except Exception as exc:
         server_error = _safe(exc, 240)
+    running_image_commit = _runtime_build_commit()
+    recorded_commit = str(server_status.get("current_commit") or "").strip()
     current = _current_server_commit(server_status)
     latest = str(github.get("sha") or "")
     update_available = bool(current and latest and current != latest)
@@ -229,6 +238,9 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
         "server": {
             "current_commit": current,
             "current_short_sha": current[:12] if current else "",
+            "running_image_commit": running_image_commit,
+            "recorded_commit": recorded_commit,
+            "version_source": "running_image" if running_image_commit else "updater_status",
             "github": github,
             "update_available": update_available,
             "sync_error": server_error,
