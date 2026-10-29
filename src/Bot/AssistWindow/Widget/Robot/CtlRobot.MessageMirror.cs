@@ -234,12 +234,16 @@ namespace Bot.AssistWindow.Widget.Robot
                     }
 
                     usedNativeBotConversations.Add(nativeBotConversation);
-                    nativeBotConversation.UseAnswerOnlyMirrorPresentation();
-                    messageElement = nativeBotConversation;
+                    // A Bot transport echo must use the SAME right-aligned seller
+                    // bubble layout as manual replies. The linked native answer
+                    // still owns 查看/复制/重发/修改/来源, but is not rendered as
+                    // the old left-aligned green Q/A card.
+                    messageElement = BuildMessageMirrorBubble(
+                        turn, seller, buyer, botAnswer, nativeBotConversation);
                 }
                 else
                 {
-                    messageElement = BuildMessageMirrorBubble(turn);
+                    messageElement = BuildMessageMirrorBubble(turn, seller, buyer);
                 }
 
                 if (messageElement == null) continue;
@@ -283,9 +287,24 @@ namespace Bot.AssistWindow.Widget.Robot
             };
         }
 
-        private UIElement BuildMessageMirrorBubble(ConversationContextTurn turn)
+        private UIElement BuildMessageMirrorBubble(
+            ConversationContextTurn turn,
+            string seller,
+            string buyer,
+            string botAnswer = null,
+            CtlConversation botAction = null)
         {
             var isSeller = string.Equals(turn.Role, "assistant", StringComparison.Ordinal);
+            var isBot = isSeller && botAction != null;
+            // Seller + Bot both appear on the right; the buyer stays on the left.
+            // Do not infer Bot solely from the role: only [A] transport echoes are Bot.
+            var sender = isBot ? "Bot" : (isSeller ? seller : buyer);
+            var timestamp = turn.Timestamp == DateTime.MinValue
+                ? string.Empty
+                : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
+            var caption = string.IsNullOrEmpty(timestamp)
+                ? sender
+                : timestamp + " " + sender;
             var maxWidth = Math.Max(210, Math.Min(380, scvBody.ActualWidth > 80
                 ? scvBody.ActualWidth - 64
                 : 300));
@@ -298,21 +317,18 @@ namespace Bot.AssistWindow.Widget.Robot
             };
             meta.Children.Add(new TextBlock
             {
-                Text = isSeller ? "客服" : "买家",
+                Text = caption,
                 Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                 FontSize = 10,
                 FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            meta.Children.Add(new TextBlock
-            {
-                Text = turn.Timestamp == DateTime.MinValue ? string.Empty : "  " + turn.Timestamp.ToString("HH:mm:ss"),
-                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = maxWidth,
+                TextAlignment = isSeller ? TextAlignment.Right : TextAlignment.Left
             });
 
-            var messageText = turn.Withdrawn ? "已撤回一条消息" : (turn.Text ?? string.Empty);
+            var messageText = turn.Withdrawn ? "已撤回一条消息"
+                : isBot ? botAnswer : (turn.Text ?? string.Empty);
             var text = new TextBlock
             {
                 Text = messageText,
@@ -339,7 +355,9 @@ namespace Bot.AssistWindow.Widget.Robot
                 MaxWidth = maxWidth,
                 Child = text
             };
-            bubble.ContextMenu = BuildCopyOnlyContextMenu(messageText, bubble);
+            bubble.ContextMenu = isBot
+                ? BuildMessageMirrorBotContextMenu(botAction, messageText, bubble)
+                : BuildCopyOnlyContextMenu(messageText, bubble);
 
             var stack = new StackPanel
             {
@@ -351,6 +369,36 @@ namespace Bot.AssistWindow.Widget.Robot
             stack.Children.Add(meta);
             stack.Children.Add(bubble);
             return stack;
+        }
+
+        private ContextMenu BuildMessageMirrorBotContextMenu(
+            CtlConversation action, string messageText, FrameworkElement placementTarget)
+        {
+            var menu = BuildCopyOnlyContextMenu(messageText, placementTarget);
+            var view = new MenuItem { Header = "查看" };
+            view.Click += (s, e) => action.MirrorOpenKnowledge(Window.GetWindow(this));
+            menu.Items.Insert(0, view);
+
+            if (action.MirrorCanResend)
+            {
+                var resend = new MenuItem { Header = "重发" };
+                resend.Click += (s, e) => action.MirrorRequestResend();
+                menu.Items.Add(resend);
+            }
+
+            var edit = new MenuItem { Header = "修改" };
+            edit.Click += (s, e) => action.MirrorRequestEdit();
+            menu.Items.Add(edit);
+
+            var provenance = new MenuItem { Header = "来源" };
+            provenance.Click += (s, e) => MessageBox.Show(
+                Window.GetWindow(this),
+                "消息来源：" + (string.IsNullOrWhiteSpace(action.MirrorAnswerSource)
+                    ? "未知" : action.MirrorAnswerSource)
+                    + "\\n此处修改的是本地答案和知识库，不会修改已送达买家的千牛消息。",
+                "消息来源", MessageBoxButton.OK, MessageBoxImage.Information);
+            menu.Items.Add(provenance);
+            return menu;
         }
 
         private ContextMenu BuildCopyOnlyContextMenu(string messageText, FrameworkElement placementTarget)
