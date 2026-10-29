@@ -161,26 +161,32 @@ namespace Bot.ChromeNs
                 || compact.Contains("聚好看") || compact.Contains("内置音乐");
             var otherProvider = compact.Contains("绑定qq") || compact.Contains("qq音乐账号")
                 || compact.Contains("qq音乐资源");
-            var kugouAccount = compact.Contains("已绑定酷狗") || compact.Contains("绑定酷狗账号")
-                || compact.Contains("酷狗昵称");
+            var kugouAccount = compact.Contains("已绑定酷狗")
+                || compact.Contains("酷狗账号已绑定")
+                || (compact.Contains("绑定成功") && compact.Contains("酷狗"));
             if ((compact.Contains("海信") || compact.Contains("vidaa")
                 || compact.Contains("聚好看") || compact.Contains("东芝")) && builtIn && !official)
             {
                 answer = "您当前使用的是电视系统自带的音乐栏目，这类栏目本店暂不提供充值服务。如果已经下单，可以先申请退款；如果是另行安装的酷狗官方应用，请把应用及登录页面发来再确认。";
                 reason = "hisense_builtin_decline";
             }
-            else if (tcl && builtIn && otherProvider)
+            else if (tcl && otherProvider && !official)
             {
                 answer = "从这张图看，当前音乐栏目使用的是 QQ 音乐账号体系，无法在这个栏目使用本店的酷狗会员。如果您另外安装了酷狗官方应用，可将那个应用的账号页面发来确认。";
                 reason = "tcl_qq_reject";
+            }
+            else if (tcl && !official && kugouAccount)
+            {
+                answer = "收到您发来的绑定界面。图片上显示了酷狗账号绑定信息，我再结合订单核对；确认前暂不安排充值。";
+                reason = "tcl_binding_seen_pending_order_review";
             }
             else if (tcl && !official && !kugouAccount)
             {
                 answer = "这张图还不能确认已绑定您自己的酷狗账号。请按 TCL/雷鸟电视教程进入“我的账号”绑定页面，确认是酷狗资源，并使用您本人能再次登录的电视账号绑定酷狗账号，完成后拍照发给我确认：" + TClGuideUrl;
                 reason = "tcl_need_verified_binding";
             }
-            else if (compact.Contains("华数") || compact.Contains("iptv")
-                || compact.Contains("点歌机") || compact.Contains("话费开通"))
+            else if (!official && (compact.Contains("华数") || compact.Contains("iptv")
+                || compact.Contains("点歌机") || compact.Contains("话费开通")))
             {
                 answer = "您这张图显示的系统目前不属于本店支持的酷狗账号充值范围。如果您使用的是另行安装的酷狗官方应用，可以把官方应用的账号页面发来单独确认。";
                 reason = "unsupported_platform";
@@ -193,7 +199,8 @@ namespace Bot.ChromeNs
             if (answer.Length == 0) return false;
             var newStage = reason == "tcl_need_verified_binding"
                 ? "awaiting_binding_proof"
-                : "device_rejected";
+                : reason == "tcl_binding_seen_pending_order_review"
+                    ? "awaiting_order_review" : "device_rejected";
             Audit(seller, buyer, "REPLY", newStage, reason, "kg_visual");
             return true;
         }
@@ -237,7 +244,7 @@ namespace Bot.ChromeNs
                     var allowed = new HashSet<string>(StringComparer.Ordinal)
                     {
                         "awaiting_account_screenshot", "awaiting_binding_proof",
-                        "device_rejected", "human_handoff", "completed"
+                        "device_rejected", "awaiting_order_review", "human_handoff", "completed"
                     };
                     var entry = recent.Where(x => x != null
                             && x.BuyerHash == key
