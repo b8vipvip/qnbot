@@ -7,6 +7,7 @@ FILES = [ROOT / "README.md", ROOT / "AGENTS.md"]
 FILES.extend((ROOT / "docs").rglob("*.md"))
 FILES.extend((ROOT / "docs").rglob("*.txt"))
 FILES.append(ROOT / "services/api-control-plane/README.md")
+FILES.extend((ROOT / "ci-last-build").rglob("*.txt"))
 # Keep literal merchant names out of the test file as well.
 PRIVATE_TOKENS = [
     "\u9177\u72d7", "\u96f7\u9e1f", "\u6d77\u4fe1",
