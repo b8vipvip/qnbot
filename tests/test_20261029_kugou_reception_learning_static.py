@@ -1,0 +1,43 @@
+"""Workflow learning must be review-only; generated policy must never auto-publish."""
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LEARNING = "src/Bot/ChromeNs/ConversationSessionLearningService.cs"
+POLICY = "src/Bot/ChromeNs/KugouReceptionPolicy.cs"
+
+def text(p):
+    return (ROOT / p).read_text(encoding="utf-8-sig")
+
+def test_five_minute_learning_keeps_original_timing_and_review_only_flows():
+    source = text(LEARNING)
+    assert "TimeSpan.FromMinutes(InactivityMinutes)" in source
+    assert '["workflow_proposals"]' in source
+    assert '"workflow_proposals"' in source or r'\\"workflow_proposals\\"' in source
+    assert "SerializeSuggestionsWithWorkflowReview(" in source
+    assert "RequiresWorkflowReview(suggestion)" in source
+    assert "未写入生产知识库" in source
+    assert '["kind"] = "reception_workflow_proposal"' in source
+    assert '["action"] = "manual_review"' in source
+    assert '["applied"] = false' in source
+    assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(" in source
+    assert source.index("RequiresWorkflowReview(suggestion)") < source.index(
+        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge("
+    )
+
+def test_workflow_candidates_require_evidence_and_are_never_sent_as_answers():
+    source = text(LEARNING)
+    assert "var allowed = new HashSet<string>" in source
+    assert '"WAIT", "ASK_EVIDENCE", "REPLY", "SEND_VERIFIED_GUIDE", "HANDOFF"' in source
+    assert "evidence.Length == 0 || requiredEvidence.Length == 0" in source
+    assert '["apply_message"] = "流程候选仅供审核：未修改生产流程与知识库"' in source
+    assert "proposedFlows.Take(4)" in source
+
+def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
+    policy = text(POLICY)
+    assert "GetRecentStage(string seller, string buyer)" in policy
+    assert "BuyerHash = HashBuyer(seller, buyer)" in policy
+    assert "AtUtc > DateTime.UtcNow.AddHours(-2)" in policy
+    assert '"awaiting_binding_proof"' in policy
+    assert '"awaiting_order_review"' in policy
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in policy
+    assert 'Path.Combine(directory, "kugou-reception-decisions.json")' in policy
