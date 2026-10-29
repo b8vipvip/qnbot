@@ -38,6 +38,7 @@ import runtime_streaming_guard
 import scheduled_deep_test_retry
 import store_rule_sync
 import version_update_admin
+import server_runtime_logs
 import wecom_bridge
 import wecom_policy_migration
 import wecom_settings
@@ -72,6 +73,7 @@ bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
 version_update_admin.install(control_plane)
+server_runtime_logs.install(control_plane)
 bot_web_bot_qa.install(control_plane)
 bot_web_conversation_knowledge.install(control_plane)
 client_data_backup.install(control_plane)
