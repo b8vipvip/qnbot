@@ -155,7 +155,10 @@ namespace Bot.ChromeNs
         {
             reason = string.Empty;
             if (!Applies(seller)) return false;
-            if (BadOutgoingClaim.IsMatch(answer ?? string.Empty))
+            if (!KugouReceptionConfigService.GetConfig(seller).EnableAutoGuidance
+                && (answer ?? string.Empty).Contains(TClGuideUrl))
+                reason = "自动设备教程已在本店配置中关闭";
+            else if (BadOutgoingClaim.IsMatch(answer ?? string.Empty))
                 reason = "命中已隔离的错误跨端/店铺/退款表述";
             else if (IsScreenshotQuestion(question)
                 && Regex.IsMatch(answer ?? string.Empty, @"^.{0,12}(包含酷狗K歌会员|包含.*?会员的)", RegexOptions.IgnoreCase))
