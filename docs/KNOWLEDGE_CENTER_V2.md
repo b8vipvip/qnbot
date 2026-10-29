@@ -54,9 +54,9 @@ CreatedAt / UpdatedAt / LastVerifiedAt
 ```text
 Title: 电视会员是什么
 Intent: capability
-Subject: 酷狗音乐/电视/会员
+Subject: 示例音频应用/电视/会员
 Predicate: membership_type
-Entities: 酷狗音乐, 电视, 会员
+Entities: 示例音频应用, 电视, 会员
 Aliases: 这个是电视会员吗, TV版会员吗
 Answer: ...
 ```
