@@ -425,6 +425,9 @@ namespace Bot.ChromeNs
             string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
+            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
+                return true;
+            if (!KugouReceptionPolicy.Applies(seller)) return false;
             var input = (question ?? string.Empty).Trim();
             if (!MobileOnly.IsMatch(input)) return false;
             var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
@@ -574,7 +577,7 @@ namespace Bot.ChromeNs
             // A receptionist decides whether to reply BEFORE consulting a matching answer.
             // Silent/wait decisions must not create AI calls or send generic knowledge.
             string silentReason;
-            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out silentReason))
+            if (ReceptionFlowPolicy.TryChooseSilence(seller, buyer, question, out silentReason))
             {
                 return ReceptionFlowPolicy.SilentMarker + silentReason;
             }
