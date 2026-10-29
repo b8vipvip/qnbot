@@ -116,6 +116,7 @@ namespace Bot.Knowledge
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
                 Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller)),
+                Nav("通用流程草稿", () => new KnowledgeV2WorkflowDraftPage(_seller)),
                 Nav("学习", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Learning)),
                 Nav("冲突", () => new KnowledgeV2ConflictPage(_owner, _seller)),
                 Nav("测试台", () => new KnowledgeV2DebuggerPage(_owner, _seller)),
