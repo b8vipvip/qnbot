@@ -1,151 +1,151 @@
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.codedom\8.0.0\system.codedom.8.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.codedom/8.0.0/system.codedom.8.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.codedom/8.0.0/system.codedom.8.0.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.codedom/8.0.0/system.codedom.8.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.codedom/8.0.0/system.codedom.8.0.0.nupkg 3ms
 Acquiring lock for the installation of System.CodeDom 8.0.0
 Acquired lock for the installation of System.CodeDom 8.0.0
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.diagnostics.diagnosticsource\6.0.1\system.diagnostics.diagnosticsource.6.0.1.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.diagnostics.diagnosticsource/6.0.1/system.diagnostics.diagnosticsource.6.0.1.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.diagnostics.diagnosticsource/6.0.1/system.diagnostics.diagnosticsource.6.0.1.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.diagnostics.diagnosticsource/6.0.1/system.diagnostics.diagnosticsource.6.0.1.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.diagnostics.diagnosticsource/6.0.1/system.diagnostics.diagnosticsource.6.0.1.nupkg 3ms
 Acquiring lock for the installation of System.Diagnostics.DiagnosticSource 6.0.1
 Acquired lock for the installation of System.Diagnostics.DiagnosticSource 6.0.1
-Installed System.ClientModel 1.2.1 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.clientmodel\1.2.1 with content hash s9+M5El+DXdCRRLzxak8uGBKWT8H/eIssGpFtpaMKdJULrQbBDPH/zFbVyHX+NDczhS5EvjHFbBH9/L+0UhmcA==.
+Installed System.ClientModel 1.2.1 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.clientmodel\1.2.1 with content hash s9+M5El+DXdCRRLzxak8uGBKWT8H/eIssGpFtpaMKdJULrQbBDPH/zFbVyHX+NDczhS5EvjHFbBH9/L+0UhmcA==.
 Adding package 'System.ClientModel.1.2.1' to folder 'D:\a\qnbot\qnbot\src\packages'
-PackageSignatureVerificationLog: PackageIdentity: System.CodeDom.8.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-PackageSignatureVerificationLog: PackageIdentity: System.Diagnostics.DiagnosticSource.6.0.1 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
+PackageSignatureVerificationLog: PackageIdentity: System.CodeDom.8.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+PackageSignatureVerificationLog: PackageIdentity: System.Diagnostics.DiagnosticSource.6.0.1 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
 Added package 'System.ClientModel.1.2.1' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.ClientModel.1.2.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.ClientModel.1.2.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Management.8.0.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.management\8.0.0\system.management.8.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.management/8.0.0/system.management.8.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.management/8.0.0/system.management.8.0.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.management/8.0.0/system.management.8.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.management/8.0.0/system.management.8.0.0.nupkg 3ms
 Acquiring lock for the installation of System.Management 8.0.0
 Acquired lock for the installation of System.Management 8.0.0
-PackageSignatureVerificationLog: PackageIdentity: System.Management.8.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Buffers 4.5.1 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.buffers\4.5.1 with content hash Rw7ijyl1qqRS0YQD/WycNst8hUUMgrMH4FCn1nNm27M4VxchZ1js3fVjQaANHO5f3sN4isvP4a+Met9Y4YomAg==.
+PackageSignatureVerificationLog: PackageIdentity: System.Management.8.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Buffers 4.5.1 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.buffers\4.5.1 with content hash Rw7ijyl1qqRS0YQD/WycNst8hUUMgrMH4FCn1nNm27M4VxchZ1js3fVjQaANHO5f3sN4isvP4a+Met9Y4YomAg==.
 Adding package 'System.Buffers.4.5.1' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Buffers.4.5.1' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Buffers.4.5.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Buffers.4.5.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Memory.4.5.4.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.memory\4.5.4\system.memory.4.5.4.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.memory/4.5.4/system.memory.4.5.4.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.memory/4.5.4/system.memory.4.5.4.nupkg 2ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.memory/4.5.4/system.memory.4.5.4.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.memory/4.5.4/system.memory.4.5.4.nupkg 2ms
 Acquiring lock for the installation of System.Memory 4.5.4
 Acquired lock for the installation of System.Memory 4.5.4
-PackageSignatureVerificationLog: PackageIdentity: System.Memory.4.5.4 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Diagnostics.DiagnosticSource 6.0.1 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.diagnostics.diagnosticsource\6.0.1 with content hash KiLYDu2k2J82Q9BJpWiuQqCkFjRBWVq4jDzKKWawVi9KWzyD0XG3cmfX0vqTQlL14Wi9EufJrbL0+KCLTbqWiQ==.
+PackageSignatureVerificationLog: PackageIdentity: System.Memory.4.5.4 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Diagnostics.DiagnosticSource 6.0.1 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.diagnostics.diagnosticsource\6.0.1 with content hash KiLYDu2k2J82Q9BJpWiuQqCkFjRBWVq4jDzKKWawVi9KWzyD0XG3cmfX0vqTQlL14Wi9EufJrbL0+KCLTbqWiQ==.
 Adding package 'System.Diagnostics.DiagnosticSource.6.0.1' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Diagnostics.DiagnosticSource.6.0.1' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Diagnostics.DiagnosticSource.6.0.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Diagnostics.DiagnosticSource.6.0.1' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Memory.Data.6.0.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.memory.data\6.0.0\system.memory.data.6.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.memory.data/6.0.0/system.memory.data.6.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.memory.data/6.0.0/system.memory.data.6.0.0.nupkg 6ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.memory.data/6.0.0/system.memory.data.6.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.memory.data/6.0.0/system.memory.data.6.0.0.nupkg 6ms
 Acquiring lock for the installation of System.Memory.Data 6.0.0
 Acquired lock for the installation of System.Memory.Data 6.0.0
-PackageSignatureVerificationLog: PackageIdentity: System.Memory.Data.6.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Memory 4.5.4 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.memory\4.5.4 with content hash 1MbJTHS1lZ4bS4FmsJjnuGJOu88ZzTT2rLvrhW7Ygic+pC0NWA+3hgAen0HRdsocuQXCkUTdFn9yHJJhsijDXw==.
+PackageSignatureVerificationLog: PackageIdentity: System.Memory.Data.6.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Memory 4.5.4 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.memory\4.5.4 with content hash 1MbJTHS1lZ4bS4FmsJjnuGJOu88ZzTT2rLvrhW7Ygic+pC0NWA+3hgAen0HRdsocuQXCkUTdFn9yHJJhsijDXw==.
 Adding package 'System.Memory.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Memory.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Memory.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Memory.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Numerics.Vectors.4.5.0.
-Installed System.CodeDom 8.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.codedom\8.0.0 with content hash WTlRjL6KWIMr/pAaq3rYqh0TJlzpouaQ/W1eelssHgtlwHAH25jXTkUphTYx9HaIIf7XA6qs/0+YhtLEQRkJ+Q==.
+Installed System.CodeDom 8.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.codedom\8.0.0 with content hash WTlRjL6KWIMr/pAaq3rYqh0TJlzpouaQ/W1eelssHgtlwHAH25jXTkUphTYx9HaIIf7XA6qs/0+YhtLEQRkJ+Q==.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.numerics.vectors\4.5.0\system.numerics.vectors.4.5.0.nupkg
 Adding package 'System.CodeDom.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-  GET https://api.nuget.org/v3-flatcontainer/system.numerics.vectors/4.5.0/system.numerics.vectors.4.5.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.numerics.vectors/4.5.0/system.numerics.vectors.4.5.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.numerics.vectors/4.5.0/system.numerics.vectors.4.5.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.numerics.vectors/4.5.0/system.numerics.vectors.4.5.0.nupkg 3ms
 Acquiring lock for the installation of System.Numerics.Vectors 4.5.0
 Acquired lock for the installation of System.Numerics.Vectors 4.5.0
 Added package 'System.CodeDom.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.CodeDom.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.CodeDom.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Runtime.CompilerServices.Unsafe.6.0.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.runtime.compilerservices.unsafe\6.0.0\system.runtime.compilerservices.unsafe.6.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.runtime.compilerservices.unsafe/6.0.0/system.runtime.compilerservices.unsafe.6.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.runtime.compilerservices.unsafe/6.0.0/system.runtime.compilerservices.unsafe.6.0.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.runtime.compilerservices.unsafe/6.0.0/system.runtime.compilerservices.unsafe.6.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.runtime.compilerservices.unsafe/6.0.0/system.runtime.compilerservices.unsafe.6.0.0.nupkg 3ms
 Acquiring lock for the installation of System.Runtime.CompilerServices.Unsafe 6.0.0
-PackageSignatureVerificationLog: PackageIdentity: System.Numerics.Vectors.4.5.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
+PackageSignatureVerificationLog: PackageIdentity: System.Numerics.Vectors.4.5.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
 Acquired lock for the installation of System.Runtime.CompilerServices.Unsafe 6.0.0
-PackageSignatureVerificationLog: PackageIdentity: System.Runtime.CompilerServices.Unsafe.6.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Management 8.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.management\8.0.0 with content hash jrK22i5LRzxZCfGb+tGmke2VH7oE0DvcDlJ1HAKYU8cPmD8XnpUT0bYn2Gy98GEhGjtfbR/sxKTVb+dE770pfA==.
+PackageSignatureVerificationLog: PackageIdentity: System.Runtime.CompilerServices.Unsafe.6.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Management 8.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.management\8.0.0 with content hash jrK22i5LRzxZCfGb+tGmke2VH7oE0DvcDlJ1HAKYU8cPmD8XnpUT0bYn2Gy98GEhGjtfbR/sxKTVb+dE770pfA==.
 Adding package 'System.Management.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Management.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Management.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Management.8.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Security.Cryptography.Pkcs.6.0.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.security.cryptography.pkcs\6.0.0\system.security.cryptography.pkcs.6.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.security.cryptography.pkcs/6.0.0/system.security.cryptography.pkcs.6.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.security.cryptography.pkcs/6.0.0/system.security.cryptography.pkcs.6.0.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.security.cryptography.pkcs/6.0.0/system.security.cryptography.pkcs.6.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.security.cryptography.pkcs/6.0.0/system.security.cryptography.pkcs.6.0.0.nupkg 3ms
 Acquiring lock for the installation of System.Security.Cryptography.Pkcs 6.0.0
 Acquired lock for the installation of System.Security.Cryptography.Pkcs 6.0.0
-Installed System.Memory.Data 6.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.memory.data\6.0.0 with content hash ntFHArH3I4Lpjf5m4DCXQHJuGwWPNVJPaAvM95Jy/u+2Yzt2ryiyIN04LAogkjP9DeRcEOiviAjQotfmPq/FrQ==.
+Installed System.Memory.Data 6.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.memory.data\6.0.0 with content hash ntFHArH3I4Lpjf5m4DCXQHJuGwWPNVJPaAvM95Jy/u+2Yzt2ryiyIN04LAogkjP9DeRcEOiviAjQotfmPq/FrQ==.
 Adding package 'System.Memory.Data.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Memory.Data.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Memory.Data.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Memory.Data.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Text.Encodings.Web.6.0.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.text.encodings.web\6.0.0\system.text.encodings.web.6.0.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.text.encodings.web/6.0.0/system.text.encodings.web.6.0.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.text.encodings.web/6.0.0/system.text.encodings.web.6.0.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.text.encodings.web/6.0.0/system.text.encodings.web.6.0.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.text.encodings.web/6.0.0/system.text.encodings.web.6.0.0.nupkg 3ms
 Acquiring lock for the installation of System.Text.Encodings.Web 6.0.0
 Acquired lock for the installation of System.Text.Encodings.Web 6.0.0
-PackageSignatureVerificationLog: PackageIdentity: System.Security.Cryptography.Pkcs.6.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-PackageSignatureVerificationLog: PackageIdentity: System.Text.Encodings.Web.6.0.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Runtime.CompilerServices.Unsafe 6.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.runtime.compilerservices.unsafe\6.0.0 with content hash /iUeP3tq1S0XdNNoMz5C9twLSrM/TH+qElHkXWaPvuNOt+99G75NrV0OS2EqHx5wMN7popYjpc8oTjC1y16DLg==.
+PackageSignatureVerificationLog: PackageIdentity: System.Security.Cryptography.Pkcs.6.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+PackageSignatureVerificationLog: PackageIdentity: System.Text.Encodings.Web.6.0.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Runtime.CompilerServices.Unsafe 6.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.runtime.compilerservices.unsafe\6.0.0 with content hash /iUeP3tq1S0XdNNoMz5C9twLSrM/TH+qElHkXWaPvuNOt+99G75NrV0OS2EqHx5wMN7popYjpc8oTjC1y16DLg==.
 Adding package 'System.Runtime.CompilerServices.Unsafe.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Runtime.CompilerServices.Unsafe.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Runtime.CompilerServices.Unsafe.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Runtime.CompilerServices.Unsafe.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Text.Json.6.0.10.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.text.json\6.0.10\system.text.json.6.0.10.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.text.json/6.0.10/system.text.json.6.0.10.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.text.json/6.0.10/system.text.json.6.0.10.nupkg 2ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.text.json/6.0.10/system.text.json.6.0.10.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.text.json/6.0.10/system.text.json.6.0.10.nupkg 2ms
 Acquiring lock for the installation of System.Text.Json 6.0.10
 Acquired lock for the installation of System.Text.Json 6.0.10
-PackageSignatureVerificationLog: PackageIdentity: System.Text.Json.6.0.10 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Text.Encodings.Web 6.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.text.encodings.web\6.0.0 with content hash Vg8eB5Tawm1IFqj4TVK1czJX89rhFxJo9ELqc/Eiq0eXy13RK00eubyU6TJE6y+GQXjyV5gSfiewDUZjQgSE0w==.
+PackageSignatureVerificationLog: PackageIdentity: System.Text.Json.6.0.10 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Text.Encodings.Web 6.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.text.encodings.web\6.0.0 with content hash Vg8eB5Tawm1IFqj4TVK1czJX89rhFxJo9ELqc/Eiq0eXy13RK00eubyU6TJE6y+GQXjyV5gSfiewDUZjQgSE0w==.
 Adding package 'System.Text.Encodings.Web.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Text.Encodings.Web.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Text.Encodings.Web.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
+Added package 'System.Text.Encodings.Web.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
 Restoring NuGet package System.Threading.Tasks.Extensions.4.5.4.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.threading.tasks.extensions\4.5.4\system.threading.tasks.extensions.4.5.4.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.threading.tasks.extensions/4.5.4/system.threading.tasks.extensions.4.5.4.nupkg
-Installed System.Numerics.Vectors 4.5.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.numerics.vectors\4.5.0 with content hash QQTlPTl06J/iiDbJCiepZ4H//BVraReU4O4EoRw1U02H5TLUIT7xn3GnDp9AXPSlJUDyFs4uWjWafNX6WrAojQ==.
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.threading.tasks.extensions/4.5.4/system.threading.tasks.extensions.4.5.4.nupkg
+Installed System.Numerics.Vectors 4.5.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.numerics.vectors\4.5.0 with content hash QQTlPTl06J/iiDbJCiepZ4H//BVraReU4O4EoRw1U02H5TLUIT7xn3GnDp9AXPSlJUDyFs4uWjWafNX6WrAojQ==.
 Adding package 'System.Numerics.Vectors.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-  OK https://api.nuget.org/v3-flatcontainer/system.threading.tasks.extensions/4.5.4/system.threading.tasks.extensions.4.5.4.nupkg 5ms
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.threading.tasks.extensions/4.5.4/system.threading.tasks.extensions.4.5.4.nupkg 5ms
 Acquiring lock for the installation of System.Threading.Tasks.Extensions 4.5.4
 Acquired lock for the installation of System.Threading.Tasks.Extensions 4.5.4
 Added package 'System.Numerics.Vectors.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Numerics.Vectors.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
-PackageSignatureVerificationLog: PackageIdentity: System.Threading.Tasks.Extensions.4.5.4 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
+Added package 'System.Numerics.Vectors.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
+PackageSignatureVerificationLog: PackageIdentity: System.Threading.Tasks.Extensions.4.5.4 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
 Restoring NuGet package System.ValueTuple.4.5.0.
 Missing C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\system.valuetuple\4.5.0\system.valuetuple.4.5.0.nupkg
-  GET https://api.nuget.org/v3-flatcontainer/system.valuetuple/4.5.0/system.valuetuple.4.5.0.nupkg
-  OK https://api.nuget.org/v3-flatcontainer/system.valuetuple/4.5.0/system.valuetuple.4.5.0.nupkg 3ms
+  GET <PACKAGE_FEED_HOST>/v3-flatcontainer/system.valuetuple/4.5.0/system.valuetuple.4.5.0.nupkg
+  OK <PACKAGE_FEED_HOST>/v3-flatcontainer/system.valuetuple/4.5.0/system.valuetuple.4.5.0.nupkg 3ms
 Acquiring lock for the installation of System.ValueTuple 4.5.0
 Acquired lock for the installation of System.ValueTuple 4.5.0
-PackageSignatureVerificationLog: PackageIdentity: System.ValueTuple.4.5.0 Source: https://api.nuget.org/v3/index.json PackageSignatureValidity: True
-Installed System.Security.Cryptography.Pkcs 6.0.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.security.cryptography.pkcs\6.0.0 with content hash elM3x+xSRhzQysiqo85SbidJJ2YbZlnvmh+53TuSZHsD7dNuuEWser+9EFtY+rYupBwkq2avc6ZCO3/6qACgmg==.
+PackageSignatureVerificationLog: PackageIdentity: System.ValueTuple.4.5.0 Source: <PACKAGE_FEED_HOST>/v3/index.json PackageSignatureValidity: True
+Installed System.Security.Cryptography.Pkcs 6.0.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.security.cryptography.pkcs\6.0.0 with content hash elM3x+xSRhzQysiqo85SbidJJ2YbZlnvmh+53TuSZHsD7dNuuEWser+9EFtY+rYupBwkq2avc6ZCO3/6qACgmg==.
 Adding package 'System.Security.Cryptography.Pkcs.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Security.Cryptography.Pkcs.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Security.Cryptography.Pkcs.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
-Installed System.Threading.Tasks.Extensions 4.5.4 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.threading.tasks.extensions\4.5.4 with content hash zteT+G8xuGu6mS+mzDzYXbzS7rd3K6Fjb9RiZlYlJPam2/hU7JCBZBVEcywNuR+oZ1ncTvc/cq0faRr3P01OVg==.
+Added package 'System.Security.Cryptography.Pkcs.6.0.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
+Installed System.Threading.Tasks.Extensions 4.5.4 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.threading.tasks.extensions\4.5.4 with content hash zteT+G8xuGu6mS+mzDzYXbzS7rd3K6Fjb9RiZlYlJPam2/hU7JCBZBVEcywNuR+oZ1ncTvc/cq0faRr3P01OVg==.
 Adding package 'System.Threading.Tasks.Extensions.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Threading.Tasks.Extensions.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Threading.Tasks.Extensions.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
-Installed System.ValueTuple 4.5.0 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.valuetuple\4.5.0 with content hash okurQJO6NRE/apDIP23ajJ0hpiNmJ+f0BwOlB/cSqTLQlw5upkf+5+96+iG2Jw40G1fCVCyPz/FhIABUjMR+RQ==.
+Added package 'System.Threading.Tasks.Extensions.4.5.4' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
+Installed System.ValueTuple 4.5.0 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.valuetuple\4.5.0 with content hash okurQJO6NRE/apDIP23ajJ0hpiNmJ+f0BwOlB/cSqTLQlw5upkf+5+96+iG2Jw40G1fCVCyPz/FhIABUjMR+RQ==.
 Adding package 'System.ValueTuple.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.ValueTuple.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.ValueTuple.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
-Installed System.Text.Json 6.0.10 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.text.json\6.0.10 with content hash NSB0kDipxn2ychp88NXWfFRFlmi1bst/xynOutbnpEfRCT9JZkZ7KOmF/I/hNKo2dILiMGnqblm+j1sggdLB9g==.
+Added package 'System.ValueTuple.4.5.0' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
+Installed System.Text.Json 6.0.10 from <PACKAGE_FEED_HOST>/v3/index.json to C:\Users\runneradmin\.nuget\packages\system.text.json\6.0.10 with content hash NSB0kDipxn2ychp88NXWfFRFlmi1bst/xynOutbnpEfRCT9JZkZ7KOmF/I/hNKo2dILiMGnqblm+j1sggdLB9g==.
 Adding package 'System.Text.Json.6.0.10' to folder 'D:\a\qnbot\qnbot\src\packages'
 Added package 'System.Text.Json.6.0.10' to folder 'D:\a\qnbot\qnbot\src\packages'
-Added package 'System.Text.Json.6.0.10' to folder 'D:\a\qnbot\qnbot\src\packages' from source 'https://api.nuget.org/v3/index.json'
-  GET https://api.nuget.org/v3/vulnerabilities/index.json
-  OK https://api.nuget.org/v3/vulnerabilities/index.json 3ms
-  GET https://api.nuget.org/v3-vulnerabilities/2026.07.10.06.21.10/vulnerability.base.json
-  GET https://api.nuget.org/v3-vulnerabilities/2026.07.10.06.21.10/2026.07.15.00.21.32/vulnerability.update.json
-  OK https://api.nuget.org/v3-vulnerabilities/2026.07.10.06.21.10/vulnerability.base.json 3ms
-  OK https://api.nuget.org/v3-vulnerabilities/2026.07.10.06.21.10/2026.07.15.00.21.32/vulnerability.update.json 2ms
-WARNING: NU1904: Package 'log4net' 2.0.3 has a known critical severity vulnerability, https://github.com/advisories/GHSA-2cwj-8chv-9pp9
-WARNING: NU1902: Package 'log4net' 2.0.3 has a known moderate severity vulnerability, https://github.com/advisories/GHSA-4f7c-pmjv-c25w
-WARNING: NU1903: Package 'Newtonsoft.Json' 12.0.1 has a known high severity vulnerability, https://github.com/advisories/GHSA-5crp-9r3c-p9vr
-WARNING: NU1903: Package 'System.Security.Cryptography.Pkcs' 6.0.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-555c-2p6r-68mm
+Added package 'System.Text.Json.6.0.10' to folder 'D:\a\qnbot\qnbot\src\packages' from source '<PACKAGE_FEED_HOST>/v3/index.json'
+  GET <PACKAGE_FEED_HOST>/v3/vulnerabilities/index.json
+  OK <PACKAGE_FEED_HOST>/v3/vulnerabilities/index.json 3ms
+  GET <PACKAGE_FEED_HOST>/v3-vulnerabilities/2026.07.10.06.21.10/vulnerability.base.json
+  GET <PACKAGE_FEED_HOST>/v3-vulnerabilities/2026.07.10.06.21.10/2026.07.15.00.21.32/vulnerability.update.json
+  OK <PACKAGE_FEED_HOST>/v3-vulnerabilities/2026.07.10.06.21.10/vulnerability.base.json 3ms
+  OK <PACKAGE_FEED_HOST>/v3-vulnerabilities/2026.07.10.06.21.10/2026.07.15.00.21.32/vulnerability.update.json 2ms
+WARNING: NU1904: Package 'log4net' 2.0.3 has a known critical severity vulnerability, <PACKAGE_FEED_HOST>/advisories/GHSA-2cwj-8chv-9pp9
+WARNING: NU1902: Package 'log4net' 2.0.3 has a known moderate severity vulnerability, <PACKAGE_FEED_HOST>/advisories/GHSA-4f7c-pmjv-c25w
+WARNING: NU1903: Package 'Newtonsoft.Json' 12.0.1 has a known high severity vulnerability, <PACKAGE_FEED_HOST>/advisories/GHSA-5crp-9r3c-p9vr
+WARNING: NU1903: Package 'System.Security.Cryptography.Pkcs' 6.0.0 has a known high severity vulnerability, <PACKAGE_FEED_HOST>/advisories/GHSA-555c-2p6r-68mm
 
 NuGet Config files used:
     C:\Users\runneradmin\AppData\Roaming\NuGet\NuGet.Config
@@ -153,7 +153,7 @@ NuGet Config files used:
     C:\Program Files (x86)\NuGet\Config\Microsoft.VisualStudio.Offline.config
 
 Feeds used:
-    https://api.nuget.org/v3/index.json
+    <PACKAGE_FEED_HOST>/v3/index.json
     C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\
 
 Installed:
