@@ -96,6 +96,20 @@ namespace Bot.ChromeNs
                 || body.Contains("恢复出厂设置后不要升级");
         }
 
+        // Called only after the order action ledger confirms the instruction was delivered.
+        // This does not claim that payment, binding or recharge has been verified.
+        internal static void ObserveDeliveredOrderInstruction(string seller, string buyer, string text)
+        {
+            if (!Applies(seller)) return;
+            text = (text ?? string.Empty).Trim();
+            if (!PhotoInstruction.IsMatch(text)
+                || (text.IndexOf("酷狗", StringComparison.Ordinal) < 0
+                    && text.IndexOf("账号", StringComparison.Ordinal) < 0)
+                || text.IndexOf("电视", StringComparison.Ordinal) < 0) return;
+            Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
+                "verified_order_photo_instruction_delivered", "kg_order_photo");
+        }
+
         public static bool TryWaitForEvidence(string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
@@ -105,7 +119,15 @@ namespace Bot.ChromeNs
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
             var lastSeller = turns.LastOrDefault(x => x != null
                 && x.Role == "assistant" && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text));
-            if (lastSeller == null || lastSeller.Timestamp == DateTime.MinValue
+            if (lastSeller == null)
+            {
+                if (GetRecentStage(seller, buyer) != "awaiting_account_screenshot") return false;
+                reason = "订单截图要求已确认送达，正在等待设备账号图片";
+                Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
+                    "phone_only_after_order_instruction", "kg_wait_photo");
+                return true;
+            }
+            if (lastSeller.Timestamp == DateTime.MinValue
                 || lastSeller.Timestamp < DateTime.Now.AddHours(-2)) return false;
             var instruction = lastSeller.Text ?? string.Empty;
             if (!PhotoInstruction.IsMatch(instruction)
