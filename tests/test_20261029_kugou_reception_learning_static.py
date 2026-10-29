@@ -62,3 +62,13 @@ def test_ai_and_observed_human_learning_cannot_publish_store_policy():
     assert "店铺业务知识自动学习改为会话复盘待审核" in learn
     assert 'string.Equals(sourceType, "人工修改", StringComparison.Ordinal)' in learn
     assert "等待人工审核，未自动写入" in learn
+
+def test_knowledge_center_exposes_scoped_read_only_audit():
+    ui = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    audit = text("src/Bot/Knowledge/KnowledgeV2ReceptionAuditPage.cs")
+    build = text("src/Directory.Build.targets")
+    assert 'Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller))' in ui
+    assert "KugouReceptionPolicy.GetAuditJson(_seller)" in audit
+    assert "IsReadOnly = true" in audit
+    assert "导出脱敏JSON" in audit
+    assert "KnowledgeV2ReceptionAuditPage.cs" in build
