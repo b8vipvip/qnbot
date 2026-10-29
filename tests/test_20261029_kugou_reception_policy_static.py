@@ -80,3 +80,13 @@ def test_decision_audit_is_bounded_and_anonymizes_buyer():
     assert "SHA256.Create()" in p
     assert ".Take(300)" in p
     assert "AddDays(-7)" in p
+
+def test_uncertain_or_negated_image_evidence_cannot_authorize_device():
+    policy = src(POLICY)
+    assert "visual_evidence_uncertain" in policy
+    assert "ASK_EVIDENCE" in policy
+    assert "need_resource_confirmation" in policy
+    assert "HasPositiveCue(compact, \"绑定qq\", \"qq音乐账号\", \"qq音乐资源\")" in policy
+    assert "HasPositiveCue(compact, \"已绑定酷狗\", \"酷狗账号已绑定\")" in policy
+    assert "无法确认|不能确定|不确定|无法识别" in policy
+    assert "没有|并非|不是" in policy
