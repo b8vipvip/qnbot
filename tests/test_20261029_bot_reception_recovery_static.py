@@ -14,7 +14,8 @@ def test_confirmed_bot_echo_survives_missing_local_answer_card():
     assert "FindMessageMirrorActionConversation(" in mirror
     assert "if (nativeBotConversation == null)" in mirror
     assert "nativeBotConversation = CtlConversation.Create(" in mirror
-    assert '"千牛Bot发送回显（本地答复卡片未找到）"' in mirror
+    assert '"千牛Bot发送回显（本地答复卡片未找到）"' not in mirror
+    assert 'ConversationContextStore.IsProductLinkPresetReply(botAnswer)' in mirror
     assert 'nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");' in mirror
     assert "nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;" in mirror
     assert "nativeBotConversation.EditRequested += CtlConversation_EditRequested;" in mirror
