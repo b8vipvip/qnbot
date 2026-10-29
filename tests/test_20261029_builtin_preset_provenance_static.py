@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def src(relative):
     return (ROOT/relative).read_text(encoding="utf-8-sig")
 
-def test_builtin_product_preset_is_exact_match_not_knowledge:
+def test_builtin_product_preset_is_exact_match_not_knowledge():
     store=src("src/Bot/ChromeNs/ConversationContextStore.cs")
     assert '我看到您发来的商品链接了，想咨询哪方面呢？' in store
     assert 'internal static bool IsProductLinkPresetReply(string answer)' in store
@@ -16,7 +16,7 @@ def test_builtin_product_preset_is_exact_match_not_knowledge:
     pipeline=src("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert 'productLinkReply, "商品链接预设回复"' in pipeline
 
-def test_fallback_card_not_mistaken_for_real_provenance:
+def test_fallback_card_not_mistaken_for_real_provenance():
     mirror=src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     assert 'ConversationContextStore.IsProductLinkPresetReply(botAnswer)' in mirror
     assert '商品链接预设回复（内置固定话术，非知识库条目）' in mirror
