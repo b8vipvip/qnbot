@@ -84,6 +84,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\LegacyKnowledgePreviewWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2BotReplyManagementPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2QualityUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RevisionUi.cs" />
