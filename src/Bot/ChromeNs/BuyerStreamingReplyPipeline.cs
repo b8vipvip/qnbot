@@ -427,7 +427,9 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
                 return true;
-            if (!KugouReceptionPolicy.Applies(seller)) return false;
+            if (!KugouReceptionPolicy.Applies(seller)
+                || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait)
+                return false;
             var input = (question ?? string.Empty).Trim();
             if (!MobileOnly.IsMatch(input)) return false;
             var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
