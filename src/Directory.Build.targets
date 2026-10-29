@@ -256,4 +256,10 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionEvidenceLedger.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionEvidenceLedger.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowCatalogService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowCatalogService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs" />
+  </ItemGroup>
 </Project>
