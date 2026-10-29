@@ -74,8 +74,9 @@ namespace Bot.ChromeNs
         {
             if (string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(source)) return;
             var stamp = new SourceStamp { Source = source.Trim(), ExpiresAt = DateTime.Now.AddMinutes(30) };
+            // Operator overrides are answer-specific; do not let a corrected source
+            // bleed into a different answer for the same buyer question.
             Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
-            Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
             BotConversationHistoryStore.SaveAnswerSourceStamp(seller, buyer, question, answer, source.Trim());
         }
 
