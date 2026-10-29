@@ -51,9 +51,9 @@ def test_reception_can_wait_without_upstream_call_or_error():
 
 def test_human_reply_supersedes_old_normal_ai_output_but_not_order_ledger():
     source = load("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    assert "var newerHuman = recent" in source
-    assert 'x.Role == "assistant"' in source
-    assert 'x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase)' in source
+    assert "var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);" in source
+    assert "x.Kind == BuyerSessionEventKind.SellerHumanReply" in source
+    assert "x.SourceTimestamp > dispatchedAt.AddMilliseconds(120)" in source
     assert "人工客服已在本轮回复，抑制未发送的普通AI答案" in source
     assert "if (!ParallelReplyRelevanceGate.ShouldSend(" in source
     assert 'lease.MarkCompleted("streaming_relevance_suppressed");' in source
