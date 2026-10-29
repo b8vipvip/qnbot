@@ -111,7 +111,7 @@ namespace Bot.ChromeNs
         // This does not claim that payment, binding or recharge has been verified.
         internal static void ObserveDeliveredOrderInstruction(string seller, string buyer, string text)
         {
-            if (!Applies(seller)) return;
+            if (!Applies(seller) || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait) return;
             text = (text ?? string.Empty).Trim();
             if (!PhotoInstruction.IsMatch(text)
                 || (text.IndexOf("酷狗", StringComparison.Ordinal) < 0
@@ -124,7 +124,7 @@ namespace Bot.ChromeNs
         public static bool TryWaitForEvidence(string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
-            if (!Applies(seller)) return false;
+            if (!Applies(seller) || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait) return false;
             var input = (question ?? string.Empty).Trim();
             if (!PhoneOnly.IsMatch(input)) return false;
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
@@ -184,6 +184,8 @@ namespace Bot.ChromeNs
             answer = string.Empty;
             reason = string.Empty;
             if (!Applies(seller)) return false;
+            var config = KugouReceptionConfigService.GetConfig(seller);
+            if (!config.EnableAutoGuidance) return false;
             var evidence = ((summary ?? string.Empty) + " " + (ocr ?? string.Empty));
             if (evidence.Trim().Length == 0) return false;
             var compact = Regex.Replace(evidence, @"\s+", "").ToLowerInvariant();
@@ -215,7 +217,7 @@ namespace Bot.ChromeNs
             }
             else if (tcl && !official && !kugouAccount)
             {
-                answer = "这张图还不能确认已绑定您自己的酷狗账号。请按 TCL/雷鸟电视教程进入“我的账号”绑定页面，确认是酷狗资源，并使用您本人能再次登录的电视账号绑定酷狗账号，完成后拍照发给我确认：" + TClGuideUrl;
+                answer = "这张图还不能确认已绑定您自己的酷狗账号。请按 TCL/雷鸟电视教程进入“我的账号”绑定页面，确认是酷狗资源，并使用您本人能再次登录的电视账号绑定酷狗账号，完成后拍照发给我确认：" + config.TclGuideUrl;
                 reason = "tcl_need_verified_binding";
             }
             else if (!official && (compact.Contains("华数") || compact.Contains("iptv")
@@ -242,12 +244,14 @@ namespace Bot.ChromeNs
         {
             if (!Applies(seller)) return string.Empty;
             var knownStage = GetRecentStage(seller, buyer);
+            var config = KugouReceptionConfigService.GetConfig(seller);
             return "\n\n【本店酷狗会员接待政策，必须遵守】"
                 + "\n最近经过规则决策的接待阶段：" + (knownStage.Length == 0 ? "未确认" : knownStage) + "。该阶段不是订单实时状态，必须用最新消息或订单证据重新验证。"
                 + "\n本店两商品1057505313937、1066362196568对应同一酷狗超级会员权益；按买家实际使用场景如实解释跨端权益，不得说手机端不通用；准确的价格、库存、会员类型仍需以实际订单及商品为准。"
                 + "\n卖家店铺先核验设备，再执行充值；已付款≠已核验≠已绑定≠已充值。手机/电脑/平板官方酷狗应用无需电视截图。其他智能设备需以当前应用、资源提供方和账号体系核验。"
                 + "\n海信/聚好看等系统自带音乐栏目按店铺经营政策暂不受理充值，独立安装的酷狗官方APP须单独核验。小米内置K歌不支持；自带听歌必须看开通会员页资源。"
-                + "\nTCL/雷鸟内置音乐先确认酷狗而非QQ资源、本人可重复登录的电视账号，必要时解绑旧账号，然后绑定本人酷狗账号；没有已绑定证据不得批准充值。可用的店铺教程：" + TClGuideUrl
+                + "\nTCL/雷鸟内置音乐先确认酷狗而非QQ资源、本人可重复登录的电视账号，必要时解绑旧账号，然后绑定本人酷狗账号；没有已绑定证据不得批准充值。已审核教程：" + config.TclGuideUrl
+                + (config.EnableAutoGuidance ? "" : "\n当前店铺已关闭自动设备指导，应交人工核验，不要自动发送设备操作教程。")
                 + "\n图片提问‘是这个吗’先回答当前图片是否为指定账号界面；无法确认就要求当前步骤证据，禁止机械回答会员包含哪些权益。人工已经处理时不抢答。"
                 + "\n不得擅自声称订单已充值/已到账，不能仅凭品牌或图片相似性确认可用；不能建议恢复出厂删除数据、拒绝升级或一律拒绝退款；有关退款和验证码由真实订单及人工/平台政策处理。\n";
         }
