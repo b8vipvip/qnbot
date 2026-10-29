@@ -15,7 +15,14 @@ async function loadVersionUpdate(){
   if(versionUpdateState.loading)return;
   versionUpdateState.loading=true;
   try{const data=await api("/api/admin/version-update/status");versionUpdateState.last=data;renderVersionUpdate(data);loadGithubProxySettings(false).catch(err=>console.warn(err))}
-  catch(err){if($("versionUpdateStatus"))$("versionUpdateStatus").innerHTML=`<div class="empty">${esc(err.message)}</div>`}
+  catch(err){
+    const reason=String(err&&err.message||err||"");
+    const transient=/(?:502|503|504)\\s*(?:Bad Gateway|Service Unavailable|Gateway Timeout)?|<html[\\s>]/i.test(reason);
+    const message=transient
+      ?"服务端暂时无法连接，可能正在更新切换容器；页面会自动重试。若持续无法恢复，请查看服务器的容器和反向代理日志。"
+      :reason;
+    if($("versionUpdateStatus"))$("versionUpdateStatus").innerHTML=`<div class="empty">${esc(message)}</div>`;
+  }
   finally{versionUpdateState.loading=false}
 }
 
@@ -99,9 +106,14 @@ function renderVersionUpdate(data){
   const buildCommit=server.running_image_commit||"";
   const buildHint=buildCommit
     ?`<p class="hint">当前运行镜像已标注 Git 提交 ${esc(buildCommit.slice(0,12))}；此值来自容器镜像，不受正在执行的更新影响。</p>`
-    :'<p class="hint">旧镜像未嵌入构建提交：当前版本仅来自更新状态记录，不能证明实际容器已切换。</p>';
+    :'<p class="hint">旧镜像未嵌入构建提交：当前版本仅来自更新状态记录，不能证明实际容器已切换。建议在旧更新任务结束后执行一次版本重新构建核验。</p>';
 
-  const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):(!server.current_commit?badge("等待识别当前版本","gray"):(server.update_available?badge("发现新版本","warn"):badge("已是最新","good")));
+  const runtimeUnverified=!!server.needs_runtime_verification;
+  const sameSourceVersion=!!(server.current_commit&&gh.sha&&server.current_commit===gh.sha);
+  const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):
+    (runtimeUnverified?badge("运行镜像版本未验证","warn"):
+     (!server.current_commit?badge("等待识别当前版本","gray"):
+      (server.update_available?badge("发现新版本","warn"):badge("已是最新","good"))));
   const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
   const gitTransport=(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
   $("serverVersionCard").innerHTML=`
@@ -115,6 +127,7 @@ function renderVersionUpdate(data){
       ${buildHint}
       <div class="provider-meta">${agent.online?badge("主机更新代理在线","good"):badge("主机更新代理离线","bad")}${badge(gitTransport,"blue")}${badge(`源码失败最多重试 ${Number(agent.git_fetch_attempts||serverNet.git_fetch_attempts||5)} 次`,"gray")}${vuStateBadge(update.state)}</div>
       ${agentHint}
+      ${update.state==="completed"&&runtimeUnverified?'<p class="hint">上方 100% 仅表示上一次更新任务完成；实际运行镜像的版本仍需重新构建核验。</p>':""}
       <div style="margin-top:12px">${vuProgress(update.progress_percent)}</div>
       <p><strong>${esc(update.phase||"等待更新")}</strong> · ${esc(update.message||"")}</p>
       ${update.build_phase_not_percentage?'<p class="hint">35% 是镜像构建阶段标记，不代表镜像已构建 35%。</p>':""}
@@ -122,7 +135,7 @@ function renderVersionUpdate(data){
       <p class="hint">更新状态：${update.status_age_seconds==null?"--":Number(update.status_age_seconds)+"秒前"} · 最后日志输出：${update.log_age_seconds==null?"--":Number(update.log_age_seconds)+"秒前"} · 日志大小：${vuBytes(update.log_size_bytes)}</p>
       <div class="actions"><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='build';loadServerRuntimeLogs()">查看构建日志</button><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='update';loadServerRuntimeLogs()">查看更新日志</button></div>
       <p class="hint">服务端源码仍由主机更新代理通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取；上方 VLESS 配置只作用于控制面内部的 GitHub HTTPS / Release 下载，不改变主机 SSH 更新链路。</p>
-      <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>更新服务端到 GitHub 最新版</button></div>
+      <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>${runtimeUnverified&&sameSourceVersion?"重新构建并验证当前服务端版本":"更新服务端到 GitHub 最新版"}</button></div>
     </div>`;
 
   const pkgPhase=pkg.ready?"ready":(pkg.error?"failed":(pkg.phase||(pkg.downloading?"downloading":"waiting")));
@@ -157,7 +170,11 @@ async function syncVersionUpdate(){
   catch(err){toast(err.message)}finally{$("syncVersionBtn").disabled=false}
 }
 async function startServerVersionUpdate(){
-  if(!confirm("确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，随后先构建新镜像、备份数据，再切换服务；失败会按现有部署脚本回滚。"))return;
+  const needsReverify=!!(versionUpdateState.last&&versionUpdateState.last.server&&versionUpdateState.last.server.needs_runtime_verification);
+  const text=needsReverify
+    ?"确认重新构建并核验实际运行的服务端镜像？该镜像缺少构建提交标记，当前后台的『已更新』仅来自更新状态。操作会先构建，再备份并切换容器，期间可能短暂出现 502；失败将按现有流程回滚。"
+    :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，随后先构建新镜像、备份数据，再切换服务；失败会按现有部署脚本回滚。";
+  if(!confirm(text))return;
   try{const r=await api("/api/admin/version-update/server/start",{method:"POST"});toast(r.already_latest?"服务端已经是 GitHub 最新版":"服务端更新任务已启动");await loadVersionUpdate()}catch(err){toast(err.message)}
 }
 async function startClientReleaseUpdate(){
