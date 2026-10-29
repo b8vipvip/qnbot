@@ -244,4 +244,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionPolicy.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionPolicy.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs" />
+  </ItemGroup>
 </Project>
