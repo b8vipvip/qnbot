@@ -245,6 +245,24 @@ namespace Bot.ChromeNs
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
+            string receptionBlock;
+            if (KugouReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out receptionBlock))
+            {
+                lifecycleLease.MarkCompleted("vision_business_guard_suppressed");
+                if (ctl != null) ctl.SetSkipped(receptionBlock);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
+            string humanReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out humanReason))
+            {
+                lifecycleLease.MarkCompleted("vision_human_relevance_suppressed");
+                if (ctl != null) ctl.SetSkipped(humanReason);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
             if (!await lifecycleLease.ConfirmStableAsync(220))
             {
                 if (ctl != null) ctl.SetStatus("未发送：分析结果已缓存，但买家刚刚补充了新消息", false);
