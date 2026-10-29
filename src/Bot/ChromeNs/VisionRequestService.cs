@@ -66,7 +66,7 @@ namespace Bot.ChromeNs
                 : task.CombinedQuestion.Trim();
             var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
             var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
-                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick);
+                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick);
             if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
             {
                 prompt += "\n\n买家本轮连续发送的消息如下，换行代表先后顺序。图片和这些文字属于同一轮，请合并理解后只回复一次：\n" + currentQuestion;
