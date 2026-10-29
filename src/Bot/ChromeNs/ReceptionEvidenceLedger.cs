@@ -136,6 +136,16 @@ namespace Bot.ChromeNs
                 "pending_evidence_review", "vision_observation_only", confidence);
         }
 
+        internal static void RecordImageFollowUp(
+            string seller, string buyer, string imageMessageKey, string followUpText)
+        {
+            if (string.IsNullOrWhiteSpace(imageMessageKey)) return;
+            // Hashes retain the causal image relation without storing the buyer's words.
+            Append(seller, buyer, "", "", "", imageMessageKey, followUpText,
+                "image_followup", "linked_to_prior_image", "pending_evidence_review",
+                "buyer_referential_text_only", 0);
+        }
+
         internal static string GetAuditJson(string seller)
         {
             try
