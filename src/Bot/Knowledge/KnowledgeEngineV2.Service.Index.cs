@@ -96,6 +96,8 @@ namespace Bot.Knowledge
         {
             if (record == null || query == null) return null;
             string applicabilityReason;
+            if (KugouReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer))
+                return null;
             if (!KnowledgeEngineV2Semantics.IsApplicable(record, query, out applicabilityReason))
             {
                 return null;
