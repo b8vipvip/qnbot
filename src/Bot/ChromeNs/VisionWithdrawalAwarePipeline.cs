@@ -245,6 +245,14 @@ namespace Bot.ChromeNs
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
+            if (KugouReceptionPolicy.Applies(burst.SellerNick)
+                && !KugouReceptionConfigService.GetConfig(burst.SellerNick).EnableAutoGuidance)
+            {
+                lifecycleLease.MarkCompleted("vision_auto_guidance_disabled");
+                if (ctl != null) ctl.SetSkipped("本店已关闭自动视觉设备引导，图片仍可供人工核验");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
             string receptionBlock;
             if (KugouReceptionPolicy.BlockOutgoing(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out receptionBlock))
