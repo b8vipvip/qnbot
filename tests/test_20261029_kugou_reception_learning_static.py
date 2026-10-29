@@ -41,3 +41,15 @@ def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
     assert '"awaiting_order_review"' in policy
     assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in policy
     assert 'Path.Combine(directory, "kugou-reception-decisions.json")' in policy
+
+def test_order_photo_wait_only_advances_after_confirmed_delivery():
+    policy = text(POLICY)
+    order = text("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert "ObserveDeliveredOrderInstruction(string seller, string buyer, string text)" in policy
+    assert "verified_order_photo_instruction_delivered" in policy
+    assert "GetRecentStage(seller, buyer)" in policy
+    assert order.count("KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);") == 2
+    assert order.index("if (sent)") < order.index(
+        "KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);"
+    )
+    assert "RemoteSellerEchoVerification.Delivered" in order
