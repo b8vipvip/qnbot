@@ -36,3 +36,11 @@ def test_order_delivery_and_vision_analysis_are_written_only_as_observations():
     assert "ReceptionEvidenceLedger.RecordVisionObservation(" in vision
     assert "result.VisualSummary, result.LocalOcrConfidence, false" in vision
     assert "vision_observation_only" in source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+
+def test_followup_uses_original_image_identity_without_raw_chat_storage():
+    ledger=source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    followup=source("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
+    assert "RecordImageFollowUp(" in ledger
+    assert '"image_followup", "linked_to_prior_image"' in ledger
+    assert "ReceptionEvidenceLedger.RecordImageFollowUp(" in followup
+    assert "recent.Item.MessageKey, question" in followup
