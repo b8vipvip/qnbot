@@ -160,6 +160,9 @@ namespace Bot.ChromeNs
                                     + ", score=" + learned.Score.ToString("0.00"));
                             }
 
+                            ReceptionEvidenceLedger.RecordVisionObservation(
+                                task.SellerNick, task.BuyerNick, task.MessageKey,
+                                result.VisualSummary, result.LocalOcrConfidence, false);
                             VisualKnowledgeLearningService.RecordVisionAnalysis(
                                 task.SellerNick,
                                 task.BuyerNick,
