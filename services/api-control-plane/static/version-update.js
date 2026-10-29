@@ -15,7 +15,14 @@ async function loadVersionUpdate(){
   if(versionUpdateState.loading)return;
   versionUpdateState.loading=true;
   try{const data=await api("/api/admin/version-update/status");versionUpdateState.last=data;renderVersionUpdate(data);loadGithubProxySettings(false).catch(err=>console.warn(err))}
-  catch(err){if($("versionUpdateStatus"))$("versionUpdateStatus").innerHTML=`<div class="empty">${esc(err.message)}</div>`}
+  catch(err){
+    const reason=String(err&&err.message||err||"");
+    const transient=/(?:502|503|504)\\s*(?:Bad Gateway|Service Unavailable|Gateway Timeout)?|<html[\\s>]/i.test(reason);
+    const message=transient
+      ?"服务端暂时无法连接，可能正在更新切换容器；页面会自动重试。若持续无法恢复，请查看服务器的容器和反向代理日志。"
+      :reason;
+    if($("versionUpdateStatus"))$("versionUpdateStatus").innerHTML=`<div class="empty">${esc(message)}</div>`;
+  }
   finally{versionUpdateState.loading=false}
 }
 
