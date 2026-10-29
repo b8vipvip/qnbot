@@ -13,6 +13,7 @@ namespace Bot.ChromeNs
     internal static class VisionFollowUpContextPipeline
     {
         private const int FollowUpWindowSeconds = 45;
+        private const int ExplicitReferentialWindowSeconds = 90;
         private const int CaptionWindowSeconds = 15;
         private const int SourceClockSkewToleranceSeconds = 15;
 
@@ -87,15 +88,17 @@ namespace Bot.ChromeNs
                 Log.Info("最近图片上下文检测到可容忍的消息时间逆序，按同轮续问处理: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
                 elapsed = TimeSpan.Zero;
             }
-            if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds))
+            var question = burst.CombinedQuestion ?? string.Empty;
+            var referential = IsVisionReferentialFollowUp(question);
+            var staleOrdinary = !referential && elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds);
+            var staleReferential = referential && elapsed > TimeSpan.FromSeconds(ExplicitReferentialWindowSeconds);
+            if (elapsed < TimeSpan.Zero || staleOrdinary || staleReferential)
             {
                 RecentVisionContext expired; RecentVision.TryRemove(conversationKey, out expired);
                 Log.Info("最近图片上下文已过期，文字按普通消息处理: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
                 await next(lease); return;
             }
 
-            var question = burst.CombinedQuestion ?? string.Empty;
-            var referential = IsVisionReferentialFollowUp(question);
             var likelyCaption = elapsed <= TimeSpan.FromSeconds(CaptionWindowSeconds) && IsLikelyImageCaption(question);
             if (!referential && !likelyCaption)
             {
@@ -123,6 +126,8 @@ namespace Bot.ChromeNs
                 + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
                 + ", responseAnchorAt=" + responseAnchorAt.ToString("HH:mm:ss.fff")
                 + ", reason=" + (referential ? "图片指代" : "图片说明文字") + ", question=" + SafeLog(question, 100));
+            ReceptionEvidenceLedger.RecordImageFollowUp(
+                burst.SellerNick, burst.BuyerNick, recent.Item.MessageKey, question);
             await next(combinedLease);
         }
 
@@ -145,7 +150,7 @@ namespace Bot.ChromeNs
         {
             var compact = Normalize(text);
             if (string.IsNullOrWhiteSpace(compact) || compact.Length > 36) return false;
-            if (compact == "对吗" || compact == "是吗" || compact == "这个吗" || compact == "是这个吗" || compact == "就是这个吗" || compact == "是不是这个" || compact == "是不是这个吗" || compact == "这个对吗" || compact == "这张吗" || compact == "是这张吗" || compact == "这里吗" || compact == "是这里吗" || compact == "这样吗" || compact == "是这样吗" || compact == "这种能使用吗" || compact == "这种能用吗" || compact == "这类能使用吗" || compact == "这类能用吗") return true;
+            if (compact == "对吗" || compact == "是吗" || compact == "这个吗" || compact == "是这个吗" || compact == "是这个不" || compact == "就是这个吗" || compact == "是不是这个" || compact == "是不是这个吗" || compact == "这个对吗" || compact == "这张吗" || compact == "是这张吗" || compact == "这里吗" || compact == "是这里吗" || compact == "这样吗" || compact == "是这样吗" || compact == "这种能使用吗" || compact == "这种能用吗" || compact == "这类能使用吗" || compact == "这类能用吗") return true;
             var hasReference = compact.Contains("这个") || compact.Contains("这种") || compact.Contains("这类") || compact.Contains("这款") || compact.Contains("这张") || compact.Contains("这里") || compact.Contains("这样") || compact.Contains("图里") || compact.Contains("图片里") || compact.Contains("上面") || compact.Contains("界面") || compact.Contains("页面") || compact.Contains("设备") || compact.Contains("软件");
             var asksConfirmation = compact.Contains("吗") || compact.Contains("么") || compact.Contains("是不是") || compact.Contains("对不对") || compact.Contains("可以") || compact.Contains("行不行") || compact.Contains("能用") || compact.Contains("能使用") || compact.Contains("支持");
             return hasReference && asksConfirmation;
@@ -190,7 +195,7 @@ namespace Bot.ChromeNs
 
         private static void CleanupExpired()
         {
-            var cutoff = DateTime.Now.AddSeconds(-FollowUpWindowSeconds);
+            var cutoff = DateTime.Now.AddSeconds(-ExplicitReferentialWindowSeconds);
             foreach (var pair in RecentVision.Where(x => x.Value == null || x.Value.ObservedAt < cutoff).ToList()) { RecentVisionContext ignored; RecentVision.TryRemove(pair.Key, out ignored); }
         }
 

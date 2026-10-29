@@ -98,7 +98,7 @@ namespace Bot.ChromeNs
             var dependency = CalculateContextDependency(question, turns);
             var state = ConversationStateService.Build(seller, buyer, question, turns);
             var queryResolution = ContextualQueryRewriteService.Resolve(question, dependency, state, turns);
-            var candidates = RetrieveCandidates(question, queryResolution, state, turns);
+            var candidates = RetrieveCandidates(seller, question, queryResolution, state, turns);
             var plan = new SmartReplyPlan
             {
                 ContextDependencyScore = dependency,
@@ -331,6 +331,7 @@ namespace Bot.ChromeNs
         }
 
         private static List<SmartKnowledgeCandidate> RetrieveCandidates(
+            string seller,
             string question,
             ContextualQueryResolution queryResolution,
             ConversationStateSnapshot state,
@@ -352,6 +353,7 @@ namespace Bot.ChromeNs
 
             var pool = knowledge
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
+                .Where(x => !KugouReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer))
                 .Select(x => ScoreCandidate(x, question, resolvedText, originalQuery, resolvedQuery, queryIntent, state, context))
                 .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
                 .Where(x => ConversationProgressGuardService.AllowKnowledge(x.Entry, state, question))

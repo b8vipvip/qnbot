@@ -292,6 +292,14 @@ namespace Bot.ChromeNs
             }
 
             var question = (item.DisplayText ?? string.Empty).Trim();
+            string waitingReason;
+            if (KugouReceptionPolicy.TryWaitForEvidence(
+                item.SellerNick, item.BuyerNick, question, out waitingReason))
+            {
+                Log.Info("接待流程明确等待截图，已消费手机号消息且未发送回复: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", reason=" + waitingReason);
+                return CanonicalPreMergeOutcome.Consumed;
+            }
 
             if (await ManualRechargeAssistantService.TryHandleAsync(
                 qn,
@@ -395,6 +403,13 @@ namespace Bot.ChromeNs
         {
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer)) return false;
+            string policyReason;
+            if (KugouReceptionPolicy.BlockOutgoing(
+                item.SellerNick, item.BuyerNick, item.DisplayText, answer, out policyReason))
+            {
+                Log.Info("接待规则阻止固定回复：" + policyReason);
+                return true; // consumed intentionally; do not retry an unsafe fixed answer
+            }
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var ctl = ResponseProgressTracker.BeginAnswer(

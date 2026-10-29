@@ -47,6 +47,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _buyer = string.Empty;
         private string _question = string.Empty;
         private string _answer = string.Empty;
+        private string _answerSource = string.Empty;
         private bool _canResend = true;
         private DateTime _questionDetectedAt = DateTime.MinValue;
         private DateTime _answerReadyAt = DateTime.MinValue;
@@ -147,6 +148,7 @@ namespace Bot.AssistWindow.Widget.Robot
             Ui(() =>
             {
                 source = (source ?? string.Empty).Trim();
+                _answerSource = source;
                 var visible = !string.IsNullOrWhiteSpace(source);
                 txtSource.Text = source;
                 bdSource.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
@@ -307,6 +309,16 @@ namespace Bot.AssistWindow.Widget.Robot
             var edit = new MenuItem { Header = "修改" };
             edit.Click += (s, args) => RaiseEditRequested();
             menu.Items.Add(edit);
+
+            var provenance = new MenuItem { Header = "来源" };
+            provenance.Click += (s, args) => MessageBox.Show(
+                Window.GetWindow(this),
+                "消息来源：" + (string.IsNullOrWhiteSpace(_answerSource) ? "未知" : _answerSource)
+                    + "\n此处修改的是本地答案和知识库，不会修改已送达买家的千牛消息。",
+                "消息来源",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            menu.Items.Add(provenance);
             menu.PlacementTarget = placementTarget ?? txtAnswer;
             return menu;
         }

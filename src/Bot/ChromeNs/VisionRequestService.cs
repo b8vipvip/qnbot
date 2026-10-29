@@ -65,7 +65,8 @@ namespace Bot.ChromeNs
                 ? "[图片]"
                 : task.CombinedQuestion.Trim();
             var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
-            var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick);
+            var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
+                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick);
             if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
             {
                 prompt += "\n\n买家本轮连续发送的消息如下，换行代表先后顺序。图片和这些文字属于同一轮，请合并理解后只回复一次：\n" + currentQuestion;
@@ -159,6 +160,9 @@ namespace Bot.ChromeNs
                                     + ", score=" + learned.Score.ToString("0.00"));
                             }
 
+                            ReceptionEvidenceLedger.RecordVisionObservation(
+                                task.SellerNick, task.BuyerNick, task.MessageKey,
+                                result.VisualSummary, result.LocalOcrConfidence, false);
                             VisualKnowledgeLearningService.RecordVisionAnalysis(
                                 task.SellerNick,
                                 task.BuyerNick,
@@ -168,6 +172,18 @@ namespace Bot.ChromeNs
                                 result.VisualSummary,
                                 result.VisualTags,
                                 generatedAnswer);
+
+                            string verifiedReply;
+                            string policyReason;
+                            if (KugouReceptionPolicy.TryResolveVisual(
+                                task.SellerNick, task.BuyerNick, currentQuestion,
+                                result.VisualSummary, result.LocalOcrText,
+                                out verifiedReply, out policyReason))
+                            {
+                                result.Answer = verifiedReply;
+                                Log.Info("业务设备证据覆盖普通视觉回答: seller=" + task.SellerNick
+                                    + ", buyer=" + task.BuyerNick + ", decision=" + policyReason);
+                            }
 
                             if (ConversationContextStore.IsWithdrawnAnswer(task.SellerNick, task.BuyerNick, result.Answer))
                             {

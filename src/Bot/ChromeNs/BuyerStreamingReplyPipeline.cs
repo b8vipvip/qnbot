@@ -195,6 +195,20 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            // A deliberate workflow wait is a successful no-send decision, not an AI failure.
+            // Never expose the internal marker to buyers or to the knowledge-learning lane.
+            if (!string.IsNullOrWhiteSpace(answer)
+                && answer.StartsWith(ReceptionFlowPolicy.SilentMarker, StringComparison.Ordinal))
+            {
+                var why = answer.Substring(ReceptionFlowPolicy.SilentMarker.Length);
+                lease.MarkCompleted("reception_wait_for_evidence");
+                if (conversationCtl != null) conversationCtl.SetSkipped(why);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                Log.Info("接待流程决定暂不回复: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick + ", reason=" + why);
+                return;
+            }
+
             var sanitizedAnswer = ReplyTranscriptSanitizer.Sanitize(answer);
             if (!string.Equals(sanitizedAnswer, answer, StringComparison.Ordinal))
             {
@@ -262,6 +276,16 @@ namespace Bot.ChromeNs
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
+                return;
+            }
+
+            string businessBlock;
+            if (KugouReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock))
+            {
+                lease.MarkCompleted("reception_business_guard_suppressed");
+                if (conversationCtl != null) conversationCtl.SetSkipped(businessBlock);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
 
@@ -381,6 +405,61 @@ namespace Bot.ChromeNs
         }
     }
 
+
+    /// <summary>
+    /// Conservative reception workflow guard. It uses the actual ordered seller/buyer
+    /// timeline, not a global keyword match: a phone number is meaningful only when
+    /// the most recent seller instruction is waiting for a TV account screenshot.
+    /// Device-specific tutorials and recharge eligibility must come from confirmed
+    /// knowledge or image evidence, never from this rule.
+    /// </summary>
+    internal static class ReceptionFlowPolicy
+    {
+        internal const string SilentMarker = "__QNBOT_RECEPTION_WAIT__:";
+        private static readonly Regex MobileOnly = new Regex(
+            @"^(?:\+?86[- ]?)?1[3-9]\d{9}$", RegexOptions.Compiled);
+        private static readonly Regex PhotoRequest = new Regex(
+            @"拍照|截图|拍一张|发图片|发张图|拍给我", RegexOptions.Compiled);
+
+        internal static bool TryChooseSilence(
+            string seller, string buyer, string question, out string reason)
+        {
+            reason = string.Empty;
+            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
+                return true;
+            if (!KugouReceptionPolicy.Applies(seller)
+                || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait)
+                return false;
+            var input = (question ?? string.Empty).Trim();
+            if (!MobileOnly.IsMatch(input)) return false;
+            var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+            var lastSeller = recent.LastOrDefault(x => x != null
+                && x.Role == "assistant" && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text));
+            if (lastSeller == null || lastSeller.Timestamp == DateTime.MinValue
+                || lastSeller.Timestamp < DateTime.Now.AddHours(-2)) return false;
+            var instruction = lastSeller.Text ?? string.Empty;
+            if (!PhotoRequest.IsMatch(instruction)
+                || (instruction.IndexOf("电视", StringComparison.Ordinal) < 0
+                    && instruction.IndexOf("酷狗", StringComparison.Ordinal) < 0
+                    && instruction.IndexOf("账号", StringComparison.Ordinal) < 0)) return false;
+            // A later instruction to send a phone number is a different workflow step.
+            if (instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0) return false;
+            reason = "等待买家发送电视账号界面图片；仅收到手机号，不重复提问或发送无关答案";
+            return true;
+        }
+
+        internal static string BuildPromptAddon(string seller, string buyer, string question)
+        {
+            return "\n\n【接待步骤与证据优先】\n"
+                + "先根据当前买家消息、最近客服指令、订单阶段、已核验的图片语义和店铺知识库判断本轮步骤。"
+                + "如果前面要求拍电视账号界面，买家提供图片或追问‘是这个界面吗’，优先核对图片是否真正展示指定账号及绑定状态；"
+                + "不能因为商品名称含会员就回答‘包含会员’，也不能把识别到电视品牌当作已经完成账号绑定。"
+                + "无法读到可靠的图像证据时不得猜测已绑定或支持充值，应要求清晰的指定页面或保持人工核验。"
+                + "有设备专属绑定教程时只能从本店知识库中选取与已确认设备型号一致的教程链接；不能编造教程链接。"
+                + "人工客服已经回应或完成当前步骤时不抢答。仅在证据足以推进到下一步骤时回复，不重复上一条指令。\n";
+        }
+    }
+
     internal static class ParallelReplyRelevanceGate
     {
         private static readonly Regex SupersedeRegex = new Regex(
@@ -392,7 +471,24 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             try
             {
-                var newerBuyer = ConversationContextStore.GetRecentTurns(seller, buyer, originalQuestion, 20)
+                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+                // Use the typed BuyerSessionAgent event stream, not every unmarked seller
+                // bubble: Qianniu's automatic shop greetings can lack [A], and must not
+                // be mistaken for an intentional human takeover.
+                // Order-ledger-authorized contractual messages use a separate sender.
+                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);
+                var newerHuman = snapshot != null
+                    && snapshot.RecentEvents != null
+                    && snapshot.RecentEvents.Any(x => x != null
+                        && x.Kind == BuyerSessionEventKind.SellerHumanReply
+                        && x.SourceTimestamp != DateTime.MinValue
+                        && x.SourceTimestamp > dispatchedAt.AddMilliseconds(120));
+                if (newerHuman)
+                {
+                    reason = "人工客服已在本轮回复，抑制未发送的普通AI答案";
+                    return false;
+                }
+                var newerBuyer = recent
                     .Where(x => x != null
                         && x.Role == "user"
                         && !x.Withdrawn
@@ -479,6 +575,14 @@ namespace Bot.ChromeNs
             Action<string> partial)
         {
             token.ThrowIfCancellationRequested();
+
+            // A receptionist decides whether to reply BEFORE consulting a matching answer.
+            // Silent/wait decisions must not create AI calls or send generic knowledge.
+            string silentReason;
+            if (ReceptionFlowPolicy.TryChooseSilence(seller, buyer, question, out silentReason))
+            {
+                return ReceptionFlowPolicy.SilentMarker + silentReason;
+            }
 
             string presetReply;
             if (ConversationContextStore.TryTakeProductLinkReply(seller, buyer, question, out presetReply))
@@ -611,6 +715,8 @@ namespace Bot.ChromeNs
             }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
+            dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
+            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller, buyer);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
