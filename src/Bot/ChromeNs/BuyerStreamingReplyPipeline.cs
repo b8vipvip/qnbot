@@ -714,7 +714,7 @@ namespace Bot.ChromeNs
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
-            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller);
+            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller, buyer);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
