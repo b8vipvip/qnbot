@@ -55,14 +55,20 @@ def test_saved_proxy_is_applied_before_github_prefetch_and_stopped_on_shutdown()
     assert "github_vless_proxy.stop_github_vless_proxy()" in bootstrap
 
 
-def test_sing_box_binary_is_officially_pinned_and_verified():
+def test_sing_box_binary_is_pinned_and_reused_from_verified_local_image():
     dockerfile = read("services/api-control-plane/Dockerfile")
-    assert 'ARG SING_BOX_VERSION="1.13.19"' in dockerfile
-    assert 'ARG SING_BOX_SHA256="ef88a9e577d474210867bd708933d042e9b70106529df2656182c9db90106aa1"' in dockerfile
-    assert "https://github.com/SagerNet/sing-box/releases/download/" in dockerfile
-    assert "sha256sum -c -" in dockerfile
-    assert "/usr/local/bin/sing-box version" in dockerfile
-    assert "github_vless_proxy.py" in dockerfile
+    compose = read("services/api-control-plane/docker-compose.bt.yml")
+    updater = read("scripts/update-api-control-plane.sh")
+    assert "ghcr.io/sagernet/sing-box:v1.13.19@sha256:78ca1bc9f3b563b0944fd6b1126522ee631e7b44d540b91fc435ba7062ef08b2" in dockerfile
+    assert "FROM ${SING_BOX_SOURCE_IMAGE} AS sing-box-provider" in dockerfile
+    assert "COPY --from=sing-box-provider /usr/local/bin/sing-box" in dockerfile
+    assert "sing-box version 1.13.19" in dockerfile
+    assert "CONTROL_PLANE_SING_BOX_SOURCE_IMAGE" in compose
+    assert "prepare_sing_box_source" in updater
+    assert 'docker exec "$CONTAINER_NAME" /usr/local/bin/sing-box version' in updater
+    assert 'docker image tag "$candidate" "$cache_tag"' in updater
+    assert "docker compose -f docker-compose.bt.yml build --pull" not in updater
+    assert "https://github.com/SagerNet/sing-box/releases/download/" not in dockerfile
 
 
 def test_version_console_exposes_vless_controls_without_echoing_saved_secret():
