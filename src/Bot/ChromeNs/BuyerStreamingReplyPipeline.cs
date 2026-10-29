@@ -279,6 +279,16 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            string businessBlock;
+            if (KugouReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock))
+            {
+                lease.MarkCompleted("reception_business_guard_suppressed");
+                if (conversationCtl != null) conversationCtl.SetSkipped(businessBlock);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
+
             if (!lease.MarkReady("streaming_answer_materialized"))
             {
                 const string invalidAtReady = "generation在答案发布前已终止，迟到答案已丢弃";
@@ -564,7 +574,7 @@ namespace Bot.ChromeNs
             // A receptionist decides whether to reply BEFORE consulting a matching answer.
             // Silent/wait decisions must not create AI calls or send generic knowledge.
             string silentReason;
-            if (ReceptionFlowPolicy.TryChooseSilence(seller, buyer, question, out silentReason))
+            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out silentReason))
             {
                 return ReceptionFlowPolicy.SilentMarker + silentReason;
             }
@@ -701,6 +711,7 @@ namespace Bot.ChromeNs
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
+            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
