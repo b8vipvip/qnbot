@@ -466,6 +466,12 @@ namespace Bot.ChromeNs
             string buyer)
         {
             if (!CanLearn(question, answer)) return;
+            if (KugouReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
+            {
+                Log.Info("店铺业务知识自动学习改为会话复盘待审核：source=" + sourceType
+                    + ", seller=" + seller);
+                return;
+            }
             var shop = ResolveShop(seller);
             Task.Run(async () =>
             {
@@ -512,6 +518,19 @@ namespace Bot.ChromeNs
             if (!CanLearn(question, answer))
             {
                 return new KnowledgeLearningResult { Success = false, Message = "问题或答案为空，未写入知识库" };
+            }
+            // Explicit user edits are review evidence. Automatically observed bot
+            // and human turns still go through the five-minute candidate review.
+            var explicitOperatorEdit = string.Equals(sourceType, "人工修改", StringComparison.Ordinal)
+                || string.Equals(sourceType, "管理员审核", StringComparison.Ordinal);
+            if (!explicitOperatorEdit
+                && KugouReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
+            {
+                return new KnowledgeLearningResult
+                {
+                    Success = false,
+                    Message = "涉及设备、会员权益或履约流程，等待人工审核，未自动写入"
+                };
             }
 
             var context = ConversationContextStore.BuildTimelineText(seller, buyer, question, 10);
