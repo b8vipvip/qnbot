@@ -43,3 +43,12 @@ def test_bot_echo_renders_native_card_even_without_local_reply_card():
     assert "nativeBotConversation = CtlConversation.Create(" in mirror
     assert "nativeBotConversation.SetSendResult(true," in mirror
     assert 'const string marker = "[A]";' in mirror
+
+
+def test_mirror_never_shows_internal_system_style_prompts():
+    store = source("src/Bot/ChromeNs/ConversationContextStore.cs")
+    mirror = store.split("public static List<ConversationContextTurn> GetMirrorTurns(", 1)[1].split(
+        "public static void RequestMirrorRemoteRefresh(", 1
+    )[0]
+    assert '(t.Role == "user" || t.Role == "assistant")' in mirror
+    assert "var eligible = state.Turns" in mirror
