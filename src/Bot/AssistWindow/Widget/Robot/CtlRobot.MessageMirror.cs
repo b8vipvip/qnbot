@@ -203,16 +203,20 @@ namespace Bot.AssistWindow.Widget.Robot
             grdTipNoConv.Visibility = Visibility.Collapsed;
             DateTime? previousDate = null;
             var usedNativeBotConversations = new HashSet<CtlConversation>();
+            var lastBuyerQuestion = string.Empty;
             foreach (var turn in turns.Where(x => x != null))
             {
+                if (string.Equals(turn.Role, "user", StringComparison.Ordinal)
+                    && !turn.Withdrawn && !string.IsNullOrWhiteSpace(turn.Text))
+                    lastBuyerQuestion = turn.Text;
                 UIElement messageElement = null;
                 string botAnswer;
                 if (TryExtractBotEchoAnswer(turn, out botAnswer))
                 {
-                    // [A] belongs only to the Qianniu transport echo. Never render that
-                    // mirrored seller message itself. If we can associate it with the
-                    // local Bot answer, render the original native CtlConversation answer
-                    // row exactly once; duplicate/stale [A] echoes are ignored.
+                    // [A] is a transport marker, not display text. A confirmed Qianniu
+                    // echo is authoritative even if the transient local answer card was
+                    // lost (e.g. fixed/preset reply, restart, race or history refresh).
+                    // Never discard a real sent message just because local matching failed.
                     var nativeBotConversation = FindMessageMirrorActionConversation(
                         seller,
                         buyer,
@@ -221,7 +225,12 @@ namespace Bot.AssistWindow.Widget.Robot
                         usedNativeBotConversations);
                     if (nativeBotConversation == null)
                     {
-                        continue;
+                        nativeBotConversation = CtlConversation.Create(
+                            seller, buyer, lastBuyerQuestion, botAnswer, true,
+                            "千牛Bot发送回显（本地答复卡片未找到）");
+                        nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");
+                        nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;
+                        nativeBotConversation.EditRequested += CtlConversation_EditRequested;
                     }
 
                     usedNativeBotConversations.Add(nativeBotConversation);
