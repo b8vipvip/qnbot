@@ -385,6 +385,15 @@ namespace Bot.ChromeNs
                 {
                     foreach (var suggestion in suggestions)
                     {
+                        if (KugouReceptionPolicy.Applies(session.Seller)
+                            && RequiresWorkflowReview(suggestion))
+                        {
+                            // An AI-extracted device/eligibility/account/payment rule is only a
+                            // proposed change. It must never promote itself into live V2 knowledge.
+                            suggestion.ApplyMessage = "涉及店铺权益、设备核验或履约流程，待人工审核，未写入生产知识库";
+                            skipped++;
+                            continue;
+                        }
                         if (!CanApply(suggestion, localFirst))
                         {
                             skipped++;
@@ -411,7 +420,8 @@ namespace Bot.ChromeNs
                 report.Summary = summary;
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
-                report.SuggestionsJson = SerializeSuggestions(suggestions);
+                report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
+                    suggestions, analysis["workflow_proposals"] as JArray, session.Seller);
                 report.AppliedCount = applied;
                 report.SkippedCount = skipped;
                 report.Error = string.Empty;
@@ -455,11 +465,12 @@ namespace Bot.ChromeNs
                     ["role"] = "system",
                     ["content"] =
                         "你是电商客服接待复盘与知识迭代系统。分析完整一轮聊天，对比Bot原答案与客服最终实际回复。只输出JSON："
-                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}]}。"
+                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}],\"workflow_proposals\":[{\"stage\":\"当前流程阶段\",\"trigger\":\"何种买家证据触发\",\"required_evidence\":\"必须先有的真实订单或图片证据\",\"action\":\"WAIT|ASK_EVIDENCE|REPLY|SEND_VERIFIED_GUIDE|HANDOFF\",\"next_stage\":\"下一阶段\",\"evidence\":\"本次人工操作证据\",\"reason\":\"原因\"}]}。"
                         + learningPolicy
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
+                        + "workflow_proposals只输出最多4条可核验流程建议，必须提供人工回复或明确图片/订单证据；没有证据返回空数组。所有流程建议只进入待审核报告，绝不自动生效。"
                 },
                 new JObject
                 {
@@ -626,6 +637,60 @@ namespace Bot.ChromeNs
         {
             var terms = new[] { "退款", "退货", "赔偿", "投诉", "差评", "举报", "仲裁", "身份证", "银行卡", "验证码", "密码", "订单隐私", "订单号", "手机号", "账号安全", "封号", "解封", "法律", "报警" };
             return terms.Any(x => (value ?? string.Empty).IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+
+        private static bool RequiresWorkflowReview(Suggestion suggestion)
+        {
+            if (suggestion == null) return false;
+            var text = (suggestion.Question ?? "") + " " + (suggestion.Answer ?? "")
+                + " " + (suggestion.Category ?? "");
+            return Regex.IsMatch(text,
+                @"酷狗|会员|设备|电视|车机|账号|登录|绑定|充值|退款|支持|不支持|支付|付款|到账|发货|教程|app|tcl|海信|雷鸟|小米",
+                RegexOptions.IgnoreCase);
+        }
+
+        // The existing SuggestionsJson remains an array for legacy UI consumers.
+        // Workflow proposals are *display-only* rows with no knowledge ID, and are
+        // never passed to ReviewedKnowledgeLearningService.ApplyReviewedKnowledge.
+        private static string SerializeSuggestionsWithWorkflowReview(
+            IEnumerable<Suggestion> suggestions, JArray proposedFlows, string seller)
+        {
+            var output = JArray.Parse(SerializeSuggestions(suggestions));
+            if (!KugouReceptionPolicy.Applies(seller) || proposedFlows == null)
+                return output.ToString(Formatting.None);
+            var allowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "WAIT", "ASK_EVIDENCE", "REPLY", "SEND_VERIFIED_GUIDE", "HANDOFF"
+            };
+            foreach (var token in proposedFlows.Take(4))
+            {
+                var p = token as JObject;
+                if (p == null) continue;
+                var action = Clean(Convert.ToString(p["action"]), 40).ToUpperInvariant();
+                if (!allowed.Contains(action)) continue;
+                var stage = Redact(Clean(Convert.ToString(p["stage"]), 80));
+                var evidence = Redact(Clean(Convert.ToString(p["evidence"]), 250));
+                var requiredEvidence = Redact(Clean(Convert.ToString(p["required_evidence"]), 250));
+                // No policy transition can be approved without explicit evidence.
+                if (stage.Length == 0 || evidence.Length == 0 || requiredEvidence.Length == 0)
+                    continue;
+                output.Add(new JObject
+                {
+                    ["kind"] = "reception_workflow_proposal",
+                    ["action"] = "manual_review",
+                    ["proposed_action"] = action,
+                    ["stage"] = stage,
+                    ["trigger"] = Redact(Clean(Convert.ToString(p["trigger"]), 200)),
+                    ["required_evidence"] = requiredEvidence,
+                    ["next_stage"] = Redact(Clean(Convert.ToString(p["next_stage"]), 80)),
+                    ["evidence"] = evidence,
+                    ["reason"] = Redact(Clean(Convert.ToString(p["reason"]), 240)),
+                    ["applied"] = false,
+                    ["apply_message"] = "流程候选仅供审核：未修改生产流程与知识库"
+                });
+            }
+            return output.ToString(Formatting.None);
         }
 
         private static string SerializeSuggestions(IEnumerable<Suggestion> suggestions)
