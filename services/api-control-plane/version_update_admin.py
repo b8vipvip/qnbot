@@ -227,7 +227,12 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
     recorded_commit = str(server_status.get("current_commit") or "").strip()
     current = _current_server_commit(server_status)
     latest = str(github.get("sha") or "")
-    update_available = bool(current and latest and current != latest)
+    # An unstamped image cannot prove the running service matches the checked
+    # out host Git revision, even when the last update task completed at 100%.
+    # Permit a one-time same-revision rebuild using the newly loaded updater.
+    needs_runtime_verification = not bool(running_image_commit)
+    update_available = bool(latest and (
+        needs_runtime_verification or not current or current != latest))
     client_error = ""
     client: Dict[str, Any] = {}
     try:
@@ -241,6 +246,7 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
             "running_image_commit": running_image_commit,
             "recorded_commit": recorded_commit,
             "version_source": "running_image" if running_image_commit else "updater_status",
+            "needs_runtime_verification": needs_runtime_verification,
             "github": github,
             "update_available": update_available,
             "sync_error": server_error,
@@ -279,7 +285,13 @@ def version_update_server_start(request: Request, _: str = Depends(_admin)) -> J
         raise HTTPException(status_code=503, detail="同步 GitHub master 失败：" + _safe(exc, 200))
     current = _current_server_commit(current_status)
     target = str(github.get("sha") or "")
-    if current and current == target:
+    # The previous script may have pulled the new Dockerfile after Bash startup
+    # and built it without CONTROL_PLANE_BUILD_COMMIT. In that situation the
+    # checked-out revision equals master, but the running image is unverifiable.
+    # Explicitly allow one safe same-revision rebuild; the update agent retains
+    # the normal lock, backup, health checks and rollback sequence.
+    needs_runtime_verification = not bool(_runtime_build_commit())
+    if current and current == target and not needs_runtime_verification:
         return JSONResponse({"ok": True, "already_latest": True, "status": current_status})
     request_id = f"web-{int(time.time())}"
     payload = {
@@ -287,7 +299,7 @@ def version_update_server_start(request: Request, _: str = Depends(_admin)) -> J
         "requested_at_unix": time.time(),
         "requested_commit": target,
         "branch": "master",
-        "source": "web-console",
+        "source": "web-console-runtime-reverify" if needs_runtime_verification and current == target else "web-console",
     }
     _write_json_atomic(SERVER_UPDATE_REQUEST, payload)
     queued = {
