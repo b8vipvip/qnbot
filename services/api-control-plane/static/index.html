@@ -34,6 +34,7 @@
       <a class="nav" href="/static/recharge-query.html">充值结果自动查询</a>
       <a class="nav" href="/static/manual-recharge.html">人工代充助手</a>
       <button class="nav" data-page="version-update">版本更新</button>
+      <button class="nav" data-page="server-runtime">服务端运行日志</button>
       <button class="nav" data-page="deploy">部署与安全</button>
     </nav>
     <div class="sidebar-foot"><span id="adminName"></span><button id="logoutBtn" class="ghost">退出</button></div>
@@ -107,6 +108,22 @@
         <section class="panel"><div class="panel-head"><div><h2>客户端正式版</h2><p>显示 GitHub Release、服务端安装包缓存进度和 SSE 更新通知状态。</p></div></div><div id="clientVersionCard"><div class="empty">正在读取客户端正式版…</div></div></section>
       </div>
     </section>
+    <section id="page-server-runtime" class="page">
+      <section class="panel">
+        <div class="panel-head"><div><h2>服务端运行日志</h2><p>管理员专用：读取当前服务、主机更新代理和 Docker 构建日志（按字段脱敏、限制条数）。旧版本未收集的运行日志无法追溯。</p></div><button class="secondary" onclick="loadServerRuntimeLogs()">刷新日志</button></div>
+        <div class="actions">
+          <label>日志类型<select id="serverRuntimeSource" onchange="loadServerRuntimeLogs()">
+            <option value="runtime">服务端运行日志</option><option value="update">服务端更新完整日志</option><option value="build">Docker 构建日志</option>
+          </select></label>
+          <label>最近条数<select id="serverRuntimeLines" onchange="loadServerRuntimeLogs()">
+            <option value="100">100</option><option value="300" selected>300</option><option value="1000">1000</option>
+          </select></label>
+          <button class="secondary" onclick="downloadServerRuntimeLogs()">导出脱敏日志</button>
+        </div>
+        <p id="serverRuntimeMeta" class="hint">正在读取日志状态…</p>
+        <pre id="serverRuntimeOutput" style="max-height:65vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#111827;color:#e5e7eb;padding:14px;border-radius:8px"></pre>
+      </section>
+    </section>
     <section id="page-deploy" class="page"><div class="two-col"><section class="panel"><h2>Bot 连接参数</h2><p class="muted">在 Bot 的“API 服务连接”中填写本控制台地址和客户端令牌。</p><div class="code-card"><code id="runtimeUrl"></code></div><p class="hint">文本路由：<code>text-default</code>　视觉路由：<code>vision-default</code></p><p class="hint">手机 Web 端：<code>/bot/</code>，可使用对应 Bot 客户端令牌登录。</p></section><section class="panel"><h2>安全建议</h2><ul class="clean-list"><li>使用 Caddy/Nginx 和 HTTPS，对外只开放 80/443。</li><li>修改默认管理员密码和 APP_SECRET。</li><li>固定 API_KEY_ENCRYPTION_KEY，迁移服务器时一并备份。</li><li>为每台 Bot 创建独立令牌，停用丢失设备的令牌。</li><li>定期备份 <code>/data/api-control-plane.db</code>。</li></ul></section></div></section>
   </main>
 </div>
@@ -147,6 +164,7 @@
 <script src="/static/message-traces.js?v=2"></script>
 <script src="/static/ai-requests.js?v=1"></script>
 <script src="/static/client-token-copy.js"></script>
-<script src="/static/version-update.js?v=2"></script>
+<script src="/static/version-update.js?v=3"></script>
+<script src="/static/server-runtime-logs.js?v=1"></script>
 </body>
 </html>
