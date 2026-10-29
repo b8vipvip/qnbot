@@ -95,23 +95,29 @@ def _read(source: str, lines: int) -> dict[str, Any]:
 def install(control_plane: Any) -> None:
     global _cp
     _cp = control_plane
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        str(RUNTIME_FILE), maxBytes=3 * 1024 * 1024, backupCount=5, encoding="utf-8"
-    )
+    # Diagnostics must never prevent the customer-facing API from booting.
+    # Some old deployments bind-mount /data with restrictive ownership.
     try:
-        os.chmod(RUNTIME_FILE, 0o600)
-    except OSError:
-        pass
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(PrivateLogFormatter(
-        "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
-    # Capture Python/uvicorn logging, not print() or arbitrary Docker events.
-    for name in ("", "uvicorn.error"):
-        logger = logging.getLogger(name)
-        logger.addHandler(handler)
-        if name == "":
-            logger.setLevel(min(logger.level, logging.INFO) if logger.level else logging.INFO)
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            str(RUNTIME_FILE), maxBytes=3 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
+        try:
+            os.chmod(RUNTIME_FILE, 0o600)
+        except OSError:
+            pass
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(PrivateLogFormatter(
+            "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        # Capture Python/uvicorn logging, not raw access URLs with query strings.
+        for name in ("", "uvicorn.error"):
+            logger = logging.getLogger(name)
+            logger.addHandler(handler)
+            if name == "":
+                logger.setLevel(min(logger.level, logging.INFO) if logger.level else logging.INFO)
+    except OSError as exc:
+        logging.getLogger("qnbot.runtime").warning(
+            "private runtime log unavailable: %s", type(exc).__name__)
     control_plane.app.include_router(router)
 
     @control_plane.app.middleware("http")
