@@ -112,8 +112,13 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("流程配置无效，回退安全默认规则：" + ex.Message, 10);
-                return new KugouReceptionConfig();
+                Log.ErrorWithMaxCount("流程配置无效，禁用自动设备引导：" + ex.Message, 10);
+                return new KugouReceptionConfig
+                {
+                    EnableAutoGuidance = false,
+                    EnablePhoneWait = true,
+                    TclGuideUrl = KugouReceptionPolicy.TClGuideUrl
+                };
             }
         }
 
