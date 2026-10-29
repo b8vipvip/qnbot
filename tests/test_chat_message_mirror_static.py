@@ -16,12 +16,12 @@ def test_bot_panel_renders_qianniu_style_message_timeline_instead_of_qa_cards():
     assert "RefreshMessageMirror(true);" in source
     assert "stkDialog.Children.Add(ctlConversation)" not in source
 
-    assert 'Text = isSeller ? "客服" : "买家"' in mirror
+    assert 'var sender = isBot ? "Bot" : (isSeller ? seller : buyer);' in mirror
+    assert 'turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")' in mirror
     assert "HorizontalAlignment.Right" in mirror
     assert "HorizontalAlignment.Left" in mirror
     assert "BuildMessageMirrorDateSeparator" in mirror
-    assert "UseAnswerOnlyMirrorPresentation" in mirror
-    assert "BuildNativeBotMessageBubble" not in mirror
+    assert "BuildMessageMirrorBotContextMenu" in mirror
     assert "BuildCopyOnlyContextMenu" in mirror
 
 
@@ -47,35 +47,32 @@ def test_mirror_uses_real_buyer_and_seller_chat_events_and_remote_history():
     assert ".ThenBy(t => t.MessageKey" not in context
 
 
-def test_a_suffix_is_transport_only_and_only_native_answer_is_rendered_once():
+def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_actions():
     conversation = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
-    conversation_xaml = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml")
     mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
 
     assert 'const string marker = "[A]"' in mirror
     assert "TryExtractBotEchoAnswer" in mirror
     assert "var usedNativeBotConversations = new HashSet<CtlConversation>();" in mirror
     assert "if (nativeBotConversation == null)" in mirror
-    assert "continue;" in mirror
     assert "usedNativeBotConversations.Add(nativeBotConversation);" in mirror
-    assert "nativeBotConversation.UseAnswerOnlyMirrorPresentation();" in mirror
-    assert "messageElement = nativeBotConversation;" in mirror
-    assert "BuildNativeBotMessageBubble" not in mirror
+    assert "BuildMessageMirrorBubble(" in mirror
+    assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
+    assert "messageElement = nativeBotConversation;" not in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, messageText, bubble)" in mirror
 
-    # The actual native answer row is reused, so source/status/time styling and the
-    # original 查看/复制/重发/修改 behavior remain the same as the old answer card.
-    assert 'x:Name="gridQuestion"' in conversation_xaml
-    assert "UseAnswerOnlyMirrorPresentation" in conversation
-    assert "gridQuestion.Visibility = Visibility.Collapsed;" in conversation
+    # Bot bubbles retain their original actions even though the old Q/A card
+    # is no longer the rendered element.
     assert "CreateAnswerContextMenu" in conversation
-    assert 'Header = "查看"' in conversation
-    assert 'Header = "复制"' in conversation
-    assert 'Header = "重发"' in conversation
-    assert 'Header = "修改"' in conversation
-    assert "var menu = CreateAnswerContextMenu(txtAnswer);" in conversation
+    assert "MirrorRequestResend" in mirror
+    assert "MirrorRequestEdit" in mirror
+    assert "MirrorOpenKnowledge" in mirror
+    assert "MirrorAnswerSource" in mirror
+    for label in ("查看", "复制", "重发", "修改", "来源"):
+        assert f'Header = "{label}"' in mirror
 
-    # Human seller messages still use the Qianniu mirror path.
-    assert "messageElement = BuildMessageMirrorBubble(turn);" in mirror
+    # Human seller and buyer messages follow the same bubble layout.
+    assert "messageElement = BuildMessageMirrorBubble(turn, seller, buyer);" in mirror
 
 
 def test_mirror_renderer_is_wired_into_windows_build():
