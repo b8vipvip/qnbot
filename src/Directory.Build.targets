@@ -16,6 +16,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2SandboxConversation.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2SandboxConversation.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
   </ItemGroup>

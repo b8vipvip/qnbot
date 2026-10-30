@@ -249,7 +249,10 @@ namespace Bot.Knowledge
             };
             Grid.SetRow(_result, 2);
             root.Children.Add(_result);
-            Content = root;
+            var tabs = new TabControl();
+            tabs.Items.Add(new TabItem { Header = "客服对话沙盒", Content = new KnowledgeV2SandboxConversation(_seller) });
+            tabs.Items.Add(new TabItem { Header = "知识检索与性能", Content = root });
+            Content = tabs;
         }
 
         private async Task RunOneAsync()

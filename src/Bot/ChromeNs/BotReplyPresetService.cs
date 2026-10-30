@@ -57,6 +57,32 @@ namespace Bot.ChromeNs
             }
         }
 
+        // Sandbox-only read: do not call GetPresets here, because GetPresets
+        // initializes missing default settings on disk as a side effect.
+        internal static List<BotReplyPreset> GetEnabledPresetsForPreview(string seller)
+        {
+            lock (Sync)
+            {
+                try
+                {
+                    var store = CreateStore(seller);
+                    string json;
+                    var presets = !store.TryGetString(SettingsKey, out json)
+                        || string.IsNullOrWhiteSpace(json)
+                        ? CreateDefaults()
+                        : Normalize(JsonConvert.DeserializeObject<List<BotReplyPreset>>(json));
+                    return (presets ?? new List<BotReplyPreset>())
+                        .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Text))
+                        .ToList();
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("读取模拟测试台内置话术失败：" + ex.Message, 5);
+                    return new List<BotReplyPreset>();
+                }
+            }
+        }
+
         public static List<BotReplyPreset> GetEnabledPresets(string seller)
         {
             return GetPresets(seller).Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Text)).ToList();
