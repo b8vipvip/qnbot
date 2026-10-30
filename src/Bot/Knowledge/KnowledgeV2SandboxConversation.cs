@@ -357,7 +357,9 @@ namespace Bot.Knowledge
             TraceSandbox("new_session", "success", null, null, "context_reset");
         }
 
-        private void AddBubble(string role, string message, string source)
+        private void AddBubble(string role, string message, string source,
+            bool canTeach = false, string originalQuestion = null, string suggestedAnswer = null,
+            bool isHighRisk = false, bool hasConflict = false)
         {
             var bot = string.Equals(role, "Bot", StringComparison.Ordinal);
             var surface = new Border
@@ -383,6 +385,23 @@ namespace Bot.Knowledge
             });
             panel.Children.Add(new TextBlock { Text = message ?? "", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
             surface.Child = panel;
+            if (bot && canTeach && !string.IsNullOrWhiteSpace(originalQuestion))
+            {
+                var question = originalQuestion;
+                var proposedAnswer = suggestedAnswer ?? string.Empty;
+                var risk = isHighRisk;
+                var conflict = hasConflict;
+                var menu = new ContextMenu();
+                var create = new MenuItem { Header = "新增" };
+                create.Click += delegate
+                {
+                    TraceSandbox("direct_menu_open", "requested", question, null, "right_click");
+                    ShowDirectAnswerDialog(question, proposedAnswer, risk, conflict);
+                };
+                menu.Items.Add(create);
+                surface.ContextMenu = menu;
+                surface.ToolTip = "当前未命中安全直答 · 右键 → 新增";
+            }
             _transcript.Children.Add(surface);
             _scroll.ScrollToEnd();
         }
@@ -471,7 +490,9 @@ namespace Bot.Knowledge
                 if (result.OrderDedupKey.Length > 0)
                     _orderPreviewed.Add(result.OrderDedupKey);
 
-                AddBubble("Bot", result.Reply, result.Source);
+                AddBubble("Bot", result.Reply, result.Source,
+                    result.IsKnowledgeMiss && !isOrder, message, result.SuggestedAnswer,
+                    result.IsHighRisk, result.HasConflict);
                 _diagnostics.Text = result.Detail;
                 _status.Text = "沙盒完成（未向千牛发送） · " + result.Outcome;
                 if (!isOrder)
@@ -597,12 +618,18 @@ namespace Bot.Knowledge
 
                 if (scenes.Contains("普通咨询 / 知识V2"))
                 {
-                    var decision = KnowledgeEngineV2Service.Resolve(_seller, _syntheticBuyer, message);
+                    var decision = KnowledgeEngineV2Service.ResolveSandbox(_seller, _syntheticBuyer, message);
                     var candidates = decision.Matches == null ? ""
                         : string.Join("\n", decision.Matches.Where(x => x != null && x.Record != null)
                             .Take(3).Select(x => "ID:" + x.Record.Id + " 问:" + x.Record.Title
                                 + " 答:" + x.Record.Answer));
-                    var trace = "V2决策：" + (decision.CanDirectReply ? "安全直答" : "不直答")
+                    var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
+                    var productionPermit = string.Equals(settings.Mode,
+                            KnowledgeEngineV2Constants.ModeProduction, StringComparison.OrdinalIgnoreCase)
+                        && ReplyModeService.IsLocalFirst(_seller);
+                    var trace = "V2沙盒知识判断：" + (decision.CanDirectReply ? "知识通过直答条件" : "知识未通过直答条件")
+                        + "\n生产发送开关：" + (productionPermit ? "已具备模式前提（仍须通过生产安全判断）"
+                            : "未开启（影子模式或非本地优先；不会自动更改）")
                         + "\n原因：" + decision.Reason
                         + "\n冲突：" + decision.HasConflict
                         + "\n候选数：" + decision.CandidateCount
@@ -611,7 +638,7 @@ namespace Bot.Knowledge
                     if (decision.CanDirectReply)
                         return Reply(prefix + (prefix.Length > 0 ? "\n\n" : "")
                             + decision.Answer, prefix.Length > 0
-                            ? "首条咨询 + Knowledge V2" : "Knowledge V2", trace);
+                            ? "首条咨询 + Knowledge V2 · 沙盒" : "Knowledge V2 · 沙盒", trace);
                     var miss = Reply(prefix.Length > 0 ? prefix : "知识V2未能安全直答。",
                         prefix.Length > 0 ? "首条咨询固定回复" : "Knowledge V2",
                         trace, "进入AI回退或人工审核");
