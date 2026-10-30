@@ -216,12 +216,8 @@ namespace Bot.AssistWindow.Widget.Robot
             var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
             if (wnd.ShowDialog() != true) return;
             var route = BotReplySourceRouting.Resolve(e.SourceLabel, e.SourceWasManuallyCorrected);
-            if (e.SourceWasManuallyCorrected)
-            {
-                ctl.SetStatus("本消息来源曾被人工修改，无法核实原始知识ID。请在知识中心查看原始记录后编辑；未覆盖知识库。", false);
-                return;
-            }
-            if (route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
+            if (!e.SourceWasManuallyCorrected
+                && route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
             {
                 // Do not run the generic AI organizer: it can change the question
                 // title and accidentally create another similar, conflicting fact.
@@ -245,11 +241,6 @@ namespace Bot.AssistWindow.Widget.Robot
                     ctl.SetStatus("Knowledge V2精确修订异常，原知识未确认更新。请在知识中心检查。", false);
                     Log.Exception(ex);
                 }
-                return;
-            }
-            if ((e.SourceLabel ?? string.Empty).StartsWith("本地知识V2", StringComparison.Ordinal))
-            {
-                ctl.SetStatus("历史V2回复没有可靠的知识记录ID，禁止根据语义猜测并覆盖。请通过“查看”进入知识中心编辑。", false);
                 return;
             }
             // Human-confirmed edits, including originally AI-generated answers,
