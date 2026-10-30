@@ -24,6 +24,7 @@ namespace Bot.Knowledge
 {
     public class KnowledgeCenterWindow : Window
     {
+        internal string RequestedSeller { get; set; }
         private readonly TabControl _tabs;
         private readonly KnowledgeImportControl _import;
         private readonly KnowledgeManagerControl _manager;
