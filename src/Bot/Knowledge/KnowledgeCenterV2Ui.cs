@@ -218,6 +218,7 @@ namespace Bot.Knowledge
                 Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
+                Nav("买家消息管理", () => new BuyerMessageManagementPage(_owner, _seller)),
                 Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller)),
                 Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))

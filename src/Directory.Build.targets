@@ -19,6 +19,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2SandboxConversation.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2SandboxConversation.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\BuyerMessageArchiveService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\BuyerMessageArchiveService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\BuyerMessageManagementPage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\BuyerMessageManagementPage.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
   </ItemGroup>
