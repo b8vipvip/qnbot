@@ -21,7 +21,7 @@ def test_product_link_preset_provenance_is_exact_and_editable():
 def test_confirmed_bot_echo_stamps_own_source_or_marks_unknown():
     mirror=src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     assert 'BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset)' in mirror
-    assert "KnowledgeLearningService.ResolveAnswerSource(" in mirror
+    assert "BotConversationHistoryStore.ResolveAnswerSourceStamp(" in mirror
     assert "BotConversationHistoryStore.RecordBotEcho(" in mirror
     assert '来源未记录（千牛回显已确认，需人工补录）' in mirror
     assert '"千牛Bot发送回显（本地答复卡片未找到）"' not in mirror
