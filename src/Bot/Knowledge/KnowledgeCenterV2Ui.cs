@@ -38,7 +38,14 @@ namespace Bot.Knowledge
         public static void ShowBotReplySearch(Window owner, string seller, string buyer, string question, string answer)
         {
             Initialize();
-            var window = new KnowledgeCenterWindow();
+            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认 Bot 回复所属店铺：" + ex.Message,
+                    "Bot 回复检索", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
