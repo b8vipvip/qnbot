@@ -47,6 +47,7 @@ jobs:
           fi
 
           managed_paths=(
+            .github/GPTAUTO_SMART_UPDATE.md
             .github/gptauto
             .github/actions/upload-gptauto-log
             .github/workflows/gptauto-sync.yml
@@ -124,6 +125,7 @@ jobs:
           fi
           mkdir -p .github/gptauto .github/actions/upload-gptauto-log .github/workflows
           cp "$tmp"/GPTAuto/gptauto/*.py .github/gptauto/
+          cp "$tmp"/GPTAuto/docs/SMART_UPDATE.md .github/GPTAUTO_SMART_UPDATE.md
           cp "$tmp"/GPTAuto/.github/actions/upload-gptauto-log/action.yml .github/actions/upload-gptauto-log/action.yml
           cp "$tmp"/GPTAuto/consumer-template/gptauto-sync.yml .github/workflows/gptauto-sync.yml
           cp "$tmp"/GPTAuto/consumer-template/gptauto-observer.yml .github/workflows/gptauto-observer.yml
@@ -188,7 +190,7 @@ jobs:
 
           branch="chore/gptauto-sync-v$ver"
           git checkout -B "$branch"
-          git add .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml
+          git add .github/GPTAUTO_SMART_UPDATE.md .github/gptauto .github/actions/upload-gptauto-log .github/workflows/gptauto-sync.yml .github/workflows/gptauto-observer.yml .github/workflows/gptauto-executor.yml .github/workflows/gptauto-repair.yml .github/workflows/gptauto-reconcile.yml
           git commit -m "chore: sync GPTAuto v$ver"
 
           remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
