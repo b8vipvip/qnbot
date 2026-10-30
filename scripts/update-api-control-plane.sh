@@ -422,6 +422,7 @@ elif [[ -f "$LEGACY_DIR/.env" || -d "$LEGACY_DIR/data" ]]; then
 fi
 
 # Only require build capacity after choosing the build path.
+check_free_kib "$REPO_DIR" "$(( 512 * 1024 ))" "Git 同步前"
 log "拉取 GitHub 最新 $BRANCH 分支（Git SSH over 443 + 自动重试）"
 github_fetch_with_retry
 if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
