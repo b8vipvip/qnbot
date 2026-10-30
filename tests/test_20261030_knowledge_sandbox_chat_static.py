@@ -111,3 +111,52 @@ def test_ai_fallback_uses_sandbox_history_and_never_calls_real_getanswer():
     assert '"__knowledge_v2_sandbox__"' in ui
     assert "MyOpenAI.GetAnswer(" not in ui
     assert "OrderPlacedAutoReplyService.ResolveAsync(" not in ui
+
+
+def test_conversation_is_a_star_sized_primary_area_not_a_dockpanel_remainder():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    constructor = ui.split("internal KnowledgeV2SandboxConversation(string seller)", 1)[1].split(
+        "private bool Enabled(string scene)", 1
+    )[0]
+    assert "var root = new Grid" in constructor
+    assert "var root = new DockPanel" not in constructor
+    assert "Height = new GridLength(1, GridUnitType.Star)" in constructor
+    assert "MinHeight = 240" in constructor
+    assert "attach(chatFrame, 3)" in constructor
+    assert "attach(inputRow, 4)" in constructor
+    assert "attach(_status, 5)" in constructor
+    assert "Content = root;" in constructor
+
+
+def test_optional_settings_teaching_and_evidence_are_folded_by_default():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    constructor = ui.split("internal KnowledgeV2SandboxConversation(string seller)", 1)[1].split(
+        "private bool Enabled(string scene)", 1
+    )[0]
+    assert 'Header = "场景与订单/商品素材设置' in constructor
+    assert "settings.Content = settingsBody" in constructor
+    assert "attach(settings, 2)" in constructor
+    assert "attach(_reviewExpander, 6)" in constructor
+    assert "evidence.Content = _diagnostics" in constructor
+    assert "attach(evidence, 7)" in constructor
+    assert constructor.count("IsExpanded = false") == 3
+    assert "Height = 66" in constructor
+    assert "CornerRadius = new CornerRadius(6)" in constructor
+    assert "_reviewExpander.Header = _lastMissQuestion.Length > 0" in ui
+    assert "_reviewExpander.Header = \"人工审核新增直答（未命中知识后可编辑，点击展开）\"" in ui
+
+
+def test_existing_sandbox_actions_retain_original_event_bindings():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    constructor = ui.split("internal KnowledgeV2SandboxConversation(string seller)", 1)[1].split(
+        "private bool Enabled(string scene)", 1
+    )[0]
+    for event in (
+        "ResetSession()", "RunAsync(item)", "RunAsync()",
+        "LoadHistoricalSampleAsync()", "LoadProductSampleAsync()",
+        "SaveDirectAnswer()",
+    ):
+        assert event in constructor
+    assert 'IsChecked = true' in constructor
+    assert 'Height = 125' in constructor
+    assert 'VerticalScrollBarVisibility = ScrollBarVisibility.Auto' in constructor
