@@ -15,6 +15,7 @@ using BotLib.Db.Sqlite;
 using BotLib.Wpf.Extensions;
 using System.Security.Cryptography;
 using Bot.ChromeNs;
+using Bot.Knowledge;
 using Bot.AssistWindow.Widget.Robot;
 using System.Collections.Concurrent;
 using System.Linq;
@@ -214,6 +215,44 @@ namespace Bot.AssistWindow.Widget.Robot
             if (ctl == null) return;
             var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
             if (wnd.ShowDialog() != true) return;
+            var route = BotReplySourceRouting.Resolve(e.SourceLabel, e.SourceWasManuallyCorrected);
+            if (e.SourceWasManuallyCorrected)
+            {
+                ctl.SetStatus("本消息来源曾被人工修改，无法核实原始知识ID。请在知识中心查看原始记录后编辑；未覆盖知识库。", false);
+                return;
+            }
+            if (route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
+            {
+                // Do not run the generic AI organizer: it can change the question
+                // title and accidentally create another similar, conflicting fact.
+                try
+                {
+                    ctl.SetSendPending("正在按原始知识ID精确修订...");
+                    var corrected = wnd.EditedAnswer;
+                    string message;
+                    var success = await Task.Run(() =>
+                        KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
+                            route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
+                    if (success)
+                    {
+                        ctl.SetAnswer(corrected, e.SourceLabel);
+                        ctl.SetSource(e.SourceLabel);
+                    }
+                    ctl.SetStatus(message, success);
+                }
+                catch (Exception ex)
+                {
+                    ctl.SetStatus("Knowledge V2精确修订异常，原知识未确认更新。请在知识中心检查。", false);
+                    Log.Exception(ex);
+                }
+                return;
+            }
+            if ((e.SourceLabel ?? string.Empty).StartsWith("本地知识V2", StringComparison.Ordinal))
+            {
+                ctl.SetStatus("历史V2回复没有可靠的知识记录ID，禁止根据语义猜测并覆盖。请通过“查看”进入知识中心编辑。", false);
+                return;
+            }
+            // Non-V2 answers preserve the existing reviewed learning path.
             ctl.SetAnswer(wnd.EditedAnswer);
             ctl.SetSource("人工修改");
             ctl.SetSendPending("正在整理并写入知识库...");
