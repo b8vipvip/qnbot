@@ -28,13 +28,15 @@ def test_seller_echo_is_strictly_shop_scoped_and_id_deduplicated():
     assert "var shop = ResolveShop(seller);" in segment
     assert "if (shop == null) return false;" in segment
     assert "ShopSettingsScope.Enter(shop)" in segment
-    assert "RecordMessage(state, seller, buyer, message, messageText);" in segment
+    assert "RecordMessage(state, seller, buyer, message, messageText, false);" in segment
     assert "RequestMirrorRemoteRefresh" not in segment
     record = store.split("private static void RecordMessage(", 1)[1].split(
         "private static void MarkLastSellerTurnWithdrawn(", 1
     )[0]
     assert "IncomingMessageSafety.BuildMessageKey(message, cleanText)" in record
-    assert "state.Turns.Any(t => t.MessageKey == messageKey)" in record
+    assert "HasSharedNativeAlias(t.NativeAliases, aliases)" in record
+    assert "precisePeers.Count == 1" in record
+    assert "peers.Count == 1 && opposite.Count == 1" in record
 
 
 def test_bot_echo_renders_native_card_even_without_local_reply_card():

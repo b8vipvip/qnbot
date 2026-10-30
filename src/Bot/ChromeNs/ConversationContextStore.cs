@@ -20,6 +20,11 @@ namespace Bot.ChromeNs
         public DateTime Timestamp { get; set; }
         public string MessageKey { get; set; }
         public bool Withdrawn { get; set; }
+        // Multiple transports may represent one physical message using different IDs.
+        public string[] NativeAliases { get; set; }
+        public long PreciseTimeTicks { get; set; }
+        public bool SeenLive { get; set; }
+        public bool SeenHistory { get; set; }
     }
 
     internal static class ConversationContextStore
@@ -67,7 +72,7 @@ namespace Bot.ChromeNs
                 if (shop != null && ShopSettingsScope.Current == null)
                     scope = ShopSettingsScope.Enter(shop);
                 var state = GetState(seller, buyer);
-                RecordMessage(state, seller, buyer, message, messageText);
+                RecordMessage(state, seller, buyer, message, messageText, false);
                 var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
                 if (!string.IsNullOrWhiteSpace(ccode))
                 {
@@ -126,7 +131,7 @@ namespace Bot.ChromeNs
             {
                 scope = ShopSettingsScope.Enter(shop);
                 var state = GetState(seller, buyer);
-                RecordMessage(state, seller, buyer, message, messageText);
+                RecordMessage(state, seller, buyer, message, messageText, false);
                 return true;
             }
             catch (Exception ex)
@@ -446,7 +451,7 @@ namespace Bot.ChromeNs
                 if (messages == null) return;
                 foreach (var item in messages.Where(m => m != null).OrderBy(GetSortValue))
                 {
-                    RecordMessage(state, seller, buyer, item, ExtractMessageText(item));
+                    RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true);
                 }
             }
             catch (Exception ex)
@@ -484,7 +489,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             QNChatMessage message,
-            string text)
+            string text,
+            bool fromHistory)
         {
             if (message == null) return;
             var timestamp = GetMessageTime(message);
@@ -509,20 +515,135 @@ namespace Bot.ChromeNs
                 return;
             }
             var messageKey = ScopeKey(seller) + "|" + IncomingMessageSafety.BuildMessageKey(message, cleanText);
+            var aliases = GetNativeMessageAliases(message);
+            var preciseTime = GetPreciseNativeTimeTicks(message);
+            var normalizedText = NormalizeText(cleanText);
             lock (state.Sync)
             {
-                if (!string.IsNullOrWhiteSpace(messageKey)
-                    && state.Turns.Any(t => t.MessageKey == messageKey)) return;
+                // Canonical identity wins. In a mixed live/history message one
+                // transport may report mcode while the other reports ww_msgid.
+                var exact = state.Turns.FirstOrDefault(t => t != null
+                    && t.Role == role
+                    && (string.Equals(t.MessageKey, messageKey, StringComparison.Ordinal)
+                        || HasSharedNativeAlias(t.NativeAliases, aliases)));
+                if (exact != null)
+                {
+                    MergeObservedIdentity(exact, aliases, preciseTime, fromHistory);
+                    return;
+                }
+
+                // Distinct native keys can still describe one message when both
+                // observations have the identical high-resolution timestamp.
+                var precisePeers = preciseTime == 0
+                    ? new List<ConversationContextTurn>()
+                    : state.Turns.Where(t => t != null && t.Role == role
+                        && t.PreciseTimeTicks == preciseTime
+                        && (fromHistory ? t.SeenLive && !t.SeenHistory
+                                        : t.SeenHistory && !t.SeenLive)
+                        && string.Equals(NormalizeText(t.Text), normalizedText, StringComparison.Ordinal))
+                        .ToList();
+                if (precisePeers.Count == 1)
+                {
+                    MergeObservedIdentity(precisePeers[0], aliases, preciseTime, fromHistory);
+                    Log.Info("千牛镜像原始时间戳归并回显: origin="
+                        + (fromHistory ? "history" : "live") + ", role=" + role
+                        + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
+                    return;
+                }
+
+                // If an endpoint only supplies second-resolution timestamps,
+                // match a single unmatched *opposite-feed* event. Never merge
+                // two live sends with equal text, or two history-only entries.
+                if (timestamp != DateTime.MinValue)
+                {
+                    var peers = state.Turns.Where(t => t != null && t.Role == role
+                        && t.Timestamp != DateTime.MinValue
+                        && t.Timestamp.Ticks / TimeSpan.TicksPerSecond
+                            == timestamp.Ticks / TimeSpan.TicksPerSecond
+                        && string.Equals(NormalizeText(t.Text), normalizedText, StringComparison.Ordinal))
+                        .ToList();
+                    var opposite = peers.Where(t => fromHistory
+                        ? t.SeenLive && !t.SeenHistory
+                        : t.SeenHistory && !t.SeenLive).ToList();
+                    if (peers.Count == 1 && opposite.Count == 1
+                        && (preciseTime == 0 || opposite[0].PreciseTimeTicks == 0))
+                    {
+                        MergeObservedIdentity(opposite[0], aliases, preciseTime, fromHistory);
+                        Log.Info("千牛镜像单一跨源回显归并: origin="
+                            + (fromHistory ? "history" : "live") + ", role=" + role
+                            + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
+                        return;
+                    }
+                }
+
                 state.Turns.Add(new ConversationContextTurn
                 {
                     Role = role,
                     Text = cleanText,
                     Timestamp = timestamp,
                     MessageKey = messageKey,
+                    NativeAliases = aliases,
+                    PreciseTimeTicks = preciseTime,
+                    SeenLive = !fromHistory,
+                    SeenHistory = fromHistory,
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
             }
+        }
+
+        private static string[] GetNativeMessageAliases(QNChatMessage message)
+        {
+            var aliases = new List<string>();
+            if (message == null) return aliases.ToArray();
+            var clientId = message.mcode == null ? string.Empty
+                : (message.mcode.clientId ?? string.Empty).Trim();
+            var messageId = message.mcode == null ? string.Empty
+                : (message.mcode.messageId ?? string.Empty).Trim();
+            // clientId alone may identify a transport client rather than a
+            // unique message. Never merge different sends on clientId alone.
+            if (messageId.Length > 0)
+                aliases.Add("mcode:" + clientId + ":" + messageId);
+            if (messageId.Length > 0) aliases.Add("mcode-id:" + messageId);
+            if (message.ext != null && message.ext.ww_msgid != 0)
+                aliases.Add("ww:" + message.ext.ww_msgid.ToString(CultureInfo.InvariantCulture));
+            return aliases.Distinct(StringComparer.Ordinal).ToArray();
+        }
+
+        private static long GetPreciseNativeTimeTicks(QNChatMessage message)
+        {
+            if (message == null) return 0;
+            foreach (var raw in new[] { message.sortTimeMicrosecond, message.sendTime })
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var value = raw.Trim();
+                long numeric;
+                if (!((long.TryParse(value, out numeric) && numeric >= 1000000000000L)
+                    || (value.IndexOf('.') >= 0 && value.IndexOf(':') >= 0))) continue;
+                DateTime time;
+                if (TryParseTime(value, out time) && time != DateTime.MinValue)
+                    return time.Ticks;
+            }
+            return 0;
+        }
+
+        private static bool HasSharedNativeAlias(string[] previous, string[] incoming)
+        {
+            return previous != null && incoming != null && previous.Length > 0
+                && incoming.Length > 0
+                && previous.Intersect(incoming, StringComparer.Ordinal).Any();
+        }
+
+        private static void MergeObservedIdentity(
+            ConversationContextTurn turn, string[] aliases, long preciseTime, bool fromHistory)
+        {
+            // Keep the first canonical MessageKey stable: Bot source rows,
+            // context and mirror menus use it as the identity of that turn.
+            turn.NativeAliases = (turn.NativeAliases ?? new string[0])
+                .Concat(aliases ?? new string[0]).Distinct(StringComparer.Ordinal).ToArray();
+            if (turn.PreciseTimeTicks == 0) turn.PreciseTimeTicks = preciseTime;
+            if (fromHistory) turn.SeenHistory = true;
+            else turn.SeenLive = true;
         }
 
         private static void MarkLastSellerTurnWithdrawn(TimelineState state, DateTime withdrawalTime)
@@ -746,7 +867,12 @@ namespace Bot.ChromeNs
                 Text = source.Text,
                 Timestamp = source.Timestamp,
                 MessageKey = source.MessageKey,
-                Withdrawn = source.Withdrawn
+                Withdrawn = source.Withdrawn,
+                NativeAliases = source.NativeAliases == null
+                    ? new string[0] : (string[])source.NativeAliases.Clone(),
+                PreciseTimeTicks = source.PreciseTimeTicks,
+                SeenLive = source.SeenLive,
+                SeenHistory = source.SeenHistory
             };
         }
 
