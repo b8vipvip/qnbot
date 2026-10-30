@@ -195,7 +195,7 @@ namespace Bot.ChromeNs
                 if (inner != null) await inner(lease);
                 return;
             }
-            if (!ReplyModeService.IsLocalFirst(burst.SellerNick) || !KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
+            if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
             {
                 await inner(lease);
                 return;
