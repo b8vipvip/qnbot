@@ -28,6 +28,8 @@ namespace Bot.Knowledge
         private DataGrid _sourceGrid;
         private BotConversationHistoryEntity _selectedSource;
         private string _pendingSourceRecordId = string.Empty;
+        private bool _sourcesLoading;
+        private string _pinnedPresetId = string.Empty;
         private TextBox _presetSearch, _presetName, _presetText, _presetTrigger, _presetDescription;
         private CheckBox _presetEnabled;
         private TextBlock _presetStatus;
@@ -72,6 +74,7 @@ namespace Bot.Knowledge
             _tabs.SelectedIndex = 1;
             presetId = (presetId ?? string.Empty).Trim();
             if (presetId.Length == 0) return false;
+            _pinnedPresetId = presetId;
             RefreshPresets();
             var exact = _presets.FirstOrDefault(x =>
                 string.Equals(x.Id, presetId, StringComparison.Ordinal));
@@ -317,15 +320,18 @@ namespace Bot.Knowledge
 
         private void RefreshSources()
         {
+            if (_sourcesLoading) return;
             if (string.IsNullOrWhiteSpace(_seller))
             {
                 _sourceStatus.Text = "当前未识别店铺，不能读取店铺级 Bot 回复来源。";
                 return;
             }
+            _sourcesLoading = true;
             _sourceStatus.Text = "正在读取 Bot 回复来源…";
             Task.Run(() => BotConversationHistoryStore.LoadRecentBySeller(_seller, 2000))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _sourcesLoading = false;
                     if (t.IsFaulted)
                     {
                         _sourceStatus.Text = "读取失败：" + t.Exception.GetBaseException().Message;
@@ -439,6 +445,17 @@ namespace Bot.Knowledge
             {
                 _presets = BotReplyPresetService.GetPresets(_seller);
                 FilterPresets();
+                if (!string.IsNullOrWhiteSpace(_pinnedPresetId))
+                {
+                    var pinned = _presetView.FirstOrDefault(x =>
+                        string.Equals(x.Id, _pinnedPresetId, StringComparison.Ordinal));
+                    if (pinned != null)
+                    {
+                        _presetGrid.SelectedItem = pinned;
+                        _presetGrid.ScrollIntoView(pinned);
+                        LoadPresetEditor(pinned);
+                    }
+                }
                 _presetStatus.Text = "已加载 " + _presets.Count + " 条店铺内置话术；更改只影响后续新消息。";
             }
             catch (Exception ex)
