@@ -301,9 +301,14 @@ namespace Bot.Knowledge
                 var related = knowledge.Where(x => links[g.Key].Contains(x.Id))
                     .OrderByDescending(x => KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title))
                     .Take(25).ToList();
+                // Never present a loosely related answer as trusted support.
+                // Unmatched questions deliberately go to AI with no facts; the
+                // system prompt then requires an empty proposal for human review.
                 if (related.Count == 0)
-                    related = knowledge.OrderByDescending(x =>
-                        KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title)).Take(25).ToList();
+                    related = knowledge.Where(x =>
+                        KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title) >= 0.68)
+                        .OrderByDescending(x => KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title))
+                        .Take(25).ToList();
                 var payload = new JObject
                 {
                     ["topic"] = g.Title, ["frequency"] = g.Count,
