@@ -59,14 +59,14 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
     assert "BuildMessageMirrorBubble(" in mirror
     assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
     assert "messageElement = nativeBotConversation;" not in mirror
-    assert "BuildMessageMirrorBotContextMenu(botAction, turn, messageText, bubble)" in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in mirror
 
     # Bot bubbles retain their original actions even though the old Q/A card
     # is no longer the rendered element.
     assert "CreateAnswerContextMenu" in conversation
     assert "MirrorRequestResend" in mirror
     assert "MirrorRequestEdit" in mirror
-    assert "MirrorOpenKnowledge" in mirror
+    assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch" in mirror
     assert "MirrorAnswerSource" in mirror
     for label in ("查看", "复制", "重发", "修改", "来源"):
         assert f'Header = "{label}"' in mirror

@@ -35,6 +35,32 @@ namespace Bot.Knowledge
                 new RoutedEventHandler(OnLoaded), true);
         }
 
+        public static void ShowBotReplySearch(Window owner, string seller, string buyer, string question, string answer)
+        {
+            Initialize();
+            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认 Bot 回复所属店铺：" + ex.Message,
+                    "Bot 回复检索", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            if (owner != null) window.Owner = owner;
+            window.Loaded += delegate
+            {
+                window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var shell = window.Content as KnowledgeCenterV2Shell;
+                    if (shell != null)
+                        shell.OpenBotReplySearch(question, answer);
+                    else
+                        Log.ErrorWithMaxCount("打开Bot回复反查知识页面失败：Knowledge Center V2 shell未就绪。", 5);
+                }));
+            };
+            window.Show();
+        }
+
         private static void OnLoaded(object sender, RoutedEventArgs e)
         {
             var window = sender as KnowledgeCenterWindow;
@@ -80,7 +106,8 @@ namespace Bot.Knowledge
         public KnowledgeCenterV2Shell(KnowledgeCenterWindow owner)
         {
             _owner = owner;
-            _seller = KnowledgeCenterV2Context.ResolveSeller(owner);
+            _seller = !string.IsNullOrWhiteSpace(owner.RequestedSeller)
+                ? owner.RequestedSeller : KnowledgeCenterV2Context.ResolveSeller(owner);
 
             var root = new Grid { Background = Brushes.White };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -123,6 +150,7 @@ namespace Bot.Knowledge
                 Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
+                Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller)),
                 Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))
             };
@@ -218,6 +246,20 @@ namespace Bot.Knowledge
             return new Button { Content = text, Width = width, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
         }
 
+        internal void OpenReplySource(string reply)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenSourceSearch(reply);
+        }
+
+        internal void OpenPresetManager(string reply)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenPresetSearch(reply);
+        }
+
         private static NavItem Nav(string name, Func<UIElement> factory)
         {
             return new NavItem { Name = name, Factory = factory };
@@ -246,6 +288,13 @@ namespace Bot.Knowledge
                 _nav.SelectedItem = item;
                 return;
             }
+        }
+
+        public void OpenBotReplySearch(string question, string answer)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenKnowledgeSearch(question, answer);
         }
 
         private void UpdateStatus()

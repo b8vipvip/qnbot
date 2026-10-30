@@ -46,7 +46,7 @@ def test_product_links_use_local_presets_and_platform_tips_skip():
     assert 'IsPlatformSystemTip' in safety
     assert '淘宝/千牛自动生成的系统提示' in safety
     assert 'RegisterProductLinkReply' in safety
-    assert 'ProductLinkReplies' in store
+    assert 'BotReplyPresetService.GetEnabledPresets(seller)' in store
     assert 'TryTakeProductLinkReply' in ai
     preset_pos = ai.index('TryTakeProductLinkReply')
     config_pos = ai.index('EnsureConfig()', preset_pos)

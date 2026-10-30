@@ -33,11 +33,11 @@ def test_bot_echo_is_a_right_aligned_bubble_not_left_qa_card():
 def test_bot_actions_are_preserved_after_converting_to_bubble():
     src=read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     actions=read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
-    assert "BuildMessageMirrorBotContextMenu(botAction, turn, messageText, bubble)" in src
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in src
     assert "BuildCopyOnlyContextMenu(messageText, placementTarget)" in src
     assert "action.MirrorRequestResend()" in src
     assert "action.MirrorRequestEdit()" in src
-    assert "action.MirrorOpenKnowledge(Window.GetWindow(this))" in src
+    assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch(" in src
     assert "action.MirrorAnswerSource" in src
     assert "internal string MirrorAnswerSource" in actions
     assert "nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;" in src

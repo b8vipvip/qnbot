@@ -16,7 +16,7 @@ def test_product_link_preset_is_consumed_by_canonical_owner_before_first_inquiry
     first = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
     local = canonical.index("LocalShortReplyService.TryResolve(")
     assert offhours < product < first < local
-    assert '"商品链接预设回复"' in canonical[product:first]
+    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply)" in canonical[product:first]
     assert "CanonicalPreMergeOutcome.Consumed" in canonical[product:first]
     assert "aiCalled=false" in canonical[product:first]
 

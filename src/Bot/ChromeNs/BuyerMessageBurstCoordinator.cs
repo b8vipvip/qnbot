@@ -336,7 +336,7 @@ namespace Bot.ChromeNs
                 item.SellerNick, item.BuyerNick, question, out productLinkReply))
             {
                 var productOk = await SendFixedAsync(
-                    qn, item, productLinkReply, "商品链接预设回复", cancellationToken).ConfigureAwait(false);
+                    qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply), cancellationToken).ConfigureAwait(false);
                 Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + productOk + ", aiCalled=false");
                 return productOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;

@@ -1,5 +1,6 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChromeNs;
+using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
 using System;
@@ -223,31 +224,62 @@ namespace Bot.AssistWindow.Widget.Robot
                         botAnswer,
                         turn.Timestamp,
                         usedNativeBotConversations);
+                    var source = nativeBotConversation == null
+                        ? string.Empty
+                        : (nativeBotConversation.MirrorAnswerSource ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(source))
+                        source = KnowledgeLearningService.ResolveAnswerSource(
+                            seller, buyer, lastBuyerQuestion, botAnswer);
+                    BotReplyPreset matchedPreset;
+                    var isPresetReply = BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset);
+                    if (isPresetReply && (string.IsNullOrWhiteSpace(source)
+                        || source == "本地"
+                        || source == "商品链接预设回复"
+                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"
+                        || source.StartsWith("内置话术：", StringComparison.Ordinal)))
+                        source = BotReplyPresetService.BuildSourceLabel(matchedPreset);
+                    if (string.IsNullOrWhiteSpace(source))
+                        source = "来源未记录（千牛回显已确认，需人工补录）";
+
                     if (nativeBotConversation == null)
                     {
-                        // Reconstruct only provenance that can be proven from the
-                        // exact built-in response; a missing transient UI card
-                        // is not itself a message source.
-                        var source = ConversationContextStore.IsProductLinkPresetReply(botAnswer)
-                            ? "商品链接预设回复（内置固定话术，非知识库条目）"
-                            : KnowledgeLearningService.ResolveAnswerSource(
-                                seller, buyer, lastBuyerQuestion, botAnswer);
-                        if (string.IsNullOrWhiteSpace(source))
-                            source = "千牛已发送回显（来源记录未留存，不能确定知识库命中）";
+                        // Every observed Bot echo gets a durable history row even if
+                        // the transient answer card disappeared or the app restarted.
                         nativeBotConversation = CtlConversation.Create(
                             seller, buyer, lastBuyerQuestion, botAnswer, true, source);
                         nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");
                         nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;
                         nativeBotConversation.EditRequested += CtlConversation_EditRequested;
                     }
+                    else if (!string.Equals(nativeBotConversation.MirrorAnswerSource, source, StringComparison.Ordinal))
+                    {
+                        nativeBotConversation.MirrorSetAnswerSource(source);
+                    }
+
+                    // Keep provenance available after restart and associate the visible
+                    // transport echo with the nearest answer card where possible.
+                    var botEchoRecordId = BotConversationHistoryStore.RecordBotEcho(
+                        seller, buyer, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
+                    var operatorCorrection = BotConversationHistoryStore.GetManualSource(seller, botEchoRecordId);
+                    if (!string.IsNullOrWhiteSpace(operatorCorrection))
+                    {
+                        // An explicit correction is more authoritative than a
+                        // reconstructed temporary answer card on every refresh.
+                        source = operatorCorrection;
+                        nativeBotConversation.MirrorSetAnswerSource(operatorCorrection);
+                        KnowledgeLearningService.OverrideAnswerSource(
+                            seller, buyer, lastBuyerQuestion, botAnswer, operatorCorrection);
+                    }
+                    else
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(
+                            seller, buyer, lastBuyerQuestion, botAnswer, source);
+                    }
 
                     usedNativeBotConversations.Add(nativeBotConversation);
-                    // A Bot transport echo must use the SAME right-aligned seller
-                    // bubble layout as manual replies. The linked native answer
-                    // still owns 查看/复制/重发/修改/来源, but is not rendered as
-                    // the old left-aligned green Q/A card.
                     messageElement = BuildMessageMirrorBubble(
-                        turn, seller, buyer, botAnswer, nativeBotConversation);
+                        turn, seller, buyer, botAnswer, nativeBotConversation,
+                        botEchoRecordId, lastBuyerQuestion);
                 }
                 else
                 {
@@ -300,7 +332,9 @@ namespace Bot.AssistWindow.Widget.Robot
             string seller,
             string buyer,
             string botAnswer = null,
-            CtlConversation botAction = null)
+            CtlConversation botAction = null,
+            string botEchoRecordId = null,
+            string botQuestion = null)
         {
             var isSeller = string.Equals(turn.Role, "assistant", StringComparison.Ordinal);
             var isBot = isSeller && botAction != null;
@@ -364,7 +398,9 @@ namespace Bot.AssistWindow.Widget.Robot
                 Child = text
             };
             bubble.ContextMenu = isBot
-                ? BuildMessageMirrorBotContextMenu(botAction, turn, messageText, bubble)
+                ? BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer,
+                    string.IsNullOrWhiteSpace(botQuestion) ? botAction.MirrorQuestionText : botQuestion,
+                    messageText, botEchoRecordId, bubble)
                 : BuildCopyOnlyContextMenu(messageText, bubble);
 
             var stack = new StackPanel
@@ -379,64 +415,68 @@ namespace Bot.AssistWindow.Widget.Robot
             return stack;
         }
 
-        private static string ResolveMirrorBotSource(CtlConversation action, string messageText)
+        private static string ResolveMirrorBotSource(
+            string seller, string buyer, string question, CtlConversation action, string messageText)
         {
-            if (ConversationContextStore.IsProductLinkPresetReply(messageText))
-                return "商品链接预设回复（系统内置固定话术，不属于知识库 V2）";
             var source = action == null ? string.Empty : (action.MirrorAnswerSource ?? string.Empty).Trim();
-            if (source.IndexOf("本地答复卡片未找到", StringComparison.Ordinal) >= 0)
-                return "千牛已发送回显；原始来源记录未留存，不能确认知识库命中";
-            return string.IsNullOrWhiteSpace(source)
-                ? "千牛已发送回显；来源尚未记录，不能确认知识库命中"
-                : source;
-        }
+            if (source.IndexOf("本地答复卡片未找到", StringComparison.Ordinal) >= 0
+                || source == "千牛已发送回显（来源未记录，需人工补录）"
+                || source == "千牛已发送回显（来源记录未留存，不能确定知识库命中）")
+                source = string.Empty;
 
-        private static bool IsVerifiedKnowledgeMirrorSource(string source)
-        {
-            return source == "智能路由-本地直答"
-                || source == "智能路由-离线知识兜底"
-                || source == "知识库直答"
-                || source == "知识库匹配";
+            BotReplyPreset preset;
+            var isPreset = BotReplyPresetService.TryFindPreset(seller, messageText, out preset);
+            if (isPreset && (string.IsNullOrWhiteSpace(source)
+                || source == "本地"
+                || source == "商品链接预设回复"
+                || source == "商品链接预设回复（内置固定话术，非知识库条目）"
+                || source.StartsWith("内置话术：", StringComparison.Ordinal)))
+                return BotReplyPresetService.BuildSourceLabel(preset);
+
+            if (string.IsNullOrWhiteSpace(source))
+                source = KnowledgeLearningService.ResolveAnswerSource(seller, buyer, question, messageText);
+            if (string.IsNullOrWhiteSpace(source) && isPreset)
+                source = BotReplyPresetService.BuildSourceLabel(preset);
+            return string.IsNullOrWhiteSpace(source)
+                ? "来源未记录（千牛回显已确认，需人工补录）"
+                : source;
         }
 
         private ContextMenu BuildMessageMirrorBotContextMenu(
             CtlConversation action,
             ConversationContextTurn turn,
+            string seller,
+            string buyer,
+            string question,
             string messageText,
+            string sourceRecordId,
             FrameworkElement placementTarget)
         {
             var menu = BuildCopyOnlyContextMenu(messageText, placementTarget);
-            var source = ResolveMirrorBotSource(action, messageText);
+            var source = ResolveMirrorBotSource(seller, buyer, question, action, messageText);
             var timestamp = turn == null || turn.Timestamp == DateTime.MinValue
                 ? "时间未记录" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
             var detail = "发送时间：" + timestamp
                 + "\n发送者：Bot"
                 + "\n消息来源：" + source
+                + "\n\n买家问题：\n" + (question ?? string.Empty)
                 + "\n\n回复内容：\n" + messageText;
             var view = new MenuItem { Header = "查看" };
             view.Click += (s, e) =>
             {
-                // Only a confirmed knowledge-source answer can navigate to the
-                // legacy knowledge locator. Presets and unknown-source echoes
-                // are perfectly valid Bot replies without a Knowledge V2 entry.
-                if (IsVerifiedKnowledgeMirrorSource(source))
-                {
-                    var result = MessageBox.Show(Window.GetWindow(this),
-                        detail + "\n\n来源标记指向知识检索。是否进一步尝试定位知识库条目？",
-                        "Bot 回复详情", MessageBoxButton.YesNo, MessageBoxImage.Information);
-                    if (result == MessageBoxResult.Yes)
-                        action.MirrorOpenKnowledge(Window.GetWindow(this));
-                }
-                else
-                {
-                    MessageBox.Show(Window.GetWindow(this),
-                        detail + "\n\n此回复并非已验证的知识库命中，不会错误跳转知识库。",
-                        "Bot 回复详情", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
+                MessageBox.Show(Window.GetWindow(this),
+                    detail + "\n\n来源信息可在知识中心 V2 的“Bot回复管理”中查看和维护。",
+                    "Bot 回复详情", MessageBoxButton.OK, MessageBoxImage.Information);
             };
             menu.Items.Insert(0, view);
 
-            if (action.MirrorCanResend)
+            var searchKnowledge = new MenuItem { Header = "知识库检索问题" };
+            searchKnowledge.Click += (s, e) =>
+                KnowledgeCenterV2UiBridge.ShowBotReplySearch(
+                    Window.GetWindow(this), seller, buyer, question, messageText);
+            menu.Items.Add(searchKnowledge);
+
+            if (action != null && action.MirrorCanResend)
             {
                 var resend = new MenuItem { Header = "重发" };
                 resend.Click += (s, e) => action.MirrorRequestResend();
@@ -444,16 +484,27 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             var edit = new MenuItem { Header = "修改" };
-            edit.Click += (s, e) => action.MirrorRequestEdit();
+            edit.Click += (s, e) => { if (action != null) action.MirrorRequestEdit(); };
             menu.Items.Add(edit);
 
             var provenance = new MenuItem { Header = "来源" };
-            provenance.Click += (s, e) => MessageBox.Show(
-                Window.GetWindow(this),
-                "消息来源：" + source
-                    + "\n该消息已由千牛回显确认发送。来源标签仅表示回复生成路径，不代表知识库一定存在同名条目。"
-                    + "\n修改本地答案或知识不会修改已送达买家的消息。",
-                "消息来源", MessageBoxButton.OK, MessageBoxImage.Information);
+            provenance.Click += (s, e) =>
+            {
+                var edited = BotReplySourceEditorWindow.Edit(Window.GetWindow(this), source);
+                if (edited == null) return;
+                if (!BotConversationHistoryStore.UpdateAnswerSource(seller, sourceRecordId, edited))
+                {
+                    MessageBox.Show(Window.GetWindow(this),
+                        "来源文本未能保存到持久化记录。请打开知识中心 V2 → Bot回复管理重试。",
+                        "来源管理", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                KnowledgeLearningService.OverrideAnswerSource(seller, buyer, question, messageText, edited);
+                if (action != null) action.MirrorSetAnswerSource(edited);
+                source = edited;
+                Log.Info("Bot回复来源标签已由消息菜单修改: seller=" + seller
+                    + ", buyer=" + buyer + ", record=" + sourceRecordId);
+            };
             menu.Items.Add(provenance);
             return menu;
         }

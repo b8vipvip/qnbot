@@ -24,6 +24,7 @@ namespace Bot.Knowledge
 {
     public class KnowledgeCenterWindow : Window
     {
+        internal string RequestedSeller { get; set; }
         private readonly TabControl _tabs;
         private readonly KnowledgeImportControl _import;
         private readonly KnowledgeManagerControl _manager;
@@ -82,6 +83,33 @@ namespace Bot.Knowledge
             MessageBox.Show(this,
                 "没有找到完全对应的知识条目，已按当前问题或答案显示搜索结果。",
                 "知识库定位", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        public static void ShowBotReplySourceAndLocate(Window owner, string seller, string answer, bool presetManager = false)
+        {
+            if (string.IsNullOrWhiteSpace(seller)) return;
+            // A seller identity must exist in the currently connected shop before
+            // opening an editor. Never silently fall back to another open shop.
+            try { Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法定位消息所属店铺：" + ex.Message, "Bot 来源管理",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var wnd = new KnowledgeCenterWindow { RequestedSeller = seller };
+            if (owner != null) wnd.Owner = owner;
+            wnd.Loaded += (s, e) => wnd.Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    var shell = wnd.Content as KnowledgeCenterV2Shell;
+                    if (shell != null)
+                    {
+                        if (presetManager) shell.OpenPresetManager(answer);
+                        else shell.OpenReplySource(answer);
+                    }
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            wnd.Show();
         }
 
         protected override void OnClosed(EventArgs e)
