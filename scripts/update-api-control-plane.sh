@@ -473,6 +473,11 @@ if [[ -f "$SMART_PLAN_TOOL" ]]; then
     log "GPTAuto 分类失败，采用已有的正式镜像构建路径"
   fi
 fi
+if [[ "$SMART_MODE" == "client-build" ]]; then
+  log "GPTAuto 智能判断：仅 Windows 客户端代码变更，服务器无需 Docker Build"
+  log "Windows 编译/客户端正式版资产由 GitHub Actions 和既有客户端发布流程负责；不会把服务器重启冒充客户端交付成功"
+  exit 0
+fi
 if [[ "$SMART_MODE" == "checks-only" ]]; then
   log "GPTAuto 智能判断：无运行时代码变更，无需容器部署"
   exit 0
