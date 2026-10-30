@@ -1,4 +1,6 @@
 using Bot.ChromeNs;
+using BotLib;
+using System.Security.Cryptography;
 using Bot.ShopScope;
 using Newtonsoft.Json.Linq;
 using System.Threading;
@@ -29,8 +31,7 @@ namespace Bot.Knowledge
         private readonly Dictionary<string, CheckBox> _scenarios =
             new Dictionary<string, CheckBox>(StringComparer.Ordinal);
         private readonly CheckBox _enableAi;
-        private readonly TextBox _directAnswerDraft;
-        private readonly Button _saveDirect;
+        private readonly string _sandboxSessionId = Guid.NewGuid().ToString("N").Substring(0, 12);
         private readonly List<KeyValuePair<string, string>> _conversation =
             new List<KeyValuePair<string, string>>();
         private string _lastMissQuestion = string.Empty;
@@ -43,7 +44,6 @@ namespace Bot.Knowledge
         private readonly TextBox _product;
         private readonly TextBlock _status;
         private readonly TextBox _diagnostics;
-        private readonly Expander _reviewExpander;
         private readonly Button _send;
         private string _syntheticBuyer;
         private bool _firstInquiryUsed;
@@ -68,7 +68,6 @@ namespace Bot.Knowledge
             }); // primary transcript
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // compose
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // status
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // teaching drawer
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // evidence drawer
             Action<UIElement, int> attach = (control, row) =>
             {
@@ -306,36 +305,6 @@ namespace Bot.Knowledge
             };
             attach(_status, 5);
 
-            _reviewExpander = new Expander
-            {
-                Header = "人工审核新增直答（未命中知识后可编辑，点击展开）",
-                IsExpanded = false,
-                Margin = new Thickness(0, 1, 0, 5)
-            };
-            var teaching = new DockPanel { Margin = new Thickness(7, 6, 7, 7) };
-            _saveDirect = new Button
-            {
-                Content = "审核并新增直答",
-                Width = 122,
-                Height = 68,
-                Margin = new Thickness(8, 0, 0, 0),
-                IsEnabled = false
-            };
-            _saveDirect.Click += delegate { SaveDirectAnswer(); };
-            DockPanel.SetDock(_saveDirect, Dock.Right);
-            teaching.Children.Add(_saveDirect);
-            _directAnswerDraft = new TextBox
-            {
-                Height = 68,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                ToolTip = "仅未直答的问题可提交人工审核；确认后才会写入真实 V2 知识库"
-            };
-            teaching.Children.Add(_directAnswerDraft);
-            _reviewExpander.Content = teaching;
-            attach(_reviewExpander, 6);
-
             var evidence = new Expander
             {
                 Header = "本轮路由证据（只读，点击展开）",
@@ -352,10 +321,11 @@ namespace Bot.Knowledge
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
             evidence.Content = _diagnostics;
-            attach(evidence, 7);
+            attach(evidence, 6);
 
             Content = root;
-            AddBubble("系统", "独立沙盒会话已建立，所有订单号均为模拟数据。", "sandbox-only");
+            AddBubble("系统", "独立模拟会话已建立，所有订单号均为模拟数据。", "sandbox-only");
+            TraceSandbox("session_open", "success", null, null, string.Empty);
         }
 
         private bool Enabled(string scene)
@@ -379,14 +349,12 @@ namespace Bot.Knowledge
             _lastMissAnswer = string.Empty;
             _lastMissWasHighRisk = false;
             _lastMissHadConflict = false;
-            _saveDirect.IsEnabled = false;
-            _reviewExpander.Header = "人工审核新增直答（未命中知识后可编辑，点击展开）";
-            _directAnswerDraft.Text = string.Empty;
             _turns = 0;
             _transcript.Children.Clear();
             _diagnostics.Text = string.Empty;
             _status.Text = "已清空模拟会话；真实买家和订单数据未改变。";
             AddBubble("系统", "已重新开始模拟会话（首条咨询状态已重置）。", "sandbox-only");
+            TraceSandbox("new_session", "success", null, null, "context_reset");
         }
 
         private void AddBubble(string role, string message, string source)
@@ -444,8 +412,8 @@ namespace Bot.Knowledge
             }
             _busy = true;
             _send.IsEnabled = false;
-            _saveDirect.IsEnabled = false;
             _status.Text = "正在模拟路由（不会发送千牛消息）...";
+            TraceSandbox("request_start", "running", message, null, isOrder ? forcedEvent : "chat");
             if (isOrder && string.Equals((_orderId.Text ?? "").Trim(), "SIM-ORDER-001", StringComparison.Ordinal))
                 await LoadHistoricalSampleAsync(true); // Reuse a detached sample for this simulated order.
             if ((isOrder || IsOnlyProductLink(scenes, message))
@@ -472,9 +440,12 @@ namespace Bot.Knowledge
                 if (result.NeedsAi && enableAi && !isOrder)
                 {
                     _status.Text = "正在调用当前店铺已配置的 AI 接口（只发送模拟对话文本）...";
+                    TraceSandbox("ai_start", "running", message, null, "fallback");
                     var ai = await Task.Run(() => GenerateAiPreview(
                         message, history, result.Detail, result.KnowledgeCandidates));
                     result.Detail += "\nAI调用：" + ai.Detail;
+                    TraceSandbox("ai_finish", ai.Success ? "success" : "error", message, null,
+                        "replyLength=" + (ai.Answer ?? "").Length);
                     if (ai.Success)
                     {
                         result.Reply = (string.IsNullOrWhiteSpace(result.Prefix) ? ""
@@ -514,17 +485,16 @@ namespace Bot.Knowledge
                 _lastMissAnswer = result.SuggestedAnswer;
                 _lastMissWasHighRisk = result.IsHighRisk;
                 _lastMissHadConflict = result.HasConflict;
-                _saveDirect.IsEnabled = _lastMissQuestion.Length > 0;
-                _reviewExpander.Header = _lastMissQuestion.Length > 0
-                    ? "人工审核新增直答 · 已有待审核问题（点击展开）"
-                    : "人工审核新增直答（未命中知识后可编辑，点击展开）";
-                _directAnswerDraft.Text = _lastMissQuestion.Length > 0
-                    ? (result.SuggestedAnswer ?? string.Empty) : string.Empty;
+                TraceSandbox("request_finish", result.IsKnowledgeMiss ? "not_direct" : "success",
+                    message, null, "source=" + SafeKind(result.Source) + ";mode="
+                        + SafeKind(KnowledgeEngineV2Service.GetMode(_seller))
+                        + ";candidates=" + SafeCount(result.KnowledgeCandidates));
                 if (!isOrder) _input.Clear();
             }
             catch (Exception ex)
             {
                 _status.Text = "模拟失败：" + ex.Message;
+                TraceSandbox("request_failed", "error", message, null, "exception=" + ex.GetType().Name);
                 _diagnostics.Text = "沙盒异常，未发送千牛消息或订单操作。";
             }
             finally
