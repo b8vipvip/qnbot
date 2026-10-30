@@ -267,13 +267,9 @@ namespace Bot.AssistWindow.Widget.Robot
                         // reconstructed temporary answer card on every refresh.
                         source = operatorCorrection;
                         nativeBotConversation.MirrorSetAnswerSource(operatorCorrection);
-                        KnowledgeLearningService.OverrideAnswerSource(
-                            seller, buyer, lastBuyerQuestion, botAnswer, operatorCorrection);
-                    }
-                    else
-                    {
-                        KnowledgeLearningService.RegisterAnswerSource(
-                            seller, buyer, lastBuyerQuestion, botAnswer, source);
+                        // Operator corrections belong only to this exact transport
+                        // message; never rewrite the shared question+answer source
+                        // stamp used by subsequent Bot replies.
                     }
 
                     usedNativeBotConversations.Add(nativeBotConversation);
@@ -499,7 +495,8 @@ namespace Bot.AssistWindow.Widget.Robot
                         "来源管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                KnowledgeLearningService.OverrideAnswerSource(seller, buyer, question, messageText, edited);
+                // The message-specific history correction is durable. Do not
+                // poison the shared answer stamp for future identical replies.
                 if (action != null) action.MirrorSetAnswerSource(edited);
                 source = edited;
                 Log.Info("Bot回复来源标签已由消息菜单修改: seller=" + seller
