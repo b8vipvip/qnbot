@@ -251,10 +251,11 @@ namespace Bot.ChromeNs
                         .OrderBy(x => Math.Abs((double)(x.Time - targetTicks)));
                     foreach (var candidate in eligible)
                     {
+                        var candidateRecordId = candidate.Row.EntityId;
                         BotReplyEchoLinkEntity claimed;
                         lock (DbSync)
                             claimed = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
-                                x => x.RecordId == candidate.Row.EntityId);
+                                x => x.RecordId == candidateRecordId);
                         if (claimed != null) continue;
                         match = candidate.Row;
                         break;
