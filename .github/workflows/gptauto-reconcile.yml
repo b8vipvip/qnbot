@@ -22,7 +22,7 @@ permissions:
   issues: write
 concurrency:
   group: gptauto-reconcile-${{ inputs.task_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   reconcile:
     runs-on: ubuntu-latest

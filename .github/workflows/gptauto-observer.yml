@@ -37,8 +37,8 @@ permissions:
   pull-requests: read
   issues: read
 concurrency:
-  group: gptauto-observer-${{ github.event.pull_request.number || github.event.workflow_run.id || github.event.release.id || github.ref }}
-  cancel-in-progress: true
+  group: gptauto-observer-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   watchdog:
@@ -295,15 +295,20 @@ jobs:
           echo "generation=$generation" >> "$GITHUB_OUTPUT"
           echo "head-sha=$dispatch_head" >> "$GITHUB_OUTPUT"
           echo "executor-eligible=$EXECUTOR_ELIGIBLE" >> "$GITHUB_OUTPUT"
+          echo "dispatch-required=$(jq -r '.dispatch_required' observer-result.json)" >> "$GITHUB_OUTPUT"
+          echo "dispatch-key=$(jq -r '.dispatch_key' observer-result.json)" >> "$GITHUB_OUTPUT"
+          if [[ "$(jq -r '.dispatch_required' observer-result.json)" != "true" ]]; then
+            echo "::notice::Observer received no new task/head/CI/phase evidence: skip Executor."
+          fi
 
       - uses: ./.github/actions/upload-gptauto-log
-        if: ${{ steps.ingress.outputs.actionable == 'true' }}
+        if: ${{ steps.ingress.outputs.actionable == 'true' && steps.capture.outputs.dispatch-required == 'true' }}
         with:
           task-id: ${{ steps.capture.outputs.task-id }}
           retention-days: '30'
 
       - name: Dispatch canonical Executor handoff
-        if: ${{ steps.ingress.outputs.actionable == 'true' && steps.capture.outputs.executor-eligible == 'true' }}
+        if: ${{ steps.ingress.outputs.actionable == 'true' && steps.capture.outputs.executor-eligible == 'true' && steps.capture.outputs.dispatch-required == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -326,11 +331,15 @@ jobs:
         env:
           TASK_ID: ${{ steps.capture.outputs.task-id }}
           EXECUTOR_ELIGIBLE: ${{ steps.capture.outputs.executor-eligible }}
+          DISPATCH_REQUIRED: ${{ steps.capture.outputs.dispatch-required }}
+          DISPATCH_KEY: ${{ steps.capture.outputs.dispatch-key }}
         run: |
           {
             echo "## GPTAuto repository observation"
             echo "- Task ID: \`$TASK_ID\`"
             echo "- Artifact: \`gptauto-$TASK_ID\`"
+            echo "- Dispatch required: $DISPATCH_REQUIRED"
+            echo "- Event fingerprint: $DISPATCH_KEY"
             echo "- Provenance: \`repository_observer\`"
             echo "- Executor eligible: \`$EXECUTOR_ELIGIBLE\`"
             echo "- Superseded PR workflow runs are cancelled on synchronize events."

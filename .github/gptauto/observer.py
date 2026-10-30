@@ -48,6 +48,26 @@ def observed_task_id(repo, pr_number="", head_sha="", merge_sha=""):
     return "GA-" + hashlib.sha256((repo + ":" + anchor).encode()).hexdigest()[:12]
 
 
+def observation_dispatch_key(task: Task, phase: str) -> str:
+    """Hash actionable evidence instead of the fresh Observer workflow run ID."""
+    m = task.metadata
+    identity = {
+        "task_id": task.task_id,
+        "head_sha": m.get("current_pr_head_sha") or m.get("head_sha") or "",
+        "merge_sha": m.get("merge_sha") or "",
+        "phase": phase,
+        "pr_ci_run_id": m.get("pr_ci_run_id") or "",
+        "pr_ci_run_attempt": str(m.get("pr_ci_run_attempt") or ""),
+        "main_ci_run_id": m.get("main_ci_run_id") or "",
+        "release_run_id": m.get("release_run_id") or "",
+        "release_published": bool(m.get("release_published")),
+        "release_required": bool(m.get("release_required")),
+        "blocked_reason": m.get("blocked_reason") or "",
+    }
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
 def _passed(value):
     return str(value or "").lower() == "success"
 
@@ -319,6 +339,8 @@ def capture(
         )
     ]
 
+    previous_dispatch_key = ""
+    previous_terminal_done = False
     previous_state = Path(log_root) / tid / "state.json"
     if previous_state.exists():
         try:
@@ -326,6 +348,8 @@ def capture(
         except (OSError, ValueError, KeyError, TypeError):
             previous = None
         if previous and previous.task_id == tid:
+            previous_dispatch_key = str(previous.metadata.get("last_executor_dispatch_key") or "")
+            previous_terminal_done = bool(previous.metadata.get("terminal_done"))
             t.created_at = previous.created_at
             merged_metadata = dict(previous.metadata)
             merged_metadata.update({k: v for k, v in t.metadata.items() if v not in ("", None)})
@@ -352,6 +376,18 @@ def capture(
     from .orchestrator import canonicalize_task
 
     authority = canonicalize_task(t)
+    dispatch_key = observation_dispatch_key(t, authority["phase"])
+    # Explicit manual dispatch always permits recovery. Repeated automatic
+    # wakeups for unchanged task/head/CI-run/phase evidence are no-ops.
+    dispatch_required = (
+        event == "workflow_dispatch"
+        or (
+            dispatch_key != previous_dispatch_key
+            and not (previous_terminal_done and authority["terminal_done"])
+        )
+    )
+    t.metadata["last_executor_dispatch_key"] = dispatch_key
+    t.metadata["last_observation_was_duplicate"] = not dispatch_required
 
     from .time_budget import apply as apply_time_budget
 
@@ -362,6 +398,8 @@ def capture(
         "state": t.state.value,
         "phase": authority["phase"],
         "generation": authority["generation"],
+        "dispatch_required": dispatch_required,
+        "dispatch_key": dispatch_key,
         "terminal_done": authority["terminal_done"],
         "allow_foreground_exit": authority["allow_foreground_exit"],
         "provenance": evidence_provenance,

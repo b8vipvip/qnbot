@@ -9,8 +9,8 @@ permissions:
   pull-requests: write
   issues: write
 concurrency:
-  group: gptauto-executor-${{ github.event.client_payload.task_id || github.event.client_payload.observer_run_id || github.run_id }}-${{ github.event.client_payload.head_sha || github.run_id }}
-  cancel-in-progress: true
+  group: gptauto-executor-${{ github.event.client_payload.task_id || github.event.client_payload.observer_run_id || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   execute:
@@ -130,10 +130,18 @@ jobs:
             -f merge_method=squash -f sha="$EXPECTED_HEAD" | tee /tmp/gptauto-merge.json
           jq -e '.merged == true' /tmp/gptauto-merge.json >/dev/null
           merge_sha="$(jq -r '.sha' /tmp/gptauto-merge.json)"
+          marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$merge_sha -->"
+          existing="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          if grep -Fq "$marker" <<<"$existing"; then
+            echo "Reconcile already dispatched for task=$TASK_ID merge=$merge_sha; no duplicate workflow."
+            exit 0
+          fi
           default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
             -f release_required="${{ steps.state.outputs.release-required }}"
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
+          GPTAuto scheduled Reconcile for task $TASK_ID merge $merge_sha. Automatic wakeups reuse this handoff; explicit manual recovery remains available."
 
       - name: Adopt externally merged completion lease
         if: ${{ steps.state.outputs.action == 'reconcile_adopt' }}
@@ -149,9 +157,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || { echo "::error::Reconcile adoption is missing task/PR/merge identity."; exit 1; }
+          marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$MERGE_SHA -->"
+          existing="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          if grep -Fq "$marker" <<<"$existing"; then
+            echo "Reconcile already dispatched for task=$TASK_ID merge=$MERGE_SHA; keeping one canonical run."
+            exit 0
+          fi
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
             -f release_required="$RELEASE_REQUIRED"
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
+          GPTAuto adopted merged task $TASK_ID for Reconcile on merge $MERGE_SHA. Automatic wakeups reuse the handoff; explicit manual recovery remains available."
 
       - name: Retry transient failed jobs only
         id: transient-retry
