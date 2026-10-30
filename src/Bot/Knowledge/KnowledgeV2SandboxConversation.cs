@@ -279,6 +279,9 @@ namespace Bot.Knowledge
             _status.Text = "正在模拟路由（不会发送千牛消息）...";
             if (isOrder && string.Equals((_orderId.Text ?? "").Trim(), "SIM-ORDER-001", StringComparison.Ordinal))
                 await LoadHistoricalSampleAsync(true); // Reuse a detached sample for this simulated order.
+            if ((isOrder || IsOnlyProductLink(scenes, message))
+                && (_product.Text ?? "").Contains("未读取真实素材"))
+                await LoadProductSampleAsync(true);
             var selectedOrder = (_orderId.Text ?? "").Trim();
             var amount = (_orderAmount.Text ?? "").Trim();
             var product = (_product.Text ?? "").Trim();
@@ -415,7 +418,8 @@ namespace Bot.Knowledge
                     if (preset != null)
                         return Reply(preset.Text, BotReplyPresetService.BuildSourceLabel(preset),
                             "商品链接被识别为非实质咨询；首条咨询名额未消耗。仅预览首个启用话术，"
-                            + "生产可能按消息ID选出另一条话术。");
+                            + "生产可能按消息ID选出另一条话术。"
+                            + " 当前店铺只读商品素材：" + product);
                 }
 
                 var prefix = string.Empty;
@@ -567,9 +571,9 @@ namespace Bot.Knowledge
             catch (Exception ex) { _status.Text = "历史订单素材读取失败：" + ex.Message; }
         }
 
-        private async Task LoadProductSampleAsync()
+        private async Task LoadProductSampleAsync(bool internalCall = false)
         {
-            if (_busy) return;
+            if (_busy && !internalCall) return;
             _status.Text = "正在从当前店铺的历史订单和商品知识只读选择素材...";
             try
             {
