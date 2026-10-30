@@ -99,7 +99,8 @@ namespace Bot.Knowledge
         public KnowledgeCenterV2Shell(KnowledgeCenterWindow owner)
         {
             _owner = owner;
-            _seller = KnowledgeCenterV2Context.ResolveSeller(owner);
+            _seller = !string.IsNullOrWhiteSpace(owner.RequestedSeller)
+                ? owner.RequestedSeller : KnowledgeCenterV2Context.ResolveSeller(owner);
 
             var root = new Grid { Background = Brushes.White };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
