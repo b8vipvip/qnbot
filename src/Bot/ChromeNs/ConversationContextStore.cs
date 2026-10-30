@@ -48,13 +48,6 @@ namespace Bot.ChromeNs
         /// Exact match only. Preset content is read from the shop-scoped editable
         /// catalog so disabled/deleted entries stop being used immediately.
         /// </summary>
-        internal static bool IsProductLinkPresetReply(string answer)
-        {
-            var current = QN.CurQN;
-            var seller = current == null || current.Seller == null ? string.Empty : current.Seller.Nick;
-            return IsProductLinkPresetReply(seller, answer);
-        }
-
         internal static bool IsProductLinkPresetReply(string seller, string answer)
         {
             return BotReplyPresetService.IsPresetReply(seller, answer);
