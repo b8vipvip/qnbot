@@ -45,6 +45,10 @@ def _valid_path(name: str) -> bool:
 
 def _metadata_only(name: str) -> bool:
     return (name.endswith((".md", ".rst")) or
+            # GPTAuto's managed orchestration YAML changes do not alter the
+            # product runtime image. Product CI still validates the workflow.
+            (name.startswith(".github/workflows/gptauto-") and
+             name.endswith((".yml", ".yaml"))) or
             name.startswith(("docs/", "tests/", ".github/gptauto/", ".github/actions/")) or
             name in {"AGENTS.md", ".gitignore"})
 
