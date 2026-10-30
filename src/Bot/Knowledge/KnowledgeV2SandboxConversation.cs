@@ -281,7 +281,7 @@ namespace Bot.Knowledge
             var product = (_product.Text ?? "").Trim();
             var first = !_firstInquiryUsed;
             var enableAi = _enableAi.IsChecked == true;
-            var history = _conversation.TakeLastForSandbox(12);
+            var history = _conversation.Skip(Math.Max(0, _conversation.Count - 12)).ToList();
             AddBubble(isOrder ? "模拟事件" : "买家", isOrder ? forcedEvent : message,
                 isOrder ? "独立事件" : "模拟买家");
             try
@@ -588,21 +588,21 @@ namespace Bot.Knowledge
             return value is T ? (T)value : fallback;
         }
 
-        private PreviewResult PreviewOffHours(object cfg)
+        private PreviewResult PreviewOffHours(object cfg, bool force)
         {
-            if (!GetSetting(cfg, "EnableWorkHours", false))
-                return Reply("（未启用下班固定回复）", "下班自动回复",
-                    "当前店铺未启用工作时间规则，模拟时不会绕过开关。", "未触发");
+            if (!GetSetting(cfg, "EnableWorkHours", false)) return null;
             var start = GetSetting(cfg, "WorkStartTime", "");
             var end = GetSetting(cfg, "WorkEndTime", "");
             TimeSpan s, e;
             if (!TimeSpan.TryParse(start, out s) || !TimeSpan.TryParse(end, out e))
-                return Reply("（工作时间配置无效）", "下班自动回复", "拒绝猜测工作时间。", "未触发");
+                return null;
+            var now = DateTime.Now.TimeOfDay;
+            var within = s == e || (s < e ? now >= s && now < e : now >= s || now < e);
+            if (within && !force) return null;
             var hours = s.ToString(@"hh\:mm") + "-" + e.ToString(@"hh\:mm");
             var body = GetSetting(cfg, "OffHoursFixedText", "");
             if (string.IsNullOrWhiteSpace(body))
-                return Reply("（未设置下班固定话术）", "下班自动回复",
-                    "模拟展示固定模板，不调用AI生成模式。", "未触发");
+                return null;
             return Reply(body.Replace("{工作时间}", hours), "下班自动回复",
                 "强制选择“下班场景”，只预览当前配置文本；没有更改系统时间或真实营业状态。");
         }
