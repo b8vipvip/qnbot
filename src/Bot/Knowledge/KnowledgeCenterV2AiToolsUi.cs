@@ -311,7 +311,7 @@ namespace Bot.Knowledge
         }
     }
 
-    internal sealed class KnowledgeV2AiOptimizationHistoryPage : UserControl, IKnowledgeV2Refreshable
+    internal sealed class KnowledgeV2AiOptimizationHistoryPage : UserControl, IKnowledgeV2Refreshable, IKnowledgeV2Searchable
     {
         private sealed class HistoryItem
         {
@@ -326,6 +326,8 @@ namespace Bot.Knowledge
         private readonly string _seller;
         private readonly DataGrid _grid;
         private readonly ComboBox _filter;
+        private readonly ComboBox _resultFilter;
+        private readonly TextBox _search;
         private readonly TextBlock _status;
         private List<KnowledgeV2GovernanceAuditEntry> _all = new List<KnowledgeV2GovernanceAuditEntry>();
         private List<ConversationSessionLearningReportView> _sessions = new List<ConversationSessionLearningReportView>();
@@ -339,13 +341,13 @@ namespace Bot.Knowledge
             var header = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
             header.Children.Add(new TextBlock
             {
-                Text = "AI优化记录",
+                Text = "优化记录",
                 FontSize = 20,
                 FontWeight = FontWeights.SemiBold
             });
             header.Children.Add(new TextBlock
             {
-                Text = "汇总 V2 智能导入、AI 修订和本店对话自动学习的实际状态、修改数量及失败原因；自动学习记录来自独立审计表。",
+                Text = "汇总当前店铺 AI 优化、自动学习和人工添加/修订直答的历史，支持关键词与结果筛选。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 4, 0, 0)
@@ -355,13 +357,26 @@ namespace Bot.Knowledge
 
             var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
             _filter = new ComboBox { Width = 150, Height = 28, Margin = new Thickness(0, 0, 8, 0) };
-            _filter.Items.Add("全部AI记录");
+            _filter.Items.Add("全部记录");
+            _filter.Items.Add("AI优化");
+            _filter.Items.Add("人工优化");
             _filter.Items.Add("智能导入");
-            _filter.Items.Add("AI修订优化");
             _filter.Items.Add("会话自动学习");
             _filter.SelectedIndex = 0;
             _filter.SelectionChanged += delegate { ApplyFilter(); };
             tools.Children.Add(_filter);
+            _resultFilter = new ComboBox { Width = 108, Height = 28,
+                Margin = new Thickness(0, 0, 8, 0) };
+            foreach (var item in new[] { "全部结果", "成功", "失败", "跳过", "进行中" })
+                _resultFilter.Items.Add(item);
+            _resultFilter.SelectedIndex = 0;
+            _resultFilter.SelectionChanged += delegate { ApplyFilter(); };
+            tools.Children.Add(_resultFilter);
+            _search = new TextBox { Width = 270, Height = 28,
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "可按问题、操作类别、记录内容、知识ID或结果关键字查询" };
+            _search.TextChanged += delegate { ApplyFilter(); };
+            tools.Children.Add(_search);
             var refresh = new Button { Content = "刷新", Width = 74, Height = 30 };
             refresh.Click += delegate { RefreshView(); };
             tools.Children.Add(refresh);
@@ -398,13 +413,13 @@ namespace Bot.Knowledge
                 _all = new List<KnowledgeV2GovernanceAuditEntry>();
                 _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
-                _status.Text = "当前未识别店铺，无法读取 AI 优化记录。";
+                _status.Text = "当前未识别店铺，无法读取优化记录。";
                 return;
             }
             try
             {
                 _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
-                    .Where(IsAiHistory)
+                    .Where(IsOptimizationHistory)
                     .ToList();
                 _sessions = ConversationSessionLearningService.GetReports(1000)
                     .Where(x => x != null && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
@@ -414,19 +429,29 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 _grid.ItemsSource = null;
-                _status.Text = "读取 AI 优化记录失败：" + ex.Message;
+                _status.Text = "读取优化记录失败：" + ex.Message;
             }
+        }
+
+        public void ApplyGlobalSearch(string text)
+        {
+            _search.Text = text ?? string.Empty;
         }
 
         private void ApplyFilter()
         {
             if (_grid == null || _filter == null) return;
-            var mode = _filter.SelectedItem as string ?? "全部AI记录";
+            var mode = _filter.SelectedItem as string ?? "全部记录";
+            var resultMode = _resultFilter.SelectedItem as string ?? "全部结果";
+            var query = (_search.Text ?? string.Empty).Trim();
             IEnumerable<KnowledgeV2GovernanceAuditEntry> source = _all;
             if (mode == "智能导入")
-                source = source.Where(x => string.Equals(x.ActionType, "ai_smart_import", StringComparison.OrdinalIgnoreCase));
-            else if (mode == "AI修订优化")
-                source = source.Where(x => !string.Equals(x.ActionType, "ai_smart_import", StringComparison.OrdinalIgnoreCase));
+                source = source.Where(x => string.Equals(x.ActionType, "ai_smart_import",
+                    StringComparison.OrdinalIgnoreCase));
+            else if (mode == "AI优化")
+                source = source.Where(x => IsAiAction(x.ActionType));
+            else if (mode == "人工优化")
+                source = source.Where(x => IsManualAction(x.ActionType));
             else if (mode == "会话自动学习")
                 source = Enumerable.Empty<KnowledgeV2GovernanceAuditEntry>();
 
@@ -434,38 +459,73 @@ namespace Bot.Knowledge
             {
                 Time = x.CreatedAtText,
                 Type = ActionText(x.ActionType),
-                Target = string.IsNullOrWhiteSpace(x.TargetTitle) ? "-" : x.TargetTitle,
-                Summary = x.Summary ?? string.Empty,
-                Result = string.Equals(x.Result, "success", StringComparison.OrdinalIgnoreCase) ? "成功" : (x.Result ?? string.Empty),
+                Target = string.IsNullOrWhiteSpace(x.TargetTitle) ? x.KnowledgeId : x.TargetTitle,
+                Summary = (x.Summary ?? string.Empty)
+                    + (string.IsNullOrWhiteSpace(x.KnowledgeId) ? string.Empty : " [知识ID:" + x.KnowledgeId + "]"),
+                Result = NormalizeResult(x.Result),
                 SortAt = x.CreatedAt
             }).ToList();
-            if (mode == "全部AI记录" || mode == "会话自动学习")
+            if (mode == "全部记录" || mode == "AI优化" || mode == "会话自动学习")
             {
                 items.AddRange(_sessions.Select(x => new HistoryItem
                 {
                     SortAt = x.CompletedAt != DateTime.MinValue ? x.CompletedAt : x.LastBuyerAt,
-                    Time = (x.CompletedAt != DateTime.MinValue ? x.CompletedAt : x.LastBuyerAt).ToString("yyyy-MM-dd HH:mm:ss"),
+                    Time = (x.CompletedAt != DateTime.MinValue ? x.CompletedAt : x.LastBuyerAt)
+                        .ToString("yyyy-MM-dd HH:mm:ss"),
                     Type = "会话自动学习",
                     Target = x.Buyer ?? "-",
                     Summary = (x.Summary ?? string.Empty) + " [应用 " + x.AppliedCount
                         + " / 跳过 " + x.SkippedCount + "] "
                         + (string.IsNullOrWhiteSpace(x.Error) ? string.Empty : "原因：" + x.Error),
-                    Result = x.Status ?? "-"
+                    Result = NormalizeResult(x.Status),
                 }));
             }
+            if (resultMode != "全部结果")
+                items = items.Where(x => string.Equals(x.Result, resultMode,
+                    StringComparison.OrdinalIgnoreCase)).ToList();
+            if (query.Length > 0)
+                items = items.Where(x => new[] { x.Time, x.Type, x.Target, x.Result, x.Summary }
+                    .Any(value => (value ?? string.Empty).IndexOf(query,
+                        StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
             _grid.ItemsSource = items.OrderByDescending(x => x.SortAt).Take(800).ToList();
-            _status.Text = "共 " + items.Count + " 条记录（显示最近800条）；记录按本店隔离查询。";
+            _status.Text = "符合条件 " + items.Count + " 条；显示最近800条（按店铺隔离）。";
         }
 
-        private static bool IsAiHistory(KnowledgeV2GovernanceAuditEntry entry)
+        private static string NormalizeResult(string status)
         {
-            if (entry == null) return false;
-            var action = (entry.ActionType ?? string.Empty).Trim().ToLowerInvariant();
+            var value = (status ?? string.Empty).Trim().ToLowerInvariant();
+            if (value == "success" || value == "completed" || value == "done"
+                || value == "成功" || value == "已完成") return "成功";
+            if (value == "error" || value == "failed" || value == "failure"
+                || value == "失败" || value == "异常") return "失败";
+            if (value == "skipped" || value == "skip" || value == "跳过") return "跳过";
+            if (value == "pending" || value == "running" || value == "processing"
+                || value == "进行中") return "进行中";
+            return status ?? "-";
+        }
+
+        private static bool IsAiAction(string action)
+        {
+            action = (action ?? string.Empty).Trim().ToLowerInvariant();
             return action == "ai_smart_import"
                 || action == "generate_revision_candidates"
                 || action == "apply_revision"
                 || action == "reject_revision"
                 || action == "rollback_revision";
+        }
+
+        private static bool IsManualAction(string action)
+        {
+            action = (action ?? string.Empty).Trim().ToLowerInvariant();
+            return action == "manual_direct_answer_add"
+                || action == "manual_bot_answer_correction"
+                || action == "manual_knowledge_update";
+        }
+
+        private static bool IsOptimizationHistory(KnowledgeV2GovernanceAuditEntry entry)
+        {
+            return entry != null
+                && (IsAiAction(entry.ActionType) || IsManualAction(entry.ActionType));
         }
 
         private static string ActionText(string action)
@@ -477,6 +537,9 @@ namespace Bot.Knowledge
                 case "apply_revision": return "应用修订";
                 case "reject_revision": return "驳回修订";
                 case "rollback_revision": return "回滚修订";
+                case "manual_direct_answer_add": return "人工新增直答";
+                case "manual_bot_answer_correction": return "人工修改Bot答案";
+                case "manual_knowledge_update": return "人工优化知识";
                 default: return action ?? string.Empty;
             }
         }
