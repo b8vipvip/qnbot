@@ -1,4 +1,4 @@
-"""Sandbox chat in Knowledge Center V2 must not leak into real Qianniu traffic."""
+"""Sandbox simulation cannot send, order, or auto-learn; human-confirmed saves are explicit."""
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +33,16 @@ def test_sandbox_is_read_only_without_outbound_order_or_ai_learning():
     assert "using (ShopSettingsScope.Enter(shop))" in simulator
     assert '"__knowledge_v2_sandbox__"' in simulator
     assert "KnowledgeEngineV2Service.Resolve(_seller, _syntheticBuyer, message)" in simulator
+    assert "MyOpenAI.CallStructuredChat(" in simulator
+    assert "OrderEventHub.ReadSandboxSamples(_seller, 150)" in simulator
+    assert "KnowledgeEngineV2Repository.Save(_seller, knowledge)" in simulator
+    # Save is only called from the explicit operator-confirmed knowledge action.
+    save_section = simulator.split("private void SaveDirectAnswer()", 1)[1].split(
+        "private sealed class KnowledgePreview", 1)[0]
+    assert "MessageBoxResult.Yes" in save_section
+    assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
+    assert "KnowledgeEngineV2Repository.LoadAll(_seller)" in save_section
+    assert "duplicate != null" in save_section
 
 
 def test_all_scenario_inputs_use_configured_policies_and_are_labeled_preview():
@@ -47,7 +57,7 @@ def test_all_scenario_inputs_use_configured_policies_and_are_labeled_preview():
     assert 'GetSetting(cfg, "EnableOrderPlacedReply", false)' in simulator
     assert 'GetSetting(cfg, "OrderPlacedReplyText", "")' in simulator
     assert 'orderId.StartsWith("SIM-", StringComparison.Ordinal)' in simulator
-    assert "scenario != \"商品链接\"" in simulator
+    assert "IsOnlyProductLink(scenes, message)" in simulator
     assert "_orderPreviewed.Contains(key)" in simulator
 
 
@@ -65,3 +75,39 @@ def test_sandbox_is_compiled_with_wpf_temporary_project():
     targets = source("src/Directory.Build.targets")
     assert "Knowledge\\KnowledgeV2SandboxConversation.cs" in targets
     assert "<Compile Include=" in targets
+
+
+def test_multi_checked_scenarios_and_explicit_order_event_buttons():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    assert "Dictionary<string, CheckBox> _scenarios" in ui
+    assert "IsChecked = true" in ui
+    assert '"模拟发货"' in ui
+    assert 'foreach (var scene in new[] { "模拟下单", "模拟付款", "模拟发货" })' in ui
+    assert "if (isOrder && !scenes.Contains(forcedEvent))" in ui
+    assert "if (!string.IsNullOrWhiteSpace(eventScene))" in ui
+    assert "isShipped ? \"已发货\" : isPaid ? \"已付款\" : \"待付款\"" in ui
+
+
+def test_historical_order_samples_only_read_shop_data_not_real_order_ids():
+    hub = source("src/Bot/ChromeNs/OrderEventHub.cs")
+    method = hub.split("internal static List<OrderSnapshot> ReadSandboxSamples(", 1)[1].split(
+        "public static OrderSnapshot RefreshFromCanonical", 1
+    )[0]
+    assert "TryReadState(GetPath())" in method
+    assert "string.Equals((x.Snapshot.Seller ?? \"\").Trim(), seller" in method
+    assert 'OrderId = "SIM-REC-" + Guid.NewGuid()' in method
+    assert 'Buyer = "模拟买家"' in method
+    assert "Publish(" not in method
+    assert "SaveInternal(" not in method
+    assert "x.Snapshot.Buyer" not in method
+    assert "x.Snapshot.OrderId" not in method
+
+
+def test_ai_fallback_uses_sandbox_history_and_never_calls_real_getanswer():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    assert "if (result.NeedsAi && enableAi && !isOrder)" in ui
+    assert "MyOpenAI.CallStructuredChat(" in ui
+    assert "ShopSettingsScope.Enter(shop)" in ui
+    assert '"__knowledge_v2_sandbox__"' in ui
+    assert "MyOpenAI.GetAnswer(" not in ui
+    assert "OrderPlacedAutoReplyService.ResolveAsync(" not in ui
