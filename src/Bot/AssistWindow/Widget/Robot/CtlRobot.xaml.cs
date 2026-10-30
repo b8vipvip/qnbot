@@ -252,20 +252,26 @@ namespace Bot.AssistWindow.Widget.Robot
                 ctl.SetStatus("历史V2回复没有可靠的知识记录ID，禁止根据语义猜测并覆盖。请通过“查看”进入知识中心编辑。", false);
                 return;
             }
-            // Non-V2 answers preserve the existing reviewed learning path.
-            ctl.SetAnswer(wnd.EditedAnswer);
-            ctl.SetSource("人工修改");
-            ctl.SetSendPending("正在整理并写入知识库...");
+            // Human-confirmed edits, including originally AI-generated answers,
+            // write directly to approved V2 knowledge; no AI learning/observation queue.
+            ctl.SetSendPending("正在保存人工审核的即时直答...");
             try
             {
-                var result = await KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer, "人工修改", e.Seller, e.Buyer);
-                if (result.Success)
-                    await Task.Run(() => KnowledgeEngineV2LearningBridge.SynchronizeSeller(e.Seller));
-                ctl.SetStatus(result.Success ? result.Message : "答案已修改，但知识库整理失败：" + result.Message, result.Success);
+                string status = string.Empty;
+                var correctedAnswer = wnd.EditedAnswer;
+                var saved = await Task.Run(() =>
+                    KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                        e.Seller, e.Question, correctedAnswer, e.MessageRecordId, out status));
+                if (saved)
+                {
+                    ctl.SetAnswer(correctedAnswer, "人工审核直答");
+                    ctl.SetSource("人工审核直答");
+                }
+                ctl.SetStatus(status, saved);
             }
             catch (Exception ex)
             {
-                ctl.SetStatus("答案已修改，但知识库整理异常", false);
+                ctl.SetStatus("保存人工直答异常；原知识没有确认更新。", false);
                 Log.Exception(ex);
             }
         }
