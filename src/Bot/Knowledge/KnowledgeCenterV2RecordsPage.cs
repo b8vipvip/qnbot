@@ -114,7 +114,7 @@ namespace Bot.Knowledge
             var save = Btn("保存", 68); save.Click += delegate { SaveCurrent(); };
             var delete = Btn("删除", 68); delete.Click += delegate { DeleteCurrent(); };
             toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(delete);
-            if (_mode == KnowledgeV2RecordsPageMode.Knowledge)
+            if (_mode == KnowledgeV2RecordsPageMode.All)
             {
                 var undo = Btn("回滚Bot人工纠错", 138);
                 undo.Click += delegate { RollbackLastBotCorrection(); };
