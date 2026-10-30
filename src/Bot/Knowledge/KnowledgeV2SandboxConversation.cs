@@ -380,6 +380,7 @@ namespace Bot.Knowledge
             _lastMissWasHighRisk = false;
             _lastMissHadConflict = false;
             _saveDirect.IsEnabled = false;
+            _reviewExpander.Header = "人工审核新增直答（未命中知识后可编辑，点击展开）";
             _directAnswerDraft.Text = string.Empty;
             _turns = 0;
             _transcript.Children.Clear();
@@ -514,6 +515,9 @@ namespace Bot.Knowledge
                 _lastMissWasHighRisk = result.IsHighRisk;
                 _lastMissHadConflict = result.HasConflict;
                 _saveDirect.IsEnabled = _lastMissQuestion.Length > 0;
+                _reviewExpander.Header = _lastMissQuestion.Length > 0
+                    ? "人工审核新增直答 · 已有待审核问题（点击展开）"
+                    : "人工审核新增直答（未命中知识后可编辑，点击展开）";
                 _directAnswerDraft.Text = _lastMissQuestion.Length > 0
                     ? (result.SuggestedAnswer ?? string.Empty) : string.Empty;
                 if (!isOrder) _input.Clear();
@@ -858,6 +862,7 @@ namespace Bot.Knowledge
                         + "\n来源：测试台人工确认（非自动AI学习）";
                     _lastMissQuestion = string.Empty;
                     _lastMissAnswer = string.Empty;
+                    _reviewExpander.Header = "人工审核新增直答（未命中知识后可编辑，点击展开）";
                     AddBubble("系统", "人工审核知识已写入当前店铺知识V2（不会向真实买家发送）。",
                         "V2人工入库");
                 }
