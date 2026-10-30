@@ -54,6 +54,17 @@ namespace Bot.ChromeNs
         public long CorrectedAtTicks { get; set; }
     }
 
+    // A single prepared Bot reply can be observed in multiple history refreshes.
+    // Bind each native transport echo to exactly one persisted reply record.
+    internal sealed class BotReplyEchoLinkEntity
+    {
+        [PrimaryKey]
+        public string EchoId { get; set; }
+        public string RecordId { get; set; }
+        public string Seller { get; set; }
+        public string Buyer { get; set; }
+    }
+
     internal static class BotConversationHistoryStore
     {
         public const int RetentionDays = 90;
@@ -203,20 +214,52 @@ namespace Bot.ChromeNs
             try
             {
                 FlushNow();
+                var echoId = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
                 var candidates = LoadRecent(seller, buyer, 200);
                 var answerKey = NormalizeSourceValue(answer);
                 var targetTicks = sentAt.Ticks;
-                var match = candidates
-                    .Where(x => x != null && NormalizeSourceValue(x.Answer) == answerKey)
-                    .Select(x => new
+
+                // Re-rendering the same Qianniu echo must resolve to the original
+                // record even when that record has already been marked as sent.
+                BotReplyEchoLinkEntity existingLink;
+                lock (DbSync)
+                    existingLink = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
+                        x => x.EchoId == echoId);
+                var originalId = existingLink != null
+                    && string.Equals(existingLink.Seller, seller, StringComparison.Ordinal)
+                    && string.Equals(existingLink.Buyer, buyer, StringComparison.Ordinal)
+                        ? existingLink.RecordId : echoId;
+                var match = candidates.FirstOrDefault(x => x != null
+                    && string.Equals(x.EntityId, originalId, StringComparison.Ordinal));
+
+                if (match == null)
+                {
+                    // Different message keys with identical text must NOT claim
+                    // a previously linked record. Prefer a still-unlinked native
+                    // answer card; never merge two independent bot-echo rows.
+                    var eligible = candidates
+                        .Where(x => x != null
+                            && !x.EntityId.StartsWith("bot-echo-", StringComparison.Ordinal)
+                            && NormalizeSourceValue(x.Answer) == answerKey)
+                        .Select(x => new
+                        {
+                            Row = x,
+                            Time = x.AnswerReadyAtTicks > 0 ? x.AnswerReadyAtTicks : x.CreatedAtTicks
+                        })
+                        .Where(x => x.Time > 0
+                            && Math.Abs((double)(x.Time - targetTicks)) <= TimeSpan.FromMinutes(30).Ticks)
+                        .OrderBy(x => Math.Abs((double)(x.Time - targetTicks)));
+                    foreach (var candidate in eligible)
                     {
-                        Row = x,
-                        Time = x.AnswerReadyAtTicks > 0 ? x.AnswerReadyAtTicks : x.CreatedAtTicks
-                    })
-                    .Where(x => x.Time > 0 && Math.Abs((double)(x.Time - targetTicks)) <= TimeSpan.FromMinutes(30).Ticks)
-                    .OrderBy(x => Math.Abs((double)(x.Time - targetTicks)))
-                    .Select(x => x.Row)
-                    .FirstOrDefault();
+                        BotReplyEchoLinkEntity claimed;
+                        lock (DbSync)
+                            claimed = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
+                                x => x.RecordId == candidate.Row.EntityId);
+                        if (claimed != null) continue;
+                        match = candidate.Row;
+                        break;
+                    }
+                }
                 if (match != null)
                 {
                     match.Question = string.IsNullOrWhiteSpace(match.Question) ? question : match.Question;
@@ -232,11 +275,19 @@ namespace Bot.ChromeNs
                     match.StatusDetail = "已观察到Bot消息回显";
                     match.AnswerReadyAtTicks = sentAt.Ticks;
                     match.UpdatedAtTicks = DateTime.Now.Ticks;
+                    lock (DbSync)
+                        DbHelper.Db.SaveOneRecord(new BotReplyEchoLinkEntity
+                        {
+                            EchoId = echoId,
+                            RecordId = match.EntityId,
+                            Seller = seller,
+                            Buyer = buyer
+                        });
                     QueueSave(match);
                     return match.EntityId;
                 }
 
-                var id = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
+                var id = echoId;
                 QueueSave(new BotConversationHistoryEntity
                 {
                     EntityId = id,
@@ -651,6 +702,16 @@ namespace Bot.ChromeNs
                     + "CorrectedSource text,"
                     + "CorrectedAtTicks integer not null default 0"
                     + ")");
+                DbHelper.Db.Execute(
+                    "create table if not exists BotReplyEchoLinkEntity ("
+                    + "EchoId text primary key not null,"
+                    + "RecordId text not null,"
+                    + "Seller text not null,"
+                    + "Buyer text not null"
+                    + ")");
+                DbHelper.Db.Execute(
+                    "create index if not exists IX_BotReplyEchoLink_Record "
+                    + "on BotReplyEchoLinkEntity(RecordId)");
                 Volatile.Write(ref _schemaReady, 1);
             }
         }
