@@ -477,6 +477,21 @@ if [[ "$SMART_MODE" == "checks-only" ]]; then
   log "GPTAuto 智能判断：无运行时代码变更，无需容器部署"
   exit 0
 fi
+# Automatically choose verified image build when previous container lacks
+# a proven embedded Git SHA or matching, verified runtime overlay marker.
+if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLOY_KIND" == "repo" ]]; then
+  BASELINE_PORT="$(read_env_value CONTROL_PLANE_BIND_PORT "$SERVICE_DIR/.env")"
+  BASELINE_PORT="${BASELINE_PORT:-18081}"
+  baseline_json="$(python3 "$SMART_APPLY_TOOL" --baseline-only \
+    --repo qnbot --worktree "$REPO_DIR" \
+    --from-sha "$OLD_COMMIT" --target-sha "$NEW_COMMIT" \
+    --container "$CONTAINER_NAME" \
+    --state-file "$SERVICE_DIR/data/server-update/runtime-deployment.json" \
+    --health-url "http://127.0.0.1:${BASELINE_PORT}/healthz")"
+  SMART_MODE="$(python3 -c 'import json,sys;print(json.load(sys.stdin)["mode"])' <<<"$baseline_json")"
+  log "GPTAuto 运行容器源版本验证结果: $SMART_MODE"
+fi
+
 if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLOY_KIND" == "repo" ]]; then
   BIND_PORT="$(read_env_value CONTROL_PLANE_BIND_PORT "$SERVICE_DIR/.env")"
   BIND_PORT="${BIND_PORT:-18081}"
