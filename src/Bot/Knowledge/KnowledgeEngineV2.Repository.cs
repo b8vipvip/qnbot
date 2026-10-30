@@ -50,6 +50,165 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
+        /// <summary>
+        /// A verified V2 source ID is the only authority for editing an answer.
+        /// Check the old answer under the same database lock as the write; never
+        /// infer a record from semantic similarity or AI-generated titles.
+        /// </summary>
+        public static bool TryCorrectBotAnswer(string seller, string knowledgeId,
+            string observedAnswer, string correctedAnswer, string messageRecordId, out string result)
+        {
+            result = string.Empty;
+            knowledgeId = (knowledgeId ?? string.Empty).Trim();
+            correctedAnswer = (correctedAnswer ?? string.Empty).Trim();
+            observedAnswer = (observedAnswer ?? string.Empty).Trim();
+            if (knowledgeId.Length == 0 || correctedAnswer.Length == 0 || observedAnswer.Length == 0)
+            {
+                result = "知识ID、原始答案或修改答案为空，未修改知识。";
+                return false;
+            }
+            if (correctedAnswer.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                correctedAnswer = correctedAnswer.Substring(0, correctedAnswer.Length - 3).TrimEnd();
+            if (correctedAnswer.Length == 0)
+            {
+                result = "修改答案为空，未修改知识。";
+                return false;
+            }
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            KnowledgeV2Record corrected = null;
+            KnowledgeV2Record before = null;
+            lock (state.Sync)
+            {
+                var id = knowledgeId;
+                var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
+                if (row == null)
+                {
+                    result = "原始Knowledge V2记录已不存在，拒绝按相似文本修改其他知识。";
+                    return false;
+                }
+                before = FromRow(row);
+                if (!before.Enabled || string.Equals(before.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(before.Status, "candidate", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = "原始知识不是已启用的生产知识，请在知识中心手工审核。";
+                    return false;
+                }
+                if (!string.Equals((before.Answer ?? string.Empty).Trim(), observedAnswer, StringComparison.Ordinal))
+                {
+                    result = "知识答案已被其他操作修改，或消息与来源记录不匹配；未覆盖现有内容。请在知识中心刷新后编辑。";
+                    return false;
+                }
+                if (string.Equals(before.Answer.Trim(), correctedAnswer, StringComparison.Ordinal))
+                {
+                    result = "新答案与原知识相同，无需再次修改。";
+                    return true;
+                }
+                if (string.Equals(before.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || KnowledgeEngineV2Semantics.IsHighRisk(correctedAnswer))
+                {
+                    result = "原知识或修改内容涉及高风险操作，请前往知识中心按审核流程修改。";
+                    return false;
+                }
+                corrected = JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                    JsonConvert.SerializeObject(before));
+                corrected.Answer = correctedAnswer;
+                if (string.IsNullOrWhiteSpace(corrected.ShortAnswer)
+                    || string.Equals(corrected.ShortAnswer.Trim(), before.Answer.Trim(), StringComparison.Ordinal))
+                    corrected.ShortAnswer = correctedAnswer;
+                corrected.SourceType = "人工修改";
+                corrected.Authority = Math.Max(corrected.Authority, 0.98);
+                corrected.Confidence = Math.Max(corrected.Confidence, 0.94);
+                corrected.CorrectionCount++;
+                corrected.LastVerifiedAt = DateTime.Now;
+                NormalizeForSave(corrected);
+                var revision = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = knowledgeId,
+                    MessageRecordId = (messageRecordId ?? string.Empty).Trim(),
+                    Action = "apply",
+                    PreviousJson = JsonConvert.SerializeObject(before),
+                    CurrentJson = JsonConvert.SerializeObject(corrected),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
+            }
+            MirrorOneToLegacy(shop, corrected);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+                seller, "manual_bot_answer_correction", "knowledge", knowledgeId,
+                (messageRecordId ?? string.Empty).Trim(), corrected.Title,
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(before),
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(corrected),
+                "人工确认的Bot答案按实际Knowledge V2记录ID精确更新；原快照已保存，可回滚。",
+                "success", out auditError);
+            result = "已精确更新Knowledge V2知识并刷新检索索引；历史答案已留存，可从知识中心回滚。";
+            return true;
+        }
+
+        public static bool TryRollbackLastBotCorrection(string seller, string knowledgeId, out string result)
+        {
+            result = string.Empty;
+            knowledgeId = (knowledgeId ?? string.Empty).Trim();
+            if (knowledgeId.Length == 0) { result = "请选择要回滚的知识。"; return false; }
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            KnowledgeV2Record restored = null;
+            KnowledgeV2Record before = null;
+            lock (state.Sync)
+            {
+                var id = knowledgeId;
+                var revisions = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x != null && x.KnowledgeId == id)
+                    .OrderByDescending(x => x.CreatedAtTicks).ToList();
+                var latest = revisions.FirstOrDefault();
+                if (latest == null || latest.Action != "apply")
+                {
+                    result = "没有可回滚的最近一次Bot人工纠错。";
+                    return false;
+                }
+                var currentRow = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
+                if (currentRow == null) { result = "目标知识已删除，无法回滚。"; return false; }
+                before = FromRow(currentRow);
+                var applied = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.CurrentJson ?? "");
+                restored = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.PreviousJson ?? "");
+                if (applied == null || restored == null
+                    || !string.Equals(before.Answer, applied.Answer, StringComparison.Ordinal)
+                    || before.UpdatedAt.Ticks != applied.UpdatedAt.Ticks)
+                {
+                    result = "知识在纠错后又发生变化，禁止覆盖新的编辑。请人工处理冲突。";
+                    return false;
+                }
+                NormalizeForSave(restored);
+                var rollback = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = knowledgeId,
+                    MessageRecordId = latest.MessageRecordId,
+                    Action = "rollback",
+                    PreviousJson = JsonConvert.SerializeObject(before),
+                    CurrentJson = JsonConvert.SerializeObject(restored),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restored), rollback });
+            }
+            MirrorOneToLegacy(shop, restored);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+                seller, "rollback_revision", "knowledge", knowledgeId,
+                string.Empty, restored.Title,
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(before),
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(restored),
+                "回滚最后一条已验证Bot人工纠错；新版本发生变化时拒绝回滚。", "success", out auditError);
+            result = "已回滚最近的Bot人工纠错并刷新检索索引。";
+            return true;
+        }
+
         public static bool Delete(string seller, string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return false;
@@ -121,7 +280,8 @@ namespace Bot.Knowledge
                     Db = new SQLiteHelper(path, new List<Type>
                     {
                         typeof(KnowledgeV2RecordRow),
-                        typeof(KnowledgeV2MetaRow)
+                        typeof(KnowledgeV2MetaRow),
+                        typeof(KnowledgeV2ManualEditRevisionRow)
                     })
                 };
             });
