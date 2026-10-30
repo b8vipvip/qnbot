@@ -41,7 +41,8 @@ def test_provenance_prepared_saved_and_confirmed_echo_never_forged():
     assert "BotReplyManualSourceEntity" in history
     assert "OriginalSource" in history
     assert "GetManualSource(seller, botEchoRecordId)" in mirror
-    assert "KnowledgeLearningService.OverrideAnswerSource(" in mirror
+    assert "KnowledgeLearningService.OverrideAnswerSource(" not in mirror
+    assert "KnowledgeLearningService.RegisterAnswerSource(" not in mirror
 
 def test_manager_edits_sources_and_reverse_looks_up_questions_by_reply():
     ui=read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")

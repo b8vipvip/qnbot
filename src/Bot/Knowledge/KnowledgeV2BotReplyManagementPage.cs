@@ -357,10 +357,10 @@ namespace Bot.Knowledge
                 MessageBox.Show(_owner, "来源保存失败，请刷新后重试。", "Bot回复管理", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            KnowledgeLearningService.OverrideAnswerSource(
-                _seller, _selectedSource.Buyer, _selectedSource.Question, _selectedSource.Answer, source);
+            // Only the selected transport message is corrected. Future answers
+            // must use their own generation evidence instead of this manual label.
             _selectedSource.AnswerSource = source;
-            _sourceStatus.Text = "来源已保存。后续相同问题与回复将优先沿用该来源记录。";
+            _sourceStatus.Text = "来源已保存至当前消息；其他消息与后续回复不受影响。";
             FilterSources();
         }
 
