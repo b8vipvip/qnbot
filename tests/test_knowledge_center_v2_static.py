@@ -101,7 +101,8 @@ def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'StopLegacyMemoryTimer();' in runtime
     assert 'StripLegacyMemoryWrapper' in runtime
-    assert 'ReplyModeService.IsLocalFirst' in runtime
+    assert 'if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))' in runtime
+    assert 'ReplyModeService.IsLocalFirst' not in runtime
     assert 'ParallelReplyRelevanceGate.ShouldSend' in runtime
     assert 'SendTextWithRetryAsync' in runtime
 
@@ -122,7 +123,8 @@ def test_learning_candidates_require_explicit_approval_before_direct_reply():
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     assert 'productionMatches = rankedMatches' in public
     assert '.Where(IsApprovedProductionMatch)' in public
-    assert 'var best = productionMatches.FirstOrDefault();' in public
+    assert 'var best = manualExact ?? productionMatches.FirstOrDefault();' in public
+    assert 'var manualExact = productionMatches.FirstOrDefault' in public
     assert 'var visibleMatches = rankedMatches.Take(5).ToList();' in public
     assert 'if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);' in public
     assert 'KnowledgeV2AuthorityPolicy.IsProductionApproved' in public
