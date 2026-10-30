@@ -134,8 +134,9 @@ function renderVersionUpdate(data){
       ${update.diagnostic?`<p class="hint" style="${update.build_suspected_stalled?'color:#b45309':''}">${esc(update.diagnostic)}</p>`:""}
       <p class="hint">更新状态：${update.status_age_seconds==null?"--":Number(update.status_age_seconds)+"秒前"} · 最后日志输出：${update.log_age_seconds==null?"--":Number(update.log_age_seconds)+"秒前"} · 日志大小：${vuBytes(update.log_size_bytes)}</p>
       <div class="actions"><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='build';loadServerRuntimeLogs()">查看构建日志</button><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='update';loadServerRuntimeLogs()">查看更新日志</button></div>
+      <p class="hint">GPTAuto 智能更新：点击一次即可自动判断热修复或正式构建，并校验运行版本、CI 证据及健康状态。</p>
       <p class="hint">服务端源码仍由主机更新代理通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取；上方 VLESS 配置只作用于控制面内部的 GitHub HTTPS / Release 下载，不改变主机 SSH 更新链路。</p>
-      <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>${runtimeUnverified&&sameSourceVersion?"重新构建并验证当前服务端版本":"更新服务端到 GitHub 最新版"}</button></div>
+      <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>${runtimeUnverified&&sameSourceVersion?"重新构建并验证当前服务端版本":"检查并智能更新"}</button></div>
     </div>`;
 
   const pkgPhase=pkg.ready?"ready":(pkg.error?"failed":(pkg.phase||(pkg.downloading?"downloading":"waiting")));
@@ -173,7 +174,7 @@ async function startServerVersionUpdate(){
   const needsReverify=!!(versionUpdateState.last&&versionUpdateState.last.server&&versionUpdateState.last.server.needs_runtime_verification);
   const text=needsReverify
     ?"确认重新构建并核验实际运行的服务端镜像？该镜像缺少构建提交标记，当前后台的『已更新』仅来自更新状态。操作会先构建，再备份并切换容器，期间可能短暂出现 502；失败将按现有流程回滚。"
-    :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，随后先构建新镜像、备份数据，再切换服务；失败会按现有部署脚本回滚。";
+    :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，然后自动判断是否适合免构建热修复，必要时仍执行正式镜像构建；失败保留回滚证据。";
   if(!confirm(text))return;
   try{const r=await api("/api/admin/version-update/server/start",{method:"POST"});toast(r.already_latest?"服务端已经是 GitHub 最新版":"服务端更新任务已启动");await loadVersionUpdate()}catch(err){toast(err.message)}
 }

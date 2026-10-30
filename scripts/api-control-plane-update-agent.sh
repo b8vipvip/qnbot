@@ -94,6 +94,9 @@ phase_from_line() {
       BUILD_PHASE=0
       write_status running "构建失败，等待重试" 35 "$line" "$request_id" "$current" "$target"
       ;;
+    *"GPTAuto 智能热修复："*) write_status running "智能热修复验证" 55 "$line" "$request_id" "$current" "$target" ;;
+    *"GPTAuto 智能热修复成功"*) write_status running "热修复完成" 92 "$line" "$request_id" "$current" "$target" ;;
+    *"无需容器部署"*) write_status running "无运行时代码修改" 95 "$line" "$request_id" "$current" "$target" ;;
     *"新镜像构建成功"*) BUILD_PHASE=0; write_status running "镜像构建完成" 60 "$line" "$request_id" "$current" "$target" ;;
     *"停止旧控制面并创建冷备份"*) write_status running "备份并切换服务" 66 "$line" "$request_id" "$current" "$target" ;;
     *"备份完成:"*) write_status running "备份完成" 74 "$line" "$request_id" "$current" "$target" ;;

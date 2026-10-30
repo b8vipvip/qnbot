@@ -1,3 +1,7 @@
+# GPTAuto 统一智能更新规则（本仓库强制执行）
+
+对任何 AI / ChatGPT / GPTAuto 修复与版本更新，首先读取 [GPTAuto 统一策略](.github/GPTAUTO_SMART_UPDATE.md)，然后遵守其 Git SHA 绑定的更新分类、Fast CI、按需编译、人工点击部署、宿主机唯一更新器及回滚规则。不能凭 PR 标题或版本号自动触发完整 Docker Build；无法验证安全热更新前置条件时，必须保持已有正式构建/发布保护。下文产品专属安全约束继续生效。
+
 # AI / Agent Development Instructions
 
 Before modifying this repository, read in order:

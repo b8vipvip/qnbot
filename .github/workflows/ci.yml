@@ -19,10 +19,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  smart-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      windows_required: ${{ steps.plan.outputs.windows_required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Choose product CI lanes using shared GPTAuto policy
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          required=true
+          target="$(git rev-parse HEAD)"
+          base="$BASE_SHA"
+          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" == 0000000000000000000000000000000000000000 ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          if [[ -f .github/gptauto/smart_update.py ]] && \
+             python3 .github/gptauto/smart_update.py --repo qnbot --worktree . \
+               --from-sha "$base" --target-sha "$target" > /tmp/gptauto-plan.json; then
+            required="$(python3 - <<'PY'
+          import json
+          plan = json.load(open("/tmp/gptauto-plan.json"))
+          print(str("Windows x64 release build" in plan["required_checks"]).lower())
+          PY
+            )"
+          fi
+          echo "windows_required=$required" >> "$GITHUB_OUTPUT"
+
   api-control-plane:
     name: API control plane
     uses: ./.github/workflows/api-control-plane-ci.yml
 
   windows-bot:
     name: Windows Bot
+    needs: smart-plan
+    if: needs.smart-plan.outputs.windows_required == 'true'
     uses: ./.github/workflows/windows-build.yml

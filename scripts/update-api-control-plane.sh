@@ -421,7 +421,8 @@ elif [[ -f "$LEGACY_DIR/.env" || -d "$LEGACY_DIR/data" ]]; then
   OLD_SOURCE_DIR="$LEGACY_DIR"
 fi
 
-check_space_before_build
+# Only require build capacity after choosing the build path.
+check_free_kib "$REPO_DIR" "$(( 512 * 1024 ))" "Git 同步前"
 log "拉取 GitHub 最新 $BRANCH 分支（Git SSH over 443 + 自动重试）"
 github_fetch_with_retry
 if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -458,6 +459,73 @@ log "校验宝塔 Compose 配置"
   cd "$SERVICE_DIR"
   docker compose -f docker-compose.bt.yml config >/dev/null
 )
+
+# GPTAuto Consumer Sync owns policy; existing host agent owns deployment.
+SMART_PLAN_TOOL="$REPO_DIR/.github/gptauto/smart_update.py"
+SMART_APPLY_TOOL="$REPO_DIR/.github/gptauto/runtime_hotfix.py"
+SMART_MODE="verified-image"
+if [[ -f "$SMART_PLAN_TOOL" ]]; then
+  if plan_json="$(python3 "$SMART_PLAN_TOOL" --repo qnbot \
+      --worktree "$REPO_DIR" --from-sha "$OLD_COMMIT" --target-sha "$NEW_COMMIT")"; then
+    SMART_MODE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])' <<<"$plan_json")"
+    log "GPTAuto 智能更新模式: $SMART_MODE; $plan_json"
+  else
+    log "GPTAuto 分类失败，采用已有的正式镜像构建路径"
+  fi
+fi
+if [[ "$SMART_MODE" == "client-build" ]]; then
+  # Windows binaries are produced by independent Actions. No successful exact
+  # SHA workflow evidence means the admin update must NOT report completion.
+  EVIDENCE_CLI="$REPO_DIR/.github/gptauto/ci_evidence.py"
+  if [[ ! -f "$EVIDENCE_CLI" ]] || ! python3 "$EVIDENCE_CLI" \
+      --repo qnbot --sha "$NEW_COMMIT" \
+      --workflow "Windows x64 release build"; then
+    warn "未找到目标提交的 Windows CI 成功证据，客户端更新尚未完成"
+    git -C "$REPO_DIR" reset --hard "$OLD_COMMIT" || true
+    exit 13
+  fi
+  log "GPTAuto 智能判断：仅 Windows 客户端代码变更，服务器无需 Docker Build"
+  log "Windows 编译/客户端正式版资产由 GitHub Actions 和既有客户端发布流程负责；不会把服务器重启冒充客户端交付成功"
+  exit 0
+fi
+if [[ "$SMART_MODE" == "checks-only" ]]; then
+  log "GPTAuto 智能判断：无运行时代码变更，无需容器部署"
+  exit 0
+fi
+# Automatically choose verified image build when previous container lacks
+# a proven embedded Git SHA or matching, verified runtime overlay marker.
+if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLOY_KIND" == "repo" ]]; then
+  BASELINE_PORT="$(read_env_value CONTROL_PLANE_BIND_PORT "$SERVICE_DIR/.env")"
+  BASELINE_PORT="${BASELINE_PORT:-18081}"
+  baseline_json="$(python3 "$SMART_APPLY_TOOL" --baseline-only \
+    --repo qnbot --worktree "$REPO_DIR" \
+    --from-sha "$OLD_COMMIT" --target-sha "$NEW_COMMIT" \
+    --container "$CONTAINER_NAME" \
+    --state-file "$SERVICE_DIR/data/server-update/runtime-deployment.json" \
+    --health-url "http://127.0.0.1:${BASELINE_PORT}/healthz")"
+  SMART_MODE="$(python3 -c 'import json,sys;print(json.load(sys.stdin)["mode"])' <<<"$baseline_json")"
+  log "GPTAuto 运行容器源版本验证结果: $SMART_MODE"
+fi
+
+if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLOY_KIND" == "repo" ]]; then
+  BIND_PORT="$(read_env_value CONTROL_PLANE_BIND_PORT "$SERVICE_DIR/.env")"
+  BIND_PORT="${BIND_PORT:-18081}"
+  log "GPTAuto 智能热修复：验证目标 SHA 的 CI、运行容器基线和文件 SHA256"
+  if python3 "$SMART_APPLY_TOOL" \
+      --repo qnbot --worktree "$REPO_DIR" \
+      --from-sha "$OLD_COMMIT" --target-sha "$NEW_COMMIT" \
+      --container "$CONTAINER_NAME" \
+      --state-file "$SERVICE_DIR/data/server-update/runtime-deployment.json" \
+      --health-url "http://127.0.0.1:${BIND_PORT}/healthz"; then
+    log "GPTAuto 智能热修复成功：健康检查通过，跳过完整 Docker Build"
+    exit 0
+  fi
+  warn "智能热修复未成功；不自动启动第二套构建"
+  git -C "$REPO_DIR" reset --hard "$OLD_COMMIT" || true
+  exit 12
+fi
+log "GPTAuto 智能判断：正式构建模式 $SMART_MODE"
+check_space_before_build
 
 # These probes are diagnostic only. A transient probe failure must not take production down.
 probe_url "腾讯云 PyPI" "${CONTROL_PLANE_BUILD_PIP_INDEX_URL%/}/pip/" || true
