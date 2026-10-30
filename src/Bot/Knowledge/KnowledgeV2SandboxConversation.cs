@@ -78,7 +78,7 @@ namespace Bot.Knowledge
             var heading = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
             heading.Children.Add(new TextBlock
             {
-                Text = "客服对话沙盒",
+                Text = "模拟对话",
                 FontSize = 17,
                 FontWeight = FontWeights.SemiBold
             });
@@ -718,6 +718,7 @@ namespace Bot.Knowledge
         {
             if (_busy && !internalCall) return;
             _status.Text = "只读扫描当前店铺已有历史订单快照...";
+            TraceSandbox("order_sample_start", "running", null, null, "shop_only");
             try
             {
                 var snapshots = await Task.Run(() => OrderEventHub.ReadSandboxSamples(_seller, 150));
@@ -728,6 +729,7 @@ namespace Bot.Knowledge
                     return;
                 }
                 var selected = snapshots[new Random(Guid.NewGuid().GetHashCode()).Next(snapshots.Count)];
+                TraceSandbox("order_sample_finish", "success", null, null, "samples=" + snapshots.Count);
                 _orderId.Text = selected.OrderId;
                 _orderAmount.Text = (selected.PaidAmount ?? selected.TotalAmount ?? 0m)
                     .ToString("0.00", CultureInfo.InvariantCulture);
@@ -744,6 +746,7 @@ namespace Bot.Knowledge
         {
             if (_busy && !internalCall) return;
             _status.Text = "正在从当前店铺的历史订单和商品知识只读选择素材...";
+            TraceSandbox("product_sample_start", "running", null, null, "shop_only");
             try
             {
                 var names = await Task.Run(() =>
@@ -764,6 +767,7 @@ namespace Bot.Knowledge
                     return;
                 }
                 _product.Text = names[new Random(Guid.NewGuid().GetHashCode()).Next(names.Count)];
+                TraceSandbox("product_sample_finish", "success", null, null, "samples=" + names.Count);
                 _status.Text = "已选择店铺本机历史订单/商品知识中的一个商品名称（只读模拟）。";
             }
             catch (Exception ex) { _status.Text = "商品素材读取失败：" + ex.Message; }
