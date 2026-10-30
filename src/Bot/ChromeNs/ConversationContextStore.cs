@@ -538,6 +538,8 @@ namespace Bot.ChromeNs
                     ? new List<ConversationContextTurn>()
                     : state.Turns.Where(t => t != null && t.Role == role
                         && t.PreciseTimeTicks == preciseTime
+                        && (fromHistory ? t.SeenLive && !t.SeenHistory
+                                        : t.SeenHistory && !t.SeenLive)
                         && string.Equals(NormalizeText(t.Text), normalizedText, StringComparison.Ordinal))
                         .ToList();
                 if (precisePeers.Count == 1)
@@ -598,7 +600,9 @@ namespace Bot.ChromeNs
                 : (message.mcode.clientId ?? string.Empty).Trim();
             var messageId = message.mcode == null ? string.Empty
                 : (message.mcode.messageId ?? string.Empty).Trim();
-            if (clientId.Length > 0 || messageId.Length > 0)
+            // clientId alone may identify a transport client rather than a
+            // unique message. Never merge different sends on clientId alone.
+            if (messageId.Length > 0)
                 aliases.Add("mcode:" + clientId + ":" + messageId);
             if (messageId.Length > 0) aliases.Add("mcode-id:" + messageId);
             if (message.ext != null && message.ext.ww_msgid != 0)
