@@ -106,6 +106,8 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 2, 15, 2),
                 ToolTip = "仅调用当前店铺 AI 生成模拟答案，不会给真实买家发送消息"
             };
+            _enableAi.Checked += delegate { TraceSandbox("ai_toggle", "on", null, null, string.Empty); };
+            _enableAi.Unchecked += delegate { TraceSandbox("ai_toggle", "off", null, null, string.Empty); };
             actions.Children.Add(_enableAi);
             var reset = new Button
             {
@@ -158,6 +160,9 @@ namespace Bot.Knowledge
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 _scenarios[scene] = box;
+                var key = scene;
+                box.Checked += delegate { TraceSandbox("scene_change", "checked", null, null, "scene=" + key); };
+                box.Unchecked += delegate { TraceSandbox("scene_change", "unchecked", null, null, "scene=" + key); };
                 choices.Children.Add(box);
             }
             var all = new Button
@@ -170,12 +175,14 @@ namespace Bot.Knowledge
             all.Click += delegate
             {
                 foreach (var box in _scenarios.Values) box.IsChecked = true;
+                TraceSandbox("scene_select_all", "success", null, null, string.Empty);
             };
             choices.Children.Add(all);
             var clear = new Button { Content = "全不选", Width = 59, Height = 25 };
             clear.Click += delegate
             {
                 foreach (var box in _scenarios.Values) box.IsChecked = false;
+                TraceSandbox("scene_clear_all", "success", null, null, string.Empty);
             };
             choices.Children.Add(clear);
             settingsBody.Children.Add(choices);
@@ -242,6 +249,8 @@ namespace Bot.Knowledge
             sampleActions.Children.Add(productSample);
             settingsBody.Children.Add(sampleActions);
             settings.Content = settingsBody;
+            settings.Expanded += delegate { TraceSandbox("settings_expand", "success", null, null, string.Empty); };
+            settings.Collapsed += delegate { TraceSandbox("settings_collapse", "success", null, null, string.Empty); };
             attach(settings, 2);
 
             _transcript = new StackPanel { Margin = new Thickness(5, 6, 5, 6) };
@@ -321,6 +330,8 @@ namespace Bot.Knowledge
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
             evidence.Content = _diagnostics;
+            evidence.Expanded += delegate { TraceSandbox("evidence_expand", "success", null, null, string.Empty); };
+            evidence.Collapsed += delegate { TraceSandbox("evidence_collapse", "success", null, null, string.Empty); };
             attach(evidence, 6);
 
             Content = root;
@@ -724,6 +735,7 @@ namespace Bot.Knowledge
                 var snapshots = await Task.Run(() => OrderEventHub.ReadSandboxSamples(_seller, 150));
                 if (snapshots == null || snapshots.Count == 0)
                 {
+                    TraceSandbox("order_sample_finish", "no_data", null, null, string.Empty);
                     _status.Text = "当前店铺本机的订单事件缓存无可用样本，可手工填写SIM-订单。"
                         + "不会查询生产订单HTTP，也不会跨店读取。";
                     return;
@@ -763,6 +775,7 @@ namespace Bot.Knowledge
                 });
                 if (names.Count == 0)
                 {
+                    TraceSandbox("product_sample_finish", "no_data", null, null, string.Empty);
                     _status.Text = "当前店铺本机暂无可读取的商品素材。不会凭空宣称商品来自生产店铺。";
                     return;
                 }
