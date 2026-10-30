@@ -10,7 +10,9 @@ from .audit import write_audit
 from .model import Criterion, CriterionStatus, Event, Gate, GateStatus, GateStep, State, Task, utcnow
 
 _VERSION_RE = re.compile(r"(?<![\w.])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?![\w.])", re.I)
-_RELEASE_RE = re.compile(r"\b(?:release|publish|published|shipping)\b|正式版|发布|发版", re.I)
+# An incidental word such as "last completed release result" in a bugfix
+# title must not schedule publication. Only explicit release directives count.
+_RELEASE_RE = re.compile(r"(?:^|:\s*)(?:release|publish|ship)\b|正式版|发布正式版|发版", re.I)
 _SECONDARY_RELEASE_INTENT_RE = re.compile(
     r"(?:^|\n)\s*(?:[-*]\s*)?(?:please\s+)?(?:release|publish|ship)\b"
     r"|\b(?:release|publish)\b.{0,32}\b(?:required|must|required after|after merge|when green)\b"
