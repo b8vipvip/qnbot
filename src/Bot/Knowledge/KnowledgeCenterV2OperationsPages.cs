@@ -549,7 +549,7 @@ namespace Bot.Knowledge
                 var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
                 var stats = KnowledgeEngineV2Service.GetStats(_seller);
                 _enabled.IsChecked = settings.Enabled;
-                _mode.Text = settings.Mode;
+                _mode.Text = KnowledgeEngineV2Constants.ModeProduction;
                 _threshold.Text = settings.DirectThreshold.ToString("0.00");
                 _confidence.Text = settings.MinConfidence.ToString("0.00");
                 _stats.Text = "知识 " + stats.Total + " 条；商品绑定 " + stats.ProductBound + " 条；学习候选 "
@@ -565,18 +565,16 @@ namespace Bot.Knowledge
             panel.Children.Add(new TextBlock { Text = "Knowledge Engine V2 设置", FontSize = 20, FontWeight = FontWeights.SemiBold });
             panel.Children.Add(new TextBlock
             {
-                Text = "Production：高置信结构化知识可直接本地发送；Shadow：只计算并记录 V2 结果，继续使用兼容回复链路。",
+                Text = "影子观察模式已移除。已批准的知识可立即参与生产直答，仍保留高风险、冲突和订单流程保护。", 
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 5, 0, 14)
             });
             _enabled = new CheckBox { Content = "启用 Knowledge Engine V2", Margin = new Thickness(0, 0, 0, 10) };
             panel.Children.Add(_enabled);
-            panel.Children.Add(new TextBlock { Text = "运行模式", FontWeight = FontWeights.SemiBold });
-            _mode = new ComboBox { Height = 30, Margin = new Thickness(0, 4, 0, 10), Width = 220, HorizontalAlignment = HorizontalAlignment.Left };
+            _mode = new ComboBox { Visibility = Visibility.Collapsed };
             _mode.Items.Add(KnowledgeEngineV2Constants.ModeProduction);
-            _mode.Items.Add(KnowledgeEngineV2Constants.ModeShadow);
-            panel.Children.Add(_mode);
+            _mode.SelectedIndex = 0;
             panel.Children.Add(new TextBlock { Text = "本地直答匹配阈值（0.70~0.96）", FontWeight = FontWeights.SemiBold });
             _threshold = new TextBox { Width = 220, Height = 30, Margin = new Thickness(0, 4, 0, 10), HorizontalAlignment = HorizontalAlignment.Left };
             panel.Children.Add(_threshold);
@@ -617,7 +615,7 @@ namespace Bot.Knowledge
             }
             try
             {
-                KnowledgeEngineV2Service.SetSettings(_seller, _enabled.IsChecked == true, _mode.Text, threshold, confidence);
+                KnowledgeEngineV2Service.SetSettings(_seller, _enabled.IsChecked == true, KnowledgeEngineV2Constants.ModeProduction, threshold, confidence);
                 RefreshView();
                 _stats.Text = "设置已保存。" + _stats.Text;
             }

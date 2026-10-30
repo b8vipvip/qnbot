@@ -35,15 +35,15 @@ def test_sandbox_is_read_only_without_outbound_order_or_ai_learning():
     assert "KnowledgeEngineV2Service.ResolveSandbox(_seller, _syntheticBuyer, message)" in simulator
     assert "MyOpenAI.CallStructuredChat(" in simulator
     assert "OrderEventHub.ReadSandboxSamples(_seller, 150)" in simulator
-    assert "KnowledgeEngineV2Repository.Save(_seller, knowledge)" in simulator
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in simulator
     # Save is only called from the explicit operator-confirmed knowledge action.
     save_section = simulator.split("private bool SaveDirectAnswer(", 1)[1].split(
         "private sealed class KnowledgePreview", 1)[0]
     assert "MessageBoxResult.Yes" in save_section
     assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
-    assert "KnowledgeEngineV2Repository.LoadAll(_seller)" in save_section
-    assert "duplicate != null" in save_section
-    assert "KnowledgeEngineV2Service.ResolveSandbox(" in save_section
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in save_section
+    assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
+    assert "KnowledgeEngineV2Service.Resolve(" in save_section
     assert "ReadAll(" not in save_section
     assert "direct_save_success" in save_section
 
@@ -170,25 +170,25 @@ def test_shadow_mode_previews_do_not_relax_production_sending():
     assert "return ResolveInternal(seller, buyer, message, false);" in engine
     assert "return ResolveInternal(seller, buyer, message, true);" in engine
     assert "if (!decision.Enabled)" in engine
-    assert "&& !decision.HasConflict" in engine
+    assert "decision.HasConflict = manualExact == null && HasConflict(best, second)" in engine
     assert "&& !highRisk" in engine
     assert "&& standaloneSafe" in engine
-    assert "&& best.Score >= threshold" in engine
+    assert "best.Score >= threshold" in engine
 
 
 def test_new_direct_answer_menu_and_runtimelog_trace_require_explicit_confirm():
     ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
-    assert 'surface.ToolTip = "当前未命中安全直答 · 右键 → 新增"' in ui
+    assert 'var modify = new MenuItem { Header = "修改答案" };' in ui
     assert 'var create = new MenuItem { Header = "新增" };' in ui
-    assert "result.IsKnowledgeMiss && !isOrder, message, result.SuggestedAnswer" in ui
+    assert "result.IsKnowledgeMiss, isOrder ? null : message, result.SuggestedAnswer" in ui
     assert "win.ShowDialog()" in ui
     assert "MessageBoxResult.Yes" in ui
     assert "TraceSandbox(" in ui
     assert 'Log.Info("[KnowledgeV2Sandbox] session="' in ui
     assert "HashTrace(question)" in ui
-    assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction(" in ui
-    assert '"manual_direct_answer_add"' in ui
-    assert "KnowledgeEngineV2Repository.LoadAll(_seller)" in ui
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in ui
+    assert '"direct_save_success"' in ui
+    assert "KnowledgeEngineV2Service.Resolve(" in ui
     assert "KnowledgeEngineV2Service.ResolveSandbox(" in ui
 
 

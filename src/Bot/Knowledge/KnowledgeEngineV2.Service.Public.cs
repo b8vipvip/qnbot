@@ -60,13 +60,13 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
             store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, enabled ? "1" : "0");
-            store.SetString(KnowledgeEngineV2Constants.SettingsMode, string.Equals(mode, KnowledgeEngineV2Constants.ModeShadow, StringComparison.OrdinalIgnoreCase) ? KnowledgeEngineV2Constants.ModeShadow : KnowledgeEngineV2Constants.ModeProduction);
+            store.SetString(KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction);
             store.SetString(KnowledgeEngineV2Constants.SettingsDirectThreshold, Math.Max(0.70, Math.Min(0.96, threshold)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             store.SetString(KnowledgeEngineV2Constants.SettingsMinConfidence, Math.Max(0.50, Math.Min(0.95, minConfidence)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             SettingsCache[shop.ShopKey] = new RuntimeSettings
             {
                 Enabled = enabled,
-                Mode = string.Equals(mode, KnowledgeEngineV2Constants.ModeShadow, StringComparison.OrdinalIgnoreCase) ? KnowledgeEngineV2Constants.ModeShadow : KnowledgeEngineV2Constants.ModeProduction,
+                Mode = KnowledgeEngineV2Constants.ModeProduction,
                 DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
                 MinConfidence = Math.Max(0.50, Math.Min(0.95, minConfidence)),
                 ExpiresAt = DateTime.Now.AddMinutes(5)
@@ -121,7 +121,17 @@ namespace Bot.Knowledge
             var rankSw = Stopwatch.StartNew();
             var rankedMatches = candidates.Select(i => Score(seller, snapshot.Records[i], query)).Where(x => x != null && x.Score >= 0.30).OrderByDescending(x => x.Score).ThenByDescending(x => x.ConfidenceScore).ToList();
             var productionMatches = rankedMatches.Where(IsApprovedProductionMatch).Take(5).ToList();
-            var best = productionMatches.FirstOrDefault();
+            // Operator-reviewed direct replies take precedence at the exact question
+            // boundary; confidence observations never delay an explicit manual save.
+            // Other semantically similar questions continue through normal safety ranking.
+            var manualExact = productionMatches.FirstOrDefault(x => x != null
+                && x.Record != null
+                && string.Equals((x.Record.SourceType ?? "").Trim(),
+                    "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
+                && (x.Record.Aliases ?? new List<string>()).Concat(new[] { x.Record.Title })
+                    .Any(a => string.Equals(KnowledgeEngineV2Semantics.Compact(a),
+                        query.Normalized, StringComparison.Ordinal)));
+            var best = manualExact ?? productionMatches.FirstOrDefault();
             var visibleMatches = rankedMatches.Take(5).ToList();
             if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);
             decision.Matches = visibleMatches;
@@ -134,8 +144,11 @@ namespace Bot.Knowledge
                 Finish(decision, total, decideSw);
                 return decision;
             }
-            var second = productionMatches.Count > 1 ? productionMatches[1] : null;
-            decision.HasConflict = HasConflict(best, second);
+            var second = productionMatches.FirstOrDefault(x => x != null
+                && !object.ReferenceEquals(x, best));
+            // An explicit human correction of this exact standalone question wins over
+            // older generic answers; unrelated queries still use conflict rejection.
+            decision.HasConflict = manualExact == null && HasConflict(best, second);
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
@@ -145,19 +158,19 @@ namespace Bot.Knowledge
             var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)) || safeConsensus ? Math.Max(margin, 0.12) : margin;
             var standaloneSafe = IsSafeStandaloneLocalDirect(query, message);
 
-            decision.CanDirectReply = (sandbox || (ReplyModeService.IsLocalFirst(seller)
-                && decision.Mode == KnowledgeEngineV2Constants.ModeProduction))
-                && !decision.HasConflict
+            var approvedExact = manualExact != null && object.ReferenceEquals(best, manualExact);
+            decision.CanDirectReply = !decision.HasConflict
                 && !highRisk
                 && standaloneSafe
                 && best.Record.Enabled
-                && best.Score >= threshold
-                && best.ConfidenceScore >= minConfidence
-                && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
-                && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98);
+                && (approvedExact || (best.Score >= threshold
+                    && best.ConfidenceScore >= minConfidence
+                    && (best.AliasScore >= 0.94 || best.PredicateScore >= 0.99)
+                    && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
-                ? (sandbox ? "仅沙盒可直答（不代表生产允许发送）：score=" : "V2结构化知识高置信直答：score=") + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
+                ? (approvedExact ? "人工审核精确问法直答即时生效：score=" : "V2结构化知识已通过直答安全检查：score=")
+                    + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
                 : (!standaloneSafe ? "当前消息依赖Working Memory或属于状态/投诉/人工等控制语义，禁止V2本地直答，继续完整上下文/AI/人工链路" : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
             Finish(decision, total, decideSw);
             return decision;

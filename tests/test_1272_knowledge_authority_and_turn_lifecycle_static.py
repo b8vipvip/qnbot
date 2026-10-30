@@ -20,8 +20,8 @@ def test_human_edit_is_authoritative_provenance_not_ai_classification():
     bridge_importer = bridge.split("namespace Bot.Knowledge")[0]
     assert 'record.Type = "learning_candidate";' not in bridge_importer
     assert 'record.Status = "candidate";' not in bridge_importer
-    assert 'LearnAsync(e.Question, wnd.EditedAnswer, "人工修改"' in ui
-    assert "KnowledgeEngineV2LearningBridge.SynchronizeSeller(e.Seller)" in ui
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in ui
+    assert "KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer" not in ui
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved" in service
 
 

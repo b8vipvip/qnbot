@@ -51,6 +51,118 @@ namespace Bot.Knowledge
         }
 
         /// <summary>
+        /// Explicit operator Save from the Bot message editor / sandbox. Stores a
+        /// production-approved exact question without an AI observation period.
+        /// Exact-title duplicates are updated instead of creating competing facts;
+        /// vague similarity is never used to overwrite another knowledge record.
+        /// </summary>
+        public static bool TrySaveReviewedDirectAnswer(string seller, string question,
+            string answer, string sourceMessageId, out string result)
+        {
+            string ignoredId;
+            return TrySaveReviewedDirectAnswer(seller, question, answer, sourceMessageId,
+                out result, out ignoredId);
+        }
+
+        public static bool TrySaveReviewedDirectAnswer(string seller, string question,
+            string answer, string sourceMessageId, out string result, out string savedKnowledgeId)
+        {
+            savedKnowledgeId = string.Empty;
+            result = string.Empty;
+            question = (question ?? string.Empty).Trim();
+            answer = (answer ?? string.Empty).Trim();
+            if (answer.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                answer = answer.Substring(0, answer.Length - 3).TrimEnd();
+            if (question.Length < 5 || question.Length > 500 || answer.Length < 2 || answer.Length > 4000)
+            {
+                result = "问题或答案长度不合法，未写入知识。";
+                return false;
+            }
+            if (KnowledgeEngineV2Semantics.IsHighRisk(question)
+                || KnowledgeEngineV2Semantics.IsHighRisk(answer))
+            {
+                result = "该内容需要安全流程处理，不能设置为自动直答。";
+                return false;
+            }
+            var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
+            if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
+            {
+                result = "问题依赖上下文或缺少独立业务主体，不能建立无条件自动直答。";
+                return false;
+            }
+            try
+            {
+                var all = LoadAll(seller);
+                var exact = all.Where(x => x != null && x.Enabled
+                    && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title),
+                        KnowledgeEngineV2Semantics.Compact(question), StringComparison.Ordinal)).ToList();
+                if (exact.Count > 1)
+                {
+                    result = "存在多条完全同题的启用知识，请先在知识中心消除冲突。";
+                    return false;
+                }
+                var record = exact.Count == 1 ? exact[0] : new KnowledgeV2Record
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Type = "business_fact",
+                    Title = question,
+                    CreatedAt = DateTime.Now,
+                    SourceId = "reviewed-" + Guid.NewGuid().ToString("N")
+                };
+                if (string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = "原有知识标记为高风险，已阻止覆盖。";
+                    return false;
+                }
+                var old = record.Answer ?? string.Empty;
+                record.Answer = answer;
+                record.ShortAnswer = answer;
+                record.Aliases = (record.Aliases ?? new List<string>())
+                    .Concat(new[] { question }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                record.Intent = parsed.Intent;
+                record.Subject = parsed.Subject;
+                record.Predicate = parsed.Predicate;
+                record.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
+                if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
+                    record.Type = "business_fact";
+                record.SourceType = "manual_reviewed_direct";
+                record.RiskLevel = "normal";
+                record.Status = "active";
+                record.Enabled = true;
+                record.Authority = 0.99;
+                record.Confidence = 0.99;
+                record.LastVerifiedAt = DateTime.Now;
+                Save(seller, record); // Durable write + immediate immutable snapshot update.
+                var readback = LoadAll(seller).FirstOrDefault(x => x != null && x.Id == record.Id);
+                if (readback == null || !string.Equals(readback.Answer, answer, StringComparison.Ordinal))
+                {
+                    result = "知识写入后验证失败；请核实数据库和云同步。";
+                    return false;
+                }
+                string error;
+                KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+                    seller, "manual_direct_answer_add", "knowledge", record.Id,
+                    sourceMessageId ?? string.Empty, question,
+                    "previous_answer_length=" + old.Length,
+                    KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
+                    "人工确认的直答立即生效，不需影子观察；来源消息=" + (sourceMessageId ?? ""),
+                    "success", out error);
+                savedKnowledgeId = record.Id;
+                result = "直答已保存并立即刷新索引（知识ID：" + record.Id
+                    + "）。后续相同完整问题优先使用；安全/订单场景保护仍有效。";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                result = "人工直答保存失败：" + ex.Message;
+                BotLib.Log.ErrorWithMaxCount("Knowledge V2人工直答保存失败: "
+                    + ex.GetType().Name, 10);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// A verified V2 source ID is the only authority for editing an answer.
         /// Check the old answer under the same database lock as the write; never
         /// infer a record from semantic similarity or AI-generated titles.
@@ -117,9 +229,9 @@ namespace Bot.Knowledge
                 if (string.IsNullOrWhiteSpace(corrected.ShortAnswer)
                     || string.Equals(corrected.ShortAnswer.Trim(), before.Answer.Trim(), StringComparison.Ordinal))
                     corrected.ShortAnswer = correctedAnswer;
-                corrected.SourceType = "人工修改";
+                corrected.SourceType = "manual_reviewed_direct";
                 corrected.Authority = Math.Max(corrected.Authority, 0.98);
-                corrected.Confidence = Math.Max(corrected.Confidence, 0.94);
+                corrected.Confidence = Math.Max(corrected.Confidence, 0.99);
                 corrected.CorrectionCount++;
                 corrected.LastVerifiedAt = DateTime.Now;
                 NormalizeForSave(corrected);

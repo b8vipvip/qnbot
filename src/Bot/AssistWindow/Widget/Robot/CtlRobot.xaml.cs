@@ -216,12 +216,8 @@ namespace Bot.AssistWindow.Widget.Robot
             var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
             if (wnd.ShowDialog() != true) return;
             var route = BotReplySourceRouting.Resolve(e.SourceLabel, e.SourceWasManuallyCorrected);
-            if (e.SourceWasManuallyCorrected)
-            {
-                ctl.SetStatus("本消息来源曾被人工修改，无法核实原始知识ID。请在知识中心查看原始记录后编辑；未覆盖知识库。", false);
-                return;
-            }
-            if (route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
+            if (!e.SourceWasManuallyCorrected
+                && route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
             {
                 // Do not run the generic AI organizer: it can change the question
                 // title and accidentally create another similar, conflicting fact.
@@ -230,13 +226,32 @@ namespace Bot.AssistWindow.Widget.Robot
                     ctl.SetSendPending("正在按原始知识ID精确修订...");
                     var corrected = wnd.EditedAnswer;
                     string message = string.Empty;
+                    var savedId = route.TargetId;
                     var success = await Task.Run(() =>
                         KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
                             route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
+                    // If a historical source ID is stale, do not overwrite that
+                    // unrelated record. A confirmed edit may instead create an
+                    // exact-question reviewed direct answer under this seller.
+                    if (!success)
+                    {
+                        string reviewedStatus = string.Empty;
+                        var reviewed = await Task.Run(() =>
+                            KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                                e.Seller, e.Question, corrected, e.MessageRecordId,
+                                out reviewedStatus, out savedId));
+                        if (reviewed)
+                        {
+                            success = true;
+                            message = reviewedStatus;
+                        }
+                        else message += "；" + reviewedStatus;
+                    }
                     if (success)
                     {
-                        ctl.SetAnswer(corrected, e.SourceLabel);
-                        ctl.SetSource(e.SourceLabel);
+                        var source = "本地知识V2（记录ID：" + savedId + "）";
+                        ctl.SetAnswer(corrected, source);
+                        ctl.SetSource(source);
                     }
                     ctl.SetStatus(message, success);
                 }
@@ -247,25 +262,29 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
                 return;
             }
-            if ((e.SourceLabel ?? string.Empty).StartsWith("本地知识V2", StringComparison.Ordinal))
-            {
-                ctl.SetStatus("历史V2回复没有可靠的知识记录ID，禁止根据语义猜测并覆盖。请通过“查看”进入知识中心编辑。", false);
-                return;
-            }
-            // Non-V2 answers preserve the existing reviewed learning path.
-            ctl.SetAnswer(wnd.EditedAnswer);
-            ctl.SetSource("人工修改");
-            ctl.SetSendPending("正在整理并写入知识库...");
+            // Human-confirmed edits, including originally AI-generated answers,
+            // write directly to approved V2 knowledge; no AI learning/observation queue.
+            ctl.SetSendPending("正在保存人工审核的即时直答...");
             try
             {
-                var result = await KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer, "人工修改", e.Seller, e.Buyer);
-                if (result.Success)
-                    await Task.Run(() => KnowledgeEngineV2LearningBridge.SynchronizeSeller(e.Seller));
-                ctl.SetStatus(result.Success ? result.Message : "答案已修改，但知识库整理失败：" + result.Message, result.Success);
+                string status = string.Empty;
+                string savedId = string.Empty;
+                var correctedAnswer = wnd.EditedAnswer;
+                var saved = await Task.Run(() =>
+                    KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                        e.Seller, e.Question, correctedAnswer, e.MessageRecordId,
+                        out status, out savedId));
+                if (saved)
+                {
+                    var source = "本地知识V2（记录ID：" + savedId + "）";
+                    ctl.SetAnswer(correctedAnswer, source);
+                    ctl.SetSource(source);
+                }
+                ctl.SetStatus(status, saved);
             }
             catch (Exception ex)
             {
-                ctl.SetStatus("答案已修改，但知识库整理异常", false);
+                ctl.SetStatus("保存人工直答异常；原知识没有确认更新。", false);
                 Log.Exception(ex);
             }
         }
