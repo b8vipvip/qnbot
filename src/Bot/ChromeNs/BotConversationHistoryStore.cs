@@ -44,6 +44,16 @@ namespace Bot.ChromeNs
         public long UpdatedAtTicks { get; set; }
     }
 
+    internal sealed class BotReplyManualSourceEntity
+    {
+        [PrimaryKey]
+        public string EntityId { get; set; }
+        public string Seller { get; set; }
+        public string OriginalSource { get; set; }
+        public string CorrectedSource { get; set; }
+        public long CorrectedAtTicks { get; set; }
+    }
+
     internal static class BotConversationHistoryStore
     {
         public const int RetentionDays = 90;
@@ -210,7 +220,13 @@ namespace Bot.ChromeNs
                 if (match != null)
                 {
                     match.Question = string.IsNullOrWhiteSpace(match.Question) ? question : match.Question;
-                    match.AnswerSource = source;
+                    // Never erase an explicit operator correction on the next
+                    // live/history refresh of the same sent message.
+                    var manual = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
+                        x => x.EntityId == match.EntityId);
+                    match.AnswerSource = manual != null
+                        && string.Equals(manual.Seller, seller, StringComparison.Ordinal)
+                        ? manual.CorrectedSource : source;
                     match.StatusText = "千牛回显确认已发送";
                     match.StatusKind = "sent";
                     match.StatusDetail = "已观察到Bot消息回显";
@@ -273,6 +289,21 @@ namespace Bot.ChromeNs
                 {
                     var row = DbHelper.Db.ReadOneRecord<BotConversationHistoryEntity>(x => x.EntityId == entityId);
                     if (row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)) return false;
+                    if (source.Length > 200) return false;
+                    var original = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
+                        x => x.EntityId == entityId);
+                    if (original == null)
+                    {
+                        original = new BotReplyManualSourceEntity
+                        {
+                            EntityId = entityId, Seller = seller,
+                            OriginalSource = row.AnswerSource ?? string.Empty
+                        };
+                    }
+                    if (!string.Equals(original.Seller, seller, StringComparison.Ordinal)) return false;
+                    original.CorrectedSource = source;
+                    original.CorrectedAtTicks = DateTime.Now.Ticks;
+                    DbHelper.Db.SaveOneRecord(original);
                     row.AnswerSource = source;
                     row.UpdatedAtTicks = DateTime.Now.Ticks;
                     DbHelper.Db.SaveOneRecord(row);
@@ -283,6 +314,27 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("更新Bot回复来源标签失败：" + ex.Message, 10);
                 return false;
+            }
+        }
+
+        public static string GetManualSource(string seller, string entityId)
+        {
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(entityId)) return string.Empty;
+            try
+            {
+                EnsureSchema();
+                lock (DbSync)
+                {
+                    var row = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
+                        x => x.EntityId == entityId);
+                    return row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
+                        ? string.Empty : row.CorrectedSource ?? string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取人工来源更正失败：" + ex.Message, 5);
+                return string.Empty;
             }
         }
 
@@ -591,6 +643,14 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create index if not exists IX_BotReplySourceStamp_Lookup "
                     + "on BotReplySourceStampEntity(Seller, Buyer, UpdatedAtTicks)");
+                DbHelper.Db.Execute(
+                    "create table if not exists BotReplyManualSourceEntity ("
+                    + "EntityId text primary key not null,"
+                    + "Seller text not null,"
+                    + "OriginalSource text,"
+                    + "CorrectedSource text,"
+                    + "CorrectedAtTicks integer not null default 0"
+                    + ")");
                 Volatile.Write(ref _schemaReady, 1);
             }
         }
