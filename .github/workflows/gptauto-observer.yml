@@ -72,6 +72,17 @@ jobs:
                 continue
               fi
 
+              # An unchanged head may already have a completed Tier 3 handoff.
+              # Do not silently re-dispatch an identical repair forever: surface
+              # actionable recovery evidence when an autonomous patch is unavailable.
+              handoff_marker="<!-- gptauto-foreground-recovery:$task_id:$head -->"
+              handoff="$(gh api "repos/$REPOSITORY/issues/$pr/comments?per_page=100" 2>/dev/null | \
+                jq -r --arg marker "$handoff_marker" '[.[] | select((.body // "") | contains($marker))] | last | .body // ""' || true)"
+              if [[ -n "$handoff" ]]; then
+                echo "::warning::GPTAUTO_FOREGROUND_RECOVERY_REQUIRED task=$task_id pr=$pr head=$head ci_run=${ci_run:-unknown}. Automated tiers have handed off without a patch; this task remains ACTIVE and requires a foreground coding agent."
+                continue
+              fi
+
               echo "Watchdog recovering stalled task=$task_id pr=$pr head=$head ci_status=$ci_status"
               gh workflow run gptauto-observer.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
                 -f pr_number="$pr" -f head_sha="$head"

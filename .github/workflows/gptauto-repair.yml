@@ -369,7 +369,7 @@ jobs:
           jq -n --arg task "$TASK_ID" --arg pr "$PR_NUMBER" --arg head "$HEAD_SHA" --arg run "$FAILED_RUN_ID" --arg reason "$reason" \
             '{schema:"gptauto.foreground-exit-guard/v1",task_id:$task,pr_number:$pr,head_sha:$head,failed_run_id:$run,reason:$reason,completion_lease:"ACTIVE",repair_owner:"repair_pipeline",repair_tier:"foreground",foreground_disposition:"CONTINUE_REQUIRED",allow_foreground_exit:false,terminal_done:false,continuation_required:true}' > "$guard"
           echo "guard=$guard" >> "$GITHUB_OUTPUT"
-          echo "::warning::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
+          echo "::error::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID. Automatic repair exhausted without a validated patch; the Completion Lease remains ACTIVE."
 
       - name: Upload foreground recovery guard
         if: steps.foreground.outputs.guard != ''
