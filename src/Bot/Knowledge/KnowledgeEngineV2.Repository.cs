@@ -217,9 +217,9 @@ namespace Bot.Knowledge
                 if (string.IsNullOrWhiteSpace(corrected.ShortAnswer)
                     || string.Equals(corrected.ShortAnswer.Trim(), before.Answer.Trim(), StringComparison.Ordinal))
                     corrected.ShortAnswer = correctedAnswer;
-                corrected.SourceType = "人工修改";
+                corrected.SourceType = "manual_reviewed_direct";
                 corrected.Authority = Math.Max(corrected.Authority, 0.98);
-                corrected.Confidence = Math.Max(corrected.Confidence, 0.94);
+                corrected.Confidence = Math.Max(corrected.Confidence, 0.99);
                 corrected.CorrectionCount++;
                 corrected.LastVerifiedAt = DateTime.Now;
                 NormalizeForSave(corrected);
