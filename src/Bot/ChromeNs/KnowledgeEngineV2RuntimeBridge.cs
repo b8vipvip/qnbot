@@ -302,18 +302,24 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return;
             }
+            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
+            // Preserve the actual knowledge record selected for the direct reply.
+            // A generic "本地知识V2" label cannot open the right editor later.
+            var sourceLabel = best != null && best.Record != null
+                && !string.IsNullOrWhiteSpace(best.Record.Id)
+                    ? "本地知识V2（记录ID：" + best.Record.Id + "）"
+                    : "本地知识V2（未记录知识ID）";
             var readyAt = DateTime.Now;
             ctl = ResponseProgressTracker.SetAnswerReady(
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
                 answer,
-                "本地知识V2",
+                sourceLabel,
                 detectedAt,
                 readyAt);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
-            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
             Log.Info("Knowledge Engine V2本地答案已就绪: buyer=" + burst.BuyerNick
                 + ", score=" + (best == null ? "-" : best.Score.ToString("0.00"))
                 + ", predicate=" + (decision.Query == null ? "" : decision.Query.Predicate)
