@@ -2,6 +2,11 @@ name: GPTAuto Observer
 on:
   workflow_dispatch:
     inputs:
+      watchdog:
+        description: "Explicitly run stuck-task watchdog (never scheduled)"
+        type: boolean
+        required: false
+        default: false
       pr_number:
         description: PR number to reconcile
         required: false
@@ -23,11 +28,9 @@ on:
     branches: [main, master]
   workflow_run:
     workflows: [CI]
-    types: [in_progress, completed]
+    types: [completed]
   release:
     types: [published]
-  schedule:
-    - cron: '*/5 * * * *'
 permissions:
   contents: write
   actions: write
@@ -39,7 +42,7 @@ concurrency:
 
 jobs:
   watchdog:
-    if: ${{ github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.watchdog == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -72,6 +75,8 @@ jobs:
                 continue
               fi
 
+              # The watchdog is an explicit maintainer-only recovery action;
+              # do not create periodic Actions when no one is working.
               # An unchanged head may already have a completed Tier 3 handoff.
               # Do not silently re-dispatch an identical repair forever: surface
               # actionable recovery evidence when an autonomous patch is unavailable.
@@ -89,7 +94,7 @@ jobs:
             done
 
   observe:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.watchdog != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -119,8 +124,6 @@ jobs:
               if [[ "$WORKFLOW_NAME" == "CI" ]]; then
                 if [[ -n "$PR_BASE_REF" && "$PR_BASE_REF" != "$DEFAULT_BRANCH" ]]; then
                   actionable=false
-                elif [[ "$WORKFLOW_STATUS" == "in_progress" ]]; then
-                  actionable=true
                 elif [[ "$WORKFLOW_STATUS" == "completed" && "$WORKFLOW_CONCLUSION" != "cancelled" ]]; then
                   if [[ "$WORKFLOW_CONCLUSION" != "success" || "$WORKFLOW_BRANCH" != "$DEFAULT_BRANCH" ]]; then
                     actionable=true
@@ -162,25 +165,6 @@ jobs:
         if: ${{ steps.ingress.outputs.actionable == 'true' }}
         with:
           python-version: '3.12'
-
-      - name: Coalesce short in-progress CI into one observation
-        if: ${{ steps.ingress.outputs.actionable == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.status == 'in_progress' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for attempt in $(seq 1 12); do
-            current="$(gh api "repos/$REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
-            status="$(jq -r '.status // "missing"' <<<"$current")"
-            conclusion="$(jq -r '.conclusion // ""' <<<"$current")"
-            echo "Coalesce attempt $attempt: run=$SOURCE_RUN_ID status=$status conclusion=${conclusion:-pending}"
-            [[ "$status" == "completed" ]] && break
-            [[ "$attempt" == "12" ]] && break
-            sleep 10
-          done
 
       - name: Capture repository-side GPTAuto task
         if: ${{ steps.ingress.outputs.actionable == 'true' }}

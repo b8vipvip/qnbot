@@ -244,9 +244,22 @@ jobs:
           set -Eeuo pipefail
           [[ -n "$PR_NUMBER" && -n "$HEAD_SHA" && -n "$FAILED_RUN_ID" ]] || { echo "::error::Repair dispatch is missing PR/head/run identity."; exit 1; }
           marker="<!-- gptauto-repair-dispatched:$TASK_ID:$HEAD_SHA -->"
-          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          # Do not let an unresolved PR consume Actions indefinitely by
+          # repeatedly generating a fresh head and failing the same product CI.
+          # Limit all automatic repair generations for one PR/task, across SHAs.
+          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
           if grep -Fq "$marker" <<<"$comments"; then
             echo "Three-tier repair already dispatched for $TASK_ID / $HEAD_SHA; keeping the same repair lease."
+            exit 0
+          fi
+          repair_count="$(grep -Fc "<!-- gptauto-repair-dispatched:$TASK_ID:" <<<"$comments" || true)"
+          if (( repair_count >= 3 )); then
+            exhausted="<!-- gptauto-repair-budget-exhausted:$TASK_ID -->"
+            if ! grep -Fq "$exhausted" <<<"$comments"; then
+              gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$exhausted
+          GPTAuto has stopped autonomous repairs after $repair_count distinct repair attempts for this PR. Product CI remains enabled; a developer can make a new manual patch and the same PR will be revalidated. No more repair jobs will be dispatched automatically for this task. For an explicit, authorized retry, request a new repair task with a new PR."
+            fi
+            echo "::warning::Autonomous repair budget exhausted task=$TASK_ID attempts=$repair_count; no more repair dispatch."
             exit 0
           fi
           gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
