@@ -37,7 +37,7 @@ def test_time_range_frequency_is_actual_message_occurrences():
 def test_ai_top_optimization_reviews_before_production_write():
     source = src("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
     ui = src("src/Bot/Knowledge/BuyerMessageManagementPage.cs")
-    assert "await GroupByAi(seller, progress, ct)" in source
+    assert "await GroupByAi(seller, progress, ct, days)" in source
     assert "Take(count)" in source
     assert 'Status = "pending"' in source
     assert "TrySaveReviewedDirectAnswer(" in source
