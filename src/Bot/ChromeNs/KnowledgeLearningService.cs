@@ -94,10 +94,10 @@ namespace Bot.ChromeNs
             // fallback, which could incorrectly label a different answer.
             var persisted = BotConversationHistoryStore.ResolveAnswerSourceStamp(seller, buyer, question, answer);
             if (!string.IsNullOrWhiteSpace(persisted)) return persisted;
-            BotReplyPreset preset;
-            return BotReplyPresetService.TryFindPreset(seller, answer, out preset)
-                ? BotReplyPresetService.BuildSourceLabel(preset)
-                : string.Empty;
+            // No persisted stamp means the producer is unknown. Text equality to
+            // today's editable preset must not fabricate provenance for old
+            // messages or for an AI answer with identical wording.
+            return string.Empty;
         }
 
         public static bool TryFindLocalAnswer(
