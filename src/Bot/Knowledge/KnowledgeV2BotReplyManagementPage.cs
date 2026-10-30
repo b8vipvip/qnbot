@@ -554,6 +554,7 @@ namespace Bot.Knowledge
                         + "；回复与标题匹配 " + answerToQuestionScore.ToString("0.00");
                     return new BotReplyKnowledgeResult { Record = record, Score = score, Reason = reason };
                 })
+                .Where(x => x.Score >= 0.25)
                 .OrderByDescending(x => x.Score)
                 .ThenByDescending(x => x.Record.Confidence)
                 .Take(100)
