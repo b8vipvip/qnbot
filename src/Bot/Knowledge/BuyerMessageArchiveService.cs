@@ -242,13 +242,58 @@ namespace Bot.Knowledge
             var groups = Groups(seller, days, "").Take(count).ToList();
             var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)).ToList();
+            // All enabled V2 knowledge is sent in bounded chunks to let AI
+            // identify which factual records actually support each top topic.
+            // This avoids silently ignoring a distant but relevant KB entry.
+            var links = groups.ToDictionary(g => g.Key,
+                g => new HashSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
+            for (var offset = 0; offset < knowledge.Count; offset += 20)
+            {
+                ct.ThrowIfCancellationRequested();
+                var slice = knowledge.Skip(offset).Take(20).ToList();
+                var context = new JObject
+                {
+                    ["topics"] = new JArray(groups.Select((g, index) =>
+                        new JObject { ["index"] = index, ["question"] = g.Title })),
+                    ["knowledge"] = new JArray(slice.Select(k => new JObject
+                    {
+                        ["id"] = k.Id, ["question"] = k.Title,
+                        ["answer"] = k.Answer, ["risk"] = k.RiskLevel
+                    }))
+                };
+                var relation = await Ask(seller,
+                    "判断每条现有知识是否能真实支持高频问题。返回严格JSON："
+                    + "{\"items\":[{\"index\":0,\"ids\":[\"准确知识ID\"]}]}。"
+                    + " 可返回空数组；只允许引用输入提供的知识ID，不得改写事实。",
+                    context, ct).ConfigureAwait(false);
+                var relationItems = relation["items"] as JArray;
+                if (relationItems == null)
+                    throw new InvalidOperationException("AI未返回知识关联结果；不会生成不完整优化");
+                var allowed = new HashSet<string>(slice.Select(x => x.Id), StringComparer.Ordinal);
+                foreach (var pair in relationItems.OfType<JObject>())
+                {
+                    int index;
+                    if (!int.TryParse(Convert.ToString(pair["index"]), out index)
+                        || index < 0 || index >= groups.Count) continue;
+                    var ids = pair["ids"] as JArray;
+                    if (ids == null) continue;
+                    foreach (var id in ids.Select(Convert.ToString).Where(allowed.Contains))
+                        links[groups[index].Key].Add(id);
+                }
+                if (progress != null) progress("已关联知识 " + Math.Min(offset + slice.Count, knowledge.Count)
+                    + "/" + knowledge.Count);
+            }
             var suggestions = new List<BuyerAiOptimizationRow>();
             for (var i = 0; i < groups.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
                 var g = groups[i];
-                var related = knowledge.OrderByDescending(x =>
-                    KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title)).Take(25).ToList();
+                var related = knowledge.Where(x => links[g.Key].Contains(x.Id))
+                    .OrderByDescending(x => KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title))
+                    .Take(25).ToList();
+                if (related.Count == 0)
+                    related = knowledge.OrderByDescending(x =>
+                        KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title)).Take(25).ToList();
                 var payload = new JObject
                 {
                     ["topic"] = g.Title, ["frequency"] = g.Count,
