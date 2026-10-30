@@ -37,6 +37,10 @@ namespace Bot.Knowledge
         public string Status { get; set; }
         public long CreatedAtTicks { get; set; }
         public string KnowledgeId { get; set; }
+        public string CreatedAtText
+        {
+            get { return CreatedAtTicks <= 0 ? "-" : new DateTime(CreatedAtTicks).ToString("yyyy-MM-dd HH:mm"); }
+        }
     }
     internal sealed class BuyerQuestionGroup
     {
@@ -172,9 +176,15 @@ namespace Bot.Knowledge
                 return JObject.Parse((r.Answer ?? "").Trim());
             }
         }
-        internal static async Task<int> GroupByAi(string seller, Action<string> progress, CancellationToken ct)
+        internal static async Task<int> GroupByAi(string seller, Action<string> progress,
+            CancellationToken ct, int recentDays = 0)
         {
             var rows = Read(seller);
+            if (recentDays > 0)
+            {
+                var cutoff = DateTime.Now.AddDays(-Math.Max(1, Math.Min(3650, recentDays))).Ticks;
+                rows = rows.Where(x => x.ReceivedAtTicks >= cutoff).ToList();
+            }
             var unique = rows.GroupBy(x => KnowledgeEngineV2Semantics.Compact(x.Text))
                 .Select(x => new { Key = x.Key, Text = x.First().Text, Count = x.Count() }).ToList();
             var grouped = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -238,7 +248,7 @@ namespace Bot.Knowledge
             // This action does not require a separate prior click on AI分析:
             // regroup all archived variants first, so top counts are semantic.
             if (progress != null) progress("先对全部归档买家消息执行语义分组...");
-            await GroupByAi(seller, progress, ct).ConfigureAwait(false);
+            await GroupByAi(seller, progress, ct, days).ConfigureAwait(false);
             var groups = Groups(seller, days, "").Take(count).ToList();
             var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)).ToList();
@@ -257,8 +267,8 @@ namespace Bot.Knowledge
                         new JObject { ["index"] = index, ["question"] = g.Title })),
                     ["knowledge"] = new JArray(slice.Select(k => new JObject
                     {
-                        ["id"] = k.Id, ["question"] = k.Title,
-                        ["answer"] = k.Answer, ["risk"] = k.RiskLevel
+                        ["id"] = k.Id, ["question"] = Redact(k.Title),
+                        ["answer"] = Redact(k.Answer), ["risk"] = k.RiskLevel
                     }))
                 };
                 var relation = await Ask(seller,
@@ -299,7 +309,8 @@ namespace Bot.Knowledge
                     ["topic"] = g.Title, ["frequency"] = g.Count,
                     ["variants"] = new JArray(g.Messages.Select(x => x.Text).Distinct().Take(120)),
                     ["knowledge"] = new JArray(related.Select(k => new JObject
-                        { ["id"] = k.Id, ["question"] = k.Title, ["answer"] = k.Answer, ["risk"] = k.RiskLevel }))
+                        { ["id"] = k.Id, ["question"] = Redact(k.Title),
+                            ["answer"] = Redact(k.Answer), ["risk"] = k.RiskLevel }))
                 };
                 var json = await Ask(seller,
                     "基于当前知识改进高频直答。不得自创价格、库存或服务承诺。证据不足时proposed_answer留空。"
