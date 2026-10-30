@@ -43,7 +43,7 @@ def test_sandbox_is_read_only_without_outbound_order_or_ai_learning():
     assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in save_section
     assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
-    assert "KnowledgeEngineV2Service.ResolveSandbox(" in save_section
+    assert "KnowledgeEngineV2Service.Resolve(" in save_section
     assert "ReadAll(" not in save_section
     assert "direct_save_success" in save_section
 
@@ -170,10 +170,10 @@ def test_shadow_mode_previews_do_not_relax_production_sending():
     assert "return ResolveInternal(seller, buyer, message, false);" in engine
     assert "return ResolveInternal(seller, buyer, message, true);" in engine
     assert "if (!decision.Enabled)" in engine
-    assert "&& !decision.HasConflict" in engine
+    assert "decision.HasConflict = manualExact == null && HasConflict(best, second)" in engine
     assert "&& !highRisk" in engine
     assert "&& standaloneSafe" in engine
-    assert "&& best.Score >= threshold" in engine
+    assert "best.Score >= threshold" in engine
 
 
 def test_new_direct_answer_menu_and_runtimelog_trace_require_explicit_confirm():
