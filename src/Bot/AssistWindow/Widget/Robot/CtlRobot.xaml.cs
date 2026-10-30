@@ -229,11 +229,26 @@ namespace Bot.AssistWindow.Widget.Robot
                     var success = await Task.Run(() =>
                         KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
                             route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
-                    if (success)
+                    // If a historical source ID is stale, do not overwrite that
+                    // unrelated record. A confirmed edit may instead create an
+                    // exact-question reviewed direct answer under this seller.
+                    if (!success)
                     {
-                        ctl.SetAnswer(corrected, e.SourceLabel);
-                        ctl.SetSource(e.SourceLabel);
+                        string reviewedStatus = string.Empty;
+                        var reviewed = await Task.Run(() =>
+                            KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                                e.Seller, e.Question, corrected, e.MessageRecordId,
+                                out reviewedStatus));
+                        if (reviewed)
+                        {
+                            success = true;
+                            message = reviewedStatus;
+                            ctl.SetSource("人工审核直答");
+                        }
+                        else message += "；" + reviewedStatus;
                     }
+                    if (success)
+                        ctl.SetAnswer(corrected, "人工审核直答");
                     ctl.SetStatus(message, success);
                 }
                 catch (Exception ex)
