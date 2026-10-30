@@ -115,6 +115,8 @@ namespace Bot.Knowledge
                 record.Subject = parsed.Subject;
                 record.Predicate = parsed.Predicate;
                 record.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
+                if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
+                    record.Type = "business_fact";
                 record.SourceType = "manual_reviewed_direct";
                 record.RiskLevel = "normal";
                 record.Status = "active";
