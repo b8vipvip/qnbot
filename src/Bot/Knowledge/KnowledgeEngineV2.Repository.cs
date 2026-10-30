@@ -59,6 +59,15 @@ namespace Bot.Knowledge
         public static bool TrySaveReviewedDirectAnswer(string seller, string question,
             string answer, string sourceMessageId, out string result)
         {
+            string ignoredId;
+            return TrySaveReviewedDirectAnswer(seller, question, answer, sourceMessageId,
+                out result, out ignoredId);
+        }
+
+        public static bool TrySaveReviewedDirectAnswer(string seller, string question,
+            string answer, string sourceMessageId, out string result, out string savedKnowledgeId)
+        {
+            savedKnowledgeId = string.Empty;
             result = string.Empty;
             question = (question ?? string.Empty).Trim();
             answer = (answer ?? string.Empty).Trim();
@@ -139,6 +148,7 @@ namespace Bot.Knowledge
                     KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
                     "人工确认的直答立即生效，不需影子观察；来源消息=" + (sourceMessageId ?? ""),
                     "success", out error);
+                savedKnowledgeId = record.Id;
                 result = "直答已保存并立即刷新索引（知识ID：" + record.Id
                     + "）。后续相同完整问题优先使用；安全/订单场景保护仍有效。";
                 return true;
