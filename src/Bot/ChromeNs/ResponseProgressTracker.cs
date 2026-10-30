@@ -239,6 +239,9 @@ namespace Bot.ChromeNs
                     ExpiresAt = DateTime.Now.AddMinutes(3)
                 };
             }
+            if (!string.IsNullOrWhiteSpace(answer))
+                BotReplySourceLedger.RecordPrepared(seller, buyer, question, answer,
+                    string.IsNullOrWhiteSpace(source) ? "回复链路（来源未标记）" : source);
             var responseMs = Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds);
             MessageProcessingTraceService.RecordAnswerReady(
                 seller, buyer, question, answer, source, responseMs);
