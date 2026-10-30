@@ -232,7 +232,7 @@ namespace Bot.ChromeNs
                 var match = candidates.FirstOrDefault(x => x != null
                     && string.Equals(x.EntityId, originalId, StringComparison.Ordinal));
 
-                if (match == null)
+                if (match == null && existingLink == null)
                 {
                     // Different message keys with identical text must NOT claim
                     // a previously linked record. Prefer a still-unlinked native
@@ -558,6 +558,9 @@ namespace Bot.ChromeNs
                         "delete from BotConversationHistoryEntity where EntityId not in "
                         + "(select EntityId from BotConversationHistoryEntity order by UpdatedAtTicks desc limit "
                         + MaxTotalRecords + ")");
+                    DbHelper.Db.Execute(
+                        "delete from BotReplyEchoLinkEntity where RecordId not in "
+                        + "(select EntityId from BotConversationHistoryEntity)");
                 }
                 if (expired > 0 || overflow > 0)
                 {
