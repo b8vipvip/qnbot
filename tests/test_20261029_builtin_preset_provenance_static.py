@@ -1,4 +1,4 @@
-"""Fixed product link replies are not Knowledge V2 records."""
+"""Source checks for editable, shop-scoped product link presets."""
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -6,34 +6,34 @@ ROOT=Path(__file__).resolve().parents[1]
 def src(relative):
     return (ROOT/relative).read_text(encoding="utf-8-sig")
 
-def test_builtin_product_preset_is_exact_match_not_knowledge():
+def test_product_link_preset_provenance_is_exact_and_editable():
     store=src("src/Bot/ChromeNs/ConversationContextStore.cs")
-    assert '我看到您发来的商品链接了，想咨询哪方面呢？' in store
-    assert 'internal static bool IsProductLinkPresetReply(string answer)' in store
-    assert 'normalized.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)' in store
-    assert "ProductLinkReplies.Any(reply =>" in store
-    assert "string.Equals(reply, normalized, StringComparison.Ordinal)" in store
+    catalog=src("src/Bot/ChromeNs/BotReplyPresetService.cs")
     pipeline=src("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    assert 'productLinkReply, "商品链接预设回复"' in pipeline
+    assert '我看到您发来的商品链接了，想咨询哪方面呢？' in catalog
+    assert 'internal static bool IsProductLinkPresetReply(string seller, string answer)' in store
+    assert "BotReplyPresetService.IsPresetReply(seller, answer)" in store
+    assert "TryFindPreset(string seller, string answer" in catalog
+    assert 'normalized.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)' not in store
+    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply)" in pipeline
+    assert "ProductLinkReplies[Math" not in store
 
-def test_fallback_card_not_mistaken_for_real_provenance():
+def test_confirmed_bot_echo_stamps_own_source_or_marks_unknown():
     mirror=src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
-    assert 'ConversationContextStore.IsProductLinkPresetReply(botAnswer)' in mirror
-    assert '商品链接预设回复（内置固定话术，非知识库条目）' in mirror
+    assert 'BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset)' in mirror
     assert "KnowledgeLearningService.ResolveAnswerSource(" in mirror
-    assert '千牛已发送回显（来源记录未留存，不能确定知识库命中）' in mirror
+    assert "BotConversationHistoryStore.RecordBotEcho(" in mirror
+    assert '来源未记录（千牛回显已确认，需人工补录）' in mirror
     assert '"千牛Bot发送回显（本地答复卡片未找到）"' not in mirror
 
-def test_view_and_provenance_show_details_instead_of_false_knowledge_locator():
+def test_view_source_edit_and_reverse_lookup_available_on_bot_bubble():
     mirror=src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
-    assert 'ResolveMirrorBotSource(action, messageText)' in mirror
-    assert '商品链接预设回复（系统内置固定话术，不属于知识库 V2）' in mirror
-    assert 'ConversationContextTurn turn,' in mirror
+    assert "ResolveMirrorBotSource(seller, buyer, question, action, messageText)" in mirror
     assert 'turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")' in mirror
     assert '发送者：Bot' in mirror
-    assert 'if (IsVerifiedKnowledgeMirrorSource(source))' in mirror
-    assert '此回复并非已验证的知识库命中，不会错误跳转知识库' in mirror
-    assert 'action.MirrorOpenKnowledge(Window.GetWindow(this));' in mirror
-    assert '修改本地答案或知识不会修改已送达买家的消息' in mirror
-    for a in ("查看","复制","重发","修改","来源"):
-        assert f'Header = "{a}"' in mirror
+    assert 'Header = "知识库检索问题"' in mirror
+    assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch" in mirror
+    assert "BotReplySourceEditorWindow.Edit" in mirror
+    assert "BotConversationHistoryStore.UpdateAnswerSource" in mirror
+    for label in ("查看","复制","重发","修改","来源"):
+        assert f'Header = "{label}"' in mirror
