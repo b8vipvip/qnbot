@@ -23,7 +23,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,7 +106,7 @@ jobs:
                 --base "${{ github.event.repository.default_branch }}" --head "$branch"
               pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
             fi
-            gh pr merge "$pr" --auto --squash || echo "::notice::Auto-merge is unavailable; uninstall PR remains open for normal CI-gated merge."
+            echo "::notice::GPTAuto uninstall PR #$pr requires manual approval after successful product CI. Automatic uninstall merge is disabled."
             {
               echo "## GPTAuto uninstall prepared"
               echo "- PR: #$pr"
@@ -231,4 +231,54 @@ jobs:
             pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
           fi
 
-          gh pr merge "$pr" --auto --squash || echo "::notice::Auto-merge is unavailable; PR remains open for normal CI-gated merge."
+          # GitHub --auto merges IMMEDIATELY when branch protection has no
+          # required checks. Never use it as a CI gate; verify actual successful
+          # PR-workflow runs at the immutable HEAD SHA before any merge.
+          expected_head="$(git rev-parse HEAD)"
+          [[ "$expected_head" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Invalid candidate SHA"; exit 1; }
+          [[ "$expected_head" == "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" ]] || {
+            echo "::error::Sync PR changed after upload; merge rejected"
+            exit 1
+          }
+          if [[ ! -f .github/gptauto/consumer_sync_ci_gate.py ]]; then
+            echo "::error::Canonical CI merge gate is missing; leaving PR open"
+            exit 1
+          fi
+
+          gate_passed=false
+          for attempt in $(seq 1 90); do
+            # If GitHub is temporarily unavailable, fail closed; never allow
+            # missing checks, push-only checks or stale checks to authorize merge.
+            if ! runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$expected_head&per_page=100")"; then
+              echo "::error::Cannot read product CI evidence. Sync PR remains open."
+              exit 1
+            fi
+            decision="$(printf '%s\n' "$runs" |
+              PYTHONPATH=.github python3 -m gptauto.consumer_sync_ci_gate \
+                --repository "$GITHUB_REPOSITORY" --sha "$expected_head")" && verdict_status=passed || verdict_status=$?
+            if [[ "$verdict_status" == "passed" ]]; then
+              gate_passed=true
+              echo "Exact-SHA product PR CI gates passed: $decision"
+              break
+            fi
+            if [[ "$verdict_status" != "1" ]]; then
+              echo "::error::Consumer CI failed or is invalid: $decision"
+              exit 1
+            fi
+            if (( attempt % 6 == 0 )); then
+              echo "Waiting for required product PR CI at $expected_head ($attempt/90): $decision"
+            fi
+            sleep 10
+          done
+          if [[ "$gate_passed" != true ]]; then
+            echo "::error::Required PR CI did not finish successfully; refusing to merge $pr"
+            exit 1
+          fi
+          [[ "$expected_head" == "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" ]] || {
+            echo "::error::PR head moved during CI verification; refusing merge"
+            exit 1
+          }
+          # This is intentionally NOT --auto: that option can bypass CI when
+          # GitHub branch protection is not enabled on consumer repositories.
+          gh pr merge "$pr" --squash --match-head-commit "$expected_head" ||
+            { echo "::error::CI passed but guarded merge failed; PR remains open"; exit 1; }
