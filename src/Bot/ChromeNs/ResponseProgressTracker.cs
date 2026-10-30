@@ -209,11 +209,10 @@ namespace Bot.ChromeNs
             // answer receives a durable source stamp; missing route metadata is explicitly
             // marked for operator review instead of leaving a blank/unqueryable source.
             BotReplyPreset preset;
-            if ((string.IsNullOrWhiteSpace(source)
-                    || string.Equals(source, "商品链接预设回复", StringComparison.Ordinal))
+            if (string.Equals(source, "商品链接预设回复", StringComparison.Ordinal)
                 && BotReplyPresetService.TryFindPreset(seller, answer, out preset))
             {
-                // Only fill in a missing/legacy source; never override a verified
+                // Resolve a known legacy product-link producer; never override a verified
                 // Knowledge V2 / AI / rule origin with a coincidentally equal preset.
                 source = BotReplyPresetService.BuildSourceLabel(preset);
             }
