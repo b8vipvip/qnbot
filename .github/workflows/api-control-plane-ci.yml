@@ -29,6 +29,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  smart-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      image_required: ${{ steps.classify.outputs.image_required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Select full image verification only when required
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          required=true
+          target="$(git rev-parse HEAD)"
+          base="$BASE_SHA"
+          if [[ ! "$base" =~ ^[a-f0-9]{40}$ ]] || [[ "$base" == 0000000000000000000000000000000000000000 ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          if [[ -f .github/gptauto/smart_update.py ]] && \
+              python3 .github/gptauto/smart_update.py \
+                --repo qnbot --worktree . --from-sha "$base" \
+                --target-sha "$target" > /tmp/gptauto-plan.json; then
+            mode="$(python3 -c 'import json; print(json.load(open("/tmp/gptauto-plan.json"))["mode"])')"
+            echo "Selected GPTAuto update mode: $mode"
+            case "$mode" in
+              runtime-hotfix|client-build|checks-only|no-op) required=false ;;
+            esac
+          fi
+          echo "image_required=$required" >> "$GITHUB_OUTPUT"
+
   fast-gate:
     name: Fast Gate
     runs-on: ubuntu-latest
@@ -100,7 +133,7 @@ jobs:
 
   full-gate:
     name: Full Gate / Build Package
-    needs: [fast-gate, windows-static]
+    needs: [smart-plan, fast-gate, windows-static]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -135,8 +168,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Build Ubuntu container
+        if: needs.smart-plan.outputs.image_required == 'true'
         run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
       - name: Smoke test Ubuntu container startup and OCR engine
+        if: needs.smart-plan.outputs.image_required == 'true'
         run: |
           set -euo pipefail
           FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
@@ -177,6 +212,7 @@ jobs:
           find . -type d -name .pytest_cache -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
       - name: Upload Ubuntu deployment package
+        if: needs.smart-plan.outputs.image_required == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: qianniu-api-control-plane-ubuntu-${{ github.sha }}
