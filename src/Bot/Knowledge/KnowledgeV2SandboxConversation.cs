@@ -369,7 +369,7 @@ namespace Bot.Knowledge
         }
 
         private void AddBubble(string role, string message, string source,
-            bool canTeach = false, string originalQuestion = null, string suggestedAnswer = null,
+            bool isKnowledgeMiss = false, string originalQuestion = null, string suggestedAnswer = null,
             bool isHighRisk = false, bool hasConflict = false)
         {
             var bot = string.Equals(role, "Bot", StringComparison.Ordinal);
@@ -396,22 +396,35 @@ namespace Bot.Knowledge
             });
             panel.Children.Add(new TextBlock { Text = message ?? "", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
             surface.Child = panel;
-            if (bot && canTeach && !string.IsNullOrWhiteSpace(originalQuestion))
+            if (bot && !string.IsNullOrWhiteSpace(originalQuestion))
             {
                 var question = originalQuestion;
                 var proposedAnswer = suggestedAnswer ?? string.Empty;
                 var risk = isHighRisk;
                 var conflict = hasConflict;
                 var menu = new ContextMenu();
-                var create = new MenuItem { Header = "新增" };
-                create.Click += delegate
+                if (isKnowledgeMiss)
                 {
-                    TraceSandbox("direct_menu_open", "requested", question, null, "right_click");
-                    ShowDirectAnswerDialog(question, proposedAnswer, risk, conflict);
+                    var create = new MenuItem { Header = "新增" };
+                    create.Click += delegate
+                    {
+                        TraceSandbox("direct_menu_open", "requested", question, null, "right_click");
+                        ShowDirectAnswerDialog(question, proposedAnswer, risk, conflict);
+                    };
+                    menu.Items.Add(create);
+                }
+                var modify = new MenuItem { Header = "修改答案" };
+                modify.Click += delegate
+                {
+                    TraceSandbox("direct_edit_open", "requested", question, null, "right_click");
+                    ShowDirectAnswerDialog(question,
+                        string.IsNullOrWhiteSpace(proposedAnswer) ? message : proposedAnswer,
+                        risk, conflict);
                 };
-                menu.Items.Add(create);
+                menu.Items.Add(modify);
                 surface.ContextMenu = menu;
-                surface.ToolTip = "当前未命中安全直答 · 右键 → 新增";
+                surface.ToolTip = isKnowledgeMiss ? "当前未命中安全直答 · 右键新增/修改答案"
+                    : "右键修改答案后立即成为已批准直答";
             }
             _transcript.Children.Add(surface);
             _scroll.ScrollToEnd();
@@ -502,7 +515,7 @@ namespace Bot.Knowledge
                     _orderPreviewed.Add(result.OrderDedupKey);
 
                 AddBubble("Bot", result.Reply, result.Source,
-                    result.IsKnowledgeMiss && !isOrder, message, result.SuggestedAnswer,
+                    result.IsKnowledgeMiss, isOrder ? null : message, result.SuggestedAnswer,
                     result.IsHighRisk, result.HasConflict);
                 _diagnostics.Text = result.Detail;
                 _status.Text = "沙盒完成（未向千牛发送） · " + result.Outcome;
@@ -635,12 +648,8 @@ namespace Bot.Knowledge
                             .Take(3).Select(x => "ID:" + x.Record.Id + " 问:" + x.Record.Title
                                 + " 答:" + x.Record.Answer));
                     var settings = KnowledgeEngineV2Service.GetSettingsView(_seller);
-                    var productionPermit = string.Equals(settings.Mode,
-                            KnowledgeEngineV2Constants.ModeProduction, StringComparison.OrdinalIgnoreCase)
-                        && ReplyModeService.IsLocalFirst(_seller);
-                    var trace = "V2沙盒知识判断：" + (decision.CanDirectReply ? "知识通过直答条件" : "知识未通过直答条件")
-                        + "\n生产发送开关：" + (productionPermit ? "已具备模式前提（仍须通过生产安全判断）"
-                            : "未开启（影子模式或非本地优先；不会自动更改）")
+                    var trace = "V2直答判断：" + (decision.CanDirectReply ? "已通过" : "未通过")
+                        + "\n运行方式：直接生效；不再使用影子观察模式"
                         + "\n原因：" + decision.Reason
                         + "\n冲突：" + decision.HasConflict
                         + "\n候选数：" + decision.CandidateCount
@@ -878,138 +887,58 @@ namespace Bot.Knowledge
             var answer = (rawAnswer ?? string.Empty).Trim();
             TraceSandbox("direct_save_attempt", "requested", question, null,
                 "answerLength=" + answer.Length);
-            if (question.Length < 5 || question.Length > 500
-                || answer.Length < 2 || answer.Length > 4000)
+            if (riskFromDecision || conflictFromDecision
+                || KnowledgeEngineV2Semantics.IsHighRisk(question)
+                || KnowledgeEngineV2Semantics.IsHighRisk(answer))
             {
-                _status.Text = "问题需5～500字，答案需2～4000字。";
-                TraceSandbox("direct_save_rejected", "invalid_length", question, null, string.Empty);
-                MessageBox.Show(_status.Text, "新增直答", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return false;
-            }
-            if (KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
-                || riskFromDecision || conflictFromDecision)
-            {
-                _status.Text = "存在风险或知识冲突，不能直接发布。请在知识页面审核处理。";
+                _status.Text = "存在高风险或未解决的知识冲突，请在知识中心处理；不能自动直答。";
                 TraceSandbox("direct_save_rejected", "risk_or_conflict", question, null, string.Empty);
-                MessageBox.Show(_status.Text, "新增直答", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(_status.Text, "修改直答", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
             if (MessageBox.Show(Window.GetWindow(this),
-                "确认将人工核实的答案发布到当前店铺 Knowledge V2？"
+                "确认保存此人工审核答案并立即用于当前店铺的后续直答？"
                 + "\n\n问题：" + question + "\n\n答案：" + answer
-                + "\n\n这将改变生产知识库，但不会修改订单或发送消息。",
-                "确认保存直答", MessageBoxButton.YesNo,
-                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                + "\n\n生产直答不再等待影子观察；不会向当前模拟买家实际发送消息。",
+                "确认即时直答", MessageBoxButton.YesNo, MessageBoxImage.Warning)
+                != MessageBoxResult.Yes)
             {
                 TraceSandbox("direct_save_cancelled", "cancelled", question, null, string.Empty);
                 return false;
             }
             _busy = true;
             _send.IsEnabled = false;
-            string recordId = string.Empty;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
-                if (shop == null) throw new InvalidOperationException("当前店铺无法确认");
-                using (ShopSettingsScope.Enter(shop))
+                string status;
+                var saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                    _seller, question, answer, _sandboxSessionId, out status);
+                _status.Text = status;
+                if (!saved)
                 {
-                    var previous = KnowledgeEngineV2Repository.LoadAll(_seller);
-                    var duplicate = previous.FirstOrDefault(x => x != null && x.Enabled
-                        && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
-                        && (KnowledgeEngineV2Semantics.TextSimilarity(x.Title, question) >= 0.78
-                            || (x.Aliases ?? new List<string>()).Any(a =>
-                                KnowledgeEngineV2Semantics.TextSimilarity(a, question) >= 0.85)));
-                    if (duplicate != null)
-                    {
-                        _status.Text = "已存在相似知识（ID：" + duplicate.Id
-                            + "）。未重复新增，请在知识中心修改或处理冲突。";
-                        TraceSandbox("direct_save_rejected", "similar_existing", question,
-                            duplicate.Id, string.Empty);
-                        MessageBox.Show(_status.Text, "新增直答",
-                            MessageBoxButton.OK, MessageBoxImage.Warning);
-                        return false;
-                    }
-
-                    var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
-                    if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
-                    {
-                        _status.Text = "问题依赖上下文或缺少独立主体，请在知识中心补全适用条件。";
-                        TraceSandbox("direct_save_rejected", "context_dependent",
-                            question, null, string.Empty);
-                        MessageBox.Show(_status.Text, "新增直答",
-                            MessageBoxButton.OK, MessageBoxImage.Warning);
-                        return false;
-                    }
-                    var now = DateTime.Now;
-                    var knowledge = new KnowledgeV2Record
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        Type = "business_fact",
-                        Title = question,
-                        Answer = answer,
-                        ShortAnswer = answer,
-                        Aliases = new List<string> { question },
-                        Entities = parsed.Entities == null
-                            ? new List<string>() : parsed.Entities.ToList(),
-                        Intent = parsed.Intent,
-                        Subject = parsed.Subject,
-                        Predicate = parsed.Predicate,
-                        RiskLevel = "normal",
-                        SourceType = "sandbox_manual_review",
-                        SourceId = "sandbox-manual-" + Guid.NewGuid().ToString("N"),
-                        Enabled = true,
-                        Status = "active",
-                        Authority = 0.98,
-                        Confidence = 0.96,
-                        CreatedAt = now,
-                        UpdatedAt = now,
-                        LastVerifiedAt = now
-                    };
-                    recordId = knowledge.Id;
-                    KnowledgeEngineV2Repository.Save(_seller, knowledge);
-                    var stored = KnowledgeEngineV2Repository.LoadAll(_seller).FirstOrDefault(x =>
-                        x != null && string.Equals(x.Id, knowledge.Id, StringComparison.Ordinal));
-                    if (stored == null || !string.Equals(stored.Answer, answer, StringComparison.Ordinal))
-                        throw new InvalidOperationException("保存后读回校验失败，请核对知识库");
-                    var verification = KnowledgeEngineV2Service.ResolveSandbox(
-                        _seller, NewBuyerIdentity(), question);
-                    var matched = verification.Matches != null
-                        && verification.Matches.Any(x => x != null && x.Record != null
-                            && x.Record.Id == knowledge.Id);
-                    var auditError = string.Empty;
-                    KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
-                        _seller, "manual_direct_answer_add", "knowledge", knowledge.Id,
-                        string.Empty, question, "record=missing",
-                        KnowledgeEngineV2GovernanceAuditService.DescribeRecord(knowledge),
-                        "测试台人工审核新增直答；索引可见=" + matched
-                            + "；沙盒直答=" + verification.CanDirectReply
-                            + "；原因=" + verification.Reason,
-                        "success", out auditError);
-                    TraceSandbox("direct_save_success", "success", question, knowledge.Id,
-                        "readback=ok;indexed=" + matched + ";sandboxDirect="
-                        + verification.CanDirectReply + ";audit=" + (auditError.Length == 0 ? "ok" : "error"));
-                    _status.Text = "知识已保存并读回，ID：" + knowledge.Id
-                        + "；" + (verification.CanDirectReply
-                            ? "当前问法符合沙盒直答条件。"
-                            : "但当前问法尚不符合直答条件，请查看路由证据和知识设置。");
-                    _diagnostics.Text += "\n已人工新增知识ID：" + knowledge.Id
-                        + "\n保存读回：成功；索引候选：" + matched
-                        + "；沙盒直答：" + verification.CanDirectReply
-                        + "；生产模式：" + KnowledgeEngineV2Service.GetMode(_seller)
-                        + "；原因：" + verification.Reason;
-                    AddBubble("系统", "人工审核直答已保存：" + knowledge.Id
-                        + (verification.CanDirectReply ? "（沙盒可直答）" : "（沙盒未满足直答条件）"),
-                        "人工知识记录");
+                    TraceSandbox("direct_save_rejected", "repository_rejected", question, null,
+                        "answerLength=" + answer.Length);
+                    MessageBox.Show(status, "即时直答", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
                 }
+                var decision = KnowledgeEngineV2Service.Resolve(
+                    _seller, NewBuyerIdentity(), question);
+                _diagnostics.Text += "\n人工确认直答已即时写库；同问法可直答="
+                    + decision.CanDirectReply + "；原因：" + decision.Reason;
+                TraceSandbox("direct_save_success", "success", question, null,
+                    "liveDirect=" + decision.CanDirectReply);
+                AddBubble("系统", "人工审核答案已立即写入知识 V2。"
+                    + (decision.CanDirectReply ? "相同完整问题已通过本地直答判断。"
+                        : "当前问法受安全或知识冲突规则拦截，请查看路由证据。"),
+                    "即时直答");
                 return true;
             }
             catch (Exception ex)
             {
-                TraceSandbox("direct_save_failed", "error", question, recordId,
+                _status.Text = "保存直答失败：" + ex.Message;
+                TraceSandbox("direct_save_failed", "error", question, null,
                     "exception=" + ex.GetType().Name);
-                _status.Text = "新增直答异常：" + ex.Message;
-                MessageBox.Show(_status.Text, "新增直答",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(_status.Text, "即时直答", MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }
             finally
