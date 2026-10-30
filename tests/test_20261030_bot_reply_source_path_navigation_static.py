@@ -60,3 +60,19 @@ def test_v2_direct_answers_record_actual_match_id_before_ready():
     assert runtime.index("var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);") < runtime.index(
         "sourceLabel,", runtime.index("var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);")
     )
+
+
+def test_old_echo_text_similarity_cannot_forge_preset_navigation():
+    mirror = src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    tracker = src("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+    learning = src("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    assert "历史记录未保存话术ID" in mirror
+    assert "BotConversationHistoryStore.ResolveAnswerSourceStamp(" in mirror
+    assert 'source.StartsWith("内置话术：", StringComparison.Ordinal)' not in mirror
+    assert 'string.Equals(source, "商品链接预设回复", StringComparison.Ordinal)' in tracker
+    assert 'if ((string.IsNullOrWhiteSpace(source)' not in tracker
+    resolver = learning.split("public static string ResolveAnswerSource(", 1)[1].split(
+        "public static bool TryFindLocalAnswer(", 1
+    )[0]
+    assert "return string.Empty;" in resolver
+    assert "BotReplyPresetService.BuildSourceLabel(preset)" not in resolver
