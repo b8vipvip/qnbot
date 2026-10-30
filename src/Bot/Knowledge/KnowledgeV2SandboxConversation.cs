@@ -218,7 +218,14 @@ namespace Bot.Knowledge
                 // Never touch the production FirstInquiry reservation, real buyer
                 // conversation state, order ledgers, or actual sending pipeline.
                 var result = await Task.Run(() => Preview(scenario, message, order, amount, item, currentFirst));
-                if (!scenario.StartsWith("模拟")) { _firstInquiryUsed = true; _turns++; }
+                // Product links/cards never consume the first substantive
+                // inquiry slot in the production coordinator.
+                if (scenario != "模拟下单" && scenario != "模拟付款"
+                    && scenario != "商品链接")
+                {
+                    _firstInquiryUsed = true;
+                    _turns++;
+                }
                 if (result.OrderDedupKey.Length > 0) _orderPreviewed.Add(result.OrderDedupKey);
                 AddBubble("Bot", result.Reply, result.Source);
                 _diagnostics.Text = result.Detail;
@@ -362,18 +369,27 @@ namespace Bot.Knowledge
             return string.Empty;
         }
 
-        private PreviewResult PreviewOffHours(dynamic cfg)
+        private static T GetSetting<T>(object settings, string name, T fallback)
         {
-            if (cfg == null || !cfg.EnableWorkHours)
+            if (settings == null) return fallback;
+            var property = settings.GetType().GetProperty(name);
+            if (property == null || !property.CanRead) return fallback;
+            var value = property.GetValue(settings, null);
+            return value is T ? (T)value : fallback;
+        }
+
+        private PreviewResult PreviewOffHours(object cfg)
+        {
+            if (!GetSetting(cfg, "EnableWorkHours", false))
                 return Reply("（未启用下班固定回复）", "下班自动回复",
                     "当前店铺未启用工作时间规则，模拟时不会绕过开关。", "未触发");
-            var start = (string)cfg.WorkStartTime ?? "";
-            var end = (string)cfg.WorkEndTime ?? "";
+            var start = GetSetting(cfg, "WorkStartTime", "");
+            var end = GetSetting(cfg, "WorkEndTime", "");
             TimeSpan s, e;
             if (!TimeSpan.TryParse(start, out s) || !TimeSpan.TryParse(end, out e))
                 return Reply("（工作时间配置无效）", "下班自动回复", "拒绝猜测工作时间。", "未触发");
             var hours = s.ToString(@"hh\:mm") + "-" + e.ToString(@"hh\:mm");
-            var body = (string)cfg.OffHoursFixedText;
+            var body = GetSetting(cfg, "OffHoursFixedText", "");
             if (string.IsNullOrWhiteSpace(body))
                 return Reply("（未设置下班固定话术）", "下班自动回复",
                     "模拟展示固定模板，不调用AI生成模式。", "未触发");
@@ -381,9 +397,9 @@ namespace Bot.Knowledge
                 "强制选择“下班场景”，只预览当前配置文本；没有更改系统时间或真实营业状态。");
         }
 
-        private PreviewResult PreviewOrder(dynamic cfg, string scenario, string orderId, string amount, string product)
+        private PreviewResult PreviewOrder(object cfg, string scenario, string orderId, string amount, string product)
         {
-            if (cfg == null || !cfg.EnableOrderPlacedReply)
+            if (!GetSetting(cfg, "EnableOrderPlacedReply", false))
                 return Reply("（当前店铺未启用下单自动回复）", "订单通知沙盒",
                     "未发布订单事件，也没有调用订单服务。", "未触发");
             if (string.IsNullOrWhiteSpace(orderId) || !orderId.StartsWith("SIM-", StringComparison.Ordinal))
@@ -397,7 +413,7 @@ namespace Bot.Knowledge
             if (_orderPreviewed.Contains(key))
                 return Reply("（同一模拟订单事件已在本会话预览过）", "订单重复事件",
                     "仅测试台内的重复预览提示；生产持久化订单去重未执行。", "预览去重");
-            var template = (string)cfg.OrderPlacedReplyText ?? string.Empty;
+            var template = GetSetting(cfg, "OrderPlacedReplyText", "");
             if (string.IsNullOrWhiteSpace(template))
                 return Reply("（没有配置下单自动回复模板）", "订单通知沙盒", "模板为空。", "未触发");
             var isPaid = scenario == "模拟付款";
@@ -417,7 +433,7 @@ namespace Bot.Knowledge
                 "模拟订单事件：" + scenario + "；实际生产使用订单卡片证据、" +
                 "身份校验、去重ledger、模板分段和可选接口模式。本沙盒仅展示配置固定模板，"
                 + "不验证HTTP接口结果、真实下单发送或者异步通知。" +
-                "\n当前配置模式：" + ((string)cfg.OrderPlacedReplyMode ?? "固定预设答案") +
+                "\n当前配置模式：" + GetSetting(cfg, "OrderPlacedReplyMode", "固定预设答案") +
                 "\n模拟订单号：" + orderId);
             result.OrderDedupKey = key;
             return result;
