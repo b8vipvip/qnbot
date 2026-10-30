@@ -239,6 +239,20 @@ namespace Bot.Knowledge
             return new Button { Content = text, Width = width, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
         }
 
+        internal void OpenReplySource(string reply)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenSourceSearch(reply);
+        }
+
+        internal void OpenPresetManager(string reply)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenPresetSearch(reply);
+        }
+
         private static NavItem Nav(string name, Func<UIElement> factory)
         {
             return new NavItem { Name = name, Factory = factory };
