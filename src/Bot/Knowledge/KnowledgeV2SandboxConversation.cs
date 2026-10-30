@@ -278,7 +278,7 @@ namespace Bot.Knowledge
             _saveDirect.IsEnabled = false;
             _status.Text = "正在模拟路由（不会发送千牛消息）...";
             if (isOrder && string.Equals((_orderId.Text ?? "").Trim(), "SIM-ORDER-001", StringComparison.Ordinal))
-                await LoadHistoricalSampleAsync(); // If no cached sample exists, retain the synthetic placeholder.
+                await LoadHistoricalSampleAsync(true); // Reuse a detached sample for this simulated order.
             var selectedOrder = (_orderId.Text ?? "").Trim();
             var amount = (_orderAmount.Text ?? "").Trim();
             var product = (_product.Text ?? "").Trim();
@@ -541,9 +541,9 @@ namespace Bot.Knowledge
             }
         }
 
-        private async Task LoadHistoricalSampleAsync()
+        private async Task LoadHistoricalSampleAsync(bool internalCall = false)
         {
-            if (_busy) return;
+            if (_busy && !internalCall) return;
             _status.Text = "只读扫描当前店铺已有历史订单快照...";
             try
             {
