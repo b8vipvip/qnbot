@@ -27,6 +27,7 @@ namespace Bot.Knowledge
         private TextBlock _sourceStatus;
         private DataGrid _sourceGrid;
         private BotConversationHistoryEntity _selectedSource;
+        private string _pendingSourceRecordId = string.Empty;
         private TextBox _presetSearch, _presetName, _presetText, _presetTrigger, _presetDescription;
         private CheckBox _presetEnabled;
         private TextBlock _presetStatus;
@@ -55,6 +56,37 @@ namespace Bot.Knowledge
         {
             RefreshSources();
             RefreshPresets();
+        }
+
+        public void OpenSourceById(string recordId, string answer)
+        {
+            _tabs.SelectedIndex = 0;
+            _pendingSourceRecordId = (recordId ?? string.Empty).Trim();
+            // Do not filter by answer: identical Bot replies are separate records.
+            _sourceSearch.Text = string.Empty;
+            RefreshSources();
+        }
+
+        public bool OpenPresetById(string presetId)
+        {
+            _tabs.SelectedIndex = 1;
+            presetId = (presetId ?? string.Empty).Trim();
+            if (presetId.Length == 0) return false;
+            RefreshPresets();
+            var exact = _presets.FirstOrDefault(x =>
+                string.Equals(x.Id, presetId, StringComparison.Ordinal));
+            if (exact == null) return false;
+            _presetSearch.Text = string.Empty;
+            FilterPresets();
+            var row = _presetView.FirstOrDefault(x =>
+                string.Equals(x.Id, presetId, StringComparison.Ordinal));
+            if (row == null) return false;
+            _presetGrid.SelectedItem = row;
+            _presetGrid.ScrollIntoView(row);
+            LoadPresetEditor(row);
+            _presetStatus.Text = "已定位原始话术ID：" + presetId
+                + "；编辑并保存会影响后续回复，不会改写历史消息。";
+            return true;
         }
 
         public void OpenSourceSearch(string answer)
@@ -301,7 +333,29 @@ namespace Bot.Knowledge
                     }
                     _sourceAll = t.Result ?? new List<BotConversationHistoryEntity>();
                     FilterSources();
-                    _sourceStatus.Text = "已加载 " + _sourceAll.Count + " 条已发送/回显记录；历史保留期限为 90 天。选择记录可修改来源或反查知识。";
+                    if (!string.IsNullOrWhiteSpace(_pendingSourceRecordId))
+                    {
+                        var recordId = _pendingSourceRecordId;
+                        var exact = _sourceView.FirstOrDefault(x =>
+                            string.Equals(x.Entity.EntityId, recordId, StringComparison.Ordinal));
+                        _pendingSourceRecordId = string.Empty;
+                        if (exact != null)
+                        {
+                            _sourceGrid.SelectedItem = exact;
+                            _sourceGrid.ScrollIntoView(exact);
+                            _sourceStatus.Text = "已定位到这条Bot消息的唯一来源记录，可在右侧修改来源标签。";
+                        }
+                        else
+                        {
+                            _sourceStatus.Text = "该消息的唯一来源记录未找到或超出90天保留期限，"
+                                + "不能自动选择另一条内容相似的消息。";
+                        }
+                    }
+                    else
+                    {
+                        _sourceStatus.Text = "已加载 " + _sourceAll.Count
+                            + " 条已发送/回显记录；历史保留期限为 90 天。";
+                    }
                 })));
         }
 
