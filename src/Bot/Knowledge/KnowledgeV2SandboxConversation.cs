@@ -43,6 +43,7 @@ namespace Bot.Knowledge
         private readonly TextBox _product;
         private readonly TextBlock _status;
         private readonly TextBox _diagnostics;
+        private readonly Expander _reviewExpander;
         private readonly Button _send;
         private string _syntheticBuyer;
         private bool _firstInquiryUsed;
@@ -53,139 +54,306 @@ namespace Bot.Knowledge
         {
             _seller = (seller ?? string.Empty).Trim();
             _syntheticBuyer = NewBuyerIdentity();
-            var root = new DockPanel { Margin = new Thickness(8) };
-            var top = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-            top.Children.Add(new TextBlock
+            // The conversation is the primary viewport. Optional settings,
+            // knowledge teaching and diagnostics are folded away by default,
+            // so they never permanently steal the height of the transcript.
+            var root = new Grid { Margin = new Thickness(10, 7, 10, 8) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // heading
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // quick actions
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // settings drawer
+            root.RowDefinitions.Add(new RowDefinition
             {
-                Text = "客服对话沙盒 · 可选 AI / 人工审核知识直答",
-                FontSize = 17, FontWeight = FontWeights.SemiBold
+                Height = new GridLength(1, GridUnitType.Star),
+                MinHeight = 240
+            }); // primary transcript
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // compose
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // status
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // teaching drawer
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // evidence drawer
+            Action<UIElement, int> attach = (control, row) =>
+            {
+                Grid.SetRow(control, row);
+                root.Children.Add(control);
+            };
+
+            var heading = new StackPanel { Margin = new Thickness(0, 0, 0, 7) };
+            heading.Children.Add(new TextBlock
+            {
+                Text = "客服对话沙盒",
+                FontSize = 17,
+                FontWeight = FontWeights.SemiBold
             });
-            top.Children.Add(new TextBlock
+            heading.Children.Add(new TextBlock
             {
-                Text = "默认启用全部场景；模拟聊天先执行规则与V2直答，未命中可调用店铺AI接口。"
-                    + " 真实千牛发送、下单、发货、订单服务和自动学习始终禁用。"
-                    + " 只有点击“审核并新增直答”并确认后才写入当前店铺知识库。",
-                TextWrapping = TextWrapping.Wrap,
+                Text = "模拟规则与 AI 回复，不发送千牛消息或操作订单。仅人工确认新增直答时写入知识库。",
+                FontSize = 11,
                 Foreground = Brushes.DimGray,
-                Margin = new Thickness(0, 3, 0, 6)
+                TextTrimming = TextTrimming.CharacterEllipsis
             });
-            var choices = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            choices.Children.Add(new TextBlock { Text = "并行启用场景（默认全选）：", VerticalAlignment = VerticalAlignment.Center });
+            attach(heading, 0);
+
+            // Keep the most frequently used controls immediately accessible.
+            // The 9 checkboxes and order fixture editors live in a foldable drawer.
+            var actions = new WrapPanel
+            {
+                Margin = new Thickness(0, 0, 0, 5),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _enableAi = new CheckBox
+            {
+                Content = "未直答时调用 AI（消耗额度）",
+                IsChecked = true,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 2, 15, 2),
+                ToolTip = "仅调用当前店铺 AI 生成模拟答案，不会给真实买家发送消息"
+            };
+            actions.Children.Add(_enableAi);
+            var reset = new Button
+            {
+                Content = "新会话",
+                Height = 28,
+                MinWidth = 78,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            reset.Click += delegate { ResetSession(); };
+            actions.Children.Add(reset);
+            foreach (var scene in new[] { "模拟下单", "模拟付款", "模拟发货" })
+            {
+                var item = scene;
+                var button = new Button
+                {
+                    Content = item + "事件",
+                    MinWidth = 99,
+                    Height = 28,
+                    Margin = new Thickness(0, 0, 7, 0)
+                };
+                button.Click += async delegate { await RunAsync(item); };
+                actions.Children.Add(button);
+            }
+            attach(actions, 1);
+
+            var settings = new Expander
+            {
+                Header = "场景与订单/商品素材设置（9项默认全选，点击展开）",
+                IsExpanded = false,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var settingsBody = new StackPanel { Margin = new Thickness(8, 6, 8, 8) };
+            var choices = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+            choices.Children.Add(new TextBlock
+            {
+                Text = "启用场景：",
+                VerticalAlignment = VerticalAlignment.Center
+            });
             foreach (var scene in new[]
             {
                 "普通咨询 / 知识V2", "首条咨询", "商品链接", "本地短消息",
                 "特定固定规则", "下班回复", "模拟下单", "模拟付款", "模拟发货"
             })
             {
-                var box = new CheckBox { Content = scene, IsChecked = true,
-                    Margin = new Thickness(5, 3, 9, 3), VerticalAlignment = VerticalAlignment.Center };
+                var box = new CheckBox
+                {
+                    Content = scene,
+                    IsChecked = true,
+                    Margin = new Thickness(4, 3, 8, 3),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
                 _scenarios[scene] = box;
                 choices.Children.Add(box);
             }
-            var all = new Button { Content = "全选", Width = 48, Margin = new Thickness(4, 0, 4, 0) };
-            all.Click += delegate { foreach (var c in _scenarios.Values) c.IsChecked = true; };
-            choices.Children.Add(all);
-            var clear = new Button { Content = "全不选", Width = 59 };
-            clear.Click += delegate { foreach (var c in _scenarios.Values) c.IsChecked = false; };
-            choices.Children.Add(clear);
-            top.Children.Add(choices);
-            var aiOptions = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
-            _enableAi = new CheckBox { Content = "知识未直答时调用当前店铺 AI 接口（会产生真实 API 消耗）",
-                IsChecked = true, Margin = new Thickness(0, 4, 15, 4) };
-            aiOptions.Children.Add(_enableAi);
-            top.Children.Add(aiOptions);
-            var config = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
-            config.Children.Add(new TextBlock { Text = "订单与商品模拟素材：", VerticalAlignment = VerticalAlignment.Center });
-            config.Children.Add(new TextBlock { Text = "模拟订单号：", VerticalAlignment = VerticalAlignment.Center });
-            _orderId = new TextBox { Width = 146, Height = 28, Text = "SIM-ORDER-001", Margin = new Thickness(4, 0, 8, 0) };
-            config.Children.Add(_orderId);
-            config.Children.Add(new TextBlock { Text = "金额：", VerticalAlignment = VerticalAlignment.Center });
-            _orderAmount = new TextBox { Width = 74, Height = 28, Text = "9.80", Margin = new Thickness(4, 0, 6, 0) };
-            config.Children.Add(_orderAmount);
-            top.Children.Add(config);
-            var row2 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            row2.Children.Add(new TextBlock { Text = "商品（仅模板预览）：", VerticalAlignment = VerticalAlignment.Center });
-            _product = new TextBox { Width = 260, Height = 27, Text = "模拟商品（未读取真实素材）",
-                Margin = new Thickness(4, 0, 8, 0) };
-            row2.Children.Add(_product);
-            var reset = new Button { Content = "新会话", Height = 29, Width = 85 };
-            reset.Click += delegate { ResetSession(); };
-            row2.Children.Add(reset);
-            var sample = new Button { Content = "随机读取店铺历史订单", Height = 29, MinWidth = 145,
-                Margin = new Thickness(8, 0, 5, 0) };
-            sample.Click += async delegate { await LoadHistoricalSampleAsync(); };
-            row2.Children.Add(sample);
-            var productSample = new Button { Content = "随机读取店铺商品", Height = 29, MinWidth = 130 };
-            productSample.Click += async delegate { await LoadProductSampleAsync(); };
-            row2.Children.Add(productSample);
-            top.Children.Add(row2);
-            var eventButtons = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
-            foreach (var scene in new[] { "模拟下单", "模拟付款", "模拟发货" })
+            var all = new Button
             {
-                var item = scene;
-                var button = new Button { Content = item + "事件", MinWidth = 93, Height = 27,
-                    Margin = new Thickness(0, 0, 8, 0) };
-                button.Click += async delegate { await RunAsync(item); };
-                eventButtons.Children.Add(button);
-            }
-            top.Children.Add(eventButtons);
-            DockPanel.SetDock(top, Dock.Top);
-            root.Children.Add(top);
+                Content = "全选",
+                Width = 48,
+                Height = 25,
+                Margin = new Thickness(5, 0, 4, 0)
+            };
+            all.Click += delegate
+            {
+                foreach (var box in _scenarios.Values) box.IsChecked = true;
+            };
+            choices.Children.Add(all);
+            var clear = new Button { Content = "全不选", Width = 59, Height = 25 };
+            clear.Click += delegate
+            {
+                foreach (var box in _scenarios.Values) box.IsChecked = false;
+            };
+            choices.Children.Add(clear);
+            settingsBody.Children.Add(choices);
 
-            var bottom = new StackPanel();
-            var inputRow = new DockPanel { Margin = new Thickness(0, 7, 0, 5) };
-            _send = new Button { Content = "模拟发送", Width = 100, Height = 54, Margin = new Thickness(7, 0, 0, 0) };
+            var orderFields = new WrapPanel { Margin = new Thickness(0, 1, 0, 5) };
+            orderFields.Children.Add(new TextBlock
+            {
+                Text = "模拟订单号",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            _orderId = new TextBox
+            {
+                Width = 145,
+                Height = 27,
+                Text = "SIM-ORDER-001",
+                Margin = new Thickness(6, 0, 12, 0)
+            };
+            orderFields.Children.Add(_orderId);
+            orderFields.Children.Add(new TextBlock
+            {
+                Text = "金额",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            _orderAmount = new TextBox
+            {
+                Width = 72,
+                Height = 27,
+                Text = "9.80",
+                Margin = new Thickness(6, 0, 12, 0)
+            };
+            orderFields.Children.Add(_orderAmount);
+            orderFields.Children.Add(new TextBlock
+            {
+                Text = "商品",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            _product = new TextBox
+            {
+                Width = 270,
+                Height = 27,
+                Text = "模拟商品（未读取真实素材）",
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            orderFields.Children.Add(_product);
+            settingsBody.Children.Add(orderFields);
+
+            var sampleActions = new WrapPanel();
+            var sample = new Button
+            {
+                Content = "随机读取店铺历史订单",
+                Height = 28,
+                MinWidth = 153,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            sample.Click += async delegate { await LoadHistoricalSampleAsync(); };
+            sampleActions.Children.Add(sample);
+            var productSample = new Button
+            {
+                Content = "随机读取店铺商品",
+                Height = 28,
+                MinWidth = 135
+            };
+            productSample.Click += async delegate { await LoadProductSampleAsync(); };
+            sampleActions.Children.Add(productSample);
+            settingsBody.Children.Add(sampleActions);
+            settings.Content = settingsBody;
+            attach(settings, 2);
+
+            _transcript = new StackPanel { Margin = new Thickness(5, 6, 5, 6) };
+            _scroll = new ScrollViewer
+            {
+                Content = _transcript,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CanContentScroll = false
+            };
+            var chatFrame = new Border
+            {
+                Background = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(215, 223, 232)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(0, 1, 0, 7),
+                Child = _scroll
+            };
+            attach(chatFrame, 3);
+
+            var inputRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            _send = new Button
+            {
+                Content = "模拟发送",
+                Width = 104,
+                Height = 66,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
             _send.Click += async delegate { await RunAsync(); };
             DockPanel.SetDock(_send, Dock.Right);
             inputRow.Children.Add(_send);
             _input = new TextBox
             {
-                AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 54,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                Height = 66,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                ToolTip = "输入模拟买家消息；Ctrl+Enter 触发沙盒，不会真实发送"
+                ToolTip = "输入模拟买家消息，Ctrl+Enter 模拟发送，不会真正联系买家"
             };
-            _input.KeyDown += async (s, e) =>
+            _input.KeyDown += async (sender, e) =>
             {
                 if (e.Key == System.Windows.Input.Key.Enter
-                    && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
+                    && (System.Windows.Input.Keyboard.Modifiers
+                        & System.Windows.Input.ModifierKeys.Control) != 0)
                 {
                     e.Handled = true;
                     await RunAsync();
                 }
             };
             inputRow.Children.Add(_input);
-            bottom.Children.Add(inputRow);
-            _status = new TextBlock { Text = "沙盒未开始。", Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
-            bottom.Children.Add(_status);
-            var teaching = new DockPanel { Margin = new Thickness(0, 7, 0, 4) };
-            _saveDirect = new Button { Content = "审核并新增直答", Width = 116, Height = 47,
-                Margin = new Thickness(6, 0, 0, 0), IsEnabled = false };
+            attach(inputRow, 4);
+
+            _status = new TextBlock
+            {
+                Text = "沙盒未开始。",
+                Foreground = Brushes.DimGray,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(1, 0, 0, 4)
+            };
+            attach(_status, 5);
+
+            _reviewExpander = new Expander
+            {
+                Header = "人工审核新增直答（未命中知识后可编辑，点击展开）",
+                IsExpanded = false,
+                Margin = new Thickness(0, 1, 0, 5)
+            };
+            var teaching = new DockPanel { Margin = new Thickness(7, 6, 7, 7) };
+            _saveDirect = new Button
+            {
+                Content = "审核并新增直答",
+                Width = 122,
+                Height = 68,
+                Margin = new Thickness(8, 0, 0, 0),
+                IsEnabled = false
+            };
             _saveDirect.Click += delegate { SaveDirectAnswer(); };
             DockPanel.SetDock(_saveDirect, Dock.Right);
             teaching.Children.Add(_saveDirect);
-            _directAnswerDraft = new TextBox { Height = 47, AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                ToolTip = "只有知识未直答的提问可以在此填写确认答案；点击审核后才写入V2" };
+            _directAnswerDraft = new TextBox
+            {
+                Height = 68,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                ToolTip = "仅未直答的问题可提交人工审核；确认后才会写入真实 V2 知识库"
+            };
             teaching.Children.Add(_directAnswerDraft);
-            bottom.Children.Add(teaching);
-            bottom.Children.Add(new TextBlock { Text = "本轮路由证据（只读）", Margin = new Thickness(0, 7, 0, 3), FontWeight = FontWeights.SemiBold });
+            _reviewExpander.Content = teaching;
+            attach(_reviewExpander, 6);
+
+            var evidence = new Expander
+            {
+                Header = "本轮路由证据（只读，点击展开）",
+                IsExpanded = false,
+                Margin = new Thickness(0, 0, 0, 1)
+            };
             _diagnostics = new TextBox
             {
-                Height = 105, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
-                AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                Height = 125,
+                Margin = new Thickness(7, 5, 7, 7),
+                IsReadOnly = true,
+                TextWrapping = TextWrapping.Wrap,
+                AcceptsReturn = true,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
-            bottom.Children.Add(_diagnostics);
-            DockPanel.SetDock(bottom, Dock.Bottom);
-            root.Children.Add(bottom);
+            evidence.Content = _diagnostics;
+            attach(evidence, 7);
 
-            _transcript = new StackPanel();
-            _scroll = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Content = _transcript
-            };
-            root.Children.Add(_scroll);
             Content = root;
             AddBubble("系统", "独立沙盒会话已建立，所有订单号均为模拟数据。", "sandbox-only");
         }
@@ -212,6 +380,7 @@ namespace Bot.Knowledge
             _lastMissWasHighRisk = false;
             _lastMissHadConflict = false;
             _saveDirect.IsEnabled = false;
+            _reviewExpander.Header = "人工审核新增直答（未命中知识后可编辑，点击展开）";
             _directAnswerDraft.Text = string.Empty;
             _turns = 0;
             _transcript.Children.Clear();
@@ -346,6 +515,9 @@ namespace Bot.Knowledge
                 _lastMissWasHighRisk = result.IsHighRisk;
                 _lastMissHadConflict = result.HasConflict;
                 _saveDirect.IsEnabled = _lastMissQuestion.Length > 0;
+                _reviewExpander.Header = _lastMissQuestion.Length > 0
+                    ? "人工审核新增直答 · 已有待审核问题（点击展开）"
+                    : "人工审核新增直答（未命中知识后可编辑，点击展开）";
                 _directAnswerDraft.Text = _lastMissQuestion.Length > 0
                     ? (result.SuggestedAnswer ?? string.Empty) : string.Empty;
                 if (!isOrder) _input.Clear();
@@ -690,6 +862,7 @@ namespace Bot.Knowledge
                         + "\n来源：测试台人工确认（非自动AI学习）";
                     _lastMissQuestion = string.Empty;
                     _lastMissAnswer = string.Empty;
+                    _reviewExpander.Header = "人工审核新增直答（未命中知识后可编辑，点击展开）";
                     AddBubble("系统", "人工审核知识已写入当前店铺知识V2（不会向真实买家发送）。",
                         "V2人工入库");
                 }
