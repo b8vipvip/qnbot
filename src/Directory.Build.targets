@@ -265,4 +265,16 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotReplyPresetService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotReplyPresetService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotReplySourceLedger.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotReplySourceLedger.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2PresetManagementPage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2PresetManagementPage.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2BotReplySourcePage.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2BotReplySourcePage.cs" />
+  </ItemGroup>
 </Project>
