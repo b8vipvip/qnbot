@@ -16,11 +16,12 @@ def test_disk_preflight_refuses_insufficient_space_before_git_fetch_or_build():
     assert "旧服务未停止" in script
     assert "MIN_FREE_BEFORE_BUILD_MIB MIN_FREE_BEFORE_BACKUP_MIB; do" in script
 
-    preflight = script.index("\ncheck_space_before_build\nlog ")
+    preflight = script.index('\ncheck_free_kib "$REPO_DIR" "$(( 512 * 1024 ))" "Git 同步前"\n')
     fetch = script.index("\ngithub_fetch_with_retry\n", preflight)
-    build = script.index("\nbuild_new_image\n", fetch)
+    full_capacity = script.index("\ncheck_space_before_build\n", fetch)
+    build = script.index("\nbuild_new_image\n", full_capacity)
     stop_service = script.index('log "停止旧控制面并创建冷备份"', build)
-    assert preflight < fetch < build < stop_service
+    assert preflight < fetch < full_capacity < build < stop_service
 
 
 def test_cold_backup_space_accounts_for_persistent_data_and_runs_before_stop():
