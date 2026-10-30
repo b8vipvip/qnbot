@@ -249,64 +249,127 @@ namespace Bot.Knowledge
             _scroll.ScrollToEnd();
         }
 
-        private async Task RunAsync()
+        private async Task RunAsync(string forcedEvent = null)
         {
-            if (_send == null || !_send.IsEnabled) return;
+            if (_busy) return;
+            var scenes = new HashSet<string>(
+                _scenarios.Where(x => x.Value.IsChecked == true).Select(x => x.Key),
+                StringComparer.Ordinal);
+            var isOrder = !string.IsNullOrWhiteSpace(forcedEvent);
+            var message = (_input.Text ?? "").Trim();
+            if (isOrder && !scenes.Contains(forcedEvent))
+            {
+                _status.Text = "该模拟事件未勾选；如需测试请先启用对应场景。";
+                return;
+            }
+            if (!isOrder && (message.Length == 0 || message.Length > 3000))
+            {
+                _status.Text = "请输入 1～3000 字的模拟买家消息。";
+                return;
+            }
             if (string.IsNullOrWhiteSpace(_seller))
             {
-                _status.Text = "未确定当前店铺，禁止跨店读取任何规则。";
+                _status.Text = "无法确定店铺，已拒绝测试。";
                 return;
             }
-            var scenario = _scenario.SelectedItem as string ?? "普通咨询 / 知识V2";
-            var message = (_input.Text ?? "").Trim();
-            if (message.Length > 3000) { _status.Text = "模拟文本不能超过3000字。"; return; }
-            if (message.Length == 0 && scenario != "模拟下单" && scenario != "模拟付款")
-            {
-                _status.Text = "请输入模拟买家消息。";
-                return;
-            }
+            _busy = true;
             _send.IsEnabled = false;
-            _status.Text = "正在沙盒计算，本次不会调用千牛发送...";
-            AddBubble(scenario.StartsWith("模拟") ? "模拟事件" : "买家",
-                message.Length == 0 ? scenario : message, scenario);
+            _saveDirect.IsEnabled = false;
+            _status.Text = "正在模拟路由（不会发送千牛消息）...";
+            var selectedOrder = (_orderId.Text ?? "").Trim();
+            var amount = (_orderAmount.Text ?? "").Trim();
+            var product = (_product.Text ?? "").Trim();
+            var first = !_firstInquiryUsed;
+            var enableAi = _enableAi.IsChecked == true;
+            var history = _conversation.TakeLastForSandbox(12);
+            AddBubble(isOrder ? "模拟事件" : "买家", isOrder ? forcedEvent : message,
+                isOrder ? "独立事件" : "模拟买家");
             try
             {
-                var order = (_orderId.Text ?? "").Trim();
-                var amount = (_orderAmount.Text ?? "").Trim();
-                var item = (_product.Text ?? "").Trim();
-                var currentFirst = !_firstInquiryUsed;
-                // Never touch the production FirstInquiry reservation, real buyer
-                // conversation state, order ledgers, or actual sending pipeline.
-                var result = await Task.Run(() => Preview(scenario, message, order, amount, item, currentFirst));
-                // Product links/cards never consume the first substantive
-                // inquiry slot in the production coordinator.
-                if (scenario != "模拟下单" && scenario != "模拟付款"
-                    && scenario != "商品链接")
+                var result = await Task.Run(() => Preview(
+                    forcedEvent, scenes, message, selectedOrder, amount, product, first));
+                if (!isOrder)
                 {
-                    _firstInquiryUsed = true;
+                    _firstInquiryUsed = _firstInquiryUsed || !IsOnlyProductLink(scenes, message);
                     _turns++;
                 }
-                if (result.OrderDedupKey.Length > 0) _orderPreviewed.Add(result.OrderDedupKey);
+
+                if (result.NeedsAi && enableAi && !isOrder)
+                {
+                    _status.Text = "正在调用当前店铺已配置的 AI 接口（只发送模拟对话文本）...";
+                    var ai = await Task.Run(() => GenerateAiPreview(
+                        message, history, result.Detail, result.KnowledgeCandidates));
+                    result.Detail += "\nAI调用：" + ai.Detail;
+                    if (ai.Success)
+                    {
+                        result.Reply = (string.IsNullOrWhiteSpace(result.Prefix) ? ""
+                            : result.Prefix + "\n\n") + ai.Answer;
+                        result.Source = "AI接口 · 模拟生成（未经人工核实）";
+                        result.Outcome = "模拟AI已生成";
+                        result.SuggestedAnswer = ai.Answer;
+                    }
+                    else
+                    {
+                        result.Reply = (string.IsNullOrWhiteSpace(result.Prefix) ? ""
+                            : result.Prefix + "\n\n") + "AI生成失败：" + ai.Detail;
+                        result.Source = "模拟AI失败";
+                        result.Outcome = "AI失败";
+                    }
+                }
+                else if (result.NeedsAi && !enableAi)
+                {
+                    result.Reply = (string.IsNullOrWhiteSpace(result.Prefix) ? ""
+                        : result.Prefix + "\n\n")
+                        + "当前未命中安全直答，AI回退已关闭。";
+                }
+                if (result.OrderDedupKey.Length > 0)
+                    _orderPreviewed.Add(result.OrderDedupKey);
+
                 AddBubble("Bot", result.Reply, result.Source);
                 _diagnostics.Text = result.Detail;
-                _status.Text = "沙盒完成（无真实发送） · " + result.Outcome;
-                _input.Clear();
+                _status.Text = "沙盒完成（未向千牛发送） · " + result.Outcome;
+                if (!isOrder)
+                {
+                    _conversation.Add(new KeyValuePair<string, string>("buyer", message));
+                    if (!string.IsNullOrWhiteSpace(result.SuggestedAnswer))
+                        _conversation.Add(new KeyValuePair<string, string>("assistant",
+                            result.SuggestedAnswer));
+                }
+                _lastMissQuestion = result.IsKnowledgeMiss && !isOrder ? message : string.Empty;
+                _lastMissAnswer = result.SuggestedAnswer;
+                _lastMissWasHighRisk = result.IsHighRisk;
+                _lastMissHadConflict = result.HasConflict;
+                _saveDirect.IsEnabled = _lastMissQuestion.Length > 0;
+                _directAnswerDraft.Text = _lastMissQuestion.Length > 0
+                    ? (result.SuggestedAnswer ?? string.Empty) : string.Empty;
+                if (!isOrder) _input.Clear();
             }
             catch (Exception ex)
             {
                 _status.Text = "模拟失败：" + ex.Message;
-                _diagnostics.Text = "沙盒异常；没有发消息、下单或写入知识。";
+                _diagnostics.Text = "沙盒异常，未发送千牛消息或订单操作。";
             }
-            finally { _send.IsEnabled = true; }
+            finally
+            {
+                _busy = false;
+                _send.IsEnabled = true;
+            }
         }
 
         private sealed class PreviewResult
         {
             public string Reply = string.Empty;
+            public string Prefix = string.Empty;
             public string Source = string.Empty;
             public string Outcome = string.Empty;
             public string Detail = string.Empty;
             public string OrderDedupKey = string.Empty;
+            public string SuggestedAnswer = string.Empty;
+            public string KnowledgeCandidates = string.Empty;
+            public bool NeedsAi;
+            public bool IsKnowledgeMiss;
+            public bool IsHighRisk;
+            public bool HasConflict;
         }
 
         private PreviewResult Reply(string text, string source, string detail, string outcome = "预览命中")
@@ -318,73 +381,160 @@ namespace Bot.Knowledge
             };
         }
 
-        private PreviewResult Preview(string scenario, string message, string orderId,
-            string amount, string product, bool isFirst)
+        private static bool IsOnlyProductLink(HashSet<string> scenes, string message)
+        {
+            return scenes.Contains("商品链接") && (message.IndexOf("taobao.com", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("tmall.com", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private PreviewResult Preview(string eventScene, HashSet<string> scenes, string message,
+            string orderId, string amount, string product, bool isFirst)
         {
             var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
-            if (shop == null) return Reply("无法确认店铺作用域，已停止预览。", "安全阻止", "shop_not_found", "未执行");
+            if (shop == null)
+                return Reply("当前店铺身份无法确认，已阻止沙盒。", "安全拒绝", "shop_not_found", "未执行");
             using (ShopSettingsScope.Enter(shop))
             {
                 var cfg = BotFeatureStore.GetAutoReplyRules();
-                if (scenario == "模拟下单" || scenario == "模拟付款")
-                    return PreviewOrder(cfg, scenario, orderId, amount, product);
-                if (scenario == "下班回复")
-                    return PreviewOffHours(cfg);
+                if (!string.IsNullOrWhiteSpace(eventScene))
+                    return PreviewOrder(cfg, eventScene, orderId, amount, product);
 
-                var first = FirstInquiryFixedReplyService.Load(_seller);
-                if (isFirst && first != null && first.Enabled
-                    && !string.IsNullOrWhiteSpace(first.Answer)
-                    && (scenario == "首条咨询" || scenario == "普通咨询 / 知识V2"))
+                if (scenes.Contains("下班回复"))
                 {
-                    // In production the first reply does not necessarily consume
-                    // the substantive question; local V2 may still answer it.
-                    var tail = ResolveKnowledge(message);
-                    return Reply(first.Answer + (tail.CanDirect ? "\n\n【后续知识直答】\n" + tail.Answer : ""),
-                        "首条咨询固定回复" + (tail.CanDirect ? " + Knowledge V2" : ""),
-                        "首条咨询配置：已启用。首次真实买家问题可触发前置固定回复。\n"
-                        + tail.Diagnostic + "\n注意：真实发送、对话合并与上下文AI回退不在沙盒执行。");
+                    var off = PreviewOffHours(cfg, false);
+                    if (off != null) return off;
                 }
-                if (scenario == "首条咨询")
-                    return Reply("（未触发首条咨询固定回复）", "首条咨询",
-                        isFirst ? "当前店铺首条咨询固定话术未启用或答案为空。"
-                            : "当前模拟会话已经出现过买家咨询，不能重复当作首条。", "未触发");
 
-                if (scenario == "商品链接")
+                if (IsOnlyProductLink(scenes, message))
                 {
                     var presets = BotReplyPresetService.GetEnabledPresetsForPreview(_seller);
                     var preset = presets.FirstOrDefault();
-                    return preset == null
-                        ? Reply("（当前店铺没有启用的商品链接话术）", "商品链接", "没有可用预设，未触发发送。", "未触发")
-                        : Reply(preset.Text, BotReplyPresetService.BuildSourceLabel(preset),
-                            "命中商品链接场景；展示启用预设的第一条作为确定性样例。"
-                            + "真实客户端按消息身份选择话术，可能使用另一条。");
-                }
-                if (scenario == "本地短消息")
-                {
-                    string answer, phrase;
-                    return LocalShortReplyService.TryResolve(_seller, message, out answer, out phrase)
-                        ? Reply(answer, "本地短消息回复", "复用生产本地短语精确匹配，命中：" + phrase)
-                        : Reply("（未命中本地短消息）", "本地短消息回复", "未找到符合的启用短语。", "未触发");
-                }
-                if (scenario == "特定固定规则")
-                {
-                    var match = BotFeatureStore.EvaluateAutoReplyRule(message);
-                    if (match == null || !match.Matched)
-                        return Reply("（没有命中启用的特定固定规则）", "自定义固定规则",
-                            "复用当前店铺固定规则评估。", "未触发");
-                    var text = ReadRuleReplyPreview(match);
-                    return string.IsNullOrWhiteSpace(text)
-                        ? Reply("检测到规则命中，但无法安全提取规则的实际答复。请在规则设置中检查。",
-                            "自定义固定规则", "规则检测真实命中；没有调用生产发送或外部API。", "需检查")
-                        : Reply(text, "自定义固定规则", "读取命中的规则配置答复；未执行真实发送。");
+                    if (preset != null)
+                        return Reply(preset.Text, BotReplyPresetService.BuildSourceLabel(preset),
+                            "商品链接被识别为非实质咨询；首条咨询名额未消耗。仅预览首个启用话术，"
+                            + "生产可能按消息ID选出另一条话术。");
                 }
 
-                var normal = ResolveKnowledge(message);
-                return Reply(normal.CanDirect ? normal.Answer
-                        : "当前不符合 Knowledge V2 直答条件，真实链路会进入后续上下文/AI/人工处理。本沙盒不会伪造AI答案。",
-                    normal.CanDirect ? "Knowledge V2 · 本地直答" : "Knowledge V2 · 未直答",
-                    normal.Diagnostic,
-                    normal.CanDirect ? "预览命中" : "需进入后续链路");
+                var prefix = string.Empty;
+                if (isFirst && scenes.Contains("首条咨询"))
+                {
+                    var firstReply = FirstInquiryFixedReplyService.Load(_seller);
+                    if (firstReply != null && firstReply.Enabled
+                        && !string.IsNullOrWhiteSpace(firstReply.Answer))
+                        prefix = firstReply.Answer.Trim();
+                }
+
+                if (scenes.Contains("特定固定规则"))
+                {
+                    var manual = BotFeatureStore.EvaluateAutoReplyRule(message);
+                    if (manual != null && manual.Matched)
+                    {
+                        var answer = ReadRuleReplyPreview(manual);
+                        return Reply(prefix + (prefix.Length > 0 ? "\n\n" : "")
+                            + (answer.Length > 0 ? answer : "固定规则命中，但无法读取可预览的文本答案。"),
+                            "特定固定规则", "按真实店铺规则匹配；未发送。"
+                            + (answer.Length == 0 ? "请在规则页面检查配置。" : ""),
+                            answer.Length > 0 ? "规则命中" : "规则答案待确认");
+                    }
+                }
+
+                if (scenes.Contains("本地短消息"))
+                {
+                    string answer, phrase;
+                    if (LocalShortReplyService.TryResolve(_seller, message, out answer, out phrase)
+                        && prefix.Length == 0)
+                        return Reply(answer, "本地短消息回复", "命中已启用的短语：" + phrase);
+                }
+
+                if (scenes.Contains("普通咨询 / 知识V2"))
+                {
+                    var decision = KnowledgeEngineV2Service.Resolve(_seller, _syntheticBuyer, message);
+                    var candidates = decision.Matches == null ? ""
+                        : string.Join("\n", decision.Matches.Where(x => x != null && x.Record != null)
+                            .Take(3).Select(x => "ID:" + x.Record.Id + " 问:" + x.Record.Title
+                                + " 答:" + x.Record.Answer));
+                    var trace = "V2决策：" + (decision.CanDirectReply ? "安全直答" : "不直答")
+                        + "\n原因：" + decision.Reason
+                        + "\n冲突：" + decision.HasConflict
+                        + "\n候选数：" + decision.CandidateCount
+                        + "\n耗时：" + decision.TotalMs + "ms"
+                        + "\n候选摘要：\n" + candidates;
+                    if (decision.CanDirectReply)
+                        return Reply(prefix + (prefix.Length > 0 ? "\n\n" : "")
+                            + decision.Answer, prefix.Length > 0
+                            ? "首条咨询 + Knowledge V2" : "Knowledge V2", trace);
+                    var miss = Reply(prefix.Length > 0 ? prefix : "知识V2未能安全直答。",
+                        prefix.Length > 0 ? "首条咨询固定回复" : "Knowledge V2",
+                        trace, "进入AI回退或人工审核");
+                    miss.Prefix = prefix;
+                    miss.NeedsAi = true;
+                    miss.IsKnowledgeMiss = true;
+                    miss.IsHighRisk = KnowledgeEngineV2Semantics.IsHighRisk(message);
+                    miss.HasConflict = decision.HasConflict;
+                    miss.KnowledgeCandidates = candidates;
+                    return miss;
+                }
+                if (prefix.Length > 0) return Reply(prefix, "首条咨询固定回复", "已命中首条咨询预设。");
+                return Reply("没有勾选匹配当前买家消息的有效场景。", "沙盒",
+                    "所有选中的策略均未生成回复。", "无命中");
+            }
+        }
+
+        private sealed class SandboxAiResult
+        {
+            public bool Success;
+            public string Answer;
+            public string Detail;
+        }
+
+        private SandboxAiResult GenerateAiPreview(string question,
+            List<KeyValuePair<string, string>> history, string routeDetail, string candidates)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+            if (shop == null) return new SandboxAiResult { Detail = "店铺身份不明确，已阻止AI调用。" };
+            using (ShopSettingsScope.Enter(shop))
+            {
+                var messages = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] =
+                            "你是客服模拟沙盒中的应答助手。仅依据已经给出的知识候选和聊天上下文回复。"
+                            + "不要声称任何模拟订单已真实下单、付款、发货、退款或履约；"
+                            + "不得索取密码、验证码或真实订单信息。"
+                            + "知识证据不足时明确提出需人工确认，不要编造政策。"
+                            + "这次请求仅生成模拟文本，不要执行工具或任何外部业务操作。"
+                    }
+                };
+                foreach (var turn in (history ?? new List<KeyValuePair<string, string>>()).Take(12))
+                {
+                    messages.Add(new JObject
+                    {
+                        ["role"] = turn.Key == "assistant" ? "assistant" : "user",
+                        ["content"] = turn.Value ?? ""
+                    });
+                }
+                messages.Add(new JObject
+                {
+                    ["role"] = "user",
+                    ["content"] = "模拟买家最新问题：" + question
+                        + "\n本地知识决策：" + (routeDetail ?? "").Substring(
+                            0, Math.Min(1500, (routeDetail ?? "").Length))
+                        + "\n已召回知识（不一定适用，需判断）："
+                        + (candidates ?? "").Substring(0, Math.Min(2400, (candidates ?? "").Length))
+                });
+                var response = MyOpenAI.CallStructuredChat(
+                    messages, 650, 0.2, 45, CancellationToken.None, true);
+                return new SandboxAiResult
+                {
+                    Success = response != null && response.Success
+                        && !string.IsNullOrWhiteSpace(response.Answer),
+                    Answer = response == null ? "" : (response.Answer ?? "").Trim(),
+                    Detail = response == null ? "AI接口未返回结果" : response.Success
+                        ? "调用成功，耗时" + response.LatencyMs + "ms（非真实发送）"
+                        : "调用失败：" + response.Error
+                };
             }
         }
 
