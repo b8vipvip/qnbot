@@ -508,6 +508,7 @@ namespace Bot.Knowledge
         {
             action = (action ?? string.Empty).Trim().ToLowerInvariant();
             return action == "ai_smart_import"
+                || action == "ai_buyer_top_questions"
                 || action == "generate_revision_candidates"
                 || action == "apply_revision"
                 || action == "reject_revision"
@@ -533,6 +534,7 @@ namespace Bot.Knowledge
             switch ((action ?? string.Empty).Trim().ToLowerInvariant())
             {
                 case "ai_smart_import": return "智能导入";
+                case "ai_buyer_top_questions": return "高频买家消息AI优化";
                 case "generate_revision_candidates": return "AI生成修订";
                 case "apply_revision": return "应用修订";
                 case "reject_revision": return "驳回修订";
