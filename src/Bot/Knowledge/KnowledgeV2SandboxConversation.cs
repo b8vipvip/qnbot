@@ -1,5 +1,7 @@
 using Bot.ChromeNs;
 using Bot.ShopScope;
+using Newtonsoft.Json.Linq;
+using System.Threading;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -24,7 +26,18 @@ namespace Bot.Knowledge
         private readonly StackPanel _transcript;
         private readonly ScrollViewer _scroll;
         private readonly TextBox _input;
-        private readonly ComboBox _scenario;
+        private readonly Dictionary<string, CheckBox> _scenarios =
+            new Dictionary<string, CheckBox>(StringComparer.Ordinal);
+        private readonly CheckBox _enableAi;
+        private readonly TextBox _directAnswerDraft;
+        private readonly Button _saveDirect;
+        private readonly List<KeyValuePair<string, string>> _conversation =
+            new List<KeyValuePair<string, string>>();
+        private string _lastMissQuestion = string.Empty;
+        private string _lastMissAnswer = string.Empty;
+        private bool _lastMissWasHighRisk;
+        private bool _lastMissHadConflict;
+        private bool _busy;
         private readonly TextBox _orderId;
         private readonly TextBox _orderAmount;
         private readonly TextBox _product;
@@ -44,29 +57,45 @@ namespace Bot.Knowledge
             var top = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             top.Children.Add(new TextBlock
             {
-                Text = "客服对话沙盒 · 只读预演",
+                Text = "客服对话沙盒 · 可选 AI / 人工审核知识直答",
                 FontSize = 17, FontWeight = FontWeights.SemiBold
             });
             top.Children.Add(new TextBlock
             {
-                Text = "模拟买家消息、首条咨询、商品链接、订单创建/付款及固定规则。"
-                    + "不会发送千牛消息、创建订单、调用生产订单接口、触发真实AI学习或写入请求记录。"
-                    + "未覆盖的真实链路会明确提示“仅预览”，不冒充已发送。",
+                Text = "默认启用全部场景；模拟聊天先执行规则与V2直答，未命中可调用店铺AI接口。"
+                    + " 真实千牛发送、下单、发货、订单服务和自动学习始终禁用。"
+                    + " 只有点击“审核并新增直答”并确认后才写入当前店铺知识库。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 3, 0, 6)
             });
-            var config = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
-            config.Children.Add(new TextBlock { Text = "场景：", VerticalAlignment = VerticalAlignment.Center });
-            _scenario = new ComboBox { Width = 175, Height = 28, Margin = new Thickness(3, 0, 9, 0) };
-            foreach (var item in new[]
+            var choices = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            choices.Children.Add(new TextBlock { Text = "并行启用场景（默认全选）：", VerticalAlignment = VerticalAlignment.Center });
+            foreach (var scene in new[]
             {
                 "普通咨询 / 知识V2", "首条咨询", "商品链接", "本地短消息",
-                "特定固定规则", "下班回复", "模拟下单", "模拟付款"
-            }) _scenario.Items.Add(item);
-            _scenario.SelectedIndex = 0;
-            _scenario.SelectionChanged += delegate { UpdateOrderFields(); };
-            config.Children.Add(_scenario);
+                "特定固定规则", "下班回复", "模拟下单", "模拟付款", "模拟发货"
+            })
+            {
+                var box = new CheckBox { Content = scene, IsChecked = true,
+                    Margin = new Thickness(5, 3, 9, 3), VerticalAlignment = VerticalAlignment.Center };
+                _scenarios[scene] = box;
+                choices.Children.Add(box);
+            }
+            var all = new Button { Content = "全选", Width = 48, Margin = new Thickness(4, 0, 4, 0) };
+            all.Click += delegate { foreach (var c in _scenarios.Values) c.IsChecked = true; };
+            choices.Children.Add(all);
+            var clear = new Button { Content = "全不选", Width = 59 };
+            clear.Click += delegate { foreach (var c in _scenarios.Values) c.IsChecked = false; };
+            choices.Children.Add(clear);
+            top.Children.Add(choices);
+            var aiOptions = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+            _enableAi = new CheckBox { Content = "知识未直答时调用当前店铺 AI 接口（会产生真实 API 消耗）",
+                IsChecked = true, Margin = new Thickness(0, 4, 15, 4) };
+            aiOptions.Children.Add(_enableAi);
+            top.Children.Add(aiOptions);
+            var config = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
+            config.Children.Add(new TextBlock { Text = "订单与商品模拟素材：", VerticalAlignment = VerticalAlignment.Center });
             config.Children.Add(new TextBlock { Text = "模拟订单号：", VerticalAlignment = VerticalAlignment.Center });
             _orderId = new TextBox { Width = 146, Height = 28, Text = "SIM-ORDER-001", Margin = new Thickness(4, 0, 8, 0) };
             config.Children.Add(_orderId);
@@ -81,7 +110,24 @@ namespace Bot.Knowledge
             var reset = new Button { Content = "新会话", Height = 29, Width = 85 };
             reset.Click += delegate { ResetSession(); };
             row2.Children.Add(reset);
+            var sample = new Button { Content = "随机读取店铺历史订单", Height = 29, MinWidth = 145,
+                Margin = new Thickness(8, 0, 5, 0) };
+            sample.Click += async delegate { await LoadHistoricalSampleAsync(); };
+            row2.Children.Add(sample);
+            var productSample = new Button { Content = "随机读取店铺商品", Height = 29, MinWidth = 130 };
+            productSample.Click += async delegate { await LoadProductSampleAsync(); };
+            row2.Children.Add(productSample);
             top.Children.Add(row2);
+            var eventButtons = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
+            foreach (var scene in new[] { "模拟下单", "模拟付款", "模拟发货" })
+            {
+                var item = scene;
+                var button = new Button { Content = item + "事件", MinWidth = 93, Height = 27,
+                    Margin = new Thickness(0, 0, 8, 0) };
+                button.Click += async delegate { await RunAsync(item); };
+                eventButtons.Children.Add(button);
+            }
+            top.Children.Add(eventButtons);
             DockPanel.SetDock(top, Dock.Top);
             root.Children.Add(top);
 
@@ -110,6 +156,17 @@ namespace Bot.Knowledge
             bottom.Children.Add(inputRow);
             _status = new TextBlock { Text = "沙盒未开始。", Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
             bottom.Children.Add(_status);
+            var teaching = new DockPanel { Margin = new Thickness(0, 7, 0, 4) };
+            _saveDirect = new Button { Content = "审核并新增直答", Width = 116, Height = 47,
+                Margin = new Thickness(6, 0, 0, 0), IsEnabled = false };
+            _saveDirect.Click += delegate { SaveDirectAnswer(); };
+            DockPanel.SetDock(_saveDirect, Dock.Right);
+            teaching.Children.Add(_saveDirect);
+            _directAnswerDraft = new TextBox { Height = 47, AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                ToolTip = "只有知识未直答的提问可以在此填写确认答案；点击审核后才写入V2" };
+            teaching.Children.Add(_directAnswerDraft);
+            bottom.Children.Add(teaching);
             bottom.Children.Add(new TextBlock { Text = "本轮路由证据（只读）", Margin = new Thickness(0, 7, 0, 3), FontWeight = FontWeights.SemiBold });
             _diagnostics = new TextBox
             {
@@ -129,17 +186,13 @@ namespace Bot.Knowledge
             };
             root.Children.Add(_scroll);
             Content = root;
-            UpdateOrderFields();
             AddBubble("系统", "独立沙盒会话已建立，所有订单号均为模拟数据。", "sandbox-only");
         }
 
-        private void UpdateOrderFields()
+        private bool Enabled(string scene)
         {
-            var value = _scenario.SelectedItem as string ?? string.Empty;
-            var isOrder = value == "模拟下单" || value == "模拟付款";
-            _orderId.IsEnabled = isOrder;
-            _orderAmount.IsEnabled = isOrder;
-            _product.IsEnabled = isOrder;
+            CheckBox box;
+            return _scenarios.TryGetValue(scene, out box) && box.IsChecked == true;
         }
 
         private string NewBuyerIdentity()
@@ -152,6 +205,13 @@ namespace Bot.Knowledge
             _syntheticBuyer = NewBuyerIdentity();
             _firstInquiryUsed = false;
             _orderPreviewed.Clear();
+            _conversation.Clear();
+            _lastMissQuestion = string.Empty;
+            _lastMissAnswer = string.Empty;
+            _lastMissWasHighRisk = false;
+            _lastMissHadConflict = false;
+            _saveDirect.IsEnabled = false;
+            _directAnswerDraft.Text = string.Empty;
             _turns = 0;
             _transcript.Children.Clear();
             _diagnostics.Text = string.Empty;
