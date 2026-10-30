@@ -61,6 +61,20 @@ namespace Bot.Knowledge
         public long LastVerifiedAtTicks { get; set; }
     }
 
+    // Immutable operator corrections are kept in the shop-scoped V2 database,
+    // not in a fuzzy Q/A cache. The full previous snapshot permits safe rollback.
+    internal sealed class KnowledgeV2ManualEditRevisionRow
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+        public string KnowledgeId { get; set; }
+        public string MessageRecordId { get; set; }
+        public string Action { get; set; }
+        public string PreviousJson { get; set; }
+        public string CurrentJson { get; set; }
+        public long CreatedAtTicks { get; set; }
+    }
+
     internal sealed class KnowledgeV2MetaRow
     {
         [PrimaryKey]
