@@ -50,6 +50,7 @@ namespace Bot.Knowledge
         private string _globalSearch = string.Empty;
         private string _pendingRecordId = string.Empty;
         private bool _recordsLoaded;
+        private bool _recordsLoading;
 
         public KnowledgeV2RecordsPage(Window owner, string seller, KnowledgeV2RecordsPageMode mode)
         {
@@ -79,11 +80,13 @@ namespace Bot.Knowledge
 
         public void RefreshView()
         {
-            if (string.IsNullOrWhiteSpace(_seller)) return;
+            if (string.IsNullOrWhiteSpace(_seller) || _recordsLoading) return;
+            _recordsLoading = true;
             _count.Text = "正在读取 Knowledge Center V2...";
             Task.Run(() => KnowledgeEngineV2Repository.LoadAll(_seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _recordsLoading = false;
                     if (t.IsFaulted)
                     {
                         _count.Text = "读取失败：" + (t.Exception == null ? "未知错误" : t.Exception.GetBaseException().Message);
