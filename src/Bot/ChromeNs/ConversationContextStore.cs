@@ -242,8 +242,16 @@ namespace Bot.ChromeNs
                 {
                     return false;
                 }
+                // An operator may have disabled/deleted the preset while it
+                // was waiting inside the two-minute receive buffer.
                 reply = pending.Reply ?? string.Empty;
                 state.PendingPreset = null;
+                if (!BotReplyPresetService.GetEnabledPresets(seller).Any(x =>
+                    string.Equals(x.Text, reply, StringComparison.Ordinal)))
+                {
+                    reply = string.Empty;
+                    return false;
+                }
                 return !string.IsNullOrWhiteSpace(reply);
             }
         }
