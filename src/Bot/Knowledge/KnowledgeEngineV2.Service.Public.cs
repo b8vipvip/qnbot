@@ -146,7 +146,9 @@ namespace Bot.Knowledge
             }
             var second = productionMatches.FirstOrDefault(x => x != null
                 && !object.ReferenceEquals(x, best));
-            decision.HasConflict = HasConflict(best, second);
+            // An explicit human correction of this exact standalone question wins over
+            // older generic answers; unrelated queries still use conflict rejection.
+            decision.HasConflict = manualExact == null && HasConflict(best, second);
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
