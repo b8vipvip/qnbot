@@ -243,7 +243,7 @@ namespace Bot.Knowledge
             DockPanel.SetDock(editor, Dock.Bottom); layout.Children.Add(editor);
             _list = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true,
                 CanUserAddRows = false, SelectionMode = DataGridSelectionMode.Single };
-            _list.Columns.Add(new DataGridTextColumn { Header = "时间", Width = 135, Binding = new Binding("CreatedAtTicks") });
+            _list.Columns.Add(new DataGridTextColumn { Header = "时间", Width = 135, Binding = new Binding("CreatedAtText") });
             _list.Columns.Add(new DataGridTextColumn { Header = "频次", Width = 65, Binding = new Binding("Frequency") });
             _list.Columns.Add(new DataGridTextColumn { Header = "提问", Width = new DataGridLength(2, DataGridLengthUnitType.Star), Binding = new Binding("Question") });
             _list.Columns.Add(new DataGridTextColumn { Header = "状态", Width = 78, Binding = new Binding("Status") });
