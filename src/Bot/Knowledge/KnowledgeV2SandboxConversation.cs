@@ -538,6 +538,167 @@ namespace Bot.Knowledge
             }
         }
 
+        private async Task LoadHistoricalSampleAsync()
+        {
+            if (_busy) return;
+            _status.Text = "只读扫描当前店铺已有历史订单快照...";
+            try
+            {
+                var snapshots = await Task.Run(() => OrderEventHub.ReadSandboxSamples(_seller, 150));
+                if (snapshots == null || snapshots.Count == 0)
+                {
+                    _status.Text = "当前店铺本机的订单事件缓存无可用样本，可手工填写SIM-订单。"
+                        + "不会查询生产订单HTTP，也不会跨店读取。";
+                    return;
+                }
+                var selected = snapshots[new Random(Guid.NewGuid().GetHashCode()).Next(snapshots.Count)];
+                _orderId.Text = selected.OrderId;
+                _orderAmount.Text = (selected.PaidAmount ?? selected.TotalAmount ?? 0m)
+                    .ToString("0.00", CultureInfo.InvariantCulture);
+                if (!string.IsNullOrWhiteSpace(selected.ItemTitle))
+                    _product.Text = selected.ItemTitle;
+                _status.Text = "已随机读取当前店铺的历史订单素材并去除真实订单号、买家身份和备注。"
+                    + "订单状态仅供模拟，未更改实际订单。"
+                    + " 历史状态：" + (selected.TradeStatus ?? "未记录");
+            }
+            catch (Exception ex) { _status.Text = "历史订单素材读取失败：" + ex.Message; }
+        }
+
+        private async Task LoadProductSampleAsync()
+        {
+            if (_busy) return;
+            _status.Text = "正在从当前店铺的历史订单和商品知识只读选择素材...";
+            try
+            {
+                var names = await Task.Run(() =>
+                {
+                    var result = OrderEventHub.ReadSandboxSamples(_seller, 150)
+                        .Where(x => !string.IsNullOrWhiteSpace(x.ItemTitle))
+                        .Select(x => x.ItemTitle.Trim()).ToList();
+                    var records = KnowledgeEngineV2Repository.LoadAll(_seller);
+                    result.AddRange(records.Where(x => x != null && x.Enabled
+                            && x.Type == "product_knowledge"
+                            && !string.IsNullOrWhiteSpace(x.Title))
+                        .Select(x => x.Title.Trim()).Take(150));
+                    return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                });
+                if (names.Count == 0)
+                {
+                    _status.Text = "当前店铺本机暂无可读取的商品素材。不会凭空宣称商品来自生产店铺。";
+                    return;
+                }
+                _product.Text = names[new Random(Guid.NewGuid().GetHashCode()).Next(names.Count)];
+                _status.Text = "已选择店铺本机历史订单/商品知识中的一个商品名称（只读模拟）。";
+            }
+            catch (Exception ex) { _status.Text = "商品素材读取失败：" + ex.Message; }
+        }
+
+        private void SaveDirectAnswer()
+        {
+            if (_busy || string.IsNullOrWhiteSpace(_lastMissQuestion))
+            {
+                _status.Text = "只有最近一次知识未直答的问题才允许新增知识。";
+                return;
+            }
+            var question = _lastMissQuestion.Trim();
+            var answer = (_directAnswerDraft.Text ?? "").Trim();
+            if (question.Length < 5 || question.Length > 500
+                || answer.Length < 2 || answer.Length > 4000)
+            {
+                _status.Text = "问题需5～500字，审核答案需2～4000字。";
+                return;
+            }
+            if (KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
+                || _lastMissWasHighRisk || _lastMissHadConflict)
+            {
+                _status.Text = "此问题或答案属于敏感风险/冲突知识，不允许直接发布直答。"
+                    + "请进入知识中心审核、处理冲突后再启用。";
+                return;
+            }
+            var confirmation = MessageBox.Show(Window.GetWindow(this),
+                "是否将这条人工审核后的答案新增为当前店铺 Knowledge V2 可用直答知识？"
+                + "\n\n问题：" + question
+                + "\n\n答案：" + answer
+                + "\n\n该操作将真实写入知识库，并影响后续生产接待；不是沙盒预览。"
+                + "\nAI生成的内容必须由你核实事实及适用条件。",
+                "确认新增直答知识", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirmation != MessageBoxResult.Yes) return;
+            _busy = true;
+            _send.IsEnabled = false;
+            _saveDirect.IsEnabled = false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+                if (shop == null) throw new InvalidOperationException("无法确认当前店铺");
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var previous = KnowledgeEngineV2Repository.LoadAll(_seller);
+                    var duplicate = previous.FirstOrDefault(x => x != null && x.Enabled
+                        && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                        && (KnowledgeEngineV2Semantics.TextSimilarity(x.Title, question) >= 0.78
+                            || (x.Aliases ?? new List<string>()).Any(a =>
+                                KnowledgeEngineV2Semantics.TextSimilarity(a, question) >= 0.85)));
+                    if (duplicate != null)
+                    {
+                        _status.Text = "发现相近的现有知识（ID：" + duplicate.Id
+                            + "），已阻止重复新增。请从知识中心编辑原记录并处理冲突。";
+                        return;
+                    }
+                    var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
+                    if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
+                    {
+                        _status.Text = "该问题缺少独立主体或依赖聊天上下文，"
+                            + "不适合发布为无条件直答；请在知识中心补充适用条件。";
+                        return;
+                    }
+                    var now = DateTime.Now;
+                    var knowledge = new KnowledgeV2Record
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        Type = "business_fact",
+                        Title = question,
+                        Answer = answer,
+                        ShortAnswer = answer,
+                        Aliases = new List<string> { question },
+                        Entities = parsed.Entities == null
+                            ? new List<string>() : parsed.Entities.ToList(),
+                        Intent = parsed.Intent,
+                        Subject = parsed.Subject,
+                        Predicate = parsed.Predicate,
+                        RiskLevel = "normal",
+                        SourceType = "sandbox_manual_review",
+                        SourceId = "sandbox-manual-" + Guid.NewGuid().ToString("N"),
+                        Enabled = true,
+                        Status = "active",
+                        Authority = 0.98,
+                        Confidence = 0.96,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                        LastVerifiedAt = now
+                    };
+                    KnowledgeEngineV2Repository.Save(_seller, knowledge);
+                    _status.Text = "已新增人工审核直答知识 ID：" + knowledge.Id
+                        + "；检索索引已更新。最终是否直答仍受语义、冲突和风险规则控制。";
+                    _diagnostics.Text += "\n新增V2知识ID：" + knowledge.Id
+                        + "\n来源：测试台人工确认（非自动AI学习）";
+                    _lastMissQuestion = string.Empty;
+                    _lastMissAnswer = string.Empty;
+                    AddBubble("系统", "人工审核知识已写入当前店铺知识V2（不会向真实买家发送）。",
+                        "V2人工入库");
+                }
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "未确认知识保存成功：" + ex.Message;
+            }
+            finally
+            {
+                _busy = false;
+                _send.IsEnabled = true;
+                _saveDirect.IsEnabled = _lastMissQuestion.Length > 0;
+            }
+        }
+
         private sealed class KnowledgePreview
         {
             public bool CanDirect;
