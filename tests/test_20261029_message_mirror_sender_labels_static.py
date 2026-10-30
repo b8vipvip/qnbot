@@ -36,7 +36,7 @@ def test_bot_actions_are_preserved_after_converting_to_bubble():
     assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in src
     assert "BuildCopyOnlyContextMenu(messageText, placementTarget)" in src
     assert "action.MirrorRequestResend()" in src
-    assert "action.MirrorRequestEdit()" in src
+    assert "action.MirrorRequestEdit(currentSource(), sourceRecordId, manuallyCorrected)" in src
     assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch(" in src
     assert "action.MirrorAnswerSource" in src
     assert "internal string MirrorAnswerSource" in actions
