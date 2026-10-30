@@ -509,6 +509,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     + "\n\n消息所属客服：" + seller
                     + "\n买家：" + buyer
                     + "\n发送时间：" + timestamp
+                    + "\n发送者：Bot"
                     + "\n消息记录ID：" + (string.IsNullOrWhiteSpace(sourceRecordId)
                         ? "未记录" : sourceRecordId)
                     + "\n千牛消息Key：" + (turn == null
