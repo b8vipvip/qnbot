@@ -114,6 +114,12 @@ namespace Bot.Knowledge
             var save = Btn("保存", 68); save.Click += delegate { SaveCurrent(); };
             var delete = Btn("删除", 68); delete.Click += delegate { DeleteCurrent(); };
             toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(delete);
+            if (_mode == KnowledgeV2RecordsPageMode.Knowledge)
+            {
+                var undo = Btn("回滚Bot人工纠错", 138);
+                undo.Click += delegate { RollbackLastBotCorrection(); };
+                toolbar.Children.Add(undo);
+            }
             if (_mode == KnowledgeV2RecordsPageMode.Learning)
             {
                 var approve = Btn("批准入库", 86); approve.Click += delegate { ApproveCurrent(); };
@@ -307,6 +313,30 @@ namespace Bot.Knowledge
             };
             LoadEditor(_selected);
             _title.Focus();
+        }
+
+        private void RollbackLastBotCorrection()
+        {
+            if (_selected == null || string.IsNullOrWhiteSpace(_selected.Id))
+            {
+                _count.Text = "请先选择需要回滚的知识记录。";
+                return;
+            }
+            var id = _selected.Id;
+            var answer = MessageBox.Show(Window.GetWindow(this),
+                "确认回滚该知识最近一次来自Bot右键“修改”的人工纠错？"
+                + "\n如果该知识此后已被其他人更新，系统将拒绝覆盖。",
+                "回滚Bot人工纠错", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+            string reason;
+            if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(_seller, id, out reason))
+            {
+                _count.Text = reason;
+                return;
+            }
+            _pendingRecordId = id;
+            RefreshView();
+            _count.Text = reason;
         }
 
         private void LoadEditor(KnowledgeV2Record item)
