@@ -258,10 +258,23 @@ namespace Bot.AssistWindow.Widget.Robot
 
                     // Keep provenance available after restart and associate the visible
                     // transport echo with the nearest answer card where possible.
-                    KnowledgeLearningService.RegisterAnswerSource(
-                        seller, buyer, lastBuyerQuestion, botAnswer, source);
                     var botEchoRecordId = BotConversationHistoryStore.RecordBotEcho(
                         seller, buyer, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
+                    var operatorCorrection = BotConversationHistoryStore.GetManualSource(seller, botEchoRecordId);
+                    if (!string.IsNullOrWhiteSpace(operatorCorrection))
+                    {
+                        // An explicit correction is more authoritative than a
+                        // reconstructed temporary answer card on every refresh.
+                        source = operatorCorrection;
+                        nativeBotConversation.MirrorSetAnswerSource(operatorCorrection);
+                        KnowledgeLearningService.OverrideAnswerSource(
+                            seller, buyer, lastBuyerQuestion, botAnswer, operatorCorrection);
+                    }
+                    else
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(
+                            seller, buyer, lastBuyerQuestion, botAnswer, source);
+                    }
 
                     usedNativeBotConversations.Add(nativeBotConversation);
                     messageElement = BuildMessageMirrorBubble(
