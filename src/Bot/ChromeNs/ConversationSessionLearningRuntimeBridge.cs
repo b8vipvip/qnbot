@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.Knowledge;
 using BotLib;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -168,6 +169,9 @@ namespace Bot.ChromeNs
             var isBuyer = from == buyer && to == seller;
             if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))
             {
+                // Archive all incoming buyer message text independently from reply success
+                // and buyer learning, without persisting buyer nickname or conversation ID.
+                BuyerMessageArchiveService.Observe(seller, text, messageKey, messageTime);
                 // This event is raised before QN processes the same buyer message. Recording now is safe
                 // because ConversationContextStore deduplicates by message key, and it gives us a state in
                 // which to inject the store-specific style as a system turn before AI generation starts.
