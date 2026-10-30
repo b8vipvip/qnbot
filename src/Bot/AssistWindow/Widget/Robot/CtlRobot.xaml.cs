@@ -226,6 +226,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     ctl.SetSendPending("正在按原始知识ID精确修订...");
                     var corrected = wnd.EditedAnswer;
                     string message = string.Empty;
+                    var savedId = route.TargetId;
                     var success = await Task.Run(() =>
                         KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
                             route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
@@ -238,17 +239,20 @@ namespace Bot.AssistWindow.Widget.Robot
                         var reviewed = await Task.Run(() =>
                             KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
                                 e.Seller, e.Question, corrected, e.MessageRecordId,
-                                out reviewedStatus));
+                                out reviewedStatus, out savedId));
                         if (reviewed)
                         {
                             success = true;
                             message = reviewedStatus;
-                            ctl.SetSource("人工审核直答");
                         }
                         else message += "；" + reviewedStatus;
                     }
                     if (success)
-                        ctl.SetAnswer(corrected, "人工审核直答");
+                    {
+                        var source = "本地知识V2（记录ID：" + savedId + "）";
+                        ctl.SetAnswer(corrected, source);
+                        ctl.SetSource(source);
+                    }
                     ctl.SetStatus(message, success);
                 }
                 catch (Exception ex)
@@ -264,14 +268,17 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 string status = string.Empty;
+                string savedId = string.Empty;
                 var correctedAnswer = wnd.EditedAnswer;
                 var saved = await Task.Run(() =>
                     KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                        e.Seller, e.Question, correctedAnswer, e.MessageRecordId, out status));
+                        e.Seller, e.Question, correctedAnswer, e.MessageRecordId,
+                        out status, out savedId));
                 if (saved)
                 {
-                    ctl.SetAnswer(correctedAnswer, "人工审核直答");
-                    ctl.SetSource("人工审核直答");
+                    var source = "本地知识V2（记录ID：" + savedId + "）";
+                    ctl.SetAnswer(correctedAnswer, source);
+                    ctl.SetSource(source);
                 }
                 ctl.SetStatus(status, saved);
             }
