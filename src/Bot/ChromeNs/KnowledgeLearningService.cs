@@ -90,8 +90,8 @@ namespace Bot.ChromeNs
             SourceStamp stamp;
             if (Sources.TryGetValue(AnswerKey(seller, buyer, question, answer), out stamp)
                 && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
-            if (Sources.TryGetValue(QuestionSourceKey(seller, buyer, question), out stamp)
-                && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
+            // Answer-specific durable evidence must precede question-level
+            // fallback, which could incorrectly label a different answer.
             var persisted = BotConversationHistoryStore.ResolveAnswerSourceStamp(seller, buyer, question, answer);
             if (!string.IsNullOrWhiteSpace(persisted)) return persisted;
             BotReplyPreset preset;
