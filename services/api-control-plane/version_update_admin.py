@@ -175,7 +175,12 @@ def _server_update_status() -> Dict[str, Any]:
 
 
 def _runtime_build_commit() -> str:
-    """Revision baked into THIS process's image; never infer it from host Git."""
+    """Effective runtime SHA from the current container; never trust host checkout."""
+    marker = Path("/app/.gptauto-runtime-sha")
+    if marker.is_file():
+        overlay_sha = marker.read_text(encoding="ascii").strip().lower()
+        if len(overlay_sha) == 40 and all(c in "0123456789abcdef" for c in overlay_sha):
+            return overlay_sha
     value = str(os.getenv("CONTROL_PLANE_BUILD_COMMIT", "")).strip()
     if len(value) == 40 and all(ch in "0123456789abcdef" for ch in value.lower()):
         return value.lower()
@@ -244,8 +249,10 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
             "current_commit": current,
             "current_short_sha": current[:12] if current else "",
             "running_image_commit": running_image_commit,
+            "base_image_commit": str(os.getenv("CONTROL_PLANE_BUILD_COMMIT", "")),
+            "runtime_overlay_active": Path("/app/.gptauto-runtime-sha").is_file(),
             "recorded_commit": recorded_commit,
-            "version_source": "running_image" if running_image_commit else "updater_status",
+            "version_source": ("runtime_overlay" if Path("/app/.gptauto-runtime-sha").is_file() else "running_image") if running_image_commit else "updater_status",
             "needs_runtime_verification": needs_runtime_verification,
             "github": github,
             "update_available": update_available,
