@@ -474,6 +474,16 @@ if [[ -f "$SMART_PLAN_TOOL" ]]; then
   fi
 fi
 if [[ "$SMART_MODE" == "client-build" ]]; then
+  # Windows binaries are produced by independent Actions. No successful exact
+  # SHA workflow evidence means the admin update must NOT report completion.
+  EVIDENCE_CLI="$REPO_DIR/.github/gptauto/ci_evidence.py"
+  if [[ ! -f "$EVIDENCE_CLI" ]] || ! python3 "$EVIDENCE_CLI" \
+      --repo qnbot --sha "$NEW_COMMIT" \
+      --workflow "Windows x64 release build"; then
+    warn "未找到目标提交的 Windows CI 成功证据，客户端更新尚未完成"
+    git -C "$REPO_DIR" reset --hard "$OLD_COMMIT" || true
+    exit 13
+  fi
   log "GPTAuto 智能判断：仅 Windows 客户端代码变更，服务器无需 Docker Build"
   log "Windows 编译/客户端正式版资产由 GitHub Actions 和既有客户端发布流程负责；不会把服务器重启冒充客户端交付成功"
   exit 0
