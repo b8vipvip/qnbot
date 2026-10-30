@@ -57,6 +57,20 @@ namespace Bot.Knowledge
             RefreshPresets();
         }
 
+        public void OpenSourceSearch(string answer)
+        {
+            _tabs.SelectedIndex = 0;
+            _sourceSearch.Text = answer ?? string.Empty;
+            FilterSources();
+        }
+
+        public void OpenPresetSearch(string answer)
+        {
+            _tabs.SelectedIndex = 1;
+            _presetSearch.Text = answer ?? string.Empty;
+            FilterPresets();
+        }
+
         public void OpenKnowledgeSearch(string question, string answer)
         {
             _kbQuestion.Text = question ?? string.Empty;
