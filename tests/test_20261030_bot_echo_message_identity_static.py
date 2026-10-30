@@ -23,7 +23,8 @@ def test_echo_link_uses_transport_identity_before_answer_similarity():
         "if (match == null && existingLink == null)"
     )
     assert 'x.EntityId.StartsWith("bot-echo-", StringComparison.Ordinal)' in method
-    assert "x => x.RecordId == candidate.Row.EntityId" in method
+    assert "var candidateRecordId = candidate.Row.EntityId;" in method
+    assert "x => x.RecordId == candidateRecordId" in method
     assert "if (claimed != null) continue;" in method
     assert "DbHelper.Db.SaveOneRecord(new BotReplyEchoLinkEntity" in method
     assert "RecordId = match.EntityId" in method
