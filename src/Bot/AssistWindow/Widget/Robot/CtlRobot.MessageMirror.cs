@@ -488,7 +488,15 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             var edit = new MenuItem { Header = "修改" };
-            edit.Click += (s, e) => { if (action != null) action.MirrorRequestEdit(); };
+            edit.Click += (s, e) =>
+            {
+                if (action == null) return;
+                // Use the exact observed message source. A manually corrected
+                // provenance label is never treated as verified knowledge ID.
+                var manuallyCorrected = !string.IsNullOrWhiteSpace(
+                    BotConversationHistoryStore.GetManualSource(seller, sourceRecordId));
+                action.MirrorRequestEdit(currentSource(), sourceRecordId, manuallyCorrected);
+            };
             menu.Items.Add(edit);
 
             var provenance = new MenuItem { Header = "来源" };

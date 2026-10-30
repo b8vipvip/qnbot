@@ -30,13 +30,23 @@ namespace Bot.AssistWindow.Widget.Robot
         public string Buyer { get; private set; }
         public string Question { get; private set; }
         public string Answer { get; private set; }
+        public string SourceLabel { get; private set; }
+        public string MessageRecordId { get; private set; }
+        public bool SourceWasManuallyCorrected { get; private set; }
 
         public ConversationEditEventArgs(string seller, string buyer, string question, string answer)
+            : this(seller, buyer, question, answer, string.Empty, string.Empty, false) { }
+
+        public ConversationEditEventArgs(string seller, string buyer, string question,
+            string answer, string sourceLabel, string messageRecordId, bool sourceWasManuallyCorrected)
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
             Question = question ?? string.Empty;
             Answer = answer ?? string.Empty;
+            SourceLabel = sourceLabel ?? string.Empty;
+            MessageRecordId = messageRecordId ?? string.Empty;
+            SourceWasManuallyCorrected = sourceWasManuallyCorrected;
         }
     }
 
@@ -258,6 +268,16 @@ namespace Bot.AssistWindow.Widget.Robot
             RaiseEditRequested();
         }
 
+        internal void MirrorRequestEdit(string originalSource, string messageRecordId,
+            bool sourceWasManuallyCorrected)
+        {
+            var handler = EditRequested;
+            if (handler != null)
+                handler(this, new ConversationEditEventArgs(
+                    _seller, _buyer, _question, _answer,
+                    originalSource, messageRecordId, sourceWasManuallyCorrected));
+        }
+
         internal void MirrorOpenKnowledge(Window owner)
         {
             KnowledgeCenterWindow.ShowManagerAndLocate(
@@ -277,7 +297,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private void RaiseEditRequested()
         {
             var handler = EditRequested;
-            if (handler != null) handler(this, new ConversationEditEventArgs(_seller, _buyer, _question, _answer));
+            if (handler != null) handler(this, new ConversationEditEventArgs(
+                _seller, _buyer, _question, _answer, _answerSource, string.Empty, false));
         }
 
         internal void UseAnswerOnlyMirrorPresentation()
