@@ -228,16 +228,16 @@ namespace Bot.AssistWindow.Widget.Robot
                         ? string.Empty
                         : (nativeBotConversation.MirrorAnswerSource ?? string.Empty).Trim();
                     if (string.IsNullOrWhiteSpace(source))
-                        source = KnowledgeLearningService.ResolveAnswerSource(
+                        source = BotConversationHistoryStore.ResolveAnswerSourceStamp(
                             seller, buyer, lastBuyerQuestion, botAnswer);
                     BotReplyPreset matchedPreset;
                     var isPresetReply = BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset);
-                    if (isPresetReply && (string.IsNullOrWhiteSpace(source)
-                        || source == "本地"
-                        || source == "商品链接预设回复"
-                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"
-                        || source.StartsWith("内置话术：", StringComparison.Ordinal)))
-                        source = BotReplyPresetService.BuildSourceLabel(matchedPreset);
+                    // Legacy reply-type labels do not prove which *version* of a
+                    // preset generated a message; never resolve an exact ID merely
+                    // because today's preset text happens to be the same.
+                    if (isPresetReply && (source == "商品链接预设回复"
+                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"))
+                        source = "商品链接预设回复（历史记录未保存话术ID）";
                     if (string.IsNullOrWhiteSpace(source))
                         source = "来源未记录（千牛回显已确认，需人工补录）";
 
@@ -422,17 +422,14 @@ namespace Bot.AssistWindow.Widget.Robot
 
             BotReplyPreset preset;
             var isPreset = BotReplyPresetService.TryFindPreset(seller, messageText, out preset);
-            if (isPreset && (string.IsNullOrWhiteSpace(source)
-                || source == "本地"
-                || source == "商品链接预设回复"
-                || source == "商品链接预设回复（内置固定话术，非知识库条目）"
-                || source.StartsWith("内置话术：", StringComparison.Ordinal)))
-                return BotReplyPresetService.BuildSourceLabel(preset);
+            if (isPreset && (source == "商品链接预设回复"
+                || source == "商品链接预设回复（内置固定话术，非知识库条目）"))
+                source = "商品链接预设回复（历史记录未保存话术ID）";
 
             if (string.IsNullOrWhiteSpace(source))
-                source = KnowledgeLearningService.ResolveAnswerSource(seller, buyer, question, messageText);
-            if (string.IsNullOrWhiteSpace(source) && isPreset)
-                source = BotReplyPresetService.BuildSourceLabel(preset);
+                source = BotConversationHistoryStore.ResolveAnswerSourceStamp(
+                    seller, buyer, question, messageText);
+            // Never infer a concrete preset ID from the text of a history echo.
             return string.IsNullOrWhiteSpace(source)
                 ? "来源未记录（千牛回显已确认，需人工补录）"
                 : source;
@@ -449,20 +446,31 @@ namespace Bot.AssistWindow.Widget.Robot
             FrameworkElement placementTarget)
         {
             var menu = BuildCopyOnlyContextMenu(messageText, placementTarget);
-            var source = ResolveMirrorBotSource(seller, buyer, question, action, messageText);
+            // The real transport message row takes priority over a transient
+            // reply card or a text-only guess. Manual corrections remain scoped
+            // to this exact message ID.
+            Func<string> currentSource = () =>
+            {
+                var corrected = BotConversationHistoryStore.GetManualSource(seller, sourceRecordId);
+                if (!string.IsNullOrWhiteSpace(corrected)) return corrected;
+                var row = BotConversationHistoryStore.LoadRecent(seller, buyer, 200)
+                    .FirstOrDefault(x => string.Equals(x.EntityId, sourceRecordId, StringComparison.Ordinal));
+                return row != null && !string.IsNullOrWhiteSpace(row.AnswerSource)
+                    ? row.AnswerSource.Trim()
+                    : ResolveMirrorBotSource(seller, buyer, question, action, messageText);
+            };
             var timestamp = turn == null || turn.Timestamp == DateTime.MinValue
                 ? "时间未记录" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
-            var detail = "发送时间：" + timestamp
-                + "\n发送者：Bot"
-                + "\n消息来源：" + source
-                + "\n\n买家问题：\n" + (question ?? string.Empty)
-                + "\n\n回复内容：\n" + messageText;
+
             var view = new MenuItem { Header = "查看" };
             view.Click += (s, e) =>
             {
-                MessageBox.Show(Window.GetWindow(this),
-                    detail + "\n\n来源信息可在知识中心 V2 的“Bot回复管理”中查看和维护。",
-                    "Bot 回复详情", MessageBoxButton.OK, MessageBoxImage.Information);
+                var source = currentSource();
+                var manuallyCorrected = !string.IsNullOrWhiteSpace(
+                    BotConversationHistoryStore.GetManualSource(seller, sourceRecordId));
+                KnowledgeCenterV2UiBridge.ShowBotReplyTarget(
+                    Window.GetWindow(this), seller, buyer, messageText,
+                    sourceRecordId, source, manuallyCorrected);
             };
             menu.Items.Insert(0, view);
 
@@ -486,7 +494,41 @@ namespace Bot.AssistWindow.Widget.Robot
             var provenance = new MenuItem { Header = "来源" };
             provenance.Click += (s, e) =>
             {
-                var edited = BotReplySourceEditorWindow.Edit(Window.GetWindow(this), source);
+                var source = currentSource();
+                var correction = BotConversationHistoryStore.GetManualSource(seller, sourceRecordId);
+                var original = BotConversationHistoryStore.GetOriginalSourceBeforeCorrection(
+                    seller, sourceRecordId);
+                var route = BotReplySourceRouting.Resolve(source,
+                    !string.IsNullOrWhiteSpace(correction));
+                var description = "来源路径：" + route.Path
+                    + "\n来源标签：" + source
+                    + "\n来源依据：" + route.Evidence
+                    + "\n\n消息所属客服：" + seller
+                    + "\n买家：" + buyer
+                    + "\n发送时间：" + timestamp
+                    + "\n发送者：Bot"
+                    + "\n消息记录ID：" + (string.IsNullOrWhiteSpace(sourceRecordId)
+                        ? "未记录" : sourceRecordId)
+                    + "\n千牛消息Key：" + (turn == null
+                        || string.IsNullOrWhiteSpace(turn.MessageKey)
+                            ? "未记录" : turn.MessageKey);
+                if (!string.IsNullOrWhiteSpace(correction))
+                    description += "\n\n原始来源：" + (string.IsNullOrWhiteSpace(original)
+                        ? "原始来源未留存" : original)
+                        + "\n人工更正：" + correction
+                        + "\n说明：人工更正只修改本消息来源，不改变原始生成链路。";
+                MessageBox.Show(Window.GetWindow(this), description,
+                    "Bot 消息来源路径", MessageBoxButton.OK, MessageBoxImage.Information);
+            };
+            menu.Items.Add(provenance);
+
+            // Editing provenance is an explicit different action; the Source item
+            // above is evidence-only and never silently overwrites history.
+            var editSource = new MenuItem { Header = "修改来源" };
+            editSource.Click += (s, e) =>
+            {
+                var edited = BotReplySourceEditorWindow.Edit(
+                    Window.GetWindow(this), currentSource());
                 if (edited == null) return;
                 if (!BotConversationHistoryStore.UpdateAnswerSource(seller, sourceRecordId, edited))
                 {
@@ -495,14 +537,13 @@ namespace Bot.AssistWindow.Widget.Robot
                         "来源管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                // The message-specific history correction is durable. Do not
-                // poison the shared answer stamp for future identical replies.
+                // This is a per-message operator correction, not a new
+                // producer stamp for future replies with the same answer.
                 if (action != null) action.MirrorSetAnswerSource(edited);
-                source = edited;
                 Log.Info("Bot回复来源标签已由消息菜单修改: seller=" + seller
                     + ", buyer=" + buyer + ", record=" + sourceRecordId);
             };
-            menu.Items.Add(provenance);
+            menu.Items.Add(editSource);
             return menu;
         }
 

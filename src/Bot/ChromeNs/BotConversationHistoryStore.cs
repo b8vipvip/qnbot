@@ -390,6 +390,28 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static string GetOriginalSourceBeforeCorrection(string seller, string entityId)
+        {
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(entityId))
+                return string.Empty;
+            try
+            {
+                EnsureSchema();
+                lock (DbSync)
+                {
+                    var row = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
+                        x => x.EntityId == entityId);
+                    return row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
+                        ? string.Empty : row.OriginalSource ?? string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取Bot来源人工更正前证据失败：" + ex.Message, 5);
+                return string.Empty;
+            }
+        }
+
         private static string BuildSourceStampId(string seller, string buyer, string question, string answer)
         {
             return Sha256((seller ?? string.Empty).Trim() + "\n"

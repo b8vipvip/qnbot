@@ -48,6 +48,9 @@ namespace Bot.Knowledge
         private ComboBox _status;
         private KnowledgeV2Record _selected;
         private string _globalSearch = string.Empty;
+        private string _pendingRecordId = string.Empty;
+        private bool _recordsLoaded;
+        private bool _recordsLoading;
 
         public KnowledgeV2RecordsPage(Window owner, string seller, KnowledgeV2RecordsPageMode mode)
         {
@@ -58,6 +61,17 @@ namespace Bot.Knowledge
             Loaded += delegate { RefreshView(); };
         }
 
+        public void OpenRecordById(string recordId)
+        {
+            // A producer record ID, not an answer substring, identifies the exact
+            // knowledge item to edit. Do not select a similar knowledge candidate.
+            _pendingRecordId = (recordId ?? string.Empty).Trim();
+            _globalSearch = string.Empty;
+            if (_search != null) _search.Text = string.Empty;
+            if (_recordsLoaded) ApplyFilter();
+            else RefreshView();
+        }
+
         public void ApplyGlobalSearch(string text)
         {
             _globalSearch = (text ?? string.Empty).Trim();
@@ -66,17 +80,20 @@ namespace Bot.Knowledge
 
         public void RefreshView()
         {
-            if (string.IsNullOrWhiteSpace(_seller)) return;
+            if (string.IsNullOrWhiteSpace(_seller) || _recordsLoading) return;
+            _recordsLoading = true;
             _count.Text = "正在读取 Knowledge Center V2...";
             Task.Run(() => KnowledgeEngineV2Repository.LoadAll(_seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    _recordsLoading = false;
                     if (t.IsFaulted)
                     {
                         _count.Text = "读取失败：" + (t.Exception == null ? "未知错误" : t.Exception.GetBaseException().Message);
                         return;
                     }
                     _all = t.Result ?? new List<KnowledgeV2Record>();
+                    _recordsLoaded = true;
                     ApplyFilter();
                 })));
         }
@@ -217,6 +234,25 @@ namespace Bot.Knowledge
                 .ToList();
             _view.Clear();
             foreach (var item in filtered) _view.Add(item);
+            if (!string.IsNullOrWhiteSpace(_pendingRecordId) && _recordsLoaded)
+            {
+                var targetId = _pendingRecordId;
+                _pendingRecordId = string.Empty;
+                var exact = _view.FirstOrDefault(x =>
+                    string.Equals(x.Id, targetId, StringComparison.Ordinal));
+                if (exact != null)
+                {
+                    _grid.SelectedItem = exact;
+                    _grid.ScrollIntoView(exact);
+                    LoadEditor(exact);
+                    if (_count != null) _count.Text = "已定位知识ID：" + targetId;
+                    return;
+                }
+                if (_count != null)
+                    _count.Text = "未找到知识ID：" + targetId
+                        + "（可能已删除或未同步）；不会自动选择相似条目。";
+                return;
+            }
             if (_count != null) _count.Text = "V2记录 " + _all.Count + " 条；当前显示 " + _view.Count + " 条";
         }
 

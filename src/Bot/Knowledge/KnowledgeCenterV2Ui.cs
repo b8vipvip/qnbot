@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.Options;
 using Bot.ShopScope;
 using BotLib;
 using System;
@@ -57,6 +58,73 @@ namespace Bot.Knowledge
                     else
                         Log.ErrorWithMaxCount("打开Bot回复反查知识页面失败：Knowledge Center V2 shell未就绪。", 5);
                 }));
+            };
+            window.Show();
+        }
+
+        /// <summary>
+        /// Open the actual producer/configuration page of one confirmed Bot message.
+        /// Never infer a knowledge or preset ID from a similar answer.
+        /// </summary>
+        public static void ShowBotReplyTarget(
+            Window owner, string seller, string buyer, string answer,
+            string sourceRecordId, string source, bool manuallyCorrected)
+        {
+            Initialize();
+            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认消息所属店铺：" + ex.Message,
+                    "查看Bot来源设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var route = BotReplySourceRouting.Resolve(source, manuallyCorrected);
+            if (route.Kind == BotReplySourceRouting.RouteKind.AutoReplyRule)
+            {
+                var active = ActiveShopSessionRegistry.GetActiveSellerNick();
+                if (!string.IsNullOrWhiteSpace(active)
+                    && !string.Equals(active, seller, StringComparison.Ordinal))
+                {
+                    MessageBox.Show(owner,
+                        "当前活动客服与该消息所属客服不同。为避免跨店修改，请切换至该消息的客服账号后重试。"
+                        + "\n消息所属客服：" + seller,
+                        "店铺作用域保护", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                WndOption.MyShow(seller, null, OptionEnum.AutoReplyRules);
+                return;
+            }
+
+            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            if (owner != null) window.Owner = owner;
+            window.Loaded += delegate
+            {
+                window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var shell = window.Content as KnowledgeCenterV2Shell;
+                    if (shell == null)
+                    {
+                        MessageBox.Show(window, "知识中心界面未加载，无法打开目标设置。",
+                            "查看Bot来源设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    if (route.Kind == BotReplySourceRouting.RouteKind.Preset)
+                    {
+                        if (shell.OpenPresetById(route.TargetId)) return;
+                        MessageBox.Show(window,
+                            "历史消息中的固定话术已被删除或配置不可读取。"
+                            + "已转到这条消息的来源管理，避免错误打开其他话术。",
+                            "历史话术不可定位", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else if (route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
+                    {
+                        shell.OpenKnowledgeRecordById(route.TargetId);
+                        return;
+                    }
+                    shell.OpenReplySourceById(sourceRecordId, answer);
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
             };
             window.Show();
         }
@@ -246,6 +314,27 @@ namespace Bot.Knowledge
             return new Button { Content = text, Width = width, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
         }
 
+        internal void OpenReplySourceById(string sourceRecordId, string answer)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            if (page != null) page.OpenSourceById(sourceRecordId, answer);
+        }
+
+        internal bool OpenPresetById(string presetId)
+        {
+            SelectNav("Bot回复管理");
+            var page = _content.Content as KnowledgeV2BotReplyManagementPage;
+            return page != null && page.OpenPresetById(presetId);
+        }
+
+        internal void OpenKnowledgeRecordById(string recordId)
+        {
+            SelectNav("知识");
+            var page = _content.Content as KnowledgeV2RecordsPage;
+            if (page != null) page.OpenRecordById(recordId);
+        }
+
         internal void OpenReplySource(string reply)
         {
             SelectNav("Bot回复管理");
@@ -306,6 +395,84 @@ namespace Bot.Knowledge
                 return;
             }
             _status.Text = "店铺：" + _seller + "　V2本地知识引擎（查询不触发定时全量重建）";
+        }
+    }
+
+    /// <summary>Display-only source route from immutable generation evidence.
+    /// Legacy generic source labels do not identify a particular configuration record.
+    /// </summary>
+    internal static class BotReplySourceRouting
+    {
+        internal enum RouteKind { SourceRecord, Preset, KnowledgeRecord, AutoReplyRule }
+
+        internal sealed class Route
+        {
+            public RouteKind Kind;
+            public string TargetId;
+            public string Path;
+            public string Evidence;
+        }
+
+        public static Route Resolve(string source, bool manuallyCorrected)
+        {
+            source = (source ?? string.Empty).Trim();
+            var fallback = new Route
+            {
+                Kind = RouteKind.SourceRecord,
+                TargetId = string.Empty,
+                Path = "知识中心 V2 → Bot回复管理 → Bot消息来源",
+                Evidence = manuallyCorrected
+                    ? "此消息的来源已被人工更正。仅能确认更正记录，不能据此证明原始生成配置。"
+                    : "没有保存可验证的配置条目ID。可查看这条消息的溯源记录，不能凭回复相似度定位配置。"
+            };
+            if (manuallyCorrected) return fallback;
+
+            const string presetPrefix = "内置话术：";
+            if (source.StartsWith(presetPrefix, StringComparison.Ordinal))
+            {
+                var open = source.LastIndexOf('（');
+                if (open > presetPrefix.Length && source.EndsWith("）", StringComparison.Ordinal))
+                {
+                    var id = source.Substring(open + 1, source.Length - open - 2).Trim();
+                    if (id.Length > 0)
+                        return new Route
+                        {
+                            Kind = RouteKind.Preset, TargetId = id,
+                            Path = "知识中心 V2 → Bot回复管理 → 内置固定话术 → " + id,
+                            Evidence = "发送时保存的话术ID；如该条目之后已删除，管理页会明确提示。"
+                        };
+                }
+            }
+
+            const string knowledgePrefix = "本地知识V2（记录ID：";
+            if (source.StartsWith(knowledgePrefix, StringComparison.Ordinal)
+                && source.EndsWith("）", StringComparison.Ordinal))
+            {
+                var id = source.Substring(knowledgePrefix.Length,
+                    source.Length - knowledgePrefix.Length - 1).Trim();
+                if (id.Length > 0)
+                    return new Route
+                    {
+                        Kind = RouteKind.KnowledgeRecord, TargetId = id,
+                        Path = "知识中心 V2 → 知识 → " + id,
+                        Evidence = "本地知识引擎直接回复时保存的命中记录ID。"
+                    };
+            }
+
+            if (source == "首条咨询固定回复" || source == "下班自动回复"
+                || source == "本地短消息回复")
+                return new Route
+                {
+                    Kind = RouteKind.AutoReplyRule, TargetId = string.Empty,
+                    Path = "设置 → 回复与通知 → 自动回复规则",
+                    Evidence = "来自固定规则链路；该设置页管理规则，历史消息不随设置修改。"
+                };
+
+            if (source.IndexOf("知识", StringComparison.Ordinal) >= 0)
+            {
+                fallback.Evidence = "来源指向知识链路，但历史记录没有保存具体知识ID；不能自动定位相似答案。";
+            }
+            return fallback;
         }
     }
 
