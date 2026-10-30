@@ -134,6 +134,8 @@ namespace Bot.Knowledge
                 Nav("知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.All)),
                 Nav("商品知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Product)),
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
+                Nav("内置话术", () => new KnowledgeV2PresetManagementPage(_seller)),
+                Nav("Bot回复溯源", () => new KnowledgeV2BotReplySourcePage(_seller)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
                 Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller)),
                 Nav("通用流程草稿", () => new KnowledgeV2WorkflowDraftPage(_seller)),
