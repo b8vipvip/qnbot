@@ -214,7 +214,6 @@ namespace Bot.Knowledge
             double threshold, double minConfidence, double margin, bool highRisk)
         {
             if (best == null) return "没有候选";
-            if (decision.Mode == KnowledgeEngineV2Constants.ModeShadow) return "当前为Shadow模式，只记录V2结果，不发送";
             if (decision.HasConflict) return "同一明确业务问题存在相互矛盾的生产知识";
             if (highRisk) return "高风险问题继续交给安全/AI链路";
             if (best.Record.Status == "candidate") return "学习候选尚未批准，不能直接发送";
@@ -305,16 +304,13 @@ namespace Bot.Knowledge
             {
                 var values = new ShopScopedSettingsStore(shop, Paths).ExportValues();
                 string enabledRaw;
-                string modeRaw;
                 string thresholdRaw;
                 string confidenceRaw;
                 double threshold;
                 double confidence;
                 var enabled = !values.TryGetValue(KnowledgeEngineV2Constants.SettingsEnabled, out enabledRaw)
                     || !string.Equals((enabledRaw ?? string.Empty).Trim(), "0", StringComparison.Ordinal);
-                var mode = values.TryGetValue(KnowledgeEngineV2Constants.SettingsMode, out modeRaw)
-                    && string.Equals(modeRaw, KnowledgeEngineV2Constants.ModeShadow, StringComparison.OrdinalIgnoreCase)
-                    ? KnowledgeEngineV2Constants.ModeShadow : KnowledgeEngineV2Constants.ModeProduction;
+                var mode = KnowledgeEngineV2Constants.ModeProduction;
                 threshold = values.TryGetValue(KnowledgeEngineV2Constants.SettingsDirectThreshold, out thresholdRaw)
                     && double.TryParse(thresholdRaw, System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out threshold)
