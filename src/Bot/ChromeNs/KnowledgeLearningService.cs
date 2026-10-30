@@ -65,6 +65,8 @@ namespace Bot.ChromeNs
             var stamp = new SourceStamp { Source = source, ExpiresAt = DateTime.Now.AddMinutes(30) };
             Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
             Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
+            // The volatile 30-minute cache is not durable provenance.
+            BotReplySourceLedger.RecordPrepared(seller, buyer, question, answer, source);
             // Keep provenance across process restarts and delayed Qianniu echoes.
             BotConversationHistoryStore.SaveAnswerSourceStamp(seller, buyer, question, answer, source);
         }
