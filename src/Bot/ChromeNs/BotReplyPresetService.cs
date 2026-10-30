@@ -49,8 +49,10 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
-                    Log.ErrorWithMaxCount("读取店铺内置Bot话术失败，暂用只读默认值：" + ex.Message, 5);
-                    return CreateDefaults();
+                    // Fail closed: damaged settings must never re-enable replies
+                    // that an operator may have deliberately disabled.
+                    Log.ErrorWithMaxCount("读取店铺内置Bot话术失败，已禁止预设自动回复：" + ex.Message, 5);
+                    return new List<BotReplyPreset>();
                 }
             }
         }
