@@ -544,6 +544,40 @@ namespace Bot.ChromeNs
         private static readonly object Sync = new object();
         private static StoredState _state;
 
+        /// <summary>
+        /// Returns detached, shop-filtered *historical* sample material for
+        /// offline UI simulation. Never publishes or updates the order ledger.
+        /// Buyer identity, original order ID, remarks, links and raw event data
+        /// are deliberately excluded from the returned snapshot.
+        /// </summary>
+        internal static List<OrderSnapshot> ReadSandboxSamples(string seller, int limit = 50)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return new List<OrderSnapshot>();
+            var disk = TryReadState(GetPath());
+            if (disk == null || disk.Events == null) return new List<OrderSnapshot>();
+            return disk.Events.Where(x => x != null && x.Snapshot != null
+                    && string.Equals((x.Snapshot.Seller ?? "").Trim(), seller,
+                        StringComparison.Ordinal))
+                .OrderByDescending(x => x.SeenAt)
+                .Take(Math.Max(1, Math.Min(200, limit)))
+                .Select(x => new OrderSnapshot
+                {
+                    Seller = seller,
+                    Buyer = "模拟买家",
+                    OrderId = "SIM-REC-" + Guid.NewGuid().ToString("N").Substring(0, 10),
+                    ItemTitle = x.Snapshot.ItemTitle,
+                    SkuText = x.Snapshot.SkuText,
+                    Quantity = x.Snapshot.Quantity,
+                    TotalAmount = x.Snapshot.TotalAmount,
+                    PaidAmount = x.Snapshot.PaidAmount,
+                    TradeStatus = x.Snapshot.TradeStatus,
+                    IsPaid = x.Snapshot.IsPaid,
+                    EventType = x.Snapshot.EventType,
+                    Source = "历史订单素材（已去标识化，仅读）"
+                }).ToList();
+        }
+
         public static OrderSnapshot RefreshFromCanonical(OrderSnapshot snapshot)
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return snapshot;
