@@ -105,7 +105,8 @@ namespace Bot.Knowledge
             top.Children.Add(config);
             var row2 = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             row2.Children.Add(new TextBlock { Text = "商品（仅模板预览）：", VerticalAlignment = VerticalAlignment.Center });
-            _product = new TextBox { Width = 260, Height = 27, Text = "模拟商品", Margin = new Thickness(4, 0, 8, 0) };
+            _product = new TextBox { Width = 260, Height = 27, Text = "模拟商品（未读取真实素材）",
+                Margin = new Thickness(4, 0, 8, 0) };
             row2.Children.Add(_product);
             var reset = new Button { Content = "新会话", Height = 29, Width = 85 };
             reset.Click += delegate { ResetSession(); };
@@ -276,6 +277,8 @@ namespace Bot.Knowledge
             _send.IsEnabled = false;
             _saveDirect.IsEnabled = false;
             _status.Text = "正在模拟路由（不会发送千牛消息）...";
+            if (isOrder && string.Equals((_orderId.Text ?? "").Trim(), "SIM-ORDER-001", StringComparison.Ordinal))
+                await LoadHistoricalSampleAsync(); // If no cached sample exists, retain the synthetic placeholder.
             var selectedOrder = (_orderId.Text ?? "").Trim();
             var amount = (_orderAmount.Text ?? "").Trim();
             var product = (_product.Text ?? "").Trim();
@@ -787,7 +790,8 @@ namespace Bot.Knowledge
             var template = GetSetting(cfg, "OrderPlacedReplyText", "");
             if (string.IsNullOrWhiteSpace(template))
                 return Reply("（没有配置下单自动回复模板）", "订单通知沙盒", "模板为空。", "未触发");
-            var isPaid = scenario == "模拟付款";
+            var isShipped = scenario == "模拟发货";
+            var isPaid = scenario == "模拟付款" || isShipped;
             var text = template.Replace("{客服}", _seller)
                 .Replace("{买家}", "模拟买家")
                 .Replace("{订单号}", orderId)
@@ -798,10 +802,14 @@ namespace Bot.Knowledge
                 .Replace("{数量}", "1")
                 .Replace("{金额}", amountValue.ToString("0.00", CultureInfo.InvariantCulture))
                 .Replace("{实付}", isPaid ? amountValue.ToString("0.00", CultureInfo.InvariantCulture) : "")
-                .Replace("{订单状态}", isPaid ? "已付款" : "待付款")
+                .Replace("{订单状态}", isShipped ? "已发货" : isPaid ? "已付款" : "待付款")
                 .Replace("{分段符}", "\n");
-            var result = Reply(text, "下单自动回复 · 固定预设沙盒",
-                "模拟订单事件：" + scenario + "；实际生产使用订单卡片证据、" +
+            var result = Reply(isShipped
+                ? "【发货状态模拟】订单已发货（仅沙盒事件展示；当前生产下单回复规则不保证因发货触发发送）。\n\n"
+                    + text : text,
+                isShipped ? "发货状态预览 · 非真实发货通知" : "下单自动回复 · 固定预设沙盒",
+                "模拟订单事件：" + scenario + (isShipped
+                    ? "；生产版没有在本处验证发货事件触发，仅做状态与模板模拟。" : "；") + "实际生产使用订单卡片证据、" +
                 "身份校验、去重ledger、模板分段和可选接口模式。本沙盒仅展示配置固定模板，"
                 + "不验证HTTP接口结果、真实下单发送或者异步通知。" +
                 "\n当前配置模式：" + GetSetting(cfg, "OrderPlacedReplyMode", "固定预设答案") +
