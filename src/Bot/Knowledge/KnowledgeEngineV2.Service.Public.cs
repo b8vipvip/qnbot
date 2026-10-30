@@ -60,13 +60,13 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
             store.SetString(KnowledgeEngineV2Constants.SettingsEnabled, enabled ? "1" : "0");
-            store.SetString(KnowledgeEngineV2Constants.SettingsMode, string.Equals(mode, KnowledgeEngineV2Constants.ModeShadow, StringComparison.OrdinalIgnoreCase) ? KnowledgeEngineV2Constants.ModeShadow : KnowledgeEngineV2Constants.ModeProduction);
+            store.SetString(KnowledgeEngineV2Constants.SettingsMode, KnowledgeEngineV2Constants.ModeProduction);
             store.SetString(KnowledgeEngineV2Constants.SettingsDirectThreshold, Math.Max(0.70, Math.Min(0.96, threshold)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             store.SetString(KnowledgeEngineV2Constants.SettingsMinConfidence, Math.Max(0.50, Math.Min(0.95, minConfidence)).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
             SettingsCache[shop.ShopKey] = new RuntimeSettings
             {
                 Enabled = enabled,
-                Mode = string.Equals(mode, KnowledgeEngineV2Constants.ModeShadow, StringComparison.OrdinalIgnoreCase) ? KnowledgeEngineV2Constants.ModeShadow : KnowledgeEngineV2Constants.ModeProduction,
+                Mode = KnowledgeEngineV2Constants.ModeProduction,
                 DirectThreshold = Math.Max(0.70, Math.Min(0.96, threshold)),
                 MinConfidence = Math.Max(0.50, Math.Min(0.95, minConfidence)),
                 ExpiresAt = DateTime.Now.AddMinutes(5)
@@ -145,8 +145,7 @@ namespace Bot.Knowledge
             var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)) || safeConsensus ? Math.Max(margin, 0.12) : margin;
             var standaloneSafe = IsSafeStandaloneLocalDirect(query, message);
 
-            decision.CanDirectReply = (sandbox || (ReplyModeService.IsLocalFirst(seller)
-                && decision.Mode == KnowledgeEngineV2Constants.ModeProduction))
+            decision.CanDirectReply = true
                 && !decision.HasConflict
                 && !highRisk
                 && standaloneSafe
@@ -157,7 +156,7 @@ namespace Bot.Knowledge
                 && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98);
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
-                ? (sandbox ? "仅沙盒可直答（不代表生产允许发送）：score=" : "V2结构化知识高置信直答：score=") + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
+                ? "V2结构化知识已通过直答安全检查：score=" + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
                 : (!standaloneSafe ? "当前消息依赖Working Memory或属于状态/投诉/人工等控制语义，禁止V2本地直答，继续完整上下文/AI/人工链路" : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
             Finish(decision, total, decideSw);
             return decision;
