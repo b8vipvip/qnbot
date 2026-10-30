@@ -37,7 +37,9 @@ def test_verified_v2_edit_does_not_go_through_fuzzy_learning():
     assert block.index("KnowledgeEngineV2Repository.TryCorrectBotAnswer") < block.index(
         "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer("
     )
-    assert 'ctl.SetAnswer(corrected, e.SourceLabel);' in block
+    assert 'ctl.SetAnswer(corrected, source);' in block
+    assert 'ctl.SetSource(source);' in block
+    assert '"本地知识V2（记录ID：" + savedId' in block
 
 
 def test_exact_id_edit_is_transactional_and_snapshot_is_immediate():
