@@ -228,16 +228,16 @@ namespace Bot.AssistWindow.Widget.Robot
                         ? string.Empty
                         : (nativeBotConversation.MirrorAnswerSource ?? string.Empty).Trim();
                     if (string.IsNullOrWhiteSpace(source))
-                        source = KnowledgeLearningService.ResolveAnswerSource(
+                        source = BotConversationHistoryStore.ResolveAnswerSourceStamp(
                             seller, buyer, lastBuyerQuestion, botAnswer);
                     BotReplyPreset matchedPreset;
                     var isPresetReply = BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset);
-                    if (isPresetReply && (string.IsNullOrWhiteSpace(source)
-                        || source == "本地"
-                        || source == "商品链接预设回复"
-                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"
-                        || source.StartsWith("内置话术：", StringComparison.Ordinal)))
-                        source = BotReplyPresetService.BuildSourceLabel(matchedPreset);
+                    // Legacy reply-type labels do not prove which *version* of a
+                    // preset generated a message; never resolve an exact ID merely
+                    // because today's preset text happens to be the same.
+                    if (isPresetReply && (source == "商品链接预设回复"
+                        || source == "商品链接预设回复（内置固定话术，非知识库条目）"))
+                        source = "商品链接预设回复（历史记录未保存话术ID）";
                     if (string.IsNullOrWhiteSpace(source))
                         source = "来源未记录（千牛回显已确认，需人工补录）";
 
@@ -422,17 +422,14 @@ namespace Bot.AssistWindow.Widget.Robot
 
             BotReplyPreset preset;
             var isPreset = BotReplyPresetService.TryFindPreset(seller, messageText, out preset);
-            if (isPreset && (string.IsNullOrWhiteSpace(source)
-                || source == "本地"
-                || source == "商品链接预设回复"
-                || source == "商品链接预设回复（内置固定话术，非知识库条目）"
-                || source.StartsWith("内置话术：", StringComparison.Ordinal)))
-                return BotReplyPresetService.BuildSourceLabel(preset);
+            if (isPreset && (source == "商品链接预设回复"
+                || source == "商品链接预设回复（内置固定话术，非知识库条目）"))
+                source = "商品链接预设回复（历史记录未保存话术ID）";
 
             if (string.IsNullOrWhiteSpace(source))
-                source = KnowledgeLearningService.ResolveAnswerSource(seller, buyer, question, messageText);
-            if (string.IsNullOrWhiteSpace(source) && isPreset)
-                source = BotReplyPresetService.BuildSourceLabel(preset);
+                source = BotConversationHistoryStore.ResolveAnswerSourceStamp(
+                    seller, buyer, question, messageText);
+            // Never infer a concrete preset ID from the text of a history echo.
             return string.IsNullOrWhiteSpace(source)
                 ? "来源未记录（千牛回显已确认，需人工补录）"
                 : source;
