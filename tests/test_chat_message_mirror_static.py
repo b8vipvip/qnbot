@@ -66,7 +66,7 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
     assert "CreateAnswerContextMenu" in conversation
     assert "MirrorRequestResend" in mirror
     assert "MirrorRequestEdit" in mirror
-    assert "MirrorOpenKnowledge" in mirror
+    assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch" in mirror
     assert "MirrorAnswerSource" in mirror
     for label in ("查看", "复制", "重发", "修改", "来源"):
         assert f'Header = "{label}"' in mirror
