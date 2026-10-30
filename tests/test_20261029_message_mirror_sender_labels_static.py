@@ -37,7 +37,7 @@ def test_bot_actions_are_preserved_after_converting_to_bubble():
     assert "BuildCopyOnlyContextMenu(messageText, placementTarget)" in src
     assert "action.MirrorRequestResend()" in src
     assert "action.MirrorRequestEdit()" in src
-    assert "action.MirrorOpenKnowledge(Window.GetWindow(this))" in src
+    assert "KnowledgeCenterV2UiBridge.ShowBotReplySearch(" in src
     assert "action.MirrorAnswerSource" in src
     assert "internal string MirrorAnswerSource" in actions
     assert "nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;" in src
