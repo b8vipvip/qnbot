@@ -132,7 +132,7 @@ namespace Bot.Knowledge
             var state = Get(seller);
             lock (state.Sync)
                 foreach (var row in state.Db.ReadRecords<BuyerQuestionRow>(null)
-                    .Where(x => x != null && selected.Contains(x.Id))) state.Db.DeleteRecord(row);
+                    .Where(x => x != null && selected.Contains(x.Id))) state.Db.Delete(row);
         }
         internal static void RenameGroup(string seller, string key, string title)
         {
@@ -235,6 +235,10 @@ namespace Bot.Knowledge
         {
             days = Math.Max(1, Math.Min(3650, days));
             count = Math.Max(1, Math.Min(100, count));
+            // This action does not require a separate prior click on AI分析:
+            // regroup all archived variants first, so top counts are semantic.
+            if (progress != null) progress("先对全部归档买家消息执行语义分组...");
+            await GroupByAi(seller, progress, ct).ConfigureAwait(false);
             var groups = Groups(seller, days, "").Take(count).ToList();
             var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)).ToList();
