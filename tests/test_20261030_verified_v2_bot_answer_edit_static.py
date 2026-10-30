@@ -28,15 +28,15 @@ def test_verified_v2_edit_does_not_go_through_fuzzy_learning():
         "private void ShowGridTip(", 1
     )[0]
     assert "BotReplySourceRouting.Resolve(e.SourceLabel, e.SourceWasManuallyCorrected)" in block
-    assert "if (e.SourceWasManuallyCorrected)" in block
+    assert "!e.SourceWasManuallyCorrected" in block
     assert "route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord" in block
     assert "KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller," in block
     assert "route.TargetId, e.Answer, corrected, e.MessageRecordId" in block
-    assert "未覆盖知识库" in block
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in block
+    assert "KnowledgeLearningService.LearnAsync(" not in block
     assert block.index("KnowledgeEngineV2Repository.TryCorrectBotAnswer") < block.index(
-        "KnowledgeLearningService.LearnAsync("
+        "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer("
     )
-    assert "if ((e.SourceLabel ?? string.Empty).StartsWith(\"本地知识V2\"" in block
     assert 'ctl.SetAnswer(corrected, e.SourceLabel);' in block
 
 
@@ -49,7 +49,7 @@ def test_exact_id_edit_is_transactional_and_snapshot_is_immediate():
     assert "if (!string.Equals((before.Answer ?? string.Empty).Trim(), observedAnswer" in method
     assert "record.Id" not in method.split("var row =", 1)[0]
     assert "KnowledgeEngineV2Semantics.IsHighRisk(correctedAnswer)" in method
-    assert 'corrected.SourceType = "人工修改";' in method
+    assert 'corrected.SourceType = "manual_reviewed_direct";' in method
     assert "corrected.CorrectionCount++" in method
     assert "new KnowledgeV2ManualEditRevisionRow" in method
     assert 'Action = "apply"' in method
