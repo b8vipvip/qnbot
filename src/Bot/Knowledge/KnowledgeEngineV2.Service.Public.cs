@@ -75,6 +75,19 @@ namespace Bot.Knowledge
 
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)
         {
+            return ResolveInternal(seller, buyer, message, false);
+        }
+
+        // Simulator-specific safety evaluation: retain every knowledge, conflict,
+        // risk and confidence check but ignore the LIVE delivery mode switches.
+        // Never modify settings or authorize an outbound buyer message here.
+        internal static KnowledgeV2Decision ResolveSandbox(string seller, string buyer, string message)
+        {
+            return ResolveInternal(seller, buyer, message, true);
+        }
+
+        private static KnowledgeV2Decision ResolveInternal(string seller, string buyer, string message, bool sandbox)
+        {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
             var decision = new KnowledgeV2Decision { Enabled = settings.Enabled, Mode = settings.Mode };
@@ -132,8 +145,8 @@ namespace Bot.Knowledge
             var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)) || safeConsensus ? Math.Max(margin, 0.12) : margin;
             var standaloneSafe = IsSafeStandaloneLocalDirect(query, message);
 
-            decision.CanDirectReply = ReplyModeService.IsLocalFirst(seller)
-                && decision.Mode == KnowledgeEngineV2Constants.ModeProduction
+            decision.CanDirectReply = (sandbox || (ReplyModeService.IsLocalFirst(seller)
+                && decision.Mode == KnowledgeEngineV2Constants.ModeProduction))
                 && !decision.HasConflict
                 && !highRisk
                 && standaloneSafe
@@ -144,7 +157,7 @@ namespace Bot.Knowledge
                 && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98);
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
-                ? "V2结构化知识高置信直答：score=" + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
+                ? (sandbox ? "仅沙盒可直答（不代表生产允许发送）：score=" : "V2结构化知识高置信直答：score=") + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
                 : (!standaloneSafe ? "当前消息依赖Working Memory或属于状态/投诉/人工等控制语义，禁止V2本地直答，继续完整上下文/AI/人工链路" : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
             Finish(decision, total, decideSw);
             return decision;

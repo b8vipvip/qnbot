@@ -219,7 +219,7 @@ namespace Bot.Knowledge
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
                 Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller)),
-                Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
+                Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))
             };
             foreach (var item in items) _nav.Items.Add(item);

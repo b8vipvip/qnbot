@@ -11,7 +11,7 @@ def test_v2_navigation_exposes_smart_import_history_and_ai_history():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     assert 'Nav("智能导入", () => new KnowledgeV2SmartImportPage' in ui
     assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage' in ui
-    assert 'Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in ui
+    assert 'Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in ui
 
 
 def test_v2_smart_import_writes_native_v2_repository_not_legacy_faq_conversion():

@@ -9,7 +9,7 @@ def source(path):
 
 def test_existing_test_bench_has_separate_conversation_sandbox_and_search_tab():
     page = source("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
-    assert 'Header = "客服对话沙盒"' in page
+    assert 'Header = "模拟对话"' in page
     assert "new KnowledgeV2SandboxConversation(_seller)" in page
     assert 'Header = "知识检索与性能"' in page
     assert "30次性能测试" in page
@@ -32,17 +32,20 @@ def test_sandbox_is_read_only_without_outbound_order_or_ai_learning():
     assert "ShopContextLocator.ResolveRuntimeBySellerNick(_seller)" in simulator
     assert "using (ShopSettingsScope.Enter(shop))" in simulator
     assert '"__knowledge_v2_sandbox__"' in simulator
-    assert "KnowledgeEngineV2Service.Resolve(_seller, _syntheticBuyer, message)" in simulator
+    assert "KnowledgeEngineV2Service.ResolveSandbox(_seller, _syntheticBuyer, message)" in simulator
     assert "MyOpenAI.CallStructuredChat(" in simulator
     assert "OrderEventHub.ReadSandboxSamples(_seller, 150)" in simulator
     assert "KnowledgeEngineV2Repository.Save(_seller, knowledge)" in simulator
     # Save is only called from the explicit operator-confirmed knowledge action.
-    save_section = simulator.split("private void SaveDirectAnswer()", 1)[1].split(
+    save_section = simulator.split("private bool SaveDirectAnswer(", 1)[1].split(
         "private sealed class KnowledgePreview", 1)[0]
     assert "MessageBoxResult.Yes" in save_section
     assert "KnowledgeEngineV2Semantics.IsHighRisk(" in save_section
     assert "KnowledgeEngineV2Repository.LoadAll(_seller)" in save_section
     assert "duplicate != null" in save_section
+    assert "KnowledgeEngineV2Service.ResolveSandbox(" in save_section
+    assert "ReadAll(" not in save_section
+    assert "direct_save_success" in save_section
 
 
 def test_all_scenario_inputs_use_configured_policies_and_are_labeled_preview():
@@ -136,14 +139,15 @@ def test_optional_settings_teaching_and_evidence_are_folded_by_default():
     assert 'Header = "场景与订单/商品素材设置' in constructor
     assert "settings.Content = settingsBody" in constructor
     assert "attach(settings, 2)" in constructor
-    assert "attach(_reviewExpander, 6)" in constructor
+    assert "_reviewExpander" not in constructor
     assert "evidence.Content = _diagnostics" in constructor
-    assert "attach(evidence, 7)" in constructor
-    assert constructor.count("IsExpanded = false") == 3
+    assert "attach(evidence, 6)" in constructor
+    assert constructor.count("IsExpanded = false") == 2
     assert "Height = 66" in constructor
     assert "CornerRadius = new CornerRadius(6)" in constructor
-    assert "_reviewExpander.Header = _lastMissQuestion.Length > 0" in ui
-    assert "_reviewExpander.Header = \"人工审核新增直答（未命中知识后可编辑，点击展开）\"" in ui
+    assert 'Header = "新增"' in ui
+    assert "surface.ContextMenu = menu" in ui
+    assert "ShowDirectAnswerDialog(question, proposedAnswer, risk, conflict)" in ui
 
 
 def test_existing_sandbox_actions_retain_original_event_bindings():
@@ -154,9 +158,47 @@ def test_existing_sandbox_actions_retain_original_event_bindings():
     for event in (
         "ResetSession()", "RunAsync(item)", "RunAsync()",
         "LoadHistoricalSampleAsync()", "LoadProductSampleAsync()",
-        "SaveDirectAnswer()",
     ):
         assert event in constructor
     assert 'IsChecked = true' in constructor
     assert 'Height = 125' in constructor
     assert 'VerticalScrollBarVisibility = ScrollBarVisibility.Auto' in constructor
+
+
+def test_shadow_mode_previews_do_not_relax_production_sending():
+    engine = source("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "return ResolveInternal(seller, buyer, message, false);" in engine
+    assert "return ResolveInternal(seller, buyer, message, true);" in engine
+    assert "if (!decision.Enabled)" in engine
+    assert "&& !decision.HasConflict" in engine
+    assert "&& !highRisk" in engine
+    assert "&& standaloneSafe" in engine
+    assert "&& best.Score >= threshold" in engine
+
+
+def test_new_direct_answer_menu_and_runtimelog_trace_require_explicit_confirm():
+    ui = source("src/Bot/Knowledge/KnowledgeV2SandboxConversation.cs")
+    assert 'surface.ToolTip = "当前未命中安全直答 · 右键 → 新增"' in ui
+    assert 'var create = new MenuItem { Header = "新增" };' in ui
+    assert "result.IsKnowledgeMiss && !isOrder, message, result.SuggestedAnswer" in ui
+    assert "win.ShowDialog()" in ui
+    assert "MessageBoxResult.Yes" in ui
+    assert "TraceSandbox(" in ui
+    assert 'Log.Info("[KnowledgeV2Sandbox] session="' in ui
+    assert "HashTrace(question)" in ui
+    assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction(" in ui
+    assert '"manual_direct_answer_add"' in ui
+    assert "KnowledgeEngineV2Repository.LoadAll(_seller)" in ui
+    assert "KnowledgeEngineV2Service.ResolveSandbox(" in ui
+
+
+def test_optimization_history_has_manual_and_ai_filters():
+    ui = source("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    shell = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    assert 'Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in shell
+    for item in ('"人工优化"', '"AI优化"', '"全部结果"', '"成功"', '"失败"', '"跳过"'):
+        assert item in ui
+    assert 'action == "manual_direct_answer_add"' in ui
+    assert 'action == "manual_bot_answer_correction"' in ui
+    assert "ApplyGlobalSearch(string text)" in ui
+    assert "NormalizeResult(x.Result)" in ui
