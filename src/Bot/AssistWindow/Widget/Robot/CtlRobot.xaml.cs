@@ -229,7 +229,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 {
                     ctl.SetSendPending("正在按原始知识ID精确修订...");
                     var corrected = wnd.EditedAnswer;
-                    string message;
+                    string message = string.Empty;
                     var success = await Task.Run(() =>
                         KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
                             route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
