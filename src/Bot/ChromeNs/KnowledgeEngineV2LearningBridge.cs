@@ -127,6 +127,7 @@ namespace Bot.Knowledge
                 || source.IndexOf("人工确认", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("人工审核", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("人工接待复盘", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("manual_reviewed_direct", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("manual_edit", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("manual_confirmed", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("human_reviewed", StringComparison.OrdinalIgnoreCase) >= 0;
