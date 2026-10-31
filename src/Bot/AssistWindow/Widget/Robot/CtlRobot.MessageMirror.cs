@@ -340,9 +340,11 @@ namespace Bot.AssistWindow.Widget.Robot
             var timestamp = turn.Timestamp == DateTime.MinValue
                 ? string.Empty
                 : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
+            // Buyer metadata reads naturally left-to-right (name then time).
+            // Bot and operator metadata keep the established time-before-name style.
             var caption = string.IsNullOrEmpty(timestamp)
                 ? sender
-                : timestamp + " " + sender;
+                : (isSeller ? timestamp + " " + sender : sender + " " + timestamp);
             var maxWidth = Math.Max(210, Math.Min(380, scvBody.ActualWidth > 80
                 ? scvBody.ActualWidth - 64
                 : 300));

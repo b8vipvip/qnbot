@@ -117,8 +117,18 @@ namespace Bot.Knowledge
         }
         internal static List<BuyerQuestionGroup> Groups(string seller, int days, string query)
         {
-            var cutoff = DateTime.Now.AddDays(-Math.Max(1, Math.Min(3650, days))).Ticks;
-            var rows = Read(seller).Where(x => x.ReceivedAtTicks >= cutoff);
+            return Groups(seller, DateTime.Now.AddDays(-Math.Max(1, Math.Min(3650, days))),
+                DateTime.Now, query);
+        }
+
+        internal static List<BuyerQuestionGroup> Groups(string seller, DateTime? start,
+            DateTime? end, string query)
+        {
+            if (start.HasValue && end.HasValue && start.Value > end.Value)
+                throw new ArgumentException("开始时间不能晚于结束时间");
+            var rows = Read(seller).Where(x =>
+                (!start.HasValue || x.ReceivedAtTicks >= start.Value.Ticks)
+                && (!end.HasValue || x.ReceivedAtTicks <= end.Value.Ticks));
             if (!string.IsNullOrWhiteSpace(query))
                 rows = rows.Where(x => (x.Text ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
                     || (x.GroupTitle ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);

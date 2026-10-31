@@ -38,7 +38,8 @@ def test_local_ocr_knowledge_can_route_images_without_external_vision_api():
     assert 'var usable = localUsable || externalUsable;' in VISION
     assert 'Kind = VisionDecisionKind.Vision' in VISION
     assert '使用本地OCR+Knowledge V2图片理解；无需外部视觉模型。' in VISION
-    assert 'ReplyModeService.IsLocalFirst(sellerNick)' in VISION
+    assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' in VISION
+    assert 'ReplyModeService.IsLocalFirst(sellerNick)' not in VISION
     assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' in VISION
     assert 'KnowledgeEngineV2Service.IsSnapshotReady(sellerNick)' in VISION
 

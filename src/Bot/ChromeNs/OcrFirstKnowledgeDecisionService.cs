@@ -27,8 +27,7 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken)
         {
             if (task == null || task.Message == null) return null;
-            if (!ReplyModeService.IsLocalFirst(task.SellerNick)
-                || !KnowledgeEngineV2Service.IsEnabled(task.SellerNick)
+            if (!KnowledgeEngineV2Service.IsEnabled(task.SellerNick)
                 || !KnowledgeEngineV2Service.IsSnapshotReady(task.SellerNick))
             {
                 return null;

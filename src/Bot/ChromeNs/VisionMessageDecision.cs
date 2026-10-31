@@ -129,8 +129,7 @@ namespace Bot.ChromeNs
                 if (shop == null) return false;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    return ReplyModeService.IsLocalFirst(sellerNick)
-                        && KnowledgeEngineV2Service.IsEnabled(sellerNick)
+                    return KnowledgeEngineV2Service.IsEnabled(sellerNick)
                         && KnowledgeEngineV2Service.IsSnapshotReady(sellerNick);
                 }
             }
