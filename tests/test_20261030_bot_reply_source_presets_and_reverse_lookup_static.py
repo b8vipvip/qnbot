@@ -25,6 +25,7 @@ def test_shop_scoped_builtin_presets_and_live_revocation():
     assert "new ShopScopedSettingsStore(shop, Paths)" in store
     assert "return new List<BotReplyPreset>();" in store
     assert "GetEnabledPresets(seller)" in context
+    assert "GetPresetsForProductLink(seller, itemId)" in context
     assert "GetEnabledPresets(seller).Any" in context
     assert "BotReplyPresetService.ResolveSourceLabel" in routing
     assert "ProductLinkReplies[Math" not in context
