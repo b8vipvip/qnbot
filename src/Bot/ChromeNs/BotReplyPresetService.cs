@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
@@ -26,6 +27,11 @@ namespace Bot.ChromeNs
     {
         private const string SettingsKey = "bot.reply_presets.product_link.v1";
         private static readonly object Sync = new object();
+        // Explicit item-level rule: 商品ID:1234567890123 (or full-width colon).
+        // Unlike the legacy free-text Trigger, this form is an executable condition.
+        private static readonly Regex ExactItemTrigger = new Regex(
+            @"^商品ID\s*[:：]\s*(\d{6,20})\s*$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
 
         public static List<BotReplyPreset> GetPresets(string seller)
@@ -91,6 +97,18 @@ namespace Bot.ChromeNs
         public static void SavePresets(string seller, IEnumerable<BotReplyPreset> presets)
         {
             var normalized = Normalize((presets ?? Enumerable.Empty<BotReplyPreset>()).ToList());
+            var enabledExactItemIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var preset in normalized)
+            {
+                if (!IsItemScopedTrigger(preset.Trigger)) continue;
+                string itemId;
+                if (!TryParseExactItemTrigger(preset.Trigger, out itemId))
+                    throw new InvalidOperationException(
+                        "商品专属话术的触发条件必须填写 商品ID:1234567890123 这样的完整数字商品ID。");
+                if (preset.Enabled && !enabledExactItemIds.Add(itemId))
+                    throw new InvalidOperationException(
+                        "商品ID " + itemId + " 已有一条启用的专属话术，请先修改或停用原条目，避免冲突。");
+            }
             if (normalized.Count > 100) throw new InvalidOperationException("内置话术最多保存 100 条。");
             if (normalized.Any(x => string.IsNullOrWhiteSpace(x.Name) || string.IsNullOrWhiteSpace(x.Text)))
                 throw new InvalidOperationException("话术名称和内容不能为空。");
@@ -103,6 +121,58 @@ namespace Bot.ChromeNs
             {
                 CreateStore(seller).SetString(SettingsKey, JsonConvert.SerializeObject(normalized));
             }
+        }
+
+        /// <summary>
+        /// Exact item rules always win over generic product-link acknowledgements.
+        /// The existing generic replies remain available for other items; no AI or
+        /// knowledge-index thresholds are bypassed for non-product messages.
+        /// </summary>
+        public static List<BotReplyPreset> GetPresetsForProductLink(string seller, string itemId)
+        {
+            return SelectForProductItem(GetEnabledPresets(seller), itemId);
+        }
+
+        internal static List<BotReplyPreset> GetEnabledPresetsForProductLinkPreview(
+            string seller, string itemId)
+        {
+            // Must not initialize missing shop settings from a read-only sandbox.
+            return SelectForProductItem(GetEnabledPresetsForPreview(seller), itemId);
+        }
+
+        private static List<BotReplyPreset> SelectForProductItem(
+            IEnumerable<BotReplyPreset> presets, string itemId)
+        {
+            var enabled = (presets ?? Enumerable.Empty<BotReplyPreset>())
+                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Text))
+                .ToList();
+            itemId = (itemId ?? string.Empty).Trim();
+            if (itemId.Length > 0)
+            {
+                var exact = enabled.Where(x =>
+                {
+                    string configured;
+                    return TryParseExactItemTrigger(x.Trigger, out configured)
+                        && string.Equals(configured, itemId, StringComparison.Ordinal);
+                }).OrderByDescending(x => x.UpdatedAt).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
+                if (exact.Count > 0) return exact;
+            }
+            // Never send a different item's answer for an unknown or unmatched item.
+            return enabled.Where(x => !IsItemScopedTrigger(x.Trigger)).ToList();
+        }
+
+        internal static bool IsItemScopedTrigger(string trigger)
+        {
+            return (trigger ?? string.Empty).TrimStart().StartsWith("商品ID", StringComparison.Ordinal);
+        }
+
+        internal static bool TryParseExactItemTrigger(string trigger, out string itemId)
+        {
+            itemId = string.Empty;
+            var match = ExactItemTrigger.Match((trigger ?? string.Empty).Trim());
+            if (!match.Success) return false;
+            itemId = match.Groups[1].Value;
+            return true;
         }
 
         public static bool IsPresetReply(string seller, string answer)

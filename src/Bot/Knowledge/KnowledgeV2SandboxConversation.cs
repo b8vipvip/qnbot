@@ -603,12 +603,14 @@ namespace Bot.Knowledge
 
                 if (IsOnlyProductLink(scenes, message))
                 {
-                    var presets = BotReplyPresetService.GetEnabledPresetsForPreview(_seller);
+                    var itemId = ConversationContextStore.ResolveProductItemId(null, message);
+                    var presets = BotReplyPresetService.GetEnabledPresetsForProductLinkPreview(_seller, itemId);
                     var preset = presets.FirstOrDefault();
                     if (preset != null)
                         return Reply(preset.Text, BotReplyPresetService.BuildSourceLabel(preset),
-                            "商品链接被识别为非实质咨询；首条咨询名额未消耗。仅预览首个启用话术，"
-                            + "生产可能按消息ID选出另一条话术。"
+                            "商品链接被识别为非实质咨询；首条咨询名额未消耗。"
+                            + (itemId.Length > 0 ? "已识别商品ID并优先检索专属话术。" : "未识别商品ID，使用通用话术。")
+                            + " 仅预览首个匹配话术；若有多条同级通用话术，生产可能按消息ID选出另一条。"
                             + " 当前店铺只读商品素材：" + product);
                 }
 
