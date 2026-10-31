@@ -180,15 +180,17 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
 
 def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_copy():
     script = read("src/Bot/Update/BotAutoUpdater.ps1")
-    assert '$partialBackupDir = "$backupDir.partial"' in script
+    assert '$partialBackupDir' not in script
+    assert "New-Item -ItemType Directory -Path $backupDir -ErrorAction Stop" in script
     assert "$persistentNames = @('data', 'global', 'shops')" in script
     assert "Get-DirectoryFingerprint" in script
     assert "Assert-DirectoryCopyMatches" in script
     assert "backup-manifest.json" in script
     assert "Test-BackupComplete" in script
     assert ".EndsWith('.partial', [StringComparison]::OrdinalIgnoreCase)" in script
-    assert "Join-Path $partialBackupDir '.complete'" in script
-    assert "Move-Item -LiteralPath $partialBackupDir -Destination $backupDir" in script
+    assert "Join-Path $backupDir '.complete'" in script
+    assert "Move-Item -LiteralPath $partialBackupDir" not in script
+    assert "if (-not $backupFinalized -and (Test-Path -LiteralPath $backupDir))" in script
     assert "$backupFinalized = $true" in script
     assert "$installMutationStarted = $false" in script
     assert "$installMutationStarted = $true" in script
