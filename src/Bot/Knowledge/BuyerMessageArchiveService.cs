@@ -366,7 +366,8 @@ namespace Bot.Knowledge
         }
         // Strictly map an archived message to one already-approved direct answer.
         // Similarity or AI-generated topic labels alone are never sufficient.
-        internal static KnowledgeV2Record FindConfirmedDirect(string seller, IEnumerable<string> variants)
+        internal static KnowledgeV2Record FindConfirmedDirect(string seller,
+            IEnumerable<string> variants, IEnumerable<KnowledgeV2Record> suppliedKnowledge = null)
         {
             var normalized = new HashSet<string>((variants ?? Enumerable.Empty<string>())
                 .Where(x => !string.IsNullOrWhiteSpace(x)
@@ -375,7 +376,7 @@ namespace Bot.Knowledge
                     && !KnowledgeEngineV2Semantics.IsHighRisk(x))
                 .Select(KnowledgeEngineV2Semantics.Compact), StringComparer.Ordinal);
             if (normalized.Count == 0) return null;
-            var matches = KnowledgeEngineV2Repository.LoadAll(seller).Where(k =>
+            var matches = (suppliedKnowledge ?? KnowledgeEngineV2Repository.LoadAll(seller)).Where(k =>
                 k != null && k.Enabled && k.Status == "active"
                 && string.Equals(k.SourceType, "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrWhiteSpace(k.Answer)
