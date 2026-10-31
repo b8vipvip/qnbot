@@ -9,7 +9,7 @@ def source() -> str:
     return UPDATER.read_text(encoding="utf-8-sig")
 
 
-def test_updater_keeps_only_current_rollback_snapshot_and_removes_partials():
+def test_updater_keeps_only_current_rollback_snapshot_and_removes_unfinished_directories():
     text = source()
     assert "function Clear-PreviousUpdaterBackups" in text
     assert "Clear-PreviousUpdaterBackups $backupRoot" in text
@@ -19,17 +19,18 @@ def test_updater_keeps_only_current_rollback_snapshot_and_removes_partials():
     assert "Get-ChildItem -LiteralPath $BackupRoot -Directory" in cleanup_fn
     assert "Remove-Item -LiteralPath $item.FullName -Recurse -Force" in cleanup_fn
     finally_block = text[text.index("finally {"):]
-    assert "Test-Path -LiteralPath $partialBackupDir" in finally_block
-    assert "Remove-Item -LiteralPath $partialBackupDir -Recurse -Force" in finally_block
+    assert "-not $backupFinalized -and (Test-Path -LiteralPath $backupDir)" in finally_block
+    assert "Remove-Item -LiteralPath $backupDir -Recurse -Force" in finally_block
+    assert "Move-Item -LiteralPath $partialBackupDir" not in text
 
 
 def test_stale_backups_are_removed_before_new_snapshot_and_before_install_mutation():
     text = source()
     cleanup = text.index("Clear-PreviousUpdaterBackups $backupRoot")
-    create_partial = text.index("New-Item -ItemType Directory -Path $partialBackupDir -Force")
+    create_snapshot = text.index("New-Item -ItemType Directory -Path $backupDir -ErrorAction Stop")
     finalize = text.index("$backupFinalized = $true")
     mutate = text.index("$installMutationStarted = $true")
-    assert cleanup < create_partial < finalize < mutate
+    assert cleanup < create_snapshot < finalize < mutate
 
 
 def test_updater_preflights_required_backup_space_after_cleanup():
@@ -38,8 +39,8 @@ def test_updater_preflights_required_backup_space_after_cleanup():
     estimate = text.index("$estimatedBackupBytes")
     free_space = text.index("Get-AvailableBytes $backupRoot")
     fail_closed = text.index("Insufficient disk space for validated rollback snapshot")
-    create_partial = text.index("New-Item -ItemType Directory -Path $partialBackupDir -Force")
-    assert cleanup < estimate < free_space < fail_closed < create_partial
+    create_snapshot = text.index("New-Item -ItemType Directory -Path $backupDir -ErrorAction Stop")
+    assert cleanup < estimate < free_space < fail_closed < create_snapshot
     assert "$availableBytes -lt ($estimatedBackupBytes + 512MB)" in text
 
 

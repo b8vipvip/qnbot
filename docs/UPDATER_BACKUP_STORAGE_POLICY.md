@@ -12,10 +12,10 @@
 
 1. 更新开始时，程序目录尚未发生任何修改，因此先删除更新器目录内所有旧的完整备份和失败 `.partial` 备份。
 2. 清理后计算本次程序目录 + 永久数据的预计备份大小，并预留 512 MB 安全空间；空间不足则在任何安装目录修改之前失败关闭。
-3. 本次更新只建立一份经过逐文件 SHA-256 校验的 rollback snapshot。
-4. 更新失败时只允许从本次 `.complete` + `backup-manifest.json` 均有效的快照恢复；`.partial` 永不参与恢复。
+3. 本次更新只建立一份经过逐文件 SHA-256 校验的 rollback snapshot；直接在本次最终备份目录写入并验证程序与永久数据，最后写入 `.complete` 标记。**不再使用 PowerShell `Move-Item` 对整个 `.partial` 备份目录改名**（Windows 主机上曾反复返回访问被拒绝）。
+4. 更新失败时只允许从本次 `.complete` + `backup-manifest.json` 均有效的快照恢复；`.partial` 和任何未写入完成标记的目录绝不参与恢复。写标记前发生中断仍然不会修改安装目录。
 5. 当前更新完成后仅保留这一份 rollback snapshot；下一次更新建立新快照前会删除它，因此不会按版本无限累积。
 6. 如果 `%LocalAppData%\QianniuAiBot\data-migration-v2.done` 已存在，安装目录里的旧 `data` 不再被复制进新程序目录。永久用户数据继续以 `%LocalAppData%\QianniuAiBot` 为权威位置。
-7. `finally` 中立即删除本次未完成 `.partial`，避免失败更新残留多 GB 临时备份。
+7. `finally` 中立即尝试删除本次尚未标记为完成的备份目录，避免失败更新残留多 GB 临时备份；已完成的快照则保持可用于回滚。
 
 这套策略保持原来的关键安全边界：先校验包 SHA-256、先完成并验证备份、再修改程序目录；新 Bot 启动失败仍自动回滚，且不会从未完成备份恢复。
