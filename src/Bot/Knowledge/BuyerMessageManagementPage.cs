@@ -23,6 +23,21 @@ namespace Bot.Knowledge
         public int GroupCount { get; set; }
         public List<BuyerQuestionRow> Messages { get; set; }
         public List<string> Details { get; set; }
+        public bool IsSemanticMerged { get; set; }
+    }
+
+    // No expand glyph for identical messages. Show variants only if AI has
+    // merged different literal texts into a semantic group.
+    internal sealed class BuyerMessageContentSelector : DataTemplateSelector
+    {
+        public DataTemplate ExactTemplate { get; set; }
+        public DataTemplate SemanticTemplate { get; set; }
+
+        public override DataTemplate SelectTemplate(object item, DependencyObject container)
+        {
+            var row = item as BuyerMessageListItem;
+            return row != null && row.IsSemanticMerged ? SemanticTemplate : ExactTemplate;
+        }
     }
 
     internal sealed class BuyerMessageManagementPage : UserControl, IKnowledgeV2Refreshable, IKnowledgeV2Searchable
@@ -48,8 +63,8 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "相同消息自动折叠为一行；点击消息展开原始记录。AI分析优化后按语义再次合并展示。"
-                    + " 归档原始记录不删除、不保存买家身份，默认按最近接收时间倒序。",
+                Text = "完全相同的消息只显示一行和接收次数；AI分析后，语义相同但文字不同的消息可展开查看问法。"
+                    + " 原始接收记录保留供统计与审计，不存储买家身份。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
             DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
@@ -123,20 +138,19 @@ namespace Bot.Knowledge
                 FontSize = 13
             };
             VirtualizingPanel.SetVirtualizationMode(_list, VirtualizationMode.Recycling);
-            _list.Columns.Add(new DataGridTextColumn
-            {
-                Header = "接收时间",
-                Binding = new Binding("ReceivedAt") { StringFormat = "{0:yyyy-MM-dd HH:mm:ss}" },
-                SortMemberPath = "ReceivedAt", Width = new DataGridLength(160)
-            });
+            // Exact groups render as plain text without an expansion icon.
+            var plain = new FrameworkElementFactory(typeof(TextBlock));
+            plain.SetBinding(TextBlock.TextProperty, new Binding("Text"));
+            plain.SetBinding(FrameworkElement.ToolTipProperty, new Binding("Text"));
+            plain.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            plain.SetValue(TextBlock.MarginProperty, new Thickness(5, 6, 5, 6));
 
-            // Each visible row is a group, never a raw message. The Expander shows
-            // time-stamped archived occurrences without flattening the parent list.
+            // Semantic groups render distinct wordings and their occurrence counts.
             var expander = new FrameworkElementFactory(typeof(Expander));
             expander.SetValue(Expander.IsExpandedProperty, false);
             expander.SetBinding(Expander.HeaderProperty, new Binding("Text"));
             expander.SetValue(FrameworkElement.MarginProperty, new Thickness(5, 4, 5, 4));
-            expander.SetValue(FrameworkElement.ToolTipProperty, "点击展开当前分组的全部原始消息");
+            expander.SetValue(FrameworkElement.ToolTipProperty, "点击展开 AI 合并的不同问法及各自接收次数");
             var details = new FrameworkElementFactory(typeof(ListBox));
             details.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Details"));
             details.SetValue(FrameworkElement.MaxHeightProperty, 235.0);
@@ -146,8 +160,12 @@ namespace Bot.Knowledge
             expander.AppendChild(details);
             _list.Columns.Add(new DataGridTemplateColumn
             {
-                Header = "买家消息内容（点击展开）",
-                CellTemplate = new DataTemplate { VisualTree = expander },
+                Header = "买家消息内容",
+                CellTemplateSelector = new BuyerMessageContentSelector
+                {
+                    ExactTemplate = new DataTemplate { VisualTree = plain },
+                    SemanticTemplate = new DataTemplate { VisualTree = expander }
+                },
                 SortMemberPath = "Text", MinWidth = 280,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
@@ -158,7 +176,7 @@ namespace Bot.Knowledge
             });
             _list.Columns.Add(new DataGridTextColumn
             {
-                Header = "筛选内同类次数", Binding = new Binding("GroupCount"),
+                Header = "接收次数", Binding = new Binding("GroupCount"),
                 SortMemberPath = "GroupCount", Width = new DataGridLength(118)
             });
             _list.MouseDoubleClick += delegate(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -192,25 +210,31 @@ namespace Bot.Knowledge
                 var end = _endDate == null || !_endDate.SelectedDate.HasValue
                     ? (DateTime?)null : _endDate.SelectedDate.Value.Date.AddDays(1).AddTicks(-1);
                 var grouped = BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text);
-                // Before AI: GroupKey is the compact-text fingerprint (exact message).
-                // After AI: it is the semantic topic key; both yield one collapsible row.
-                var rows = grouped.Select(g => new BuyerMessageListItem
+                // Exact duplicate events are counted but never repeated visually.
+                // If AI groups multiple different wordings, expose only the
+                // distinct wordings on expansion (not receipt timestamps).
+                var rows = grouped.Select(g =>
                 {
-                    Message = g.Messages.First(),
-                    ReceivedAt = g.Latest,
-                    Text = g.Title,
-                    GroupKey = g.Key, GroupTitle = g.Title,
-                    GroupCount = g.Count,
-                    Messages = g.Messages,
-                    Details = g.Messages.OrderByDescending(x => x.ReceivedAtTicks)
-                        .ThenBy(x => x.Id, StringComparer.Ordinal)
-                        .Select(message => new DateTime(message.ReceivedAtTicks).ToString("yyyy-MM-dd HH:mm:ss")
-                            + "  " + (message.Text ?? "")).ToList()
+                    var wordings = g.Messages.GroupBy(x => x.Text ?? string.Empty,
+                        StringComparer.Ordinal).OrderByDescending(x => x.Count())
+                        .ThenBy(x => x.Key, StringComparer.Ordinal).ToList();
+                    return new BuyerMessageListItem
+                    {
+                        Message = g.Messages.First(),
+                        ReceivedAt = g.Latest,
+                        Text = wordings.Count == 1 ? wordings[0].Key : g.Title,
+                        GroupKey = g.Key, GroupTitle = g.Title,
+                        GroupCount = g.Count,
+                        IsSemanticMerged = wordings.Count > 1,
+                        Messages = g.Messages,
+                        Details = wordings.Select(x => x.Key + "（接收" + x.Count() + "次）").ToList()
+                    };
                 }).OrderByDescending(x => x.ReceivedAt)
                     .ThenBy(x => x.Message.Id, StringComparer.Ordinal).ToList();
                 _list.ItemsSource = rows;
-                _status.Text = "当前筛选结果：" + grouped.Sum(x => x.Count) + "条原始消息，"
-                    + rows.Count + "个折叠分组。点击消息展开全部时间记录；AI分析优化后按语义折叠。";
+                _status.Text = "当前筛选结果：" + grouped.Sum(x => x.Count) + "次接收，"
+                    + rows.Count + "条去重/语义分组；其中 "
+                    + rows.Count(x => x.IsSemanticMerged) + "组包含不同问法，可点击展开。";
             }
             catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
         }
@@ -228,14 +252,14 @@ namespace Bot.Knowledge
             var panel = new DockPanel { Margin = new Thickness(12) };
             var info = new TextBlock
             {
-                Text = "接收时间：" + item.ReceivedAt.ToString("yyyy-MM-dd HH:mm:ss")
-                    + "    所属分类：" + item.GroupTitle,
+                Text = "接收次数：" + item.GroupCount + "    所属分类：" + item.GroupTitle,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
             };
             DockPanel.SetDock(info, Dock.Top); panel.Children.Add(info);
             panel.Children.Add(new TextBox
             {
-                Text = item.Text ?? "", IsReadOnly = true, AcceptsReturn = true,
+                Text = item.IsSemanticMerged ? string.Join(Environment.NewLine, item.Details)
+                    : (item.Text ?? ""), IsReadOnly = true, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
