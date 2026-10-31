@@ -289,13 +289,13 @@ namespace Bot.Knowledge
                 TextWrapping = TextWrapping.Wrap,
                 Height = 66,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                ToolTip = "输入模拟买家消息，Ctrl+Enter 模拟发送，不会真正联系买家"
+                ToolTip = "回车模拟发送；Shift+Enter 换行。不会真正联系买家"
             };
             _input.KeyDown += async (sender, e) =>
             {
                 if (e.Key == System.Windows.Input.Key.Enter
                     && (System.Windows.Input.Keyboard.Modifiers
-                        & System.Windows.Input.ModifierKeys.Control) != 0)
+                        & System.Windows.Input.ModifierKeys.Shift) == 0)
                 {
                     e.Handled = true;
                     await RunAsync();
@@ -864,6 +864,17 @@ namespace Bot.Knowledge
             };
             Grid.SetRow(prompt, 1);
             grid.Children.Add(prompt);
+            // Offer a concrete, explicitly reviewable rewrite when the optional
+            // product fixture is available; never auto-approve an inferred fact.
+            var productSubject = (_product.Text ?? string.Empty).Trim();
+            if (KnowledgeEngineV2Semantics.IsContextDependent(question)
+                && productSubject.Length >= 3 && productSubject.Length <= 65
+                && productSubject.IndexOf("未读取真实素材", StringComparison.Ordinal) < 0)
+            {
+                var fullQuestion = productSubject + " " + question;
+                prompt.Text = fullQuestion;
+                prompt.ToolTip = "已根据模拟商品素材预填完整问题。请核实商品身份、适用范围和答案后再保存。";
+            }
             var draft = new TextBox
             {
                 Text = suggestion ?? string.Empty,
@@ -877,7 +888,9 @@ namespace Bot.Knowledge
             grid.Children.Add(draft);
             var hint = new TextBlock
             {
-                Text = "保存前检查重复知识、语义条件、风险及店铺作用域；不会发送模拟消息给真实买家。",
+                Text = "必须使用包含具体业务主体的完整问题，例如“电视端音乐会员支持车载使用吗？”。"
+                    + " “支持车载吗”等短问法依赖上下文，不能直接成为所有商品的无条件直答。"
+                    + " 保存前检查重复知识、语义条件、风险及店铺作用域；不会发送模拟消息给真实买家。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(0, 8, 0, 7)
@@ -921,6 +934,17 @@ namespace Bot.Knowledge
                 _status.Text = "存在高风险或未解决的知识冲突，请在知识中心处理；不能自动直答。";
                 TraceSandbox("direct_save_rejected", "risk_or_conflict", question, null, string.Empty);
                 MessageBox.Show(_status.Text, "修改直答", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            var parsedQuestion = KnowledgeEngineV2Semantics.Parse(question, null);
+            if (question.Length < 5 || parsedQuestion.ContextDependent
+                || string.IsNullOrWhiteSpace(parsedQuestion.Subject))
+            {
+                _status.Text = "当前问题缺少明确业务主体。请在上方问题框写出完整商品或业务对象，"
+                    + "例如“电视端音乐会员支持车载使用吗？”，核实答案后再保存。"
+                    + " 不能把依赖聊天上下文的短语句设为无条件直答。";
+                TraceSandbox("direct_save_rejected", "needs_explicit_subject", question, null, string.Empty);
+                MessageBox.Show(_status.Text, "请补全直答问题", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
             if (MessageBox.Show(Window.GetWindow(this),
