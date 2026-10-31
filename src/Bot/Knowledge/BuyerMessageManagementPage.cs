@@ -24,6 +24,9 @@ namespace Bot.Knowledge
         public List<BuyerQuestionRow> Messages { get; set; }
         public List<string> Details { get; set; }
         public bool IsSemanticMerged { get; set; }
+        public string DirectAnswer { get; set; }
+        public string DirectKnowledgeId { get; set; }
+        public BuyerAiOptimizationRow AppliedRevision { get; set; }
     }
 
     // No expand glyph for identical messages. Show variants only if AI has
@@ -63,8 +66,8 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "完全相同的消息只显示一行和接收次数；AI分析后，语义相同但文字不同的消息可展开查看问法。"
-                    + " 原始接收记录保留供统计与审计，不存储买家身份。",
+                Text = "完全相同的消息去重计数；已存在的语义合并问法可以展开。直答列只显示本店已审核的精准知识。"
+                    + " AI分析只生成待审核直答建议，不再分类，人工确认后才更新生产知识。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
             DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
@@ -81,7 +84,7 @@ namespace Bot.Knowledge
             _endDate.SelectedDateChanged += delegate { RefreshView(); };
             toolbar.Children.Add(_endDate);
             _search = new TextBox { Width = 225, Height = 28, Margin = new Thickness(0, 0, 8, 0),
-                ToolTip = "搜索消息内容或所属分类" };
+                ToolTip = "搜索买家消息内容" };
             _search.TextChanged += delegate { RefreshView(); };
             toolbar.Children.Add(_search);
             var refresh = Button("刷新", 70);
@@ -108,15 +111,9 @@ namespace Bot.Knowledge
                 finally { _groupButton.IsEnabled = true; }
             };
             toolbar.Children.Add(_groupButton);
-            var rename = Button("修改组标题", 100);
-            rename.Click += delegate { RenameSelected(); };
-            toolbar.Children.Add(rename);
             var delete = Button("删除选中消息", 110);
             delete.Click += delegate { DeleteSelected(); };
             toolbar.Children.Add(delete);
-            var deleteGroup = Button("删除所属分类", 110);
-            deleteGroup.Click += delegate { DeleteSelectedGroup(); };
-            toolbar.Children.Add(deleteGroup);
             DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
 
             _status = new TextBlock { Text = "尚未读取", Margin = new Thickness(0, 0, 0, 8),
@@ -169,10 +166,39 @@ namespace Bot.Knowledge
                 SortMemberPath = "Text", MinWidth = 280,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
-            _list.Columns.Add(new DataGridTextColumn
+            var answerFactory = new FrameworkElementFactory(typeof(TextBlock));
+            answerFactory.SetBinding(TextBlock.TextProperty, new Binding("DirectAnswer"));
+            answerFactory.SetBinding(FrameworkElement.ToolTipProperty, new Binding("DirectAnswer"));
+            answerFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            answerFactory.SetValue(TextBlock.MarginProperty, new Thickness(5, 5, 5, 5));
+            answerFactory.AddHandler(UIElement.PreviewMouseRightButtonDownEvent,
+                new System.Windows.Input.MouseButtonEventHandler((sender, e) =>
+                {
+                    var target = sender as FrameworkElement;
+                    var item = target == null ? null : target.DataContext as BuyerMessageListItem;
+                    if (item != null)
+                    {
+                        _list.SelectedItem = item;
+                        var menu = new ContextMenu();
+                        var edit = new MenuItem { Header = "修改直答" };
+                        edit.Click += delegate { EditDirectAnswer(item); };
+                        menu.Items.Add(edit);
+                        var rollback = new MenuItem
+                        {
+                            Header = "回滚本次直答更新",
+                            IsEnabled = item.AppliedRevision != null
+                        };
+                        rollback.Click += delegate { RollbackDirectAnswer(item); };
+                        menu.Items.Add(rollback);
+                        target.ContextMenu = menu;
+                    }
+                }));
+            _list.Columns.Add(new DataGridTemplateColumn
             {
-                Header = "所属分类", Binding = new Binding("GroupTitle"),
-                SortMemberPath = "GroupTitle", Width = new DataGridLength(210)
+                Header = "直答消息（右键修改或回滚）",
+                CellTemplate = new DataTemplate { VisualTree = answerFactory },
+                MinWidth = 260,
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
             _list.Columns.Add(new DataGridTextColumn
             {
@@ -210,6 +236,10 @@ namespace Bot.Knowledge
                 var end = _endDate == null || !_endDate.SelectedDate.HasValue
                     ? (DateTime?)null : _endDate.SelectedDate.Value.Date.AddDays(1).AddTicks(-1);
                 var grouped = BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text);
+                var knowledge = KnowledgeEngineV2Repository.LoadAll(_seller);
+                var applied = BuyerMessageArchiveService.ReadOptimizations(_seller)
+                    .Where(x => x.Status == "applied").OrderByDescending(x => x.AppliedAtTicks)
+                    .GroupBy(x => x.GroupKey).ToDictionary(x => x.Key, x => x.First());
                 // Exact duplicate events are counted but never repeated visually.
                 // If AI groups multiple different wordings, expose only the
                 // distinct wordings on expansion (not receipt timestamps).
@@ -218,8 +248,22 @@ namespace Bot.Knowledge
                     var wordings = g.Messages.GroupBy(x => x.Text ?? string.Empty,
                         StringComparer.Ordinal).OrderByDescending(x => x.Count())
                         .ThenBy(x => x.Key, StringComparer.Ordinal).ToList();
+                    var match = BuyerMessageArchiveService.FindConfirmedDirect(_seller,
+                        wordings.Select(x => x.Key), knowledge);
+                    BuyerAiOptimizationRow revision;
+                    applied.TryGetValue(g.Key, out revision);
+                    if (revision != null)
+                    {
+                        var record = knowledge.FirstOrDefault(x => x.Id == revision.KnowledgeId);
+                        if (record == null || record.Answer != revision.AppliedAnswer
+                            || !record.Enabled || record.Status != "active")
+                            revision = null;
+                    }
                     return new BuyerMessageListItem
                     {
+                        DirectAnswer = match == null ? "" : match.Answer,
+                        DirectKnowledgeId = match == null ? "" : match.Id,
+                        AppliedRevision = revision,
                         Message = g.Messages.First(),
                         ReceivedAt = g.Latest,
                         Text = wordings.Count == 1 ? wordings[0].Key : g.Title,
@@ -234,7 +278,9 @@ namespace Bot.Knowledge
                 _list.ItemsSource = rows;
                 _status.Text = "当前筛选结果：" + grouped.Sum(x => x.Count) + "次接收，"
                     + rows.Count + "条去重/语义分组；其中 "
-                    + rows.Count(x => x.IsSemanticMerged) + "组包含不同问法，可点击展开。";
+                    + rows.Count(x => x.IsSemanticMerged) + "组包含不同问法；"
+                    + rows.Count(x => !string.IsNullOrWhiteSpace(x.DirectAnswer))
+                    + "组命中已审核直答，直答单元格可右键操作。";
             }
             catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
         }
@@ -252,7 +298,8 @@ namespace Bot.Knowledge
             var panel = new DockPanel { Margin = new Thickness(12) };
             var info = new TextBlock
             {
-                Text = "接收次数：" + item.GroupCount + "    所属分类：" + item.GroupTitle,
+                Text = "接收次数：" + item.GroupCount
+                    + "    直答：" + (string.IsNullOrWhiteSpace(item.DirectAnswer) ? "未匹配" : "已匹配"),
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
             };
             DockPanel.SetDock(info, Dock.Top); panel.Children.Add(info);
@@ -308,25 +355,6 @@ namespace Bot.Knowledge
             }
         }
 
-        private BuyerMessageListItem SelectedGroupRow()
-        {
-            var rows = _list.SelectedItems.OfType<BuyerMessageListItem>().ToList();
-            if (rows.Count == 0) { _status.Text = "请先选择一条所属分类的消息"; return null; }
-            if (rows.Select(x => x.GroupKey).Distinct(StringComparer.Ordinal).Count() != 1)
-            { _status.Text = "选择的消息跨越不同分类，请只选同一分类"; return null; }
-            return rows[0];
-        }
-
-        private void RenameSelected()
-        {
-            var selected = SelectedGroupRow();
-            if (selected == null) return;
-            var value = Prompt(Window.GetWindow(this), "修改分组名称", selected.GroupTitle);
-            if (value == null) return;
-            try { BuyerMessageArchiveService.RenameGroup(_seller, selected.GroupKey, value); RefreshView(); }
-            catch (Exception ex) { _status.Text = "修改失败：" + ex.Message; }
-        }
-
         internal static string Prompt(Window owner, string title, string old)
         {
             var w = new Window { Title = title, Owner = owner, Width = 540, Height = 175,
@@ -359,21 +387,51 @@ namespace Bot.Knowledge
             catch (Exception ex) { _status.Text = "删除失败：" + ex.Message; }
         }
 
-        private void DeleteSelectedGroup()
+        private void EditDirectAnswer(BuyerMessageListItem item)
         {
-            var selected = SelectedGroupRow();
-            if (selected == null) return;
-            // Explicit whole-category deletion includes messages outside the date filter.
-            var ids = BuyerMessageArchiveService.Read(_seller)
-                .Where(x => x.GroupKey == selected.GroupKey)
-                .Select(x => x.Id).ToArray();
-            if (ids.Length == 0) return;
+            if (item == null) return;
+            var editable = BuyerMessageArchiveService.FindConfirmedDirect(_seller,
+                item.Messages.Select(x => x.Text));
+            if (editable == null)
+            {
+                MessageBox.Show(Window.GetWindow(this),
+                    "这条消息没有唯一的已审核直答。请先使用“AI分析优化”生成有知识库证据的候选，"
+                    + "在审核窗口编辑后确认写入；不会直接创建无条件答案。",
+                    "暂无可修改直答", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var text = Prompt(Window.GetWindow(this), "修改直答（人工审核）", editable.Answer);
+            if (text == null || text == editable.Answer) return;
             if (MessageBox.Show(Window.GetWindow(this),
-                "确定删除分类「" + selected.GroupTitle + "」的全部 " + ids.Length
-                    + " 条匿名消息吗？包括当前日期筛选以外的记录；不会修改千牛聊天记录。",
-                "删除整个分类", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            try { BuyerMessageArchiveService.Delete(_seller, ids); RefreshView(); }
-            catch (Exception ex) { _status.Text = "删除分类失败：" + ex.Message; }
+                "确认修改当前店铺已审核的直答？\n问题：" + editable.Title
+                    + "\n原答案：" + editable.Answer + "\n新答案：" + text
+                    + "\n此操作将写入生产知识库，原版本可回滚。",
+                "确认修改直答", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            try
+            {
+                var draft = BuyerMessageArchiveService.NewManualDraft(_seller, item.GroupKey,
+                    editable.Title, item.GroupCount, editable.Answer, editable.Id, text);
+                BuyerMessageArchiveService.Apply(_seller, draft);
+                RefreshView();
+            }
+            catch (Exception ex) { _status.Text = "修改直答失败：" + ex.Message; }
+        }
+
+        private void RollbackDirectAnswer(BuyerMessageListItem item)
+        {
+            if (item == null || item.AppliedRevision == null) return;
+            if (MessageBox.Show(Window.GetWindow(this),
+                "确定回滚这条消息最近一次已审核直答修改？如果知识库之后被其他人修改，"
+                + "系统将拒绝回滚以保护新版本。",
+                "确认回滚", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            try
+            {
+                _status.Text = BuyerMessageArchiveService.Rollback(_seller, item.AppliedRevision);
+                RefreshView();
+            }
+            catch (Exception ex) { _status.Text = "回滚失败：" + ex.Message; }
         }
     }
 
