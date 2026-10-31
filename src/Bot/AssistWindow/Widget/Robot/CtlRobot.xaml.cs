@@ -217,6 +217,7 @@ namespace Bot.AssistWindow.Widget.Robot
             if (wnd.ShowDialog() != true) return;
             var route = BotReplySourceRouting.Resolve(e.SourceLabel, e.SourceWasManuallyCorrected);
             if (!e.SourceWasManuallyCorrected
+                && string.Equals(wnd.EditedQuestion, e.Question, StringComparison.Ordinal)
                 && route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord)
             {
                 // Do not run the generic AI organizer: it can change the question
@@ -238,7 +239,7 @@ namespace Bot.AssistWindow.Widget.Robot
                         string reviewedStatus = string.Empty;
                         var reviewed = await Task.Run(() =>
                             KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                                e.Seller, e.Question, corrected, e.MessageRecordId,
+                                e.Seller, wnd.EditedQuestion, corrected, e.MessageRecordId,
                                 out reviewedStatus, out savedId));
                         if (reviewed)
                         {
@@ -272,7 +273,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 var correctedAnswer = wnd.EditedAnswer;
                 var saved = await Task.Run(() =>
                     KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                        e.Seller, e.Question, correctedAnswer, e.MessageRecordId,
+                        e.Seller, wnd.EditedQuestion, correctedAnswer, e.MessageRecordId,
                         out status, out savedId));
                 if (saved)
                 {
