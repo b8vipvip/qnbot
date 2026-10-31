@@ -203,7 +203,10 @@ namespace Bot.Knowledge
                 var evidence = records.FirstOrDefault(x => x.Id == evidenceId);
                 if (evidence == null || !evidence.Enabled || evidence.Status != "active"
                     || evidence.Answer != evidenceAnswer || string.IsNullOrWhiteSpace(evidence.Answer)
-                    || string.Equals(evidence.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
+                    || string.Equals(evidence.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || (evidence.Conditions != null && evidence.Conditions.Count > 0)
+                    || (evidence.RequiredContext != null && evidence.RequiredContext.Count > 0)
+                    || (evidence.ProductIds != null && evidence.ProductIds.Count > 0))
                 {
                     result = "知识依据已经失效或发生变化，请重新分析。"; return false;
                 }
