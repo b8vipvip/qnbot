@@ -212,9 +212,8 @@ namespace Bot.Knowledge
             toolbar.Children.Add(_presetSearch);
             var refresh = Button("刷新", 64); refresh.Click += delegate { RefreshPresets(); };
             var add = Button("新增话术", 84); add.Click += delegate { NewPreset(); };
-            var save = Button("保存话术", 84); save.Click += delegate { SavePreset(); };
             var delete = Button("删除话术", 84); delete.Click += delegate { DeletePreset(); };
-            toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(delete);
+            toolbar.Children.Add(refresh); toolbar.Children.Add(add); toolbar.Children.Add(delete);
             Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
 
             var body = new Grid();
@@ -254,6 +253,11 @@ namespace Bot.Knowledge
             editor.Children.Add(_presetDescription);
             _presetEnabled = new CheckBox { Content = "启用此话术", Margin = new Thickness(0, 8, 0, 5) };
             editor.Children.Add(_presetEnabled);
+            var save = Button("保存话术", 115);
+            save.HorizontalAlignment = HorizontalAlignment.Left;
+            save.Margin = new Thickness(0, 7, 0, 7);
+            save.Click += delegate { SavePreset(); };
+            editor.Children.Add(save);
             _presetStatus = new TextBlock { Text = "支持按店铺独立编辑、启用/停用、添加或删除；保存后新请求立即生效。", Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
             editor.Children.Add(_presetStatus);
             Grid.SetColumn(editor, 1); body.Children.Add(editor);
@@ -519,23 +523,38 @@ namespace Bot.Knowledge
                 MessageBox.Show(_owner, "话术名称和话术内容不能为空。", "Bot回复管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            if (_selectedPreset == null)
-                _selectedPreset = new BotReplyPreset { Id = Guid.NewGuid().ToString("N"), UpdatedAt = DateTime.Now };
-            _selectedPreset.Name = _presetName.Text.Trim();
-            _selectedPreset.Text = _presetText.Text.Trim();
-            _selectedPreset.Trigger = string.IsNullOrWhiteSpace(_presetTrigger.Text) ? "买家消息包含商品链接" : _presetTrigger.Text.Trim();
-            _selectedPreset.Description = (_presetDescription.Text ?? string.Empty).Trim();
-            _selectedPreset.Enabled = _presetEnabled.IsChecked == true;
-            _selectedPreset.UpdatedAt = DateTime.Now;
-
-            var index = _presets.FindIndex(x => string.Equals(x.Id, _selectedPreset.Id, StringComparison.Ordinal));
-            if (index >= 0) _presets[index] = _selectedPreset;
-            else _presets.Add(_selectedPreset);
+            // The grid selection handler clears _selectedPreset during RefreshPresets.
+            // Capture the ID before refreshing, never dereference the mutable selected
+            // field after DataGrid.ItemsSource or SelectionChanged changes it.
+            var editing = _selectedPreset;
+            var id = editing == null || string.IsNullOrWhiteSpace(editing.Id)
+                ? Guid.NewGuid().ToString("N") : editing.Id;
+            var updated = new BotReplyPreset
+            {
+                Id = id,
+                Name = _presetName.Text.Trim(),
+                Text = _presetText.Text.Trim(),
+                Trigger = string.IsNullOrWhiteSpace(_presetTrigger.Text)
+                    ? "买家消息包含商品链接" : _presetTrigger.Text.Trim(),
+                Description = (_presetDescription.Text ?? string.Empty).Trim(),
+                Enabled = _presetEnabled.IsChecked == true,
+                UpdatedAt = DateTime.Now
+            };
+            var candidate = _presets.Where(x => !string.Equals(x.Id, id, StringComparison.Ordinal))
+                .Concat(new[] { updated }).ToList();
             try
             {
-                BotReplyPresetService.SavePresets(_seller, _presets);
+                // Validate/persist first; do not mutate the visible catalog on failure.
+                BotReplyPresetService.SavePresets(_seller, candidate);
+                _pinnedPresetId = id;
                 RefreshPresets();
-                _presetGrid.SelectedItem = _presetView.FirstOrDefault(x => x.Id == _selectedPreset.Id);
+                var restored = _presetView.FirstOrDefault(x => x.Id == id);
+                if (restored != null)
+                {
+                    _presetGrid.SelectedItem = restored;
+                    _presetGrid.ScrollIntoView(restored);
+                    _selectedPreset = restored;
+                }
                 _presetStatus.Text = "保存成功，新请求立即使用最新配置；历史消息不会被修改。";
             }
             catch (Exception ex)
