@@ -435,6 +435,16 @@ namespace Bot.Knowledge
         }
     }
 
+    internal sealed class BuyerDirectReviewSelection
+    {
+        public bool Selected { get; set; }
+        public BuyerAiOptimizationRow Candidate { get; set; }
+        public string Question { get { return Candidate == null ? "" : Candidate.Question; } }
+        public string ProposedAnswer { get { return Candidate == null ? "" : Candidate.ProposedAnswer; } }
+        public string ExistingAnswer { get { return Candidate == null ? "" : Candidate.ExistingAnswer; } }
+        public int Frequency { get { return Candidate == null ? 0 : Candidate.Frequency; } }
+    }
+
     internal sealed class BuyerQuestionOptimizationWindow : Window
     {
         private readonly string _seller;
@@ -455,7 +465,8 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "高频买家问题 AI 优化", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "按语义组的实际消息次数排序；建议可查看修改，点击“人工确认并应用”才即时更新生产知识。",
+                Text = "不再分析分类；基于已有知识记录生成待审核直答。先在预览中勾选需更新项，"
+                    + "确认后才会写入正式知识；无可靠知识依据的建议不可应用。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
             DockPanel.SetDock(header, Dock.Top); layout.Children.Add(header);
@@ -463,13 +474,17 @@ namespace Bot.Knowledge
             controls.Children.Add(new TextBlock { Text = "时间范围（天）", VerticalAlignment = VerticalAlignment.Center });
             _days = new TextBox { Width = 70, Height = 28, Text = "30", Margin = new Thickness(5, 0, 10, 0) };
             controls.Children.Add(_days);
-            controls.Children.Add(new TextBlock { Text = "前N组", VerticalAlignment = VerticalAlignment.Center });
+            controls.Children.Add(new TextBlock { Text = "前N条", VerticalAlignment = VerticalAlignment.Center });
             _top = new TextBox { Width = 65, Height = 28, Text = "10", Margin = new Thickness(5, 0, 10, 0) };
             controls.Children.Add(_top);
             var refresh = new Button { Content = "刷新记录", Width = 85, Height = 29, Margin = new Thickness(8, 0, 0, 0) };
             refresh.Click += delegate { RefreshRecords(); }; controls.Children.Add(refresh);
+            var preview = new Button { Content = "预览并确认更新项", Width = 145, Height = 29,
+                Margin = new Thickness(8, 0, 0, 0) };
+            preview.Click += delegate { PreviewPending(null); };
+            controls.Children.Add(preview);
             DockPanel.SetDock(controls, Dock.Top); layout.Children.Add(controls);
-            _status = new TextBlock { Text = "打开后自动执行语义分组并生成待审核优化记录。",
+            _status = new TextBlock { Text = "打开后生成待审核直答建议；不会对买家消息进行分类。",
                 Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 8),
                 TextWrapping = TextWrapping.Wrap };
             DockPanel.SetDock(_status, Dock.Top); layout.Children.Add(_status);
@@ -530,7 +545,10 @@ namespace Bot.Knowledge
                 var count = await BuyerMessageArchiveService.OptimizeTop(_seller,
                     Number(_days, 30, 3650), Number(_top, 10, 100),
                     value => Dispatcher.BeginInvoke(new Action(() => _status.Text = value)), _cancel.Token);
-                RefreshRecords(); _status.Text = "已生成 " + count + " 条可审核修改的AI优化记录。";
+                RefreshRecords();
+                _status.Text = "已生成 " + count + " 条候选；请在预览中核查并勾选更新项。";
+                var latest = BuyerMessageArchiveService.ReadOptimizations(_seller).Take(count).ToList();
+                PreviewPending(latest);
             }
             catch (OperationCanceledException) { _status.Text = "已取消AI分析优化。"; }
             catch (Exception ex) { _status.Text = "AI分析优化失败：" + ex.Message; }
@@ -563,6 +581,98 @@ namespace Bot.Knowledge
             _status.Text = "草稿已保存，生产知识未修改。";
             return true;
         }
+        private void PreviewPending(IEnumerable<BuyerAiOptimizationRow> generated)
+        {
+            var entries = (generated ?? BuyerMessageArchiveService.ReadOptimizations(_seller))
+                .Where(x => x.Status == "pending" && !string.IsNullOrWhiteSpace(x.ProposedAnswer)
+                    && !string.IsNullOrWhiteSpace(x.KnowledgeId))
+                .GroupBy(x => x.GroupKey).Select(x => x.OrderByDescending(y => y.CreatedAtTicks).First())
+                .ToList();
+            if (entries.Count == 0)
+            {
+                MessageBox.Show(this, "没有可应用的候选：只有存在明确知识库证据的非空答案才进入审核。"
+                    + " 可以选择优化记录，查看原因和关联知识后编辑草稿。",
+                    "直答更新预览", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var w = new Window
+            {
+                Owner = this, Title = "直答更新预览 · 人工确认",
+                Width = 1020, Height = 620, MinWidth = 740, MinHeight = 400,
+                ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+            };
+            var root = new DockPanel { Margin = new Thickness(12) };
+            var note = new TextBlock
+            {
+                Text = "下列均为 AI 建议，不会自动更新。请逐项核对问题、已有知识和拟写答案，"
+                    + "勾选确认项后应用。来源知识缺失、内容变更、语义不完整或高风险会被服务端再次拒绝。",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
+            };
+            DockPanel.SetDock(note, Dock.Top); root.Children.Add(note);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
+            var apply = new Button { Content = "确认更新选中项", Width = 150, Height = 32,
+                Margin = new Thickness(0, 0, 10, 0) };
+            var cancel = new Button { Content = "取消，不更新", Width = 130, Height = 32 };
+            buttons.Children.Add(apply); buttons.Children.Add(cancel);
+            DockPanel.SetDock(buttons, Dock.Bottom); root.Children.Add(buttons);
+            var rows = entries.Select(x => new BuyerDirectReviewSelection { Candidate = x }).ToList();
+            var grid = new DataGrid { ItemsSource = rows, AutoGenerateColumns = false,
+                CanUserAddRows = false, CanUserDeleteRows = false, RowHeaderWidth = 0 };
+            grid.Columns.Add(new DataGridCheckBoxColumn
+            {
+                Header = "更新",
+                Binding = new Binding("Selected") { Mode = BindingMode.TwoWay,
+                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+                Width = 60
+            });
+            grid.Columns.Add(new DataGridTextColumn { Header = "次数", Width = 65,
+                Binding = new Binding("Frequency"), IsReadOnly = true });
+            grid.Columns.Add(new DataGridTextColumn { Header = "问题", Width = new DataGridLength(2, DataGridLengthUnitType.Star),
+                Binding = new Binding("Question"), IsReadOnly = true });
+            grid.Columns.Add(new DataGridTextColumn { Header = "知识库原答案", Width = new DataGridLength(2, DataGridLengthUnitType.Star),
+                Binding = new Binding("ExistingAnswer"), IsReadOnly = true });
+            grid.Columns.Add(new DataGridTextColumn { Header = "拟更新直答", Width = new DataGridLength(3, DataGridLengthUnitType.Star),
+                Binding = new Binding("ProposedAnswer"), IsReadOnly = true });
+            root.Children.Add(grid);
+            cancel.Click += delegate { w.DialogResult = false; };
+            apply.Click += delegate
+            {
+                grid.CommitEdit(DataGridEditingUnit.Cell, true);
+                grid.CommitEdit(DataGridEditingUnit.Row, true);
+                var selected = rows.Where(x => x.Selected).Select(x => x.Candidate).ToList();
+                if (selected.Count == 0)
+                {
+                    MessageBox.Show(w, "请勾选要更新的直答项。", "预览", MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+                var changes = string.Join(Environment.NewLine,
+                    selected.Take(15).Select(x => "问题：" + x.Question + " → " + x.ProposedAnswer));
+                if (MessageBox.Show(w, "确认将以下 " + selected.Count
+                    + " 项写入当前店铺生产知识库？" + Environment.NewLine + changes
+                    + (selected.Count > 15 ? Environment.NewLine + "（更多项请在表格中查看）" : ""),
+                    "最后确认 · 更新直答", MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                int success = 0; var failed = new List<string>();
+                foreach (var item in selected)
+                {
+                    try { BuyerMessageArchiveService.Apply(_seller, item); success++; }
+                    catch (Exception ex) { failed.Add(item.Question + "：" + ex.Message); }
+                }
+                RefreshRecords();
+                _status.Text = "人工审核更新成功 " + success + " 项，失败 "
+                    + failed.Count + " 项。";
+                MessageBox.Show(w, _status.Text
+                    + (failed.Count == 0 ? "" : Environment.NewLine + string.Join(Environment.NewLine, failed.Take(10))),
+                    "直答更新结果", MessageBoxButton.OK,
+                    failed.Count == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                w.DialogResult = true;
+            };
+            w.Content = root;
+            w.ShowDialog();
+        }
+
         private void ApplySelected()
         {
             if (!SaveDraft()) return;
