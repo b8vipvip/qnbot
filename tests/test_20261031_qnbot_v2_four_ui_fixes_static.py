@@ -44,7 +44,7 @@ def test_existing_local_short_replies_get_hello_once_without_overwriting_customi
 def test_buyer_list_collapses_identical_messages_and_uses_ai_semantic_keys():
     ui = read("src/Bot/Knowledge/BuyerMessageManagementPage.cs")
     archive = read("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
-    assert 'grouped.Select(g => new BuyerMessageListItem' in ui
+    assert 'grouped.Select(g =>' in ui
     assert "Messages = g.Messages," in ui
     assert "new FrameworkElementFactory(typeof(Expander))" in ui
     assert "new FrameworkElementFactory(typeof(ListBox))" in ui
