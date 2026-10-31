@@ -827,13 +827,14 @@ namespace Bot.Knowledge
             var prompt = new TextBox
             {
                 Text = question,
-                IsReadOnly = true,
+                IsReadOnly = false,
+                AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 MinHeight = 35,
                 MaxHeight = 65,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Margin = new Thickness(0, 0, 0, 8),
-                ToolTip = "从所选 Bot 气泡绑定的原始买家消息自动填入"
+                ToolTip = "可修改适用问题。图片占位符或省略问法需补全业务主体，人工审核精确匹配优先。"
             };
             Grid.SetRow(prompt, 1);
             grid.Children.Add(prompt);
@@ -866,7 +867,7 @@ namespace Bot.Knowledge
             var save = new Button { Content = "保存直答", Width = 98, Height = 31 };
             save.Click += delegate
             {
-                if (SaveDirectAnswer(question, draft.Text, hasRisk, hadConflict))
+                if (SaveDirectAnswer(prompt.Text, draft.Text, hasRisk, hadConflict))
                 {
                     win.DialogResult = true;
                     win.Close();
