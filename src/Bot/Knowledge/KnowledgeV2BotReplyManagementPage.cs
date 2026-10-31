@@ -243,7 +243,7 @@ namespace Bot.Knowledge
             editor.Children.Add(_presetName);
             editor.Children.Add(Label("触发条件"));
             _presetTrigger = new TextBox { Height = 30,
-                ToolTip = "通用：买家消息包含商品链接；仅指定单个商品：商品ID:1057505313937。"
+                ToolTip = "通用：买家消息包含商品链接；仅指定单个商品：商品ID:1234567890123。"
                     + "商品ID规则精确匹配并优先于通用话术；其他商品继续使用通用话术。" };
             editor.Children.Add(_presetTrigger);
             editor.Children.Add(Label("话术内容"));
@@ -260,7 +260,7 @@ namespace Bot.Knowledge
             Grid.SetRow(body, 1); root.Children.Add(body);
             var note = new TextBlock
             {
-                Text = "说明：填“商品ID:1057505313937”可只匹配这件商品，并优先于所有通用商品链接话术。"
+                Text = "说明：填“商品ID:1234567890123”可只匹配这件商品，并优先于所有通用商品链接话术。"
                     + "保留其他通用话术即可继续回复不同商品。必须使用商品卡片的真实ID或可识别的淘宝/天猫商品链接；"
                     + "短链接若未携带商品ID则回退通用话术。只影响后续消息，不修改历史消息。",
                 Foreground = Brushes.DimGray, Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap
