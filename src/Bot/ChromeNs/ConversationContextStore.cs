@@ -33,6 +33,8 @@ namespace Bot.ChromeNs
         {
             public string QuestionKey;
             public string Reply;
+            public string PresetId;
+            public string ProductItemId;
             public DateTime ExpiresAt;
         }
 
@@ -188,6 +190,26 @@ namespace Bot.ChromeNs
                 || Regex.IsMatch(text, @"(?i)(item\.taobao\.com|detail\.tmall\.com|h5\.m\.taobao\.com|m\.tb\.cn)/");
         }
 
+        // Only a trusted itemId field or a recognized Taobao/Tmall item URL can
+        // authorize an exact product preset. Arbitrary digits in chat never can.
+        internal static string ResolveProductItemId(QNChatMessage message, string text)
+        {
+            var original = message == null ? null : message.originalData;
+            var field = original == null ? string.Empty : (original.itemId ?? string.Empty).Trim();
+            if (Regex.IsMatch(field, @"^\d{6,20}$")) return field;
+            var urls = string.Join(" ", new[]
+            {
+                original == null ? string.Empty : (original.actionUrl ?? string.Empty),
+                original == null ? string.Empty : (original.url ?? string.Empty),
+                text ?? string.Empty,
+                message == null ? string.Empty : (message.summary ?? string.Empty)
+            });
+            var match = Regex.Match(urls,
+                @"(?i)(?:https?://)?(?:item\.taobao\.com|detail\.tmall\.com|h5\.m\.taobao\.com)/[^\s""'<>]*?[?&](?:id|item_id)=(\d{6,20})(?!\d)",
+                RegexOptions.CultureInvariant);
+            return match.Success ? match.Groups[1].Value : string.Empty;
+        }
+
         public static void RegisterProductLinkReply(QNChatMessage message, string messageText)
         {
             if (message == null) return;
@@ -195,7 +217,8 @@ namespace Bot.ChromeNs
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
-            var presets = BotReplyPresetService.GetEnabledPresets(seller);
+            var itemId = ResolveProductItemId(message, messageText);
+            var presets = BotReplyPresetService.GetPresetsForProductLink(seller, itemId);
             if (presets.Count == 0)
             {
                 var emptyState = GetState(seller, buyer);
@@ -207,7 +230,15 @@ namespace Bot.ChromeNs
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             var seed = StableHash(ScopeKey(seller) + "|" + messageKey + "|" + messageText);
             var index = (seed & int.MaxValue) % presets.Count;
-            var reply = presets[index].Text;
+            var selectedPreset = presets[index];
+            var reply = selectedPreset.Text;
+            string exactRuleItem;
+            var exactMatch = BotReplyPresetService.TryParseExactItemTrigger(
+                selectedPreset.Trigger, out exactRuleItem);
+            Log.Info("商品链接预设匹配: presetId=" + selectedPreset.Id
+                + ", rule=" + (exactMatch ? "exact_item" : "generic")
+                + ", itemIdKnown=" + (itemId.Length > 0)
+                + ", candidates=" + presets.Count);
             var state = GetState(seller, buyer);
             lock (state.Sync)
             {
@@ -215,6 +246,8 @@ namespace Bot.ChromeNs
                 {
                     QuestionKey = NormalizeText(messageText),
                     Reply = reply,
+                    PresetId = selectedPreset.Id,
+                    ProductItemId = itemId,
                     ExpiresAt = DateTime.Now.AddMinutes(2)
                 };
             }
@@ -244,8 +277,13 @@ namespace Bot.ChromeNs
                 // was waiting inside the two-minute receive buffer.
                 var selectedReply = pending.Reply ?? string.Empty;
                 state.PendingPreset = null;
+                // Fail closed if the selected preset is disabled, edited or no longer
+                // matches this exact item while the event waits in the queue.
                 if (!BotReplyPresetService.GetEnabledPresets(seller).Any(x =>
-                    string.Equals(x.Text, selectedReply, StringComparison.Ordinal)))
+                    string.Equals(x.Id, pending.PresetId, StringComparison.Ordinal)
+                    && string.Equals(x.Text, selectedReply, StringComparison.Ordinal)
+                    && BotReplyPresetService.GetPresetsForProductLink(seller, pending.ProductItemId)
+                        .Any(y => string.Equals(x.Id, y.Id, StringComparison.Ordinal))))
                 {
                     reply = string.Empty;
                     return false;
