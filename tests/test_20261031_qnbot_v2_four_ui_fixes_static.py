@@ -48,7 +48,8 @@ def test_buyer_list_collapses_identical_messages_and_uses_ai_semantic_keys():
     assert "Messages = g.Messages," in ui
     assert "new FrameworkElementFactory(typeof(Expander))" in ui
     assert "new FrameworkElementFactory(typeof(ListBox))" in ui
-    assert "Details = g.Messages.OrderByDescending" in ui
+    assert "Details = wordings.Select(" in ui
+    assert "BuyerMessageContentSelector" in ui
     assert "SelectMany(x => x.Messages.Select(m => m.Id))" in ui
     assert "GroupBy(x => x.GroupKey ?? x.Id)" in archive
     assert '"exact-" + Hash(' in archive
