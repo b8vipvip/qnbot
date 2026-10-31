@@ -854,6 +854,10 @@ namespace Bot.ChromeNs
     internal static class LocalShortReplyService
     {
         internal const string ConfigFileName = "local-short-replies.json";
+        // One-time additive migration: existing installations retain their
+        // customized/disabled rules; never re-add greetings after an operator
+        // subsequently deletes them.
+        private const string GreetingMigrationSuffix = ".greeting-v1";
         private const int MaxNormalizedPhraseLength = 24;
         private static readonly object Sync = new object();
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -1032,7 +1036,8 @@ namespace Bot.ChromeNs
                 if (Cache.TryGetValue(path, out cached)
                     && cached != null
                     && cached.LastWriteTicks == ticks
-                    && cached.Entries != null)
+                    && cached.Entries != null
+                    && File.Exists(path + GreetingMigrationSuffix))
                 {
                     return Clone(cached.Entries);
                 }
@@ -1048,6 +1053,25 @@ namespace Bot.ChromeNs
                     throw new InvalidOperationException("短消息回复配置损坏，已停止使用该配置：" + ex.Message, ex);
                 }
                 entries = NormalizeEntries(entries, false);
+                var markerPath = path + GreetingMigrationSuffix;
+                if (!File.Exists(markerPath))
+                {
+                    var greetings = CreateDefaults().First(x => x.Id == "default-greeting");
+                    var alreadyCovered = entries.Any(x => x.Id == greetings.Id
+                        || SplitPhrases(x.Phrases).Any(p => string.Equals(
+                            NormalizePhrase(p), "你好", StringComparison.Ordinal)
+                            || string.Equals(NormalizePhrase(p), "在吗", StringComparison.Ordinal)));
+                    if (!alreadyCovered)
+                    {
+                        entries.Add(greetings);
+                        SaveLocked(path, entries, false);
+                        ticks = File.GetLastWriteTimeUtc(path).Ticks;
+                    }
+                    // Non-fatal marker write; the rule's stable ID also prevents
+                    // repeated additions if the marker write is interrupted.
+                    try { File.WriteAllText(markerPath, "1", Encoding.UTF8); }
+                    catch (Exception ex) { Log.Info("短消息问候迁移标记写入失败：" + ex.Message); }
+                }
                 Cache[path] = new CacheState { LastWriteTicks = ticks, Entries = Clone(entries) };
                 return Clone(entries);
             }
