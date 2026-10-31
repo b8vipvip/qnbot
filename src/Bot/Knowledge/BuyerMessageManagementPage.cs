@@ -21,6 +21,8 @@ namespace Bot.Knowledge
         public string GroupKey { get; set; }
         public string GroupTitle { get; set; }
         public int GroupCount { get; set; }
+        public List<BuyerQuestionRow> Messages { get; set; }
+        public List<string> Details { get; set; }
     }
 
     internal sealed class BuyerMessageManagementPage : UserControl, IKnowledgeV2Refreshable, IKnowledgeV2Searchable
@@ -46,8 +48,8 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "逐条展示本店已归档的匿名买家消息，默认按接收时间倒序排列。"
-                    + "同类消息不折叠，AI归类仅用于分类与统计，不保存买家身份。",
+                Text = "相同消息自动折叠为一行；点击消息展开原始记录。AI分析优化后按语义再次合并展示。"
+                    + " 归档原始记录不删除、不保存买家身份，默认按最近接收时间倒序。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
             DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
@@ -76,12 +78,21 @@ namespace Bot.Knowledge
             _stopScan.IsEnabled = false;
             _stopScan.Click += delegate { if (_scanCancellation != null) _scanCancellation.Cancel(); };
             toolbar.Children.Add(_stopScan);
-            _groupButton = Button("AI分析并归类", 126);
-            _groupButton.Click += async delegate { await GroupAsync(); };
+            _groupButton = Button("AI分析优化", 120);
+            _groupButton.Click += delegate
+            {
+                if (!_groupButton.IsEnabled) return;
+                _groupButton.IsEnabled = false;
+                try
+                {
+                    // One action: AI semantic regrouping followed by audited optimization
+                    // candidates; production knowledge is only changed on human approval.
+                    new BuyerQuestionOptimizationWindow(owner, _seller, true).ShowDialog();
+                    RefreshView();
+                }
+                finally { _groupButton.IsEnabled = true; }
+            };
             toolbar.Children.Add(_groupButton);
-            var stats = Button("AI统计优化", 100);
-            stats.Click += delegate { new BuyerQuestionOptimizationWindow(owner, _seller).ShowDialog(); };
-            toolbar.Children.Add(stats);
             var rename = Button("修改组标题", 100);
             rename.Click += delegate { RenameSelected(); };
             toolbar.Children.Add(rename);
@@ -119,18 +130,24 @@ namespace Bot.Knowledge
                 SortMemberPath = "ReceivedAt", Width = new DataGridLength(160)
             });
 
-            // Text may be long. Wrap its preview while keeping full redacted text
-            // accessible via tooltip and double-click detail; do not merge events.
-            var textFactory = new FrameworkElementFactory(typeof(TextBlock));
-            textFactory.SetBinding(TextBlock.TextProperty, new Binding("Text"));
-            textFactory.SetBinding(FrameworkElement.ToolTipProperty, new Binding("Text"));
-            textFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
-            textFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-            textFactory.SetValue(FrameworkElement.MaxHeightProperty, 90.0);
-            textFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(5, 4, 5, 4));
+            // Each visible row is a group, never a raw message. The Expander shows
+            // time-stamped archived occurrences without flattening the parent list.
+            var expander = new FrameworkElementFactory(typeof(Expander));
+            expander.SetValue(Expander.IsExpandedProperty, false);
+            expander.SetBinding(Expander.HeaderProperty, new Binding("Text"));
+            expander.SetValue(FrameworkElement.MarginProperty, new Thickness(5, 4, 5, 4));
+            expander.SetValue(FrameworkElement.ToolTipProperty, "点击展开当前分组的全部原始消息");
+            var details = new FrameworkElementFactory(typeof(ListBox));
+            details.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Details"));
+            details.SetValue(FrameworkElement.MaxHeightProperty, 235.0);
+            details.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+            details.SetValue(VirtualizingPanel.IsVirtualizingProperty, true);
+            details.SetValue(VirtualizingPanel.VirtualizationModeProperty, VirtualizationMode.Recycling);
+            expander.AppendChild(details);
             _list.Columns.Add(new DataGridTemplateColumn
             {
-                Header = "买家消息内容", CellTemplate = new DataTemplate { VisualTree = textFactory },
+                Header = "买家消息内容（点击展开）",
+                CellTemplate = new DataTemplate { VisualTree = expander },
                 SortMemberPath = "Text", MinWidth = 280,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
@@ -175,18 +192,25 @@ namespace Bot.Knowledge
                 var end = _endDate == null || !_endDate.SelectedDate.HasValue
                     ? (DateTime?)null : _endDate.SelectedDate.Value.Date.AddDays(1).AddTicks(-1);
                 var grouped = BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text);
-                // Display each original message once and sort across ALL categories,
-                // instead of displaying a sorted list of expandable category trees.
-                var rows = grouped.SelectMany(g => g.Messages.Select(message => new BuyerMessageListItem
+                // Before AI: GroupKey is the compact-text fingerprint (exact message).
+                // After AI: it is the semantic topic key; both yield one collapsible row.
+                var rows = grouped.Select(g => new BuyerMessageListItem
                 {
-                    Message = message, ReceivedAt = new DateTime(message.ReceivedAtTicks),
-                    Text = message.Text, GroupKey = g.Key, GroupTitle = g.Title,
-                    GroupCount = g.Count
-                })).OrderByDescending(x => x.ReceivedAt)
+                    Message = g.Messages.First(),
+                    ReceivedAt = g.Latest,
+                    Text = g.Title,
+                    GroupKey = g.Key, GroupTitle = g.Title,
+                    GroupCount = g.Count,
+                    Messages = g.Messages,
+                    Details = g.Messages.OrderByDescending(x => x.ReceivedAtTicks)
+                        .ThenBy(x => x.Id, StringComparer.Ordinal)
+                        .Select(message => new DateTime(message.ReceivedAtTicks).ToString("yyyy-MM-dd HH:mm:ss")
+                            + "  " + (message.Text ?? "")).ToList()
+                }).OrderByDescending(x => x.ReceivedAt)
                     .ThenBy(x => x.Message.Id, StringComparer.Ordinal).ToList();
                 _list.ItemsSource = rows;
-                _status.Text = "当前筛选结果：" + rows.Count + "条消息，" + grouped.Count
-                    + "个分类。按接收时间倒序；单击列标题可排序，双击消息可查看全文。";
+                _status.Text = "当前筛选结果：" + grouped.Sum(x => x.Count) + "条原始消息，"
+                    + rows.Count + "个折叠分组。点击消息展开全部时间记录；AI分析优化后按语义折叠。";
             }
             catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
         }
@@ -260,28 +284,6 @@ namespace Bot.Knowledge
             }
         }
 
-        private async Task GroupAsync()
-        {
-            if (_cancel != null) return;
-            if (MessageBox.Show(Window.GetWindow(this),
-                "将当前店铺全部已脱敏的买家消息分批发送到已配置AI接口进行语义归类。"
-                + " 可能消耗AI额度；不同语义不会自动删除消息。继续？",
-                "AI分析", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            _cancel = new CancellationTokenSource();
-            _groupButton.IsEnabled = false;
-            try
-            {
-                _status.Text = "正在分析所有归档消息...";
-                var count = await BuyerMessageArchiveService.GroupByAi(_seller,
-                    message => Dispatcher.BeginInvoke(new Action(() => _status.Text = message)), _cancel.Token);
-                RefreshView();
-                _status.Text = "AI分组完成：" + count + "个语义组。";
-            }
-            catch (OperationCanceledException) { _status.Text = "已取消本次AI分析。"; }
-            catch (Exception ex) { _status.Text = "AI分析失败，保留原分组：" + ex.Message; }
-            finally { _cancel.Dispose(); _cancel = null; _groupButton.IsEnabled = true; }
-        }
-
         private BuyerMessageListItem SelectedGroupRow()
         {
             var rows = _list.SelectedItems.OfType<BuyerMessageListItem>().ToList();
@@ -319,12 +321,15 @@ namespace Bot.Knowledge
         private void DeleteSelected()
         {
             // Multiple selection deletes only the explicitly selected rows.
+            // Selection now refers to collapsed groups; never silently delete
+            // only the representative row while claiming the group was deleted.
             var ids = _list.SelectedItems.OfType<BuyerMessageListItem>()
-                .Select(x => x.Message.Id).Distinct(StringComparer.Ordinal).ToArray();
+                .SelectMany(x => x.Messages.Select(m => m.Id))
+                .Distinct(StringComparer.Ordinal).ToArray();
             if (ids.Length == 0) { _status.Text = "请先选中要删除的消息"; return; }
             if (MessageBox.Show(Window.GetWindow(this),
-                "确认从本店匿名归档中删除选中的 " + ids.Length
-                    + " 条消息？不会更改原千牛聊天记录。",
+                "确认从本店匿名归档中删除所选分组包含的 " + ids.Length
+                    + " 条原始消息？不会更改原千牛聊天记录。",
                 "删除选中消息", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             try { BuyerMessageArchiveService.Delete(_seller, ids); RefreshView(); }
             catch (Exception ex) { _status.Text = "删除失败：" + ex.Message; }
@@ -354,11 +359,10 @@ namespace Bot.Knowledge
         private readonly TextBox _days, _top, _question, _answer, _reason;
         private readonly DataGrid _list;
         private readonly TextBlock _status;
-        private readonly Button _run;
         private CancellationTokenSource _cancel;
         private BuyerAiOptimizationRow _selected;
 
-        internal BuyerQuestionOptimizationWindow(Window owner, string seller)
+        internal BuyerQuestionOptimizationWindow(Window owner, string seller, bool autoRun = false)
         {
             _seller = seller;
             Owner = owner; Title = "买家消息 · AI优化";
@@ -380,13 +384,10 @@ namespace Bot.Knowledge
             controls.Children.Add(new TextBlock { Text = "前N组", VerticalAlignment = VerticalAlignment.Center });
             _top = new TextBox { Width = 65, Height = 28, Text = "10", Margin = new Thickness(5, 0, 10, 0) };
             controls.Children.Add(_top);
-            _run = new Button { Content = "AI统计优化", Width = 112, Height = 29 };
-            _run.Click += async delegate { await GenerateAsync(); };
-            controls.Children.Add(_run);
             var refresh = new Button { Content = "刷新记录", Width = 85, Height = 29, Margin = new Thickness(8, 0, 0, 0) };
             refresh.Click += delegate { RefreshRecords(); }; controls.Children.Add(refresh);
             DockPanel.SetDock(controls, Dock.Top); layout.Children.Add(controls);
-            _status = new TextBlock { Text = "选择时间范围并点击 AI统计优化。",
+            _status = new TextBlock { Text = "打开后自动执行语义分组并生成待审核优化记录。",
                 Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 8),
                 TextWrapping = TextWrapping.Wrap };
             DockPanel.SetDock(_status, Dock.Top); layout.Children.Add(_status);
@@ -424,7 +425,11 @@ namespace Bot.Knowledge
             _list.Columns.Add(new DataGridTextColumn { Header = "建议答案", Width = new DataGridLength(3, DataGridLengthUnitType.Star), Binding = new Binding("ProposedAnswer") });
             _list.SelectionChanged += delegate { SelectCurrent(); };
             layout.Children.Add(_list);
-            Loaded += delegate { RefreshRecords(); };
+            Loaded += async delegate
+            {
+                RefreshRecords();
+                if (autoRun) await GenerateAsync();
+            };
             Closed += delegate { if (_cancel != null) _cancel.Cancel(); };
         }
         private static int Number(TextBox tb, int fallback, int max)
@@ -436,8 +441,8 @@ namespace Bot.Knowledge
             if (_cancel != null) return;
             if (MessageBox.Show(this, "将按店铺发送已脱敏的高频问题和相关知识到当前AI接口。"
                 + " 可能消耗真实API额度；本操作只生成候选记录，不自动覆盖直答。继续？",
-                "AI统计优化", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            _run.IsEnabled = false; _cancel = new CancellationTokenSource();
+                "AI分析优化", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            _cancel = new CancellationTokenSource();
             try
             {
                 var count = await BuyerMessageArchiveService.OptimizeTop(_seller,
@@ -445,9 +450,9 @@ namespace Bot.Knowledge
                     value => Dispatcher.BeginInvoke(new Action(() => _status.Text = value)), _cancel.Token);
                 RefreshRecords(); _status.Text = "已生成 " + count + " 条可审核修改的AI优化记录。";
             }
-            catch (OperationCanceledException) { _status.Text = "已取消AI统计优化。"; }
-            catch (Exception ex) { _status.Text = "AI统计优化失败：" + ex.Message; }
-            finally { _cancel.Dispose(); _cancel = null; _run.IsEnabled = true; }
+            catch (OperationCanceledException) { _status.Text = "已取消AI分析优化。"; }
+            catch (Exception ex) { _status.Text = "AI分析优化失败：" + ex.Message; }
+            finally { _cancel.Dispose(); _cancel = null; }
         }
         private void RefreshRecords()
         {

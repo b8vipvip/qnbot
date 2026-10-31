@@ -32,6 +32,9 @@ namespace Bot.ChromeNs
         private static readonly Regex ExactItemTrigger = new Regex(
             @"^商品ID\s*[:：]\s*(\d{6,20})\s*$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex ExactProductUrlTrigger = new Regex(
+            @"^https?://(?:item\.taobao\.com|detail\.tmall\.com|h5\.m\.taobao\.com)/[^\s]*?[?&](?:id|item_id)=(\d{6,20})(?:[&#]|$)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
 
         public static List<BotReplyPreset> GetPresets(string seller)
@@ -100,11 +103,19 @@ namespace Bot.ChromeNs
             var enabledExactItemIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var preset in normalized)
             {
-                if (!IsItemScopedTrigger(preset.Trigger)) continue;
+                if (!IsItemScopedTrigger(preset.Trigger))
+                {
+                    // Unknown free-text triggers have never been executable: fail
+                    // rather than silently applying a product-specific reply to all links.
+                    if (!string.Equals(preset.Trigger, "买家消息包含商品链接", StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            "触发条件只能是“买家消息包含商品链接”、商品ID:数字或含商品ID的淘宝/天猫完整商品链接。");
+                    continue;
+                }
                 string itemId;
                 if (!TryParseExactItemTrigger(preset.Trigger, out itemId))
                     throw new InvalidOperationException(
-                        "商品专属话术的触发条件必须填写 商品ID:1234567890123 这样的完整数字商品ID。");
+                        "商品专属话术触发条件无有效商品ID。请输入 商品ID:1234567890123 或含 id 参数的淘宝/天猫完整商品链接。");
                 if (preset.Enabled && !enabledExactItemIds.Add(itemId))
                     throw new InvalidOperationException(
                         "商品ID " + itemId + " 已有一条启用的专属话术，请先修改或停用原条目，避免冲突。");
@@ -163,13 +174,18 @@ namespace Bot.ChromeNs
 
         internal static bool IsItemScopedTrigger(string trigger)
         {
-            return (trigger ?? string.Empty).TrimStart().StartsWith("商品ID", StringComparison.Ordinal);
+            var normalized = (trigger ?? string.Empty).TrimStart();
+            return normalized.StartsWith("商品ID", StringComparison.Ordinal)
+                || normalized.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || normalized.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool TryParseExactItemTrigger(string trigger, out string itemId)
         {
             itemId = string.Empty;
-            var match = ExactItemTrigger.Match((trigger ?? string.Empty).Trim());
+            var value = (trigger ?? string.Empty).Trim();
+            var match = ExactItemTrigger.Match(value);
+            if (!match.Success) match = ExactProductUrlTrigger.Match(value);
             if (!match.Success) return false;
             itemId = match.Groups[1].Value;
             return true;

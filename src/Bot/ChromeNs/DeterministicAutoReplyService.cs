@@ -854,6 +854,10 @@ namespace Bot.ChromeNs
     internal static class LocalShortReplyService
     {
         internal const string ConfigFileName = "local-short-replies.json";
+        // One-time additive migration: existing installations retain their
+        // customized/disabled rules; never re-add greetings after an operator
+        // subsequently deletes them.
+        private const string GreetingMigrationSuffix = ".greeting-v1";
         private const int MaxNormalizedPhraseLength = 24;
         private static readonly object Sync = new object();
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -939,6 +943,9 @@ namespace Bot.ChromeNs
                 Make("default-affirmative", "肯定确认",
                     "是|是的|对|对的|对啊|对哦|没错|没错的|就是|就是的",
                     "好的。", now),
+                Make("default-greeting", "问候/在线",
+                    "你好|您好|你好呀|你好啊|亲你好|哈喽|hello|hi|在么|在吗|在不在|有人吗|请问在吗|客服在吗",
+                    "您好，在的，请问有什么可以帮您？", now),
                 Make("default-thanks", "感谢",
                     "谢谢|谢谢你|谢谢亲|谢啦|谢了|多谢|感谢|感谢你|辛苦了|辛苦啦|麻烦你了|麻烦了|有劳了",
                     "不客气。", now),
@@ -1029,7 +1036,8 @@ namespace Bot.ChromeNs
                 if (Cache.TryGetValue(path, out cached)
                     && cached != null
                     && cached.LastWriteTicks == ticks
-                    && cached.Entries != null)
+                    && cached.Entries != null
+                    && File.Exists(path + GreetingMigrationSuffix))
                 {
                     return Clone(cached.Entries);
                 }
@@ -1045,6 +1053,25 @@ namespace Bot.ChromeNs
                     throw new InvalidOperationException("短消息回复配置损坏，已停止使用该配置：" + ex.Message, ex);
                 }
                 entries = NormalizeEntries(entries, false);
+                var markerPath = path + GreetingMigrationSuffix;
+                if (!File.Exists(markerPath))
+                {
+                    var greetings = CreateDefaults().First(x => x.Id == "default-greeting");
+                    var alreadyCovered = entries.Any(x => x.Id == greetings.Id
+                        || SplitPhrases(x.Phrases).Any(p => string.Equals(
+                            NormalizePhrase(p), "你好", StringComparison.Ordinal)
+                            || string.Equals(NormalizePhrase(p), "在吗", StringComparison.Ordinal)));
+                    if (!alreadyCovered)
+                    {
+                        entries.Add(greetings);
+                        SaveLocked(path, entries, false);
+                        ticks = File.GetLastWriteTimeUtc(path).Ticks;
+                    }
+                    // Non-fatal marker write; the rule's stable ID also prevents
+                    // repeated additions if the marker write is interrupted.
+                    try { File.WriteAllText(markerPath, "1", Encoding.UTF8); }
+                    catch (Exception ex) { Log.Info("短消息问候迁移标记写入失败：" + ex.Message); }
+                }
                 Cache[path] = new CacheState { LastWriteTicks = ticks, Entries = Clone(entries) };
                 return Clone(entries);
             }
