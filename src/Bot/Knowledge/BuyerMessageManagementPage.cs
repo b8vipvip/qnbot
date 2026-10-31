@@ -16,7 +16,6 @@ namespace Bot.Knowledge
         private readonly string _seller;
         private readonly TreeView _tree;
         private readonly TextBox _search;
-        private readonly TextBox _days;
         private readonly DatePicker _startDate;
         private readonly DatePicker _endDate;
         private readonly TextBlock _status;
@@ -40,12 +39,7 @@ namespace Bot.Knowledge
             });
             DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
             var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 7) };
-            toolbar.Children.Add(new TextBlock { Text = "显示最近", VerticalAlignment = VerticalAlignment.Center });
-            _days = new TextBox { Width = 57, Height = 28, Text = "30", Margin = new Thickness(5, 0, 5, 0) };
-            toolbar.Children.Add(_days);
-            toolbar.Children.Add(new TextBlock { Text = "天", VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 12, 0) });
-            toolbar.Children.Add(new TextBlock { Text = "开始日期", VerticalAlignment = VerticalAlignment.Center });
+            toolbar.Children.Add(new TextBlock { Text = "筛选开始日期", VerticalAlignment = VerticalAlignment.Center });
             _startDate = new DatePicker { Width = 127, SelectedDate = DateTime.Today.AddDays(-30),
                 Margin = new Thickness(5, 0, 8, 0) };
             _startDate.SelectedDateChanged += delegate { RefreshView(); };
@@ -102,11 +96,6 @@ namespace Bot.Knowledge
         {
             return new Button { Content = label, Width = width, Height = 29,
                 Margin = new Thickness(0, 0, 7, 3) };
-        }
-        private int Days()
-        {
-            int value;
-            return int.TryParse(_days.Text, out value) ? Math.Max(1, Math.Min(3650, value)) : 30;
         }
         public void ApplyGlobalSearch(string text) { _search.Text = text ?? ""; }
         public void RefreshView()
