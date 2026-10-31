@@ -55,11 +55,25 @@ namespace Bot.ChromeNs
             // OCR-first runs before provider selection. Therefore a high-confidence local OCR +
             // Knowledge Engine V2 hit can answer without any configured or billable vision API.
             // A local miss is soft and preserves the existing vision route unchanged.
+            Log.Info("[VisionRoute] image_received; route=ocr_first_precheck");
             var localDecision = await OcrFirstKnowledgeDecisionService.TryResolveAsync(task, cancellationToken);
-            if (localDecision != null) return localDecision;
+            if (localDecision != null)
+            {
+                Log.Info("[VisionRoute] route=local_ocr_knowledge; confidence="
+                    + localDecision.LocalOcrConfidence.ToString("0.000")
+                    + ";ocrMs=" + localDecision.LocalOcrLatencyMs
+                    + ";visualAiCalled=false");
+                return localDecision;
+            }
+            Log.Info("[VisionRoute] ocr_direct_miss; checking_configured_multimodal_ai");
 
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
-            if (endpoints.Count < 1) return Fail("未配置可用的视觉模型，且本地OCR未命中可安全直答的知识");
+            if (endpoints.Count < 1)
+            {
+                Log.Info("[VisionRoute] route=no_multimodal_endpoint; local_ocr_direct=false");
+                return Fail("未配置可用的视觉模型，且本地OCR未命中可安全直答的知识");
+            }
+            Log.Info("[VisionRoute] route=multimodal_ai; candidateEndpoints=" + endpoints.Count);
 
             var currentQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion)
                 ? "[图片]"
