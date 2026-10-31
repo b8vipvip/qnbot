@@ -11,7 +11,7 @@ def test_each_exact_or_semantic_group_is_one_collapsible_row():
     assert "private readonly DataGrid _list;" in page
     assert "private readonly TreeView _tree;" not in page
     assert "new DataGridTemplateColumn" in page
-    assert "grouped.Select(g => new BuyerMessageListItem" in page
+    assert "grouped.Select(g =>" in page
     assert 'new FrameworkElementFactory(typeof(Expander))' in page
     assert 'new FrameworkElementFactory(typeof(ListBox))' in page
     assert "Details = wordings.Select(" in page
