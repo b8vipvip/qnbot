@@ -12,7 +12,7 @@ def test_preset_save_keeps_id_before_grid_rebinding_and_button_is_under_enabled(
     assert "RefreshPresets();" in block
     assert "_selectedPreset.Id" not in block
     assert "var restored = _presetView.FirstOrDefault(x => x.Id == id);" in block
-    assert block.index("SavePresets") < block.index("RefreshPresets")
+    assert block.index("SavePresets(_seller, candidate);") < block.index("RefreshPresets();")
     construction = ui.split("private UIElement BuildPresetTab()",1)[1].split("private UIElement BuildKnowledgeSearchTab()",1)[0]
     assert construction.index("editor.Children.Add(_presetEnabled);") < construction.index('var save = Button("保存话术", 115);')
     assert construction.index('var save = Button("保存话术", 115);') < construction.index("editor.Children.Add(_presetStatus);")
