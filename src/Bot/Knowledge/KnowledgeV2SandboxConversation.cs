@@ -482,13 +482,16 @@ namespace Bot.Knowledge
 
                 if (result.NeedsAi && enableAi && !isOrder)
                 {
-                    _status.Text = "正在调用当前店铺已配置的 AI 接口（只发送模拟对话文本）...";
+                    _status.Text = "正在调用当前店铺已配置的 AI 接口（只发送模拟对话文本，最长等待"
+                        + SandboxAiTimeoutSeconds + "秒）...";
                     TraceSandbox("ai_start", "running", message, null, "fallback");
                     var ai = await Task.Run(() => GenerateAiPreview(
                         message, history, result.Detail, result.KnowledgeCandidates));
                     result.Detail += "\nAI调用：" + ai.Detail;
-                    TraceSandbox("ai_finish", ai.Success ? "success" : "error", message, null,
-                        "replyLength=" + (ai.Answer ?? "").Length);
+                    TraceSandbox("ai_finish",
+                        ai.TimedOut ? "timeout" : (ai.Success ? "success" : "error"),
+                        message, null, "replyLength=" + (ai.Answer ?? "").Length
+                            + ";timeoutSeconds=" + SandboxAiTimeoutSeconds);
                     if (ai.Success)
                     {
                         result.Reply = (string.IsNullOrWhiteSpace(result.Prefix) ? ""
@@ -676,9 +679,14 @@ namespace Bot.Knowledge
             }
         }
 
+        // Sandbox replies are not live sends: allow slow configured AI providers to
+        // finish without inheriting production message delivery deadlines.
+        private const int SandboxAiTimeoutSeconds = 180;
+
         private sealed class SandboxAiResult
         {
             public bool Success;
+            public bool TimedOut;
             public string Answer;
             public string Detail;
         }
@@ -720,17 +728,33 @@ namespace Bot.Knowledge
                         + "\n已召回知识（不一定适用，需判断）："
                         + (candidates ?? "").Substring(0, Math.Min(2400, (candidates ?? "").Length))
                 });
-                var response = MyOpenAI.CallStructuredChat(
-                    messages, 650, 0.2, 45, CancellationToken.None, true);
-                return new SandboxAiResult
+                try
                 {
-                    Success = response != null && response.Success
-                        && !string.IsNullOrWhiteSpace(response.Answer),
-                    Answer = response == null ? "" : (response.Answer ?? "").Trim(),
-                    Detail = response == null ? "AI接口未返回结果" : response.Success
-                        ? "调用成功，耗时" + response.LatencyMs + "ms（非真实发送）"
-                        : "调用失败：" + response.Error
-                };
+                    var response = MyOpenAI.CallStructuredChat(
+                        messages, 650, 0.2, SandboxAiTimeoutSeconds,
+                        CancellationToken.None, true);
+                    return new SandboxAiResult
+                    {
+                        Success = response != null && response.Success
+                            && !string.IsNullOrWhiteSpace(response.Answer),
+                        Answer = response == null ? "" : (response.Answer ?? "").Trim(),
+                        Detail = response == null ? "AI接口未返回结果" : response.Success
+                            ? "调用成功，耗时" + response.LatencyMs + "ms（非真实发送）"
+                            : "调用失败：" + response.Error
+                    };
+                }
+                catch (OperationCanceledException)
+                {
+                    // The structured-chat client uses its own linked deadline;
+                    // this sandbox passes CancellationToken.None. A deadline must
+                    // become an explicit failed preview, not abort the entire turn.
+                    return new SandboxAiResult
+                    {
+                        Success = false, TimedOut = true,
+                        Detail = "AI响应超时（等待上限" + SandboxAiTimeoutSeconds
+                            + "秒）。本次仅为模拟对话，未向千牛发送消息；可重试或切换更快的AI模型。"
+                    };
+                }
             }
         }
 
