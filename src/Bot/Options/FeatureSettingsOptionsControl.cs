@@ -103,8 +103,6 @@ namespace Bot.Options
             // Compatibility aliases for old callers/bookmarks and the new reply-mode entry.
             if (string.Equals(pageTitle, "消息通知", StringComparison.Ordinal))
                 pageTitle = "转人工策略";
-            if (string.Equals(pageTitle, "消息策略", StringComparison.Ordinal))
-                pageTitle = "自动回复规则";
 
             foreach (TabItem tab in _tabs.Items)
             {
