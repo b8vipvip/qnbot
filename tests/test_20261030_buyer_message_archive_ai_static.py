@@ -53,10 +53,13 @@ def test_message_management_is_in_v2_and_compiled():
     assert 'Nav("买家消息管理", () => new BuyerMessageManagementPage(_owner, _seller))' in nav
     assert "BuyerMessageArchiveService.cs" in targets
     assert "BuyerMessageManagementPage.cs" in targets
-    assert "TreeViewItem" in ui
-    assert "IsExpanded = false" in ui
+    assert "new DataGrid" in ui
+    assert "BuyerMessageListItem" in ui
+    assert "OrderByDescending(x => x.ReceivedAt)" in ui
+    assert "TreeViewItem" not in ui
     assert "AI分析并归类" in ui
     assert "AI统计优化" in ui
     assert "修改组标题" in ui
-    assert "删除选中消息/组" in ui
+    assert "删除选中消息" in ui
+    assert "删除所属分类" in ui
     assert "WindowStartupLocation.CenterOwner" in ui
