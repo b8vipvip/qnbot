@@ -37,6 +37,11 @@ namespace Bot.Knowledge
         public string Status { get; set; }
         public long CreatedAtTicks { get; set; }
         public string KnowledgeId { get; set; }
+        public string PreviousAnswer { get; set; }
+        public string AppliedAnswer { get; set; }
+        public string AppliedQuestion { get; set; }
+        public bool CreatedNewKnowledge { get; set; }
+        public long AppliedAtTicks { get; set; }
         public string CreatedAtText
         {
             get { return CreatedAtTicks <= 0 ? "-" : new DateTime(CreatedAtTicks).ToString("yyyy-MM-dd HH:mm"); }
@@ -255,10 +260,10 @@ namespace Bot.Knowledge
         {
             days = Math.Max(1, Math.Min(3650, days));
             count = Math.Max(1, Math.Min(100, count));
-            // This action does not require a separate prior click on AI分析:
-            // regroup all archived variants first, so top counts are semantic.
-            if (progress != null) progress("先对全部归档买家消息执行语义分组...");
-            await GroupByAi(seller, progress, ct, days).ConfigureAwait(false);
+            // Classifying incoming messages is not an optimization prerequisite.
+            // Existing semantic groups remain collapsible, while exact duplicates
+            // are counted directly without modifying any archived group keys.
+            if (progress != null) progress("按原始重复次数整理问题，关联现有知识...");
             var groups = Groups(seller, days, "").Take(count).ToList();
             var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)).ToList();
@@ -331,14 +336,22 @@ namespace Bot.Knowledge
                     "基于当前知识改进高频直答。不得自创价格、库存或服务承诺。证据不足时proposed_answer留空。"
                     + "返回 {\"question\":\"\",\"proposed_answer\":\"\",\"reason\":\"\",\"knowledge_id\":\"\"}。",
                     payload, ct).ConfigureAwait(false);
+                var evidenceId = Convert.ToString(json["knowledge_id"]) ?? "";
+                var evidence = related.FirstOrDefault(x => string.Equals(x.Id, evidenceId, StringComparison.Ordinal));
+                var draftAnswer = Redact(Convert.ToString(json["proposed_answer"]));
+                // A hallucinated or unrelated knowledge_id never authorizes a
+                // production answer; without verified evidence, leave it blank.
+                if (evidence == null || string.IsNullOrWhiteSpace(draftAnswer)
+                    || KnowledgeEngineV2Semantics.IsHighRisk(draftAnswer))
+                    draftAnswer = string.Empty;
                 var item = new BuyerAiOptimizationRow
                 {
                     Id = Guid.NewGuid().ToString("N"), GroupKey = g.Key,
                     Question = Redact(Convert.ToString(json["question"])), Frequency = g.Count,
-                    ExistingAnswer = related.FirstOrDefault() == null ? "" : related[0].Answer,
-                    ProposedAnswer = Redact(Convert.ToString(json["proposed_answer"])),
+                    ExistingAnswer = evidence == null ? "" : evidence.Answer,
+                    ProposedAnswer = draftAnswer,
                     Reason = Redact(Convert.ToString(json["reason"])), Status = "pending",
-                    CreatedAtTicks = DateTime.Now.Ticks, KnowledgeId = Convert.ToString(json["knowledge_id"]) ?? ""
+                    CreatedAtTicks = DateTime.Now.Ticks, KnowledgeId = evidence == null ? "" : evidence.Id
                 };
                 if (item.Question.Length == 0) item.Question = g.Title;
                 suggestions.Add(item);
@@ -351,17 +364,98 @@ namespace Bot.Knowledge
                 "AI输出待审核的建议 " + suggestions.Count + " 条，未自动修改生产知识", "success", out ignored);
             return suggestions.Count;
         }
+        // Strictly map an archived message to one already-approved direct answer.
+        // Similarity or AI-generated topic labels alone are never sufficient.
+        internal static KnowledgeV2Record FindConfirmedDirect(string seller, IEnumerable<string> variants)
+        {
+            var normalized = new HashSet<string>((variants ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x)
+                    && !x.StartsWith("[", StringComparison.Ordinal)
+                    && !KnowledgeEngineV2Semantics.IsContextDependent(x)
+                    && !KnowledgeEngineV2Semantics.IsHighRisk(x))
+                .Select(KnowledgeEngineV2Semantics.Compact), StringComparer.Ordinal);
+            if (normalized.Count == 0) return null;
+            var matches = KnowledgeEngineV2Repository.LoadAll(seller).Where(k =>
+                k != null && k.Enabled && k.Status == "active"
+                && string.Equals(k.SourceType, "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(k.Answer)
+                && !string.Equals(k.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                && (k.Conditions == null || k.Conditions.Count == 0)
+                && (k.RequiredContext == null || k.RequiredContext.Count == 0)
+                && (k.ProductIds == null || k.ProductIds.Count == 0)
+                && normalized.Contains(KnowledgeEngineV2Semantics.Compact(k.Title))
+            ).ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        internal static BuyerAiOptimizationRow LatestAppliedForGroup(string seller, string groupKey)
+        {
+            return ReadOptimizations(seller)
+                .Where(x => x.GroupKey == groupKey && x.Status == "applied")
+                .OrderByDescending(x => x.AppliedAtTicks).FirstOrDefault();
+        }
+
+        internal static BuyerAiOptimizationRow NewManualDraft(string seller, string groupKey,
+            string question, int count, string existing, string knowledgeId, string proposed)
+        {
+            var row = new BuyerAiOptimizationRow
+            {
+                Id = Guid.NewGuid().ToString("N"), GroupKey = groupKey,
+                Question = Redact(question), Frequency = count,
+                ExistingAnswer = existing ?? "", ProposedAnswer = Redact(proposed),
+                KnowledgeId = knowledgeId ?? "", Reason = "人工修改直答，待确认",
+                Status = "pending", CreatedAtTicks = DateTime.Now.Ticks
+            };
+            SaveOptimization(seller, row);
+            return row;
+        }
+
         internal static string Apply(string seller, BuyerAiOptimizationRow row)
         {
-            if (row == null || string.IsNullOrWhiteSpace(row.ProposedAnswer))
-                throw new InvalidOperationException("答案为空，请编辑并人工核实");
-            string message, knowledgeId;
-            if (!KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                seller, row.Question, row.ProposedAnswer, row.Id, out message, out knowledgeId))
-                throw new InvalidOperationException(message);
-            row.Status = "applied"; row.KnowledgeId = knowledgeId;
+            if (row == null || row.Status != "pending"
+                || string.IsNullOrWhiteSpace(row.ProposedAnswer)
+                || string.IsNullOrWhiteSpace(row.KnowledgeId))
+                throw new InvalidOperationException("候选没有可靠知识依据或已经处理，禁止自动写入。");
+            if (KnowledgeEngineV2Semantics.IsHighRisk(row.ProposedAnswer)
+                || KnowledgeEngineV2Semantics.IsHighRisk(row.Question))
+                throw new InvalidOperationException("存在高风险内容，必须通过知识中心审核处理。");
+            var known = KnowledgeEngineV2Repository.LoadAll(seller)
+                .FirstOrDefault(x => x.Id == row.KnowledgeId && x.Enabled && x.Status == "active");
+            if (known == null || string.IsNullOrWhiteSpace(known.Answer)
+                || string.Equals(known.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("关联知识已被删除、禁用或高风险，无法应用。");
+            if (!string.Equals(known.Answer, row.ExistingAnswer, StringComparison.Ordinal))
+                throw new InvalidOperationException("知识库答案已经变化，请重新分析，避免覆盖新内容。");
+            // Apply only to this verified knowledge record using the repository's
+            // optimistic concurrency check and durable revision journal.
+            string outcome;
+            if (!KnowledgeEngineV2Repository.TryCorrectBotAnswer(seller, known.Id,
+                known.Answer, row.ProposedAnswer, row.Id, out outcome))
+                throw new InvalidOperationException(outcome);
+            row.PreviousAnswer = known.Answer;
+            row.AppliedAnswer = row.ProposedAnswer;
+            row.AppliedQuestion = known.Title;
+            row.AppliedAtTicks = DateTime.Now.Ticks;
+            row.Status = "applied";
             SaveOptimization(seller, row);
-            return message;
+            return outcome;
+        }
+
+        internal static string Rollback(string seller, BuyerAiOptimizationRow row)
+        {
+            if (row == null || row.Status != "applied"
+                || string.IsNullOrWhiteSpace(row.KnowledgeId))
+                throw new InvalidOperationException("没有可回滚的已审核直答。");
+            var latest = LatestAppliedForGroup(seller, row.GroupKey);
+            if (latest == null || latest.Id != row.Id)
+                throw new InvalidOperationException("存在更新的直答修订，禁止回滚旧版本。");
+            string result;
+            if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(seller,
+                row.KnowledgeId, out result))
+                throw new InvalidOperationException(result);
+            row.Status = "rolled_back";
+            SaveOptimization(seller, row);
+            return result;
         }
     }
 }
