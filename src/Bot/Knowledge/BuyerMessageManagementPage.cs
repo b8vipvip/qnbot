@@ -17,9 +17,14 @@ namespace Bot.Knowledge
         private readonly TreeView _tree;
         private readonly TextBox _search;
         private readonly TextBox _days;
+        private readonly DatePicker _startDate;
+        private readonly DatePicker _endDate;
         private readonly TextBlock _status;
         private readonly Button _groupButton;
+        private readonly Button _scanButton;
+        private readonly Button _stopScan;
         private CancellationTokenSource _cancel;
+        private CancellationTokenSource _scanCancellation;
 
         internal BuyerMessageManagementPage(Window owner, string seller)
         {
@@ -40,11 +45,28 @@ namespace Bot.Knowledge
             toolbar.Children.Add(_days);
             toolbar.Children.Add(new TextBlock { Text = "天", VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 12, 0) });
+            toolbar.Children.Add(new TextBlock { Text = "开始日期", VerticalAlignment = VerticalAlignment.Center });
+            _startDate = new DatePicker { Width = 127, SelectedDate = DateTime.Today.AddDays(-30),
+                Margin = new Thickness(5, 0, 8, 0) };
+            _startDate.SelectedDateChanged += delegate { RefreshView(); };
+            toolbar.Children.Add(_startDate);
+            toolbar.Children.Add(new TextBlock { Text = "结束日期", VerticalAlignment = VerticalAlignment.Center });
+            _endDate = new DatePicker { Width = 127, SelectedDate = DateTime.Today,
+                Margin = new Thickness(5, 0, 8, 0) };
+            _endDate.SelectedDateChanged += delegate { RefreshView(); };
+            toolbar.Children.Add(_endDate);
             _search = new TextBox { Width = 225, Height = 28, Margin = new Thickness(0, 0, 8, 0),
                 ToolTip = "搜索组标题或消息文本" };
             _search.TextChanged += delegate { RefreshView(); };
             toolbar.Children.Add(_search);
             var refresh = Button("刷新", 70); refresh.Click += delegate { RefreshView(); }; toolbar.Children.Add(refresh);
+            _scanButton = Button("扫描历史消息", 115);
+            _scanButton.Click += async delegate { await ScanHistoryAsync(); };
+            toolbar.Children.Add(_scanButton);
+            _stopScan = Button("取消扫描", 90);
+            _stopScan.IsEnabled = false;
+            _stopScan.Click += delegate { if (_scanCancellation != null) _scanCancellation.Cancel(); };
+            toolbar.Children.Add(_stopScan);
             _groupButton = Button("AI分析并归类", 126);
             _groupButton.Click += async delegate { await GroupAsync(); };
             toolbar.Children.Add(_groupButton);
@@ -69,7 +91,11 @@ namespace Bot.Knowledge
                 BorderThickness = new Thickness(1), FontSize = 13 };
             root.Children.Add(_tree);
             Loaded += delegate { RefreshView(); };
-            Unloaded += delegate { if (_cancel != null) _cancel.Cancel(); };
+            Unloaded += delegate
+            {
+                if (_cancel != null) _cancel.Cancel();
+                if (_scanCancellation != null) _scanCancellation.Cancel();
+            };
         }
 
         private static Button Button(string label, double width)
@@ -88,7 +114,11 @@ namespace Bot.Knowledge
             if (_tree == null || _status == null) return;
             try
             {
-                var grouped = BuyerMessageArchiveService.Groups(_seller, Days(), _search.Text);
+                var start = _startDate == null || !_startDate.SelectedDate.HasValue
+                    ? (DateTime?)null : _startDate.SelectedDate.Value.Date;
+                var end = _endDate == null || !_endDate.SelectedDate.HasValue
+                    ? (DateTime?)null : _endDate.SelectedDate.Value.Date.AddDays(1).AddTicks(-1);
+                var grouped = BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text);
                 _tree.Items.Clear();
                 foreach (var group in grouped)
                 {
@@ -107,11 +137,51 @@ namespace Bot.Knowledge
                         });
                     _tree.Items.Add(node);
                 }
-                _status.Text = "当前时间范围：" + Days() + "天；" + grouped.Count + "组，"
+                _status.Text = "当前筛选结果：" + grouped.Count + "组，"
                     + grouped.Sum(x => x.Count) + "条消息。点击组展开查看各次提问。";
             }
             catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
         }
+        private async Task ScanHistoryAsync()
+        {
+            if (_scanCancellation != null) return;
+            if (MessageBox.Show(Window.GetWindow(this),
+                "扫描当前店铺千牛可访问的全部买家历史消息。"
+                + " 过程中需要切换聊天以读取历史记录，结束后恢复原会话。"
+                + " 仅保存脱敏后的消息文本，不导入知识库，也不会调用AI或发送客服消息。是否开始？",
+                "扫描历史买家消息", MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            _scanCancellation = new CancellationTokenSource();
+            _scanButton.IsEnabled = false;
+            _stopScan.IsEnabled = true;
+            try
+            {
+                _status.Text = "正在扫描本店可访问的全部历史买家消息...";
+                var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(
+                    _seller, new ChatHistoryScanOptions { ScanAll = true, MaxContacts = 5000 },
+                    progress => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (_scanCancellation != null)
+                            _status.Text = "扫描进度 " + progress.ContactIndex + "/"
+                                + progress.ContactCount + "；已读取消息 " + progress.MessageCount;
+                    })), _scanCancellation.Token);
+                RefreshView();
+                _status.Text = "历史扫描完成：已扫描 " + scan.ScannedContacts
+                    + "/" + scan.ContactCount + " 位联系人，读取 " + scan.MessageCount
+                    + " 条买家消息，失败 " + scan.FailedContacts
+                    + " 个；重复事件自动去重。请调整日期范围查看。";
+            }
+            catch (OperationCanceledException) { _status.Text = "扫描已取消，已保存的归档消息保留。"; }
+            catch (Exception ex) { _status.Text = "扫描失败：" + ex.Message; }
+            finally
+            {
+                _scanCancellation.Dispose();
+                _scanCancellation = null;
+                _scanButton.IsEnabled = true;
+                _stopScan.IsEnabled = false;
+            }
+        }
+
         private async Task GroupAsync()
         {
             if (_cancel != null) return;
