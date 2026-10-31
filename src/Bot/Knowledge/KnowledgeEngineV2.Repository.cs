@@ -167,6 +167,183 @@ namespace Bot.Knowledge
         /// Check the old answer under the same database lock as the write; never
         /// infer a record from semantic similarity or AI-generated titles.
         /// </summary>
+        /// <summary>
+        /// Approved buyer-message direct answer: creates an exact-question record or
+        /// updates one exact record. A trusted supporting KB ID is required, but
+        /// never overwritten merely because AI suggested an adjacent question.
+        /// The approved record and reversible revision commit in one DB transaction.
+        /// </summary>
+        public static bool TryApplyBuyerDirect(string seller, string question, string answer,
+            string evidenceId, string evidenceAnswer, string actionId,
+            out string knowledgeId, out string result)
+        {
+            knowledgeId = string.Empty;
+            result = string.Empty;
+            question = (question ?? "").Trim();
+            answer = (answer ?? "").Trim();
+            if (question.Length < 5 || question.Length > 500 || answer.Length < 2 || answer.Length > 1500
+                || KnowledgeEngineV2Semantics.IsHighRisk(question)
+                || KnowledgeEngineV2Semantics.IsHighRisk(answer))
+            {
+                result = "直答长度不合法或涉及高风险，请进入知识中心人工审核。"; return false;
+            }
+            var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
+            if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
+            {
+                result = "缺少独立业务主体，不能创建无条件直答。"; return false;
+            }
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            KnowledgeV2Record applied = null;
+            lock (state.Sync)
+            {
+                var records = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                    .Select(FromRow).Where(x => x != null).ToList();
+                var evidence = records.FirstOrDefault(x => x.Id == evidenceId);
+                if (evidence == null || !evidence.Enabled || evidence.Status != "active"
+                    || evidence.Answer != evidenceAnswer || string.IsNullOrWhiteSpace(evidence.Answer)
+                    || string.Equals(evidence.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || (evidence.Conditions != null && evidence.Conditions.Count > 0)
+                    || (evidence.RequiredContext != null && evidence.RequiredContext.Count > 0)
+                    || (evidence.ProductIds != null && evidence.ProductIds.Count > 0))
+                {
+                    result = "知识依据已经失效或发生变化，请重新分析。"; return false;
+                }
+                var exact = records.Where(x => x.Enabled && x.Status == "active"
+                    && KnowledgeEngineV2Semantics.Compact(x.Title)
+                        == KnowledgeEngineV2Semantics.Compact(question)).ToList();
+                if (exact.Count > 1)
+                {
+                    result = "知识库存在多个同题答案，请先消除冲突。"; return false;
+                }
+                var previous = exact.Count == 1 ? exact[0] : null;
+                if (previous != null && (string.Equals(previous.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || (previous.Conditions != null && previous.Conditions.Count > 0)
+                    || (previous.RequiredContext != null && previous.RequiredContext.Count > 0)
+                    || (previous.ProductIds != null && previous.ProductIds.Count > 0)))
+                {
+                    result = "原知识受场景条件约束，禁止改成无条件直答。"; return false;
+                }
+                if (previous != null && string.Equals(previous.Answer, answer, StringComparison.Ordinal))
+                {
+                    result = "直答内容已经相同，无需修改。"; knowledgeId = previous.Id; return false;
+                }
+                applied = previous == null ? new KnowledgeV2Record
+                {
+                    Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now, Type = "business_fact",
+                    Title = question, SourceId = actionId
+                } : JsonConvert.DeserializeObject<KnowledgeV2Record>(JsonConvert.SerializeObject(previous));
+                applied.Title = question;
+                applied.Answer = answer;
+                applied.ShortAnswer = answer;
+                applied.SourceType = "manual_reviewed_direct";
+                applied.Status = "active";
+                applied.Enabled = true;
+                applied.RiskLevel = "normal";
+                applied.Authority = 0.99;
+                applied.Confidence = 0.99;
+                applied.Intent = parsed.Intent;
+                applied.Subject = parsed.Subject;
+                applied.Predicate = parsed.Predicate;
+                applied.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
+                applied.Aliases = (applied.Aliases ?? new List<string>())
+                    .Concat(new[] { question }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                applied.LastVerifiedAt = DateTime.Now;
+                NormalizeForSave(applied);
+                var revision = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"), KnowledgeId = applied.Id,
+                    MessageRecordId = (actionId ?? "").Trim(), Action = "buyer_direct_apply",
+                    PreviousJson = previous == null ? "" : JsonConvert.SerializeObject(previous),
+                    CurrentJson = JsonConvert.SerializeObject(applied),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(applied), revision });
+            }
+            MirrorOneToLegacy(shop, applied);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, applied);
+            knowledgeId = applied.Id;
+            string audit;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller, "buyer_direct_apply",
+                "knowledge", applied.Id, actionId, question, "verified_knowledge=" + evidenceId,
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(applied),
+                "仅人工确认后应用；旧版本已保存用于回滚。", "success", out audit);
+            result = "直答已通过人工确认并更新正式知识库。";
+            return true;
+        }
+
+        public static bool TryRollbackBuyerDirect(string seller, string knowledgeId,
+            string actionId, out string result)
+        {
+            result = string.Empty;
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            KnowledgeV2Record restore = null, current = null;
+            bool delete = false;
+            lock (state.Sync)
+            {
+                var revisions = state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                    .Where(x => x.KnowledgeId == knowledgeId)
+                    .OrderByDescending(x => x.CreatedAtTicks).ToList();
+                var latest = revisions.FirstOrDefault();
+                if (latest == null || latest.Action != "buyer_direct_apply"
+                    || latest.MessageRecordId != actionId)
+                {
+                    result = "存在新版本或当前不是可回滚的直答修订。"; return false;
+                }
+                var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == knowledgeId);
+                if (row == null) { result = "知识已删除，拒绝回滚。"; return false; }
+                current = FromRow(row);
+                var applied = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.CurrentJson ?? "");
+                if (applied == null || current.UpdatedAt.Ticks != applied.UpdatedAt.Ticks
+                    || current.Answer != applied.Answer)
+                {
+                    result = "直答已被其他操作修改，拒绝覆盖。"; return false;
+                }
+                delete = string.IsNullOrWhiteSpace(latest.PreviousJson);
+                if (!delete)
+                {
+                    restore = JsonConvert.DeserializeObject<KnowledgeV2Record>(latest.PreviousJson);
+                    if (restore == null) { result = "原版本快照无效。"; return false; }
+                    NormalizeForSave(restore);
+                }
+                var rollback = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"), KnowledgeId = knowledgeId,
+                    MessageRecordId = actionId, Action = "buyer_direct_rollback",
+                    PreviousJson = JsonConvert.SerializeObject(current),
+                    CurrentJson = delete ? "" : JsonConvert.SerializeObject(restore),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                if (delete)
+                {
+                    state.Db.SaveOneRecord(rollback);
+                    state.Db.Delete(row);
+                }
+                else state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restore), rollback });
+            }
+            if (delete)
+            {
+                MirrorDeleteToLegacy(shop, knowledgeId);
+                KnowledgeEngineV2Service.ApplyRecordDelete(seller, knowledgeId);
+            }
+            else
+            {
+                MirrorOneToLegacy(shop, restore);
+                KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restore);
+            }
+            string audit;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller, "buyer_direct_rollback",
+                "knowledge", knowledgeId, actionId, current.Title,
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(current),
+                delete ? "new_direct_answer_deleted" : KnowledgeEngineV2GovernanceAuditService.DescribeRecord(restore),
+                "人工确认回滚，先检查修订版本一致性。", "success", out audit);
+            result = "已回滚直答并刷新知识库索引。";
+            return true;
+        }
+
         public static bool TryCorrectBotAnswer(string seller, string knowledgeId,
             string observedAnswer, string correctedAnswer, string messageRecordId, out string result)
         {

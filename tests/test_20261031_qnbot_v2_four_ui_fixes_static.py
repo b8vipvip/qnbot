@@ -67,7 +67,7 @@ def test_one_button_runs_ai_semantic_grouping_then_reviewable_optimization():
     assert "new BuyerQuestionOptimizationWindow(owner, _seller, true).ShowDialog()" in page
     assert "if (autoRun) await GenerateAsync();" in ui
     assert "BuyerMessageArchiveService.OptimizeTop(" in ui
-    assert "await GroupByAi(seller, progress, ct, days)" in archive
+    assert "await GroupByAi(seller, progress, ct, days)" not in archive
     assert '"pending"' in archive
     assert '"人工确认并应用直答"' in ui
 
