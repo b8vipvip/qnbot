@@ -37,10 +37,10 @@ def test_time_range_frequency_is_actual_message_occurrences():
 def test_ai_top_optimization_reviews_before_production_write():
     source = src("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
     ui = src("src/Bot/Knowledge/BuyerMessageManagementPage.cs")
-    assert "await GroupByAi(seller, progress, ct, days)" in source
+    assert "await GroupByAi(seller, progress, ct, days)" not in source
     assert "Take(count)" in source
     assert 'Status = "pending"' in source
-    assert "TrySaveReviewedDirectAnswer(" in source
+    assert "TryApplyBuyerDirect(" in source
     assert "MessageBoxButton.YesNo" in ui
     assert "人工确认并应用直答" in ui
     assert "SaveDraft()" in ui
@@ -60,7 +60,7 @@ def test_message_management_is_in_v2_and_compiled():
     assert "AI分析优化" in ui
     assert "AI分析并归类" not in ui
     assert "AI统计优化" not in ui
-    assert "修改组标题" in ui
+    assert "修改组标题" not in ui
     assert "删除选中消息" in ui
-    assert "删除所属分类" in ui
+    assert "删除所属分类" not in ui
     assert "WindowStartupLocation.CenterOwner" in ui
