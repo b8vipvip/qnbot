@@ -36,7 +36,7 @@ def test_message_strategy_ui_exposes_ai_first_and_local_first():
     assert 'BotMessageSuffixService.Save(' in ui
     assert 'pageTitle = "自动回复规则";' not in ui
     assert 'string.Equals(header, pageTitle, StringComparison.Ordinal)' in ui
-    assert 'pageTitle = "自动回复规则"' in ui
+    assert 'pageTitle = "自动回复规则"' not in ui
     assert '买家5分钟无新消息后' in ui
 
 
