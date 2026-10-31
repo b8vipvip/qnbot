@@ -514,7 +514,10 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $updaterRoot = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater'
 $backupRoot = Join-Path $updaterRoot 'backups'
 $backupDir = Join-Path $backupRoot $timestamp
-$partialBackupDir = "$backupDir.partial"
+# The snapshot is built in-place at its final path. The .complete marker is
+# committed LAST; an unmarked directory is never eligible for rollback.
+# This avoids a Windows PowerShell 5.1 whole-directory Move-Item operation,
+# which was repeatedly denied on field machines after successful validation.
 $programBackup = Join-Path $backupDir 'program'
 $persistentRoot = Join-Path $env:LOCALAPPDATA 'QianniuAiBot'
 $persistentNames = @('data', 'global', 'shops')
@@ -578,23 +581,26 @@ try {
         throw "Insufficient disk space for validated rollback snapshot. Required headroom is 512 MB plus current program/persistent data."
     }
 
-    if (Test-Path -LiteralPath $partialBackupDir) { Remove-Item -LiteralPath $partialBackupDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $partialBackupDir -Force | Out-Null
+    # No valid marker exists while files are copied. A crash before completion
+    # cannot turn a partial snapshot into a rollback authority.
+    if (Test-Path -LiteralPath $backupDir) {
+        throw "Refusing to reuse a prior snapshot directory: $backupDir"
+    }
+    New-Item -ItemType Directory -Path $backupDir -ErrorAction Stop | Out-Null
 
     if ($oldProgramExisted) {
-        $partialProgramBackup = Join-Path $partialBackupDir 'program'
-        Copy-DirectoryContents $InstallDir $partialProgramBackup
-        Assert-DirectoryCopyMatches $InstallDir $partialProgramBackup 'program'
+        Copy-DirectoryContents $InstallDir $programBackup
+        Assert-DirectoryCopyMatches $InstallDir $programBackup 'program'
     }
 
     $persistentEntries = @()
-    $partialPersistentRoot = Join-Path $partialBackupDir 'persistent'
+    $persistentBackupRoot = Join-Path $backupDir 'persistent'
     foreach ($name in $persistentNames) {
         $source = Join-Path $persistentRoot $name
         $existed = Test-Path -LiteralPath $source -PathType Container
         $persistentEntries += [pscustomobject]@{ name = $name; existed = [bool]$existed }
         if (-not $existed) { continue }
-        $destination = Join-Path $partialPersistentRoot $name
+        $destination = Join-Path $persistentBackupRoot $name
         Copy-DirectoryContents $source $destination
         Assert-DirectoryCopyMatches $source $destination "persistent/$name"
     }
@@ -606,11 +612,14 @@ try {
         old_program_existed = [bool]$oldProgramExisted
         persistent_root = $persistentRoot
         persistent = $persistentEntries
-    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $partialBackupDir 'backup-manifest.json') -Encoding UTF8
-    Set-Content -LiteralPath (Join-Path $partialBackupDir '.complete') -Value 'validated' -Encoding ASCII
-    Move-Item -LiteralPath $partialBackupDir -Destination $backupDir
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $backupDir 'backup-manifest.json') -Encoding UTF8
+
+    # Final commit of the verified snapshot: this marker is emitted only after
+    # all file fingerprints match and the manifest has been persisted.
+    Set-Content -LiteralPath (Join-Path $backupDir '.complete') -Value 'validated' -Encoding ASCII
     if (-not (Test-BackupComplete $backupDir)) { throw "Backup finalization failed: $backupDir" }
     $backupFinalized = $true
+    Write-Step "Validated in-place rollback snapshot ready: $backupDir"
 
     $stage = 'package-validation'
     Write-Step 'Extracting and validating package'
@@ -730,7 +739,11 @@ catch {
 finally {
     Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
     Remove-Item Env:\QIANNIU_BOT_UPDATE_EXPECTED_VERSION -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $partialBackupDir) { Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only remove an unfinished snapshot. Finalized backups are retained as
+    # rollback evidence and must never be deleted by this cleanup.
+    if (-not $backupFinalized -and (Test-Path -LiteralPath $backupDir)) {
+        Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
     try { Stop-Transcript | Out-Null } catch { }
     if ($ownsUpdaterMutex -and $null -ne $updaterMutex) { try { $updaterMutex.ReleaseMutex() } catch { } }
