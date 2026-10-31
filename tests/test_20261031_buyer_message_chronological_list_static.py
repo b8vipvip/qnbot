@@ -14,10 +14,12 @@ def test_each_exact_or_semantic_group_is_one_collapsible_row():
     assert "grouped.Select(g => new BuyerMessageListItem" in page
     assert 'new FrameworkElementFactory(typeof(Expander))' in page
     assert 'new FrameworkElementFactory(typeof(ListBox))' in page
-    assert "Details = g.Messages.OrderByDescending" in page
+    assert "Details = wordings.Select(" in page
+    assert "BuyerMessageContentSelector" in page
+    assert "IsSemanticMerged = wordings.Count > 1" in page
     assert "OrderByDescending(x => x.ReceivedAt)" in page
     assert "ThenBy(x => x.Message.Id, StringComparer.Ordinal)" in page
-    for title in ("接收时间", "买家消息内容", "所属分类", "筛选内同类次数"):
+    for title in ("买家消息内容", "所属分类", "接收次数"):
         assert title in page
     assert "EnableRowVirtualization = true" in page
     assert "SelectionMode = DataGridSelectionMode.Extended" in page
