@@ -54,7 +54,7 @@ def test_all_scenario_inputs_use_configured_policies_and_are_labeled_preview():
                   "下班回复", "模拟下单", "模拟付款", "普通咨询 / 知识V2"):
         assert scene in simulator
     assert "FirstInquiryFixedReplyService.Load(_seller)" in simulator
-    assert "GetEnabledPresetsForPreview(_seller)" in simulator
+    assert "GetEnabledPresetsForProductLinkPreview(_seller, itemId)" in simulator
     assert "LocalShortReplyService.TryResolve(_seller, message" in simulator
     assert "BotFeatureStore.EvaluateAutoReplyRule(message)" in simulator
     assert 'GetSetting(cfg, "EnableOrderPlacedReply", false)' in simulator
