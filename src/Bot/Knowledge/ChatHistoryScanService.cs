@@ -86,12 +86,105 @@ namespace Bot.Knowledge
             public string Role;
             public string Text;
             public DateTime Time;
+            public string MessageKey;
         }
 
         private sealed class ContactHistory
         {
             public string Buyer;
             public List<HistoryTurn> Turns = new List<HistoryTurn>();
+        }
+
+
+        // Message-management backfill: enumerate shop contacts and fetch raw history
+        // using the established scanner, but do NOT send any history to AI, write V2
+        // knowledge or persist the buyer identity. Each row retains only sanitized text.
+        public async Task<ChatHistoryScanResult> ScanBuyerMessagesAsync(
+            string seller, ChatHistoryScanOptions options,
+            Action<ChatHistoryScanProgress> progress, CancellationToken token)
+        {
+            options = options ?? new ChatHistoryScanOptions();
+            ValidateOptions(options);
+            var qn = QN.FindExistingBySellerNick((seller ?? string.Empty).Trim());
+            if (qn == null || qn.CDP == null || qn.Seller == null
+                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException("无法绑定当前店铺千牛会话，请先登录该店铺并打开聊天。");
+
+            var diagnostics = new StringBuilder();
+            var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
+            Report(progress, "正在搜集本店全部可访问的买家联系人...", 0, 0,
+                string.Empty, 0, 0, 0);
+            var contacts = new HashSet<string>(StringComparer.Ordinal);
+            AddContact(contacts, originalBuyer, seller);
+            var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+            foreach (var name in visible) AddContact(contacts, name, seller);
+            var managerOpened = false;
+            if (contacts.Count <= 1)
+            {
+                managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                if (managerOpened)
+                    foreach (var name in await ReadVisibleMessageManagerContactsAsync(diagnostics, token))
+                        AddContact(contacts, name, seller);
+            }
+            foreach (var name in await ReadContactsFromApisAsync(qn, diagnostics, token))
+                AddContact(contacts, name, seller);
+            var names = contacts.Where(IsPlausibleBuyerNick)
+                .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
+            if (names.Count == 0)
+                throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
+
+            var received = 0;
+            var completed = 0;
+            var failed = 0;
+            try
+            {
+                for (var i = 0; i < names.Count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Do not emit buyer names into progress, runtime diagnostics or archive.
+                    Report(progress, "扫描历史买家消息（仅归档，不调用AI）",
+                        i + 1, names.Count, string.Empty, received, 0, 0);
+                    try
+                    {
+                        var ccode = await ResolveConversationCodeAsync(qn, names[i], token);
+                        if (string.IsNullOrWhiteSpace(ccode)) { failed++; continue; }
+                        var turns = await ReadHistoryAsync(qn, seller, names[i], ccode, options, token);
+                        foreach (var turn in turns.Where(x => x.Role == "buyer"))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time);
+                            received++;
+                        }
+                        completed++;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Log.Info("[BuyerQuestions] history_scan_contact_failed type=" + ex.GetType().Name);
+                    }
+                }
+            }
+            finally
+            {
+                if (!string.IsNullOrWhiteSpace(originalBuyer))
+                    try { qn.OpenChat(originalBuyer); } catch { }
+            }
+            Report(progress, "买家消息扫描完成", names.Count, names.Count,
+                string.Empty, received, 0, 0);
+            Log.Info("[BuyerQuestions] history_scan_complete contacts=" + completed
+                + ";failed=" + failed + ";events=" + received);
+            return new ChatHistoryScanResult
+            {
+                MessageManagerOpened = managerOpened,
+                ContactCount = names.Count,
+                ScannedContacts = completed,
+                FailedContacts = failed,
+                MessageCount = received,
+                Diagnostics = "完成联系人 " + completed + "；读取失败 " + failed
+                    + "；买家消息事件 " + received + "。仅归档脱敏文本，不记录身份。"
+            };
         }
 
         public async Task<ChatHistoryScanResult> ScanAndImportAsync(
@@ -890,7 +983,11 @@ namespace Bot.Knowledge
                 && string.Equals(to, CleanNick(buyer), StringComparison.Ordinal)) role = "seller";
             else return false;
 
-            turn = new HistoryTurn { Role = role, Text = text, Time = time };
+            turn = new HistoryTurn
+            {
+                Role = role, Text = text, Time = time,
+                MessageKey = IncomingMessageSafety.BuildMessageKey(message, text)
+            };
             return true;
         }
 
