@@ -416,25 +416,18 @@ namespace Bot.Knowledge
                 || string.IsNullOrWhiteSpace(row.ProposedAnswer)
                 || string.IsNullOrWhiteSpace(row.KnowledgeId))
                 throw new InvalidOperationException("候选没有可靠知识依据或已经处理，禁止自动写入。");
-            if (KnowledgeEngineV2Semantics.IsHighRisk(row.ProposedAnswer)
-                || KnowledgeEngineV2Semantics.IsHighRisk(row.Question))
-                throw new InvalidOperationException("存在高风险内容，必须通过知识中心审核处理。");
-            var known = KnowledgeEngineV2Repository.LoadAll(seller)
-                .FirstOrDefault(x => x.Id == row.KnowledgeId && x.Enabled && x.Status == "active");
-            if (known == null || string.IsNullOrWhiteSpace(known.Answer)
-                || string.Equals(known.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("关联知识已被删除、禁用或高风险，无法应用。");
-            if (!string.Equals(known.Answer, row.ExistingAnswer, StringComparison.Ordinal))
-                throw new InvalidOperationException("知识库答案已经变化，请重新分析，避免覆盖新内容。");
-            // Apply only to this verified knowledge record using the repository's
-            // optimistic concurrency check and durable revision journal.
-            string outcome;
-            if (!KnowledgeEngineV2Repository.TryCorrectBotAnswer(seller, known.Id,
-                known.Answer, row.ProposedAnswer, row.Id, out outcome))
+            var latest = ReadOptimizations(seller).FirstOrDefault(x => x.Id == row.Id);
+            if (latest == null || latest.Status != "pending")
+                throw new InvalidOperationException("该优化记录已被其他窗口处理，刷新后重试。");
+            string id, outcome;
+            if (!KnowledgeEngineV2Repository.TryApplyBuyerDirect(seller, row.Question,
+                row.ProposedAnswer, row.KnowledgeId, row.ExistingAnswer, row.Id,
+                out id, out outcome))
                 throw new InvalidOperationException(outcome);
-            row.PreviousAnswer = known.Answer;
             row.AppliedAnswer = row.ProposedAnswer;
-            row.AppliedQuestion = known.Title;
+            row.AppliedQuestion = row.Question;
+            row.PreviousAnswer = row.ExistingAnswer;
+            row.KnowledgeId = id;
             row.AppliedAtTicks = DateTime.Now.Ticks;
             row.Status = "applied";
             SaveOptimization(seller, row);
@@ -450,8 +443,8 @@ namespace Bot.Knowledge
             if (latest == null || latest.Id != row.Id)
                 throw new InvalidOperationException("存在更新的直答修订，禁止回滚旧版本。");
             string result;
-            if (!KnowledgeEngineV2Repository.TryRollbackLastBotCorrection(seller,
-                row.KnowledgeId, out result))
+            if (!KnowledgeEngineV2Repository.TryRollbackBuyerDirect(seller,
+                row.KnowledgeId, row.Id, out result))
                 throw new InvalidOperationException(result);
             row.Status = "rolled_back";
             SaveOptimization(seller, row);
