@@ -66,7 +66,7 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "完全相同的消息去重计数；已存在的语义合并问法可以展开。直答列只显示本店已审核的精准知识。"
+                Text = "完全相同的消息去重计数；已存在的语义合并问法可以展开。直答列展示本店已审核的精确知识及人工审核后关联到本组的直答；实际发送仍需满足业务上下文与安全规则。"
                     + " AI分析只生成待审核直答建议，不再分类，人工确认后才更新生产知识。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
@@ -261,8 +261,14 @@ namespace Bot.Knowledge
                     }
                     return new BuyerMessageListItem
                     {
-                        DirectAnswer = match == null ? "" : match.Answer,
-                        DirectKnowledgeId = match == null ? "" : match.Id,
+                        // Show an explicitly approved answer associated with
+                        // this group, even if the authored full question differs
+                        // from the original shorthand. Runtime reply still uses
+                        // the normal context and eligibility checks.
+                        DirectAnswer = match != null ? match.Answer
+                            : revision != null ? revision.AppliedAnswer : "",
+                        DirectKnowledgeId = match != null ? match.Id
+                            : revision != null ? revision.KnowledgeId : "",
                         AppliedRevision = revision,
                         Message = g.Messages.First(),
                         ReceivedAt = g.Latest,
