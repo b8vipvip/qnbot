@@ -11,10 +11,22 @@ using System.Windows.Media;
 
 namespace Bot.Knowledge
 {
+    // A display-only projection of one anonymous archived message.
+    // The archive continues to store one row per actual buyer message event.
+    internal sealed class BuyerMessageListItem
+    {
+        public BuyerQuestionRow Message { get; set; }
+        public DateTime ReceivedAt { get; set; }
+        public string Text { get; set; }
+        public string GroupKey { get; set; }
+        public string GroupTitle { get; set; }
+        public int GroupCount { get; set; }
+    }
+
     internal sealed class BuyerMessageManagementPage : UserControl, IKnowledgeV2Refreshable, IKnowledgeV2Searchable
     {
         private readonly string _seller;
-        private readonly TreeView _tree;
+        private readonly DataGrid _list;
         private readonly TextBox _search;
         private readonly DatePicker _startDate;
         private readonly DatePicker _endDate;
@@ -34,10 +46,12 @@ namespace Bot.Knowledge
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
             header.Children.Add(new TextBlock
             {
-                Text = "仅按店铺汇总买家消息，不保存买家身份。相同语义按组折叠；次数按去重后的真实消息事件统计。",
+                Text = "逐条展示本店已归档的匿名买家消息，默认按接收时间倒序排列。"
+                    + "同类消息不折叠，AI归类仅用于分类与统计，不保存买家身份。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
             });
             DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
+
             var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 7) };
             toolbar.Children.Add(new TextBlock { Text = "筛选开始日期", VerticalAlignment = VerticalAlignment.Center });
             _startDate = new DatePicker { Width = 127, SelectedDate = DateTime.Today.AddDays(-30),
@@ -50,10 +64,11 @@ namespace Bot.Knowledge
             _endDate.SelectedDateChanged += delegate { RefreshView(); };
             toolbar.Children.Add(_endDate);
             _search = new TextBox { Width = 225, Height = 28, Margin = new Thickness(0, 0, 8, 0),
-                ToolTip = "搜索组标题或消息文本" };
+                ToolTip = "搜索消息内容或所属分类" };
             _search.TextChanged += delegate { RefreshView(); };
             toolbar.Children.Add(_search);
-            var refresh = Button("刷新", 70); refresh.Click += delegate { RefreshView(); }; toolbar.Children.Add(refresh);
+            var refresh = Button("刷新", 70);
+            refresh.Click += delegate { RefreshView(); }; toolbar.Children.Add(refresh);
             _scanButton = Button("扫描历史消息", 115);
             _scanButton.Click += async delegate { await ScanHistoryAsync(); };
             toolbar.Children.Add(_scanButton);
@@ -65,25 +80,77 @@ namespace Bot.Knowledge
             _groupButton.Click += async delegate { await GroupAsync(); };
             toolbar.Children.Add(_groupButton);
             var stats = Button("AI统计优化", 100);
-            stats.Click += delegate
-            {
-                new BuyerQuestionOptimizationWindow(owner, _seller).ShowDialog();
-            };
+            stats.Click += delegate { new BuyerQuestionOptimizationWindow(owner, _seller).ShowDialog(); };
             toolbar.Children.Add(stats);
             var rename = Button("修改组标题", 100);
             rename.Click += delegate { RenameSelected(); };
             toolbar.Children.Add(rename);
-            var delete = Button("删除选中消息/组", 125);
+            var delete = Button("删除选中消息", 110);
             delete.Click += delegate { DeleteSelected(); };
             toolbar.Children.Add(delete);
+            var deleteGroup = Button("删除所属分类", 110);
+            deleteGroup.Click += delegate { DeleteSelectedGroup(); };
+            toolbar.Children.Add(deleteGroup);
             DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
 
             _status = new TextBlock { Text = "尚未读取", Margin = new Thickness(0, 0, 0, 8),
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
             DockPanel.SetDock(_status, Dock.Top); root.Children.Add(_status);
-            _tree = new TreeView { BorderBrush = Brushes.LightGray,
-                BorderThickness = new Thickness(1), FontSize = 13 };
-            root.Children.Add(_tree);
+
+            _list = new DataGrid
+            {
+                AutoGenerateColumns = false, IsReadOnly = true,
+                CanUserAddRows = false, CanUserDeleteRows = false,
+                CanUserSortColumns = true,
+                SelectionUnit = DataGridSelectionUnit.FullRow,
+                SelectionMode = DataGridSelectionMode.Extended,
+                HeadersVisibility = DataGridHeadersVisibility.Column,
+                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+                RowHeaderWidth = 0, MinRowHeight = 30,
+                EnableRowVirtualization = true, EnableColumnVirtualization = true,
+                BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
+                FontSize = 13
+            };
+            VirtualizingPanel.SetVirtualizationMode(_list, VirtualizationMode.Recycling);
+            _list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "接收时间",
+                Binding = new Binding("ReceivedAt") { StringFormat = "{0:yyyy-MM-dd HH:mm:ss}" },
+                SortMemberPath = "ReceivedAt", Width = new DataGridLength(160)
+            });
+
+            // Text may be long. Wrap its preview while keeping full redacted text
+            // accessible via tooltip and double-click detail; do not merge events.
+            var textFactory = new FrameworkElementFactory(typeof(TextBlock));
+            textFactory.SetBinding(TextBlock.TextProperty, new Binding("Text"));
+            textFactory.SetBinding(FrameworkElement.ToolTipProperty, new Binding("Text"));
+            textFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            textFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            textFactory.SetValue(FrameworkElement.MaxHeightProperty, 90.0);
+            textFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(5, 4, 5, 4));
+            _list.Columns.Add(new DataGridTemplateColumn
+            {
+                Header = "买家消息内容", CellTemplate = new DataTemplate { VisualTree = textFactory },
+                SortMemberPath = "Text", MinWidth = 280,
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "所属分类", Binding = new Binding("GroupTitle"),
+                SortMemberPath = "GroupTitle", Width = new DataGridLength(210)
+            });
+            _list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "筛选内同类次数", Binding = new Binding("GroupCount"),
+                SortMemberPath = "GroupCount", Width = new DataGridLength(118)
+            });
+            _list.MouseDoubleClick += delegate(object sender, System.Windows.Input.MouseButtonEventArgs e)
+            {
+                var row = ItemsControl.ContainerFromElement(
+                    _list, e.OriginalSource as DependencyObject) as DataGridRow;
+                if (row != null) ShowMessageDetails(row.Item as BuyerMessageListItem);
+            };
+            root.Children.Add(_list);
             Loaded += delegate { RefreshView(); };
             Unloaded += delegate
             {
@@ -100,7 +167,7 @@ namespace Bot.Knowledge
         public void ApplyGlobalSearch(string text) { _search.Text = text ?? ""; }
         public void RefreshView()
         {
-            if (_tree == null || _status == null) return;
+            if (_list == null || _status == null) return;
             try
             {
                 var start = _startDate == null || !_startDate.SelectedDate.HasValue
@@ -108,29 +175,51 @@ namespace Bot.Knowledge
                 var end = _endDate == null || !_endDate.SelectedDate.HasValue
                     ? (DateTime?)null : _endDate.SelectedDate.Value.Date.AddDays(1).AddTicks(-1);
                 var grouped = BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text);
-                _tree.Items.Clear();
-                foreach (var group in grouped)
+                // Display each original message once and sort across ALL categories,
+                // instead of displaying a sorted list of expandable category trees.
+                var rows = grouped.SelectMany(g => g.Messages.Select(message => new BuyerMessageListItem
                 {
-                    var node = new TreeViewItem
-                    {
-                        Header = group.Title + "    （" + group.Count + "次 · 最近 "
-                            + group.Latest.ToString("MM-dd HH:mm") + "）",
-                        Tag = group, IsExpanded = false
-                    };
-                    foreach (var message in group.Messages)
-                        node.Items.Add(new TreeViewItem
-                        {
-                            Header = new DateTime(message.ReceivedAtTicks).ToString("yyyy-MM-dd HH:mm:ss")
-                                + "    " + message.Text,
-                            Tag = message
-                        });
-                    _tree.Items.Add(node);
-                }
-                _status.Text = "当前筛选结果：" + grouped.Count + "组，"
-                    + grouped.Sum(x => x.Count) + "条消息。点击组展开查看各次提问。";
+                    Message = message, ReceivedAt = new DateTime(message.ReceivedAtTicks),
+                    Text = message.Text, GroupKey = g.Key, GroupTitle = g.Title,
+                    GroupCount = g.Count
+                })).OrderByDescending(x => x.ReceivedAt)
+                    .ThenBy(x => x.Message.Id, StringComparer.Ordinal).ToList();
+                _list.ItemsSource = rows;
+                _status.Text = "当前筛选结果：" + rows.Count + "条消息，" + grouped.Count
+                    + "个分类。按接收时间倒序；单击列标题可排序，双击消息可查看全文。";
             }
             catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
         }
+
+        private void ShowMessageDetails(BuyerMessageListItem item)
+        {
+            if (item == null) return;
+            var w = new Window
+            {
+                Owner = Window.GetWindow(this), Title = "匿名买家消息详情",
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Width = 720, Height = 400, MinWidth = 520, MinHeight = 270,
+                ShowInTaskbar = false
+            };
+            var panel = new DockPanel { Margin = new Thickness(12) };
+            var info = new TextBlock
+            {
+                Text = "接收时间：" + item.ReceivedAt.ToString("yyyy-MM-dd HH:mm:ss")
+                    + "    所属分类：" + item.GroupTitle,
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
+            };
+            DockPanel.SetDock(info, Dock.Top); panel.Children.Add(info);
+            panel.Children.Add(new TextBox
+            {
+                Text = item.Text ?? "", IsReadOnly = true, AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Padding = new Thickness(8)
+            });
+            w.Content = panel; w.ShowDialog();
+        }
+
         private async Task ScanHistoryAsync()
         {
             if (_scanCancellation != null) return;
@@ -185,23 +274,33 @@ namespace Bot.Knowledge
                 _status.Text = "正在分析所有归档消息...";
                 var count = await BuyerMessageArchiveService.GroupByAi(_seller,
                     message => Dispatcher.BeginInvoke(new Action(() => _status.Text = message)), _cancel.Token);
-                _status.Text = "AI分组完成：" + count + "个语义组。";
                 RefreshView();
+                _status.Text = "AI分组完成：" + count + "个语义组。";
             }
             catch (OperationCanceledException) { _status.Text = "已取消本次AI分析。"; }
             catch (Exception ex) { _status.Text = "AI分析失败，保留原分组：" + ex.Message; }
             finally { _cancel.Dispose(); _cancel = null; _groupButton.IsEnabled = true; }
         }
+
+        private BuyerMessageListItem SelectedGroupRow()
+        {
+            var rows = _list.SelectedItems.OfType<BuyerMessageListItem>().ToList();
+            if (rows.Count == 0) { _status.Text = "请先选择一条所属分类的消息"; return null; }
+            if (rows.Select(x => x.GroupKey).Distinct(StringComparer.Ordinal).Count() != 1)
+            { _status.Text = "选择的消息跨越不同分类，请只选同一分类"; return null; }
+            return rows[0];
+        }
+
         private void RenameSelected()
         {
-            var node = _tree.SelectedItem as TreeViewItem;
-            var group = node == null ? null : node.Tag as BuyerQuestionGroup;
-            if (group == null) { _status.Text = "请先选中一个主分组"; return; }
-            var value = Prompt(Window.GetWindow(this), "修改分组名称", group.Title);
+            var selected = SelectedGroupRow();
+            if (selected == null) return;
+            var value = Prompt(Window.GetWindow(this), "修改分组名称", selected.GroupTitle);
             if (value == null) return;
-            try { BuyerMessageArchiveService.RenameGroup(_seller, group.Key, value); RefreshView(); }
+            try { BuyerMessageArchiveService.RenameGroup(_seller, selected.GroupKey, value); RefreshView(); }
             catch (Exception ex) { _status.Text = "修改失败：" + ex.Message; }
         }
+
         internal static string Prompt(Window owner, string title, string old)
         {
             var w = new Window { Title = title, Owner = owner, Width = 540, Height = 175,
@@ -210,26 +309,42 @@ namespace Bot.Knowledge
             var text = new TextBox { Text = old ?? "", Height = 62, AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             DockPanel.SetDock(text, Dock.Top); panel.Children.Add(text);
-            var save = new Button { Content = "保存", Width = 95, Height = 30, HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 12, 0, 0) };
+            var save = new Button { Content = "保存", Width = 95, Height = 30,
+                HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
             save.Click += delegate { w.DialogResult = true; };
             panel.Children.Add(save); w.Content = panel;
             return w.ShowDialog() == true ? text.Text.Trim() : null;
         }
+
         private void DeleteSelected()
         {
-            var node = _tree.SelectedItem as TreeViewItem;
-            if (node == null) return;
-            var group = node.Tag as BuyerQuestionGroup;
-            var message = node.Tag as BuyerQuestionRow;
-            var ids = group != null ? group.Messages.Select(x => x.Id).ToArray()
-                : message != null ? new[] { message.Id } : new string[0];
-            if (ids.Length == 0) return;
+            // Multiple selection deletes only the explicitly selected rows.
+            var ids = _list.SelectedItems.OfType<BuyerMessageListItem>()
+                .Select(x => x.Message.Id).Distinct(StringComparer.Ordinal).ToArray();
+            if (ids.Length == 0) { _status.Text = "请先选中要删除的消息"; return; }
             if (MessageBox.Show(Window.GetWindow(this),
-                "确认从本店匿名归档中删除 " + ids.Length + " 条消息？不会更改原千牛聊天记录。",
-                "删除消息", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                "确认从本店匿名归档中删除选中的 " + ids.Length
+                    + " 条消息？不会更改原千牛聊天记录。",
+                "删除选中消息", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             try { BuyerMessageArchiveService.Delete(_seller, ids); RefreshView(); }
             catch (Exception ex) { _status.Text = "删除失败：" + ex.Message; }
+        }
+
+        private void DeleteSelectedGroup()
+        {
+            var selected = SelectedGroupRow();
+            if (selected == null) return;
+            // Explicit whole-category deletion includes messages outside the date filter.
+            var ids = BuyerMessageArchiveService.Read(_seller)
+                .Where(x => x.GroupKey == selected.GroupKey)
+                .Select(x => x.Id).ToArray();
+            if (ids.Length == 0) return;
+            if (MessageBox.Show(Window.GetWindow(this),
+                "确定删除分类「" + selected.GroupTitle + "」的全部 " + ids.Length
+                    + " 条匿名消息吗？包括当前日期筛选以外的记录；不会修改千牛聊天记录。",
+                "删除整个分类", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            try { BuyerMessageArchiveService.Delete(_seller, ids); RefreshView(); }
+            catch (Exception ex) { _status.Text = "删除分类失败：" + ex.Message; }
         }
     }
 
