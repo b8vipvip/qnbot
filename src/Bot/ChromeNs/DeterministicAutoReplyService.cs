@@ -929,6 +929,23 @@ namespace Bot.ChromeNs
             SaveForCurrentUi(CreateDefaults());
         }
 
+        // V2 navigation must never use the globally selected ShopKey when
+        // the knowledge center is explicitly opened for another seller.
+        public static List<LocalShortReplyEntry> LoadForSellerUi(string seller)
+        {
+            return Load(ShopContextLocator.ResolveRuntimeBySellerNick(seller));
+        }
+
+        public static void SaveForSellerUi(string seller, IEnumerable<LocalShortReplyEntry> entries)
+        {
+            Save(ShopContextLocator.ResolveRuntimeBySellerNick(seller), entries, true);
+        }
+
+        public static void RestoreDefaultsForSellerUi(string seller)
+        {
+            SaveForSellerUi(seller, CreateDefaults());
+        }
+
         public static List<LocalShortReplyEntry> CreateDefaults()
         {
             var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -1268,9 +1285,11 @@ namespace Bot.Knowledge
         private readonly TextBox _search = new TextBox();
         private readonly DataGrid _grid = new DataGrid();
         private readonly TextBlock _status = new TextBlock();
+        private readonly string _seller;
 
-        public LocalShortReplyManagerControl()
+        public LocalShortReplyManagerControl(string seller = null)
         {
+            _seller = (seller ?? string.Empty).Trim();
             Build();
             Loaded += delegate { RefreshData(); };
         }
@@ -1366,7 +1385,9 @@ namespace Bot.Knowledge
         {
             try
             {
-                _all = Bot.ChromeNs.LocalShortReplyService.LoadForCurrentUi();
+                _all = _seller.Length == 0
+                    ? Bot.ChromeNs.LocalShortReplyService.LoadForCurrentUi()
+                    : Bot.ChromeNs.LocalShortReplyService.LoadForSellerUi(_seller);
                 ApplyFilter();
             }
             catch (Exception ex)
@@ -1462,7 +1483,10 @@ namespace Bot.Knowledge
                 MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             try
             {
-                Bot.ChromeNs.LocalShortReplyService.RestoreDefaultsForCurrentUi();
+                if (_seller.Length == 0)
+                    Bot.ChromeNs.LocalShortReplyService.RestoreDefaultsForCurrentUi();
+                else
+                    Bot.ChromeNs.LocalShortReplyService.RestoreDefaultsForSellerUi(_seller);
                 RefreshData();
             }
             catch (Exception ex)
@@ -1490,7 +1514,10 @@ namespace Bot.Knowledge
                     "导入短消息回复",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-                Bot.ChromeNs.LocalShortReplyService.SaveForCurrentUi(list);
+                if (_seller.Length == 0)
+                    Bot.ChromeNs.LocalShortReplyService.SaveForCurrentUi(list);
+                else
+                    Bot.ChromeNs.LocalShortReplyService.SaveForSellerUi(_seller, list);
                 RefreshData();
             }
             catch (Exception ex)
@@ -1526,7 +1553,10 @@ namespace Bot.Knowledge
         {
             try
             {
-                Bot.ChromeNs.LocalShortReplyService.SaveForCurrentUi(_all);
+                if (_seller.Length == 0)
+                    Bot.ChromeNs.LocalShortReplyService.SaveForCurrentUi(_all);
+                else
+                    Bot.ChromeNs.LocalShortReplyService.SaveForSellerUi(_seller, _all);
                 RefreshData();
             }
             catch (Exception ex)
