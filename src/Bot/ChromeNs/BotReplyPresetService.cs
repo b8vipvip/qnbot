@@ -27,7 +27,7 @@ namespace Bot.ChromeNs
     {
         private const string SettingsKey = "bot.reply_presets.product_link.v1";
         private static readonly object Sync = new object();
-        // Explicit item-level rule: 商品ID:1057505313937 (or full-width colon).
+        // Explicit item-level rule: 商品ID:1234567890123 (or full-width colon).
         // Unlike the legacy free-text Trigger, this form is an executable condition.
         private static readonly Regex ExactItemTrigger = new Regex(
             @"^商品ID\s*[:：]\s*(\d{6,20})\s*$",
@@ -104,7 +104,7 @@ namespace Bot.ChromeNs
                 string itemId;
                 if (!TryParseExactItemTrigger(preset.Trigger, out itemId))
                     throw new InvalidOperationException(
-                        "商品专属话术的触发条件必须填写 商品ID:1057505313937 这样的完整数字商品ID。");
+                        "商品专属话术的触发条件必须填写 商品ID:1234567890123 这样的完整数字商品ID。");
                 if (preset.Enabled && !enabledExactItemIds.Add(itemId))
                     throw new InvalidOperationException(
                         "商品ID " + itemId + " 已有一条启用的专属话术，请先修改或停用原条目，避免冲突。");
