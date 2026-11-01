@@ -173,7 +173,8 @@ namespace Bot.Knowledge
             var state = Get(seller);
             lock (state.Sync) state.Db.SaveOneRecord(item);
         }
-        private static async Task<JObject> Ask(string seller, string instructions, JToken payload, CancellationToken ct)
+        private static async Task<JObject> Ask(string seller, string instructions, JToken payload, CancellationToken ct,
+            int maxTokens = 6500, int timeoutSeconds = 180)
         {
             var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
             if (shop == null) throw new InvalidOperationException("当前店铺AI接口不可用");
@@ -185,7 +186,7 @@ namespace Bot.Knowledge
             };
             using (ShopSettingsScope.Enter(shop))
             {
-                var r = await Task.Run(() => MyOpenAI.CallStructuredChat(messages, 6500, 0.1, 180, ct), ct)
+                var r = await Task.Run(() => MyOpenAI.CallStructuredChat(messages, maxTokens, 0.1, timeoutSeconds, ct), ct)
                     .ConfigureAwait(false);
                 if (r == null || !r.Success) throw new InvalidOperationException(r == null ? "AI无结果" : r.Error);
                 return JObject.Parse((r.Answer ?? "").Trim());
@@ -255,114 +256,195 @@ namespace Bot.Knowledge
             Log.Info("[BuyerQuestions] groups=" + titles.Count + ";messages=" + rows.Count);
             return titles.Count;
         }
+        // This is a retrieval shortlist, not proof that an answer is safe to
+        // publish. The model must still select an exact knowledge ID and the
+        // operator must explicitly approve the resulting draft.
+        private static List<KnowledgeV2Record> CandidateKnowledge(BuyerQuestionGroup group,
+            IEnumerable<KnowledgeV2Record> knowledge)
+        {
+            var variants = group.Messages.Select(x => x.Text)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.Ordinal).Take(10).ToList();
+            variants.Insert(0, group.Title);
+            return knowledge.Select(k => new
+                {
+                    Knowledge = k,
+                    Score = variants.Max(q => Math.Max(
+                        KnowledgeEngineV2Semantics.TextSimilarity(q, k.Title),
+                        (k.Aliases ?? new List<string>()).DefaultIfEmpty("")
+                            .Max(a => KnowledgeEngineV2Semantics.TextSimilarity(q, a))))
+                })
+                // Low scores waste tokens and can turn an unrelated answer into
+                // a seemingly grounded statement. Evidence still needs AI and
+                // the independent repository safety checks before activation.
+                .Where(x => x.Score >= 0.32)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Knowledge.Id, StringComparer.Ordinal)
+                .Take(5).Select(x => x.Knowledge).ToList();
+        }
+
+        private static bool NeedsContextInsteadOfDirectAnswer(BuyerQuestionGroup group)
+        {
+            var compact = KnowledgeEngineV2Semantics.Compact(group.Title);
+            return compact.Length < 5 || group.Title.StartsWith("[", StringComparison.Ordinal)
+                || KnowledgeEngineV2Semantics.IsContextDependent(group.Title)
+                || KnowledgeEngineV2Semantics.IsHighRisk(group.Title);
+        }
+
         internal static async Task<int> OptimizeTop(string seller, int days, int count,
             Action<string> progress, CancellationToken ct)
         {
             days = Math.Max(1, Math.Min(3650, days));
             count = Math.Max(1, Math.Min(100, count));
-            // Classifying incoming messages is not an optimization prerequisite.
-            // Existing semantic groups remain collapsible, while exact duplicates
-            // are counted directly without modifying any archived group keys.
-            if (progress != null) progress("按原始重复次数整理问题，关联现有知识...");
             var groups = Groups(seller, days, "").Take(count).ToList();
-            var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
-                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer)).ToList();
-            // All enabled V2 knowledge is sent in bounded chunks to let AI
-            // identify which factual records actually support each top topic.
-            // This avoids silently ignoring a distant but relevant KB entry.
-            var links = groups.ToDictionary(g => g.Key,
-                g => new HashSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
-            for (var offset = 0; offset < knowledge.Count; offset += 20)
+            if (groups.Count == 0)
             {
-                ct.ThrowIfCancellationRequested();
-                var slice = knowledge.Skip(offset).Take(20).ToList();
-                var context = new JObject
-                {
-                    ["topics"] = new JArray(groups.Select((g, index) =>
-                        new JObject { ["index"] = index, ["question"] = g.Title })),
-                    ["knowledge"] = new JArray(slice.Select(k => new JObject
-                    {
-                        ["id"] = k.Id, ["question"] = Redact(k.Title),
-                        ["answer"] = Redact(k.Answer), ["risk"] = k.RiskLevel
-                    }))
-                };
-                var relation = await Ask(seller,
-                    "判断每条现有知识是否能真实支持高频问题。返回严格JSON："
-                    + "{\"items\":[{\"index\":0,\"ids\":[\"准确知识ID\"]}]}。"
-                    + " 可返回空数组；只允许引用输入提供的知识ID，不得改写事实。",
-                    context, ct).ConfigureAwait(false);
-                var relationItems = relation["items"] as JArray;
-                if (relationItems == null)
-                    throw new InvalidOperationException("AI未返回知识关联结果；不会生成不完整优化");
-                var allowed = new HashSet<string>(slice.Select(x => x.Id), StringComparer.Ordinal);
-                foreach (var pair in relationItems.OfType<JObject>())
-                {
-                    int index;
-                    if (!int.TryParse(Convert.ToString(pair["index"]), out index)
-                        || index < 0 || index >= groups.Count) continue;
-                    var ids = pair["ids"] as JArray;
-                    if (ids == null) continue;
-                    foreach (var id in ids.Select(Convert.ToString).Where(allowed.Contains))
-                        links[groups[index].Key].Add(id);
-                }
-                if (progress != null) progress("已关联知识 " + Math.Min(offset + slice.Count, knowledge.Count)
-                    + "/" + knowledge.Count);
+                if (progress != null) progress("当前时间范围内没有可优化的买家消息。");
+                return 0;
             }
-            var suggestions = new List<BuyerAiOptimizationRow>();
-            for (var i = 0; i < groups.Count; i++)
+            var knowledge = KnowledgeEngineV2Repository.LoadAll(seller)
+                .Where(x => x != null && x.Enabled && x.Status == "active"
+                    && !string.IsNullOrWhiteSpace(x.Answer)
+                    && !string.Equals(x.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    && (x.Conditions == null || x.Conditions.Count == 0)
+                    && (x.RequiredContext == null || x.RequiredContext.Count == 0)
+                    && (x.ProductIds == null || x.ProductIds.Count == 0))
+                .ToList();
+
+            // Local retrieval replaces the former all-knowledge AI relation
+            // pass (20 entries per request) plus one AI request per topic.
+            // These two serial phases could exceed a 90-second upstream proxy
+            // limit even when the model obeyed the JSON syntax.
+            if (progress != null)
+                progress("开始本地检索 " + groups.Count + " 组买家问题、"
+                    + knowledge.Count + " 条可用于无条件直答的知识...");
+            var candidates = groups.Select(g =>
+                NeedsContextInsteadOfDirectAnswer(g)
+                    ? new List<KnowledgeV2Record>()
+                    : CandidateKnowledge(g, knowledge)).ToList();
+            var suggestions = new BuyerAiOptimizationRow[groups.Count];
+            var pendingIndices = new List<int>();
+            for (int i = 0; i < groups.Count; i++)
             {
-                ct.ThrowIfCancellationRequested();
                 var g = groups[i];
-                var related = knowledge.Where(x => links[g.Key].Contains(x.Id))
-                    .OrderByDescending(x => KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title))
-                    .Take(25).ToList();
-                // Never present a loosely related answer as trusted support.
-                // Unmatched questions deliberately go to AI with no facts; the
-                // system prompt then requires an empty proposal for human review.
-                if (related.Count == 0)
-                    related = knowledge.Where(x =>
-                        KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title) >= 0.68)
-                        .OrderByDescending(x => KnowledgeEngineV2Semantics.TextSimilarity(x.Title, g.Title))
-                        .Take(25).ToList();
-                var payload = new JObject
-                {
-                    ["topic"] = g.Title, ["frequency"] = g.Count,
-                    ["variants"] = new JArray(g.Messages.Select(x => x.Text).Distinct().Take(120)),
-                    ["knowledge"] = new JArray(related.Select(k => new JObject
-                        { ["id"] = k.Id, ["question"] = Redact(k.Title),
-                            ["answer"] = Redact(k.Answer), ["risk"] = k.RiskLevel }))
-                };
-                var json = await Ask(seller,
-                    "基于当前知识改进高频直答。不得自创价格、库存或服务承诺。证据不足时proposed_answer留空。"
-                    + "返回 {\"question\":\"\",\"proposed_answer\":\"\",\"reason\":\"\",\"knowledge_id\":\"\"}。",
-                    payload, ct).ConfigureAwait(false);
-                var evidenceId = Convert.ToString(json["knowledge_id"]) ?? "";
-                var evidence = related.FirstOrDefault(x => string.Equals(x.Id, evidenceId, StringComparison.Ordinal));
-                var draftAnswer = Redact(Convert.ToString(json["proposed_answer"]));
-                // A hallucinated or unrelated knowledge_id never authorizes a
-                // production answer; without verified evidence, leave it blank.
-                if (evidence == null || string.IsNullOrWhiteSpace(draftAnswer)
-                    || KnowledgeEngineV2Semantics.IsHighRisk(draftAnswer))
-                    draftAnswer = string.Empty;
-                var item = new BuyerAiOptimizationRow
+                suggestions[i] = new BuyerAiOptimizationRow
                 {
                     Id = Guid.NewGuid().ToString("N"), GroupKey = g.Key,
-                    Question = Redact(Convert.ToString(json["question"])), Frequency = g.Count,
-                    ExistingAnswer = evidence == null ? "" : evidence.Answer,
-                    ProposedAnswer = draftAnswer,
-                    Reason = Redact(Convert.ToString(json["reason"])), Status = "pending",
-                    CreatedAtTicks = DateTime.Now.Ticks, KnowledgeId = evidence == null ? "" : evidence.Id
+                    Question = Redact(g.Title), Frequency = g.Count,
+                    ExistingAnswer = "", ProposedAnswer = "",
+                    KnowledgeId = "", Status = "pending",
+                    Reason = NeedsContextInsteadOfDirectAnswer(g)
+                        ? "买家消息是图片/链接、短语句或依赖会话上下文，不能生成无条件直答。"
+                        : "未找到足够接近的无条件知识依据，请先在知识中心补充事实。",
+                    CreatedAtTicks = DateTime.Now.Ticks
                 };
-                if (item.Question.Length == 0) item.Question = g.Title;
-                suggestions.Add(item);
-                if (progress != null) progress("生成优化 " + (i + 1) + "/" + groups.Count);
+                if (candidates[i].Count > 0) pendingIndices.Add(i);
             }
+            if (progress != null) progress("本地候选检索完成："
+                + pendingIndices.Count + "/" + groups.Count
+                + " 组有待 AI 核验的知识，跳过其余无依据或依赖上下文的组。");
+
+            // At most four topics and five retrieved records per topic per AI
+            // call. Explicitly require one item per index, including unmatched
+            // topics. An empty items array for a nonempty batch is a contract
+            // violation, NOT proof that the KB has zero matches.
+            const int batchSize = 4;
+            for (int offset = 0; offset < pendingIndices.Count; offset += batchSize)
+            {
+                ct.ThrowIfCancellationRequested();
+                var indexes = pendingIndices.Skip(offset).Take(batchSize).ToList();
+                var payload = new JObject
+                {
+                    ["topics"] = new JArray(indexes.Select((globalIndex, localIndex) =>
+                        new JObject
+                        {
+                            ["index"] = localIndex,
+                            ["question"] = Redact(groups[globalIndex].Title),
+                            ["frequency"] = groups[globalIndex].Count,
+                            ["variants"] = new JArray(groups[globalIndex].Messages
+                                .Select(x => Redact(x.Text)).Distinct(StringComparer.Ordinal).Take(5)),
+                            ["knowledge"] = new JArray(candidates[globalIndex].Select(k =>
+                                new JObject
+                                {
+                                    ["id"] = k.Id, ["question"] = Redact(k.Title),
+                                    ["answer"] = Redact(k.Answer)
+                                }))
+                        }))
+                };
+                if (progress != null) progress("AI核验直答证据：第 "
+                    + (offset / batchSize + 1) + "/"
+                    + ((pendingIndices.Count + batchSize - 1) / batchSize) + " 批...");
+                JObject json;
+                try
+                {
+                    json = await Ask(seller,
+                        "你是电商买家问题与知识证据核验员。输入topics中每个index必须返回恰好一条结果，"
+                        + "包括找不到答案时也要返回该index，绝对不可省略或直接返回items:[]。"
+                        + "只能根据该题knowledge中提供的明确事实选择knowledge_id，不能引用其他题的知识。"
+                        + "证据不足、涉及商品身份不明确、风险或会话上下文依赖时，knowledge_id与proposed_answer均设为空字符串。"
+                        + "不得编造价格、设备兼容性、权益或承诺。"
+                        + "输出JSON: {\"items\":[{\"index\":0,\"knowledge_id\":\"精确ID或空字符串\","
+                        + "\"proposed_answer\":\"简短客观直答或空字符串\",\"reason\":\"理由\"}]}。"
+                        + "必须覆盖全部输入index，每个index出现且只出现一次。",
+                        payload, ct, 1900, 70).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("AI分析直答证据第 "
+                        + (offset / batchSize + 1) + " 批请求失败：" + ex.Message
+                        + "。若为HTTP 502/90秒超时，这是AI上游或代理故障，"
+                        + "不能当作无知识命中；可在服务恢复后重新分析。", ex);
+                }
+                var items = json["items"] as JArray;
+                if (items == null || items.Count != indexes.Count)
+                    throw new InvalidOperationException("AI返回items数目不正确（期望 "
+                        + indexes.Count + " 项，实际 " + (items == null ? 0 : items.Count)
+                        + " 项）。例如items:[]不代表没有匹配知识，已拒绝错误结果。");
+                var seen = new HashSet<int>();
+                foreach (var item in items.OfType<JObject>())
+                {
+                    int index;
+                    if (!int.TryParse(Convert.ToString(item["index"]), out index)
+                        || index < 0 || index >= indexes.Count || !seen.Add(index))
+                        throw new InvalidOperationException("AI返回重复或非法的问题索引，已拒绝错误结果。");
+                    var globalIndex = indexes[index];
+                    var suggestion = suggestions[globalIndex];
+                    var id = Convert.ToString(item["knowledge_id"]) ?? "";
+                    var matched = candidates[globalIndex].FirstOrDefault(x =>
+                        string.Equals(x.Id, id, StringComparison.Ordinal));
+                    var proposed = Redact(Convert.ToString(item["proposed_answer"]));
+                    suggestion.Reason = Redact(Convert.ToString(item["reason"]));
+                    if (matched == null || string.IsNullOrWhiteSpace(proposed)
+                        || KnowledgeEngineV2Semantics.IsHighRisk(proposed))
+                    {
+                        suggestion.Reason = "没有可核实的完整知识依据，保留空直答。"
+                            + (suggestion.Reason.Length == 0 ? "" : " " + suggestion.Reason);
+                        continue;
+                    }
+                    suggestion.KnowledgeId = matched.Id;
+                    suggestion.ExistingAnswer = matched.Answer;
+                    suggestion.ProposedAnswer = proposed;
+                }
+                if (seen.Count != indexes.Count)
+                    throw new InvalidOperationException("AI遗漏部分问题索引，未将不完整结果写入候选表。");
+                if (progress != null) progress("AI核验完成 "
+                    + Math.Min(offset + indexes.Count, pendingIndices.Count)
+                    + "/" + pendingIndices.Count + " 组...");
+            }
+            ct.ThrowIfCancellationRequested();
             foreach (var item in suggestions) SaveOptimization(seller, item);
+            var ready = suggestions.Count(x => !string.IsNullOrWhiteSpace(x.ProposedAnswer)
+                && !string.IsNullOrWhiteSpace(x.KnowledgeId));
+            if (progress != null) progress("已生成 " + suggestions.Length
+                + " 条候选，其中 " + ready + " 条有待人工确认的证据，"
+                + (suggestions.Length - ready) + " 条保留空直答。");
             string ignored;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller, "ai_buyer_top_questions",
                 "buyer_question", "", "", "高频买家问题优化", "", "days=" + days + ";top=" + count,
-                "AI输出待审核的建议 " + suggestions.Count + " 条，未自动修改生产知识", "success", out ignored);
-            return suggestions.Count;
+                "产生 " + suggestions.Length + " 条待审核建议，证据充分 " + ready
+                    + " 条；仅人工确认后才能应用。", "success", out ignored);
+            return suggestions.Length;
         }
         // Strictly map an archived message to one already-approved direct answer.
         // Similarity or AI-generated topic labels alone are never sufficient.

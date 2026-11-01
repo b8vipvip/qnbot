@@ -25,7 +25,8 @@ def test_ai_optimization_no_longer_classifies_and_never_auto_applies():
         "internal static KnowledgeV2Record FindConfirmedDirect(", 1)[0]
     assert "GroupByAi(seller" not in section
     assert 'Status = "pending"' in section
-    assert "if (evidence == null || string.IsNullOrWhiteSpace(draftAnswer)" in section
+    assert "matched == null || string.IsNullOrWhiteSpace(proposed)" in section
+    assert 'items == null || items.Count != indexes.Count' in section
     assert "SaveOptimization(seller, item)" in section
     assert "BuyerMessageArchiveService.Apply(" not in section
     assert "PreviewPending(latest);" in ui
