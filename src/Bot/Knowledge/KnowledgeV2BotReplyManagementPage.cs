@@ -959,6 +959,8 @@ namespace Bot.Knowledge
             };
             Grid.SetRow(warning, 6); editor.Children.Add(warning);
             content.Children.Add(editor);
+            string approvedQuestion = null;
+            string approvedAnswer = null;
             cancel.Click += delegate { dialog.DialogResult = false; };
             save.Click += delegate
             {
@@ -980,11 +982,18 @@ namespace Bot.Knowledge
                     "最终确认 · 启用生产直答",
                     MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
                     return;
-                question = q; answer = a;
+                approvedQuestion = q;
+                approvedAnswer = a;
                 dialog.DialogResult = true;
             };
             dialog.Content = content;
-            return dialog.ShowDialog() == true;
+            var confirmed = dialog.ShowDialog() == true;
+            if (confirmed)
+            {
+                question = approvedQuestion;
+                answer = approvedAnswer;
+            }
+            return confirmed;
         }
     }
 
