@@ -128,6 +128,8 @@ namespace Bot.Knowledge
             try
             {
                 evidence = new BuyerHistoryScanEvidenceSession(seller);
+                Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
+                    + ";maxContacts=" + options.MaxContacts);
                 var qn = QN.FindExistingBySellerNick(seller);
                 if (qn == null || qn.CDP == null || qn.Seller == null
                     || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
@@ -226,6 +228,9 @@ namespace Bot.Knowledge
                         read += count;
                         successful.Add(buyer);
                         evidence.Contact(buyer, true, count, "history_read");
+                        Log.Info("[BuyerQuestions] history_scan_contact_complete run="
+                            + evidence.Record.RunId + ";contact=" + evidence.ContactHash(buyer)
+                            + ";buyerMessages=" + count);
                         ReportBuyer(progress, "已完成一位买家", ordinal, names.Count, read,
                             successful.Count, failed, evidence);
                         return true;
@@ -260,6 +265,8 @@ namespace Bot.Knowledge
                         {
                             failed++;
                             evidence.Contact(pending[i], false, 0, "retry_exhausted");
+                            Log.Info("[BuyerQuestions] history_scan_contact_retry_exhausted run="
+                                + evidence.Record.RunId + ";contact=" + evidence.ContactHash(pending[i]));
                         }
                     }
                     scanState = failed == 0 && names.Count > 1 ? "completed" : "partial";
@@ -670,6 +677,7 @@ namespace Bot.Knowledge
 
                         if (chatWindow == null || allBuyerHeader == null)
                         {
+                            Log.Info("[BuyerQuestions] scan_contact_source_warning source=chat_ui;reason=all_buyer_header_missing");
                             diagnostics.AppendLine("千牛聊天主窗口中未找到“全部买家”栏。");
                             return names.ToList();
                         }
@@ -747,6 +755,8 @@ namespace Bot.Knowledge
                 catch (Exception ex)
                 {
                     diagnostics.AppendLine("读取聊天界面“全部买家”列表失败：" + Safe(ex.Message));
+                    Log.Info("[BuyerQuestions] scan_contact_source_error source=chat_ui;type="
+                        + ex.GetType().Name);
                 }
 
                 diagnostics.AppendLine("聊天界面“全部买家”列表读取到 " + names.Count + " 个联系人。");
@@ -904,6 +914,8 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 diagnostics.AppendLine("联系人接口 relation.rebase 失败：" + Safe(ex.Message));
+                Log.Info("[BuyerQuestions] scan_contact_source_error source=relation.rebase;type="
+                    + ex.GetType().Name);
             }
 
             try
@@ -923,6 +935,8 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 diagnostics.AppendLine("联系人接口 contact.search 失败：" + Safe(ex.Message));
+                Log.Info("[BuyerQuestions] scan_contact_source_error source=contact.search;type="
+                    + ex.GetType().Name);
             }
 
             return names.ToList();
