@@ -33,7 +33,9 @@ def test_time_search_scan_grouping_and_full_message_details_still_work():
     assert "new BuyerQuestionOptimizationWindow(owner, _seller, true).ShowDialog()" in page
     assert "await GroupByAi(seller, progress, ct, days)" not in archive
     assert "ScanBuyerMessagesAsync(" in page
-    assert "new ChatHistoryScanOptions { ScanAll = true, MaxContacts = 5000 }" in page
+    assert "new ChatHistoryScanOptions" in page
+    assert "MaxContacts = 5000" in page
+    assert "ResumeCheckpointId = resumeId" in page
     assert "(!start.HasValue || x.ReceivedAtTicks >= start.Value.Ticks)" in archive
     assert "(!end.HasValue || x.ReceivedAtTicks <= end.Value.Ticks)" in archive
 
