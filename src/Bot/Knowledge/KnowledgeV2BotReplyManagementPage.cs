@@ -504,8 +504,8 @@ namespace Bot.Knowledge
                     "不能建立无条件直答", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            // Never call UpdateAnswerSource or change the stored Answer field:
-            // the historical reply remains a faithful record of what was sent.
+            // Historical transport messages and their provenance remain
+            // immutable evidence; only future knowledge answers are corrected.
             string outcome, id;
             if (!KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
                 _seller, completeQuestion, reviewedAnswer, entity.EntityId, out outcome, out id))
