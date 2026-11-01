@@ -143,7 +143,7 @@ namespace Bot.Knowledge
                         seller, evidence.Record.RunId, options);
                 else
                 {
-                    evidence.Event("resumed", "checkpoint_loaded");
+                    evidence.Resume(checkpoint.Id, checkpoint.Completed.Count);
                     Log.Info("[BuyerQuestions] history_scan_resumed run=" + evidence.Record.RunId
                         + ";checkpoint=" + checkpoint.Id
                         + ";previouslyCompleted=" + checkpoint.Completed.Count);
@@ -332,6 +332,7 @@ namespace Bot.Knowledge
                         : failed > 0 ? "some_contacts_failed" : "discovered_contacts_processed";
                     checkpoint.State = scanState;
                     BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                    evidence.CumulativeCompleted(successful.Count);
                 }
                 finally
                 {
