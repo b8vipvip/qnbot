@@ -439,8 +439,8 @@ namespace Bot.Knowledge
             var note = new TextBlock
             {
                 Text = "扫描记录存放在本店日志目录；每次任务均生成 manifest.json、events.jsonl、"
-                    + "messages-redacted.jsonl 及 ZIP。数据包不包含买家昵称、原始消息Key、订单号或密码；"
-                    + "可能包含脱敏后的聊天内容，请仅交给授权人员。",
+                    + "messages-redacted.jsonl 及 ZIP。不主动保存买家昵称和原始消息 Key，"
+                    + "并对常见敏感信息脱敏；文本仍可能含个人信息，请仅交给授权人员。",
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
             };
             DockPanel.SetDock(note, Dock.Top); dock.Children.Add(note);
