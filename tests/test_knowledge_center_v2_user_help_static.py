@@ -9,10 +9,10 @@ PROPS = (ROOT / "src/Bot/Directory.Build.props").read_text(encoding="utf-8")
 DOC = (ROOT / "docs/KNOWLEDGE_CENTER_V2_USER_HELP.md").read_text(encoding="utf-8")
 
 
-def test_help_is_reachable_from_settings_page_settings_help_and_v2_header():
-    assert 'Content = "使用帮助"' in SETTINGS
+def test_help_is_reachable_from_settings_help_and_direct_v2_header():
     assert 'string.Equals(page, "知识库", StringComparison.Ordinal)' in SETTINGS
     assert "KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);" in SETTINGS
+    assert "RemoveLegacyKnowledgeGuideTab();" in SETTINGS
     assert 'var help = Button("使用帮助", 92);' in SHELL
     assert "KnowledgeCenterHelpWindow.MyShow(_owner, _seller);" in SHELL
 
