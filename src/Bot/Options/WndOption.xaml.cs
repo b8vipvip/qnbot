@@ -1,5 +1,6 @@
 ﻿using Bot.AssistWindow;
 using Bot.ChromeNs;
+using Bot.Knowledge;
 using Bot.Common;
 using Bot.Common.Windows;
 using Bot.ShopScope;
@@ -31,6 +32,7 @@ namespace Bot.Options
         private readonly List<IOptions> _visitedOptions = new List<IOptions>();
         private FeatureSettingsOptionsControl _featureSettings;
         private SettingsPage _currentPage;
+        private KnowledgeCenterWindow _knowledgeCenterWindow;
         private OptionEnum _pendingPage = OptionEnum.Unknown;
         private bool _initialized;
 
@@ -168,12 +170,22 @@ namespace Bot.Options
         private void NavigationButton_Checked(object sender, RoutedEventArgs e)
         {
             var button = sender as RadioButton;
-            NavigateTo(button == null ? null : button.Tag as SettingsPage);
+            var page = button == null ? null : button.Tag as SettingsPage;
+            NavigateTo(page);
         }
 
         private void NavigateTo(SettingsPage page)
         {
             if (page == null) return;
+            if (page.PageType == OptionEnum.GoodsKnowledge)
+            {
+                // A direct destination, not an embedded settings page.
+                // Keep the last real settings section selected in the sidebar;
+                // opening/closing V2 must not leave a blank launcher behind.
+                RestoreCurrentSettingsSelection();
+                OpenKnowledgeCenterDirectly();
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(page.FeaturePage)) _featureSettings.NavigateTo(page.FeaturePage);
             _currentPage = page;
             Log.Info("[SettingsOperation] surface=bot_settings;event=navigate;page=" + page.Title);
@@ -185,6 +197,47 @@ namespace Bot.Options
             if (!_visitedOptions.Contains(page.Control)) _visitedOptions.Add(page.Control);
             btnRestoreCurrent.IsEnabled = !(page.Control is FeatureSettingsOptionsControl);
             btnRestoreCurrent.Opacity = btnRestoreCurrent.IsEnabled ? 1.0 : 0.55;
+        }
+
+        private void RestoreCurrentSettingsSelection()
+        {
+            var previous = _currentPage ??
+                _pages.FirstOrDefault(x => x.PageType == OptionEnum.ShopBinding);
+            if (previous == null) return;
+            if (_currentPage == null)
+                NavigateTo(previous);
+            else if (previous.NavigationButton != null
+                && previous.NavigationButton.IsChecked != true)
+                previous.NavigationButton.IsChecked = true;
+        }
+
+        private void OpenKnowledgeCenterDirectly()
+        {
+            if (_knowledgeCenterWindow != null)
+            {
+                if (_knowledgeCenterWindow.WindowState == WindowState.Minimized)
+                    _knowledgeCenterWindow.WindowState = WindowState.Normal;
+                _knowledgeCenterWindow.Activate();
+                return;
+            }
+            try
+            {
+                var knowledge = KnowledgeCenterWindow.ShowForSeller(this, Seller);
+                _knowledgeCenterWindow = knowledge;
+                knowledge.Closed += delegate
+                {
+                    if (ReferenceEquals(_knowledgeCenterWindow, knowledge))
+                        _knowledgeCenterWindow = null;
+                };
+                Log.Info("[SettingsOperation] surface=bot_settings;page=知识库;event=open_knowledge_center_direct");
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[SettingsOperation] surface=bot_settings;page=知识库;event=open_failed;type="
+                    + ex.GetType().Name);
+                MessageBox.Show(this, "打开本店知识中心失败：" + ex.Message,
+                    "知识库", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void UpdateShopScopeHeader()
