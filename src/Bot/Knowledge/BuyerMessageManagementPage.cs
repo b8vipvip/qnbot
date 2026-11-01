@@ -48,6 +48,7 @@ namespace Bot.Knowledge
     internal sealed class BuyerMessageManagementPage : UserControl, IKnowledgeV2Refreshable, IKnowledgeV2Searchable
     {
         private readonly string _seller;
+        private readonly DockPanel _root;
         private readonly DataGrid _list;
         private readonly TextBox _search;
         private readonly DatePicker _startDate;
@@ -56,8 +57,12 @@ namespace Bot.Knowledge
         private readonly Button _groupButton;
         private readonly Button _scanButton;
         private readonly Button _stopScan;
+        private readonly Border _scanCard;
+        private readonly TextBlock _scanCardTitle;
+        private readonly Button _scanCardClose;
         private readonly ProgressBar _scanProgress;
         private readonly TextBox _scanLog;
+        private int _scanGeneration;
         private string _lastScanProgressKey;
         private CancellationTokenSource _cancel;
         private CancellationTokenSource _scanCancellation;
@@ -65,7 +70,8 @@ namespace Bot.Knowledge
         internal BuyerMessageManagementPage(Window owner, string seller)
         {
             _seller = seller ?? "";
-            var root = new DockPanel { Margin = new Thickness(12) };
+            _root = new DockPanel { Margin = new Thickness(12) };
+            var root = _root;
             Content = root;
             var header = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             header.Children.Add(new TextBlock { Text = "买家消息管理", FontSize = 20, FontWeight = FontWeights.SemiBold });
@@ -127,19 +133,57 @@ namespace Bot.Knowledge
             _status = new TextBlock { Text = "尚未读取", Margin = new Thickness(0, 0, 0, 8),
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
             DockPanel.SetDock(_status, Dock.Top); root.Children.Add(_status);
-            var scanDetail = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-            _scanProgress = new ProgressBar { Height = 14, Minimum = 0, Maximum = 100,
-                Value = 0, ToolTip = "扫描进度 = 已处理联系人 / 总联系人；重试阶段单独显示。" };
-            scanDetail.Children.Add(_scanProgress);
+            // Create the progress card once, but DO NOT add it to the page.
+            // It is inserted only after the user confirms a history scan.
+            // When the scan ends, its summary stays visible until the user
+            // explicitly closes it, at which point the message grid expands.
+            var scanContents = new DockPanel();
+            var scanHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            _scanCardClose = new Button
+            {
+                Content = "×", Width = 28, Height = 26, IsEnabled = false,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                ToolTip = "扫描结束后可关闭此进度卡片，不会删除扫描记录或数据包。"
+            };
+            _scanCardClose.Click += delegate
+            {
+                if (_scanCancellation == null) _root.Children.Remove(_scanCard);
+            };
+            DockPanel.SetDock(_scanCardClose, Dock.Right);
+            scanHeader.Children.Add(_scanCardClose);
+            _scanCardTitle = new TextBlock
+            {
+                Text = "历史消息扫描", FontWeight = FontWeights.SemiBold,
+                FontSize = 14, VerticalAlignment = VerticalAlignment.Center
+            };
+            scanHeader.Children.Add(_scanCardTitle);
+            DockPanel.SetDock(scanHeader, Dock.Top);
+            scanContents.Children.Add(scanHeader);
+            _scanProgress = new ProgressBar
+            {
+                Height = 14, Minimum = 0, Maximum = 100, Value = 0,
+                ToolTip = "扫描进度 = 已处理联系人 / 总联系人；重试阶段单独显示。"
+            };
+            DockPanel.SetDock(_scanProgress, Dock.Top);
+            scanContents.Children.Add(_scanProgress);
             _scanLog = new TextBox
             {
                 Height = 80, IsReadOnly = true, AcceptsReturn = true,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 7, 0, 0),
                 ToolTip = "仅显示匿名进度事件。完整日志和脱敏结果存储在扫描数据包中。"
             };
-            scanDetail.Children.Add(_scanLog);
-            DockPanel.SetDock(scanDetail, Dock.Top); root.Children.Add(scanDetail);
+            scanContents.Children.Add(_scanLog);
+            _scanCard = new Border
+            {
+                BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6), Padding = new Thickness(10),
+                Background = Brushes.White, Margin = new Thickness(0, 0, 0, 8),
+                Child = scanContents
+            };
+            DockPanel.SetDock(_scanCard, Dock.Top);
+            // Intentionally not added to root here: never reserve empty space.
 
             _list = new DataGrid
             {
@@ -374,9 +418,16 @@ namespace Bot.Knowledge
                 + "取消任务也会保留已提取部分。是否开始？",
                 "扫描历史买家消息", MessageBoxButton.YesNo,
                 MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            // Attach the existing card only when a scan really begins, not on
+            // initial page load or when browsing saved scan records.
+            if (!_root.Children.Contains(_scanCard))
+                _root.Children.Insert(_root.Children.IndexOf(_list), _scanCard);
             _scanCancellation = new CancellationTokenSource();
+            var generation = ++_scanGeneration;
             _scanButton.IsEnabled = false;
             _stopScan.IsEnabled = true;
+            _scanCardClose.IsEnabled = false;
+            _scanCardTitle.Text = "历史消息扫描 · 正在进行";
             _scanProgress.Value = 0;
             _scanLog.Text = string.Empty;
             _lastScanProgressKey = null;
@@ -385,10 +436,17 @@ namespace Bot.Knowledge
                 _status.Text = "正在扫描本店可访问的历史消息...";
                 var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(
                     _seller, new ChatHistoryScanOptions { ScanAll = true, MaxContacts = 5000 },
-                    p => Dispatcher.BeginInvoke(new Action(() => UpdateScanProgress(p))),
+                    p => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        // A queued callback from a previous run must not alter
+                        // a newer scan card after a new scan has started.
+                        if (generation == _scanGeneration) UpdateScanProgress(p);
+                    })),
                     _scanCancellation.Token);
                 RefreshView();
                 _scanProgress.Value = 100;
+                _scanCardTitle.Text = scan.FailedContacts == 0
+                    ? "历史消息扫描 · 已完成" : "历史消息扫描 · 部分完成";
                 _status.Text = "历史扫描结束：成功 " + scan.ScannedContacts + "/"
                     + scan.ContactCount + " 位联系人；消息 " + scan.MessageCount
                     + "；失败 " + scan.FailedContacts
@@ -402,11 +460,13 @@ namespace Bot.Knowledge
             }
             catch (OperationCanceledException)
             {
+                _scanCardTitle.Text = "历史消息扫描 · 已取消";
                 _status.Text = "扫描已取消，已完成的消息和部分数据包保留；可点击“扫描记录 / 数据包”查看。";
                 _scanLog.AppendText(_status.Text + Environment.NewLine);
             }
             catch (Exception ex)
             {
+                _scanCardTitle.Text = "历史消息扫描 · 失败";
                 _status.Text = "扫描失败：" + ex.Message + "；请到扫描记录查看已保存部分。";
                 _scanLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text
                     + Environment.NewLine);
@@ -417,6 +477,9 @@ namespace Bot.Knowledge
                 _scanCancellation = null;
                 _scanButton.IsEnabled = true;
                 _stopScan.IsEnabled = false;
+                // Keep the finished card until the user clicks ×.
+                // Closing only removes the visual; persisted logs stay intact.
+                _scanCardClose.IsEnabled = true;
             }
         }
 
