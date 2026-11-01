@@ -32,7 +32,8 @@ def test_history_scan_uses_real_contact_discovery_and_native_paginated_history_w
     assert "ReadHistoryAsync(qn, seller, buyer, ccode, options," in part
     assert "pending.Add(names[i]);" in part
     assert 'turns.Where(x => x.Role == "buyer")' in part
-    assert "BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time)" in part
+    assert "BuyerMessageArchiveService.ObserveForHistoryScan(" in part
+    assert "turn.Text, receipt, turn.Time" in part
     assert "KnowledgeAiService" not in part
     assert "ImportAsync(" not in part
     assert "originalBuyer" in part and "qn.OpenChat(originalBuyer)" in part

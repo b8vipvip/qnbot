@@ -30,6 +30,9 @@ namespace Bot.Knowledge
         public bool ContactCoverageVerified { get; set; }
         public string CoverageWarning { get; set; }
         public string PackagePath { get; set; }
+        public string ResumeCheckpointId { get; set; }
+        public int SkippedPreviouslyCompleted { get; set; }
+        public int CumulativeCompletedContacts { get; set; }
     }
 
     internal sealed class BuyerHistoryScanEvidenceSession : IDisposable
@@ -130,6 +133,27 @@ namespace Bot.Knowledge
         {
             _record.ContactCount = count;
             Event("discovery", "contact_list_ready");
+        }
+
+        internal void Resume(string checkpointId, int previousCompleted)
+        {
+            lock (_sync)
+            {
+                _record.ResumeCheckpointId = checkpointId;
+                _record.SkippedPreviouslyCompleted = previousCompleted;
+                _record.CumulativeCompletedContacts = previousCompleted;
+                SaveManifest();
+            }
+            Event("resume", "checkpoint_restored");
+        }
+
+        internal void CumulativeCompleted(int count)
+        {
+            lock (_sync)
+            {
+                _record.CumulativeCompletedContacts = count;
+                SaveManifest();
+            }
         }
 
         internal void Retry(string reason)

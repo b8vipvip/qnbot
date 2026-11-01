@@ -411,11 +411,32 @@ namespace Bot.Knowledge
         private async Task ScanHistoryAsync()
         {
             if (_scanCancellation != null) return;
-            if (MessageBox.Show(Window.GetWindow(this),
-                "扫描本店可访问的历史买家消息。扫描器需要短暂切换千牛会话取得会话ID；"
-                + "新买家消息如果抢占窗口，扫描器会重新确认会话并重试，可能导致个别联系人稍后补扫。"
-                + " 不暂停正常接待与自动回复。全部日志和脱敏消息自动归档为数据包，"
-                + "取消任务也会保留已提取部分。是否开始？",
+            BuyerHistoryScanResumeInfo previous;
+            try { previous = BuyerHistoryScanCheckpointStore.Latest(_seller); }
+            catch (Exception ex)
+            {
+                _status.Text = "无法读取历史扫描断点：" + ex.Message
+                    + "。请检查本店的断点记录，避免无意覆盖未完成数据。";
+                return;
+            }
+            string resumeId = null;
+            if (previous != null)
+            {
+                var choice = MessageBox.Show(Window.GetWindow(this),
+                    "找到本店上次扫描任务：" + previous.Id
+                    + "\n状态：" + previous.State
+                    + "\n已完成：" + previous.Completed + "/" + previous.Total
+                    + " 位联系人。\n\n“是”：从断点续扫，跳过已成功的买家，补扫未完成者并发现新买家。"
+                    + "\n“否”：开始新扫描（上次断点和日志保留）。"
+                    + "\n“取消”：不执行。",
+                    "历史消息扫描 · 断点续扫",
+                    MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                if (choice == MessageBoxResult.Cancel) return;
+                if (choice == MessageBoxResult.Yes) resumeId = previous.Id;
+            }
+            else if (MessageBox.Show(Window.GetWindow(this),
+                "开始扫描本店可访问的历史消息？每成功读取一位买家都将加密保存断点。"
+                + "任务取消、客户端退出或异常中断后可继续，正常接待与自动回复仍优先。",
                 "扫描历史买家消息", MessageBoxButton.YesNo,
                 MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             // Attach the existing card only when a scan really begins, not on
@@ -427,15 +448,24 @@ namespace Bot.Knowledge
             _scanButton.IsEnabled = false;
             _stopScan.IsEnabled = true;
             _scanCardClose.IsEnabled = false;
-            _scanCardTitle.Text = "历史消息扫描 · 正在进行";
-            _scanProgress.Value = 0;
-            _scanLog.Text = string.Empty;
+            _scanCardTitle.Text = resumeId == null
+                ? "历史消息扫描 · 正在进行" : "历史消息扫描 · 断点续扫中";
+            _scanProgress.Value = resumeId != null && previous != null && previous.Total > 0
+                ? Math.Round(100.0 * previous.Completed / previous.Total) : 0;
+            _scanLog.Text = resumeId == null ? ""
+                : "继续断点任务 " + resumeId + "；已完成 "
+                    + previous.Completed + "/" + previous.Total + " 位买家将跳过。"
+                    + Environment.NewLine;
             _lastScanProgressKey = null;
             try
             {
                 _status.Text = "正在扫描本店可访问的历史消息...";
                 var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(
-                    _seller, new ChatHistoryScanOptions { ScanAll = true, MaxContacts = 5000 },
+                    _seller, new ChatHistoryScanOptions
+                    {
+                        ScanAll = true, MaxContacts = 5000,
+                        ResumeCheckpointId = resumeId
+                    },
                     p => Dispatcher.BeginInvoke(new Action(() =>
                     {
                         // A queued callback from a previous run must not alter
@@ -448,14 +478,16 @@ namespace Bot.Knowledge
                 _scanCardTitle.Text = scan.FailedContacts == 0 && scan.ContactCoverageVerified
                     ? "历史消息扫描 · 已完成" : "历史消息扫描 · 覆盖待核实";
                 _status.Text = "历史扫描结束：成功 " + scan.ScannedContacts + "/"
-                    + scan.ContactCount + " 位联系人；消息 " + scan.MessageCount
+                    + scan.ContactCount + " 位联系人（跳过上次已完成 "
+                    + scan.PreviouslyCompletedContacts + " 位）；累计消息 " + scan.MessageCount
                     + "；失败 " + scan.FailedContacts
                     + "；会话切换 " + scan.InterruptionCount
                     + "；重试 " + scan.RetryCount
                     + "。数据包已保存在店铺扫描记录中。"
                     + " " + scan.CoverageWarning;
                 _scanLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text
-                    + Environment.NewLine + "任务 " + scan.RunId
+                    + Environment.NewLine + "本轮任务 " + scan.RunId
+                    + Environment.NewLine + "断点任务 " + scan.ResumeCheckpointId
                     + Environment.NewLine + "ZIP：" + scan.PackagePath + Environment.NewLine);
                 _scanLog.ScrollToEnd();
             }
