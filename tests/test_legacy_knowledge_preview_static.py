@@ -4,15 +4,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PREVIEW = (ROOT / "src/Bot/Knowledge/LegacyKnowledgePreviewWindow.cs").read_text(encoding="utf-8")
 SETTINGS = (ROOT / "src/Bot/Options/FeatureSettingsOptionsControl.cs").read_text(encoding="utf-8")
+SHELL = (ROOT / "src/Bot/Knowledge/KnowledgeCenterV2Ui.cs").read_text(encoding="utf-8")
 PROPS = (ROOT / "src/Bot/Directory.Build.props").read_text(encoding="utf-8")
 HELP = (ROOT / "src/Bot/Knowledge/KnowledgeCenterHelpWindow.cs").read_text(encoding="utf-8")
 DOC = (ROOT / "docs/KNOWLEDGE_CENTER_V2_USER_HELP.md").read_text(encoding="utf-8")
 
 
-def test_preview_is_reachable_from_client_knowledge_settings():
-    assert 'Content = "旧版知识库预览"' in SETTINGS
-    assert 'ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能"' in SETTINGS
-    assert "LegacyKnowledgePreviewWindow.MyShow(Window.GetWindow(this), Seller);" in SETTINGS
+def test_preview_is_reachable_inside_v2_without_settings_intermediate_page():
+    assert 'Button("旧版知识库预览", 136)' in SHELL
+    assert 'ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能"' in SHELL
+    assert "LegacyKnowledgePreviewWindow.MyShow(_owner, _seller);" in SHELL
+    assert "RemoveLegacyKnowledgeGuideTab();" in SETTINGS
+    assert "ReplaceKnowledgePageWithEmbeddedLauncher" not in SETTINGS
 
 
 def test_preview_resolves_the_current_shop_and_uses_the_real_pre_v2_v1_shell():
