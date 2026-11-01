@@ -186,10 +186,23 @@ namespace Bot.Knowledge
             };
             using (ShopSettingsScope.Enter(shop))
             {
-                var r = await Task.Run(() => MyOpenAI.CallStructuredChat(messages, maxTokens, 0.1, timeoutSeconds, ct), ct)
-                    .ConfigureAwait(false);
-                if (r == null || !r.Success) throw new InvalidOperationException(r == null ? "AI无结果" : r.Error);
-                return JObject.Parse((r.Answer ?? "").Trim());
+                try
+                {
+                    var r = await Task.Run(() =>
+                        MyOpenAI.CallStructuredChat(messages, maxTokens, 0.1, timeoutSeconds, ct), ct)
+                        .ConfigureAwait(false);
+                    if (r == null || !r.Success)
+                        throw new InvalidOperationException(r == null ? "AI无结果" : r.Error);
+                    return JObject.Parse((r.Answer ?? "").Trim());
+                }
+                catch (OperationCanceledException ex)
+                {
+                    if (ct.IsCancellationRequested) throw; // User actually pressed cancel.
+                    // A per-endpoint HTTP deadline also raises OperationCanceledException,
+                    // but is not a user cancellation. Surface as an upstream failure.
+                    throw new TimeoutException("AI上游请求超过 "
+                        + timeoutSeconds + " 秒，未获得有效响应。请检查供应商或代理超时。", ex);
+                }
             }
         }
         internal static async Task<int> GroupByAi(string seller, Action<string> progress,
