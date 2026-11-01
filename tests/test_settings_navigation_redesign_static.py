@@ -78,9 +78,11 @@ def test_feature_pages_are_embedded_and_obsolete_license_page_is_removed():
     assert 'SetPrivateField(_legacyWindow, "_licensee", null);' in code
     assert '_legacyWindow.Content = null;' in code
     assert 'HideLegacyTabHeaders();' in code
-    assert 'KnowledgeCenterWindow.MyShow(Window.GetWindow(this));' in code
-    assert 'Content = "使用帮助"' in code
+    assert "RemoveLegacyKnowledgeGuideTab();" in code
+    assert "ReplaceKnowledgePageWithEmbeddedLauncher" not in code
     assert 'KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);' in code
+    window = read(SETTINGS_CS)
+    assert "KnowledgeCenterWindow.ShowForSeller(this, Seller)" in window
 
 
 def test_feature_business_data_cannot_be_cleared_by_restore_default():
