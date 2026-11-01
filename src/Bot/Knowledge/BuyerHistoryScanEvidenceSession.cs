@@ -39,6 +39,10 @@ namespace Bot.Knowledge
         private readonly BuyerHistoryScanEvidence _record;
         private bool _finished;
         internal BuyerHistoryScanEvidence Record { get { return _record; } }
+        internal string ExpectedPackagePath
+        {
+            get { return Path.Combine(_sessionFolder, _record.RunId + ".zip"); }
+        }
 
         internal BuyerHistoryScanEvidenceSession(string seller)
         {
