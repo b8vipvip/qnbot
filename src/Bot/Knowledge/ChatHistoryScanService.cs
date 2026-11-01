@@ -237,7 +237,8 @@ namespace Bot.Knowledge
                         {
                             var now = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
                             var current = CleanNick(FindString(now, "nick", "buyerNick", "display"));
-                            if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal))
+                            if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal)
+                                && BotActivityCoordinator.GetSnapshot(seller).ActiveCount == 0)
                                 qn.OpenChat(originalBuyer);
                             else evidence.Event("restore_skipped", "foreground_changed_externally");
                         }
@@ -938,9 +939,31 @@ namespace Bot.Knowledge
             return Regex.IsMatch(value, @"[\p{L}\d_]");
         }
 
+        // The scanner must yield the foreground chat to active Bot tasks.
+        // Waiting is bounded: when busy persists, the contact is deferred for
+        // the retry pass, not forced open while a real buyer is being served.
+        private static async Task WaitForSafeChatSwitchAsync(QN qn,
+            CancellationToken token, Action<string> onInterruption)
+        {
+            bool announced = false;
+            for (int i = 0; i < 40; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (BotActivityCoordinator.GetSnapshot(qn.Seller.Nick).ActiveCount == 0) return;
+                if (!announced && onInterruption != null)
+                {
+                    onInterruption("bot_busy_wait");
+                    announced = true;
+                }
+                await Task.Delay(250, token);
+            }
+            throw new InvalidOperationException("bot_active_foreground_busy");
+        }
+
         private static async Task<string> ResolveConversationCodeAsync(QN qn, string buyer,
             CancellationToken token, Action<string> onInterruption = null)
         {
+            await WaitForSafeChatSwitchAsync(qn, token, onInterruption);
             qn.OpenChat(buyer);
             int consecutiveMismatch = 0;
             for (var attempt = 0; attempt < 36; attempt++)
@@ -957,7 +980,8 @@ namespace Bot.Knowledge
                     if (consecutiveMismatch >= 4)
                     {
                         consecutiveMismatch = 0;
-                        qn.OpenChat(buyer); // Re-pin target, without pausing live buyer reception.
+                        await WaitForSafeChatSwitchAsync(qn, token, onInterruption);
+                        qn.OpenChat(buyer); // Re-pin only when Bot is not actively handling a message.
                     }
                     continue;
                 }
