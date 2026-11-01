@@ -5,6 +5,9 @@
       <Guid>{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}</Guid>
     </COMReference>
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\SettingsOperationAudit.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\SettingsOperationAudit.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs')">
     <!-- WPF creates Bot_*_wpftmp projects; include the partial there as well. -->
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs" />
