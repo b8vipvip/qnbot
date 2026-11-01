@@ -445,14 +445,15 @@ namespace Bot.Knowledge
                     _scanCancellation.Token);
                 RefreshView();
                 _scanProgress.Value = 100;
-                _scanCardTitle.Text = scan.FailedContacts == 0
-                    ? "历史消息扫描 · 已完成" : "历史消息扫描 · 部分完成";
+                _scanCardTitle.Text = scan.FailedContacts == 0 && scan.ContactCoverageVerified
+                    ? "历史消息扫描 · 已完成" : "历史消息扫描 · 覆盖待核实";
                 _status.Text = "历史扫描结束：成功 " + scan.ScannedContacts + "/"
                     + scan.ContactCount + " 位联系人；消息 " + scan.MessageCount
                     + "；失败 " + scan.FailedContacts
                     + "；会话切换 " + scan.InterruptionCount
                     + "；重试 " + scan.RetryCount
-                    + "。数据包已保存在店铺扫描记录中。";
+                    + "。数据包已保存在店铺扫描记录中。"
+                    + " " + scan.CoverageWarning;
                 _scanLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text
                     + Environment.NewLine + "任务 " + scan.RunId
                     + Environment.NewLine + "ZIP：" + scan.PackagePath + Environment.NewLine);

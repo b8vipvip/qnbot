@@ -78,6 +78,8 @@ namespace Bot.Knowledge
         public int InterruptionCount { get; set; }
         public string RunId { get; set; }
         public string PackagePath { get; set; }
+        public bool ContactCoverageVerified { get; set; }
+        public string CoverageWarning { get; set; }
     }
 
     public sealed class ChatHistoryScanService
@@ -126,6 +128,8 @@ namespace Bot.Knowledge
             try
             {
                 evidence = new BuyerHistoryScanEvidenceSession(seller);
+                Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
+                    + ";maxContacts=" + options.MaxContacts);
                 var qn = QN.FindExistingBySellerNick(seller);
                 if (qn == null || qn.CDP == null || qn.Seller == null
                     || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
@@ -136,20 +140,55 @@ namespace Bot.Knowledge
                 Report(progress, "正在搜集本店可访问的联系人", 0, 0, "", 0, 0, 0);
                 var contacts = new HashSet<string>(StringComparer.Ordinal);
                 AddContact(contacts, originalBuyer, seller);
+                evidence.Event("contact_discovery_started", "ui_list");
                 var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
                 foreach (var nick in visible) AddContact(contacts, nick, seller);
+                evidence.Discovery("visible_chat_list", visible.Count, contacts.Count);
+
                 var managerOpened = false;
+                var managerContacts = new List<string>();
                 if (contacts.Count <= 1)
                 {
                     managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
                     if (managerOpened)
-                        foreach (var nick in await ReadVisibleMessageManagerContactsAsync(diagnostics, token))
-                            AddContact(contacts, nick, seller);
+                    {
+                        managerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                        foreach (var nick in managerContacts) AddContact(contacts, nick, seller);
+                    }
                 }
-                foreach (var nick in await ReadContactsFromApisAsync(qn, diagnostics, token))
-                    AddContact(contacts, nick, seller);
+                evidence.Discovery("message_manager", managerContacts.Count, contacts.Count);
+
+                var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+                foreach (var nick in apiContacts) AddContact(contacts, nick, seller);
+                evidence.Discovery("contacts_api", apiContacts.Count, contacts.Count);
+
+                // A separate, existing source of already-served contacts.
+                // This is partial historical evidence, not an all-store roster.
+                var storedContacts = new List<string>();
+                try
+                {
+                    storedContacts = BotConversationHistoryStore.LoadRecentBySeller(seller, 5000)
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Buyer))
+                        .Select(x => CleanNick(x.Buyer))
+                        .Distinct(StringComparer.Ordinal).ToList();
+                    foreach (var nick in storedContacts) AddContact(contacts, nick, seller);
+                }
+                catch (Exception ex)
+                {
+                    evidence.Event("source_error", "history_store_" + ex.GetType().Name);
+                }
+                evidence.Discovery("bot_reply_history", storedContacts.Count, contacts.Count);
                 var names = contacts.Where(IsPlausibleBuyerNick).OrderBy(x => x, StringComparer.Ordinal)
                     .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
+                evidence.Discovery("merged_and_validated", names.Count, names.Count);
+                var discoveryDetails = "visible=" + visible.Count + ";manager=" + managerContacts.Count
+                    + ";managerOpened=" + managerOpened + ";api=" + apiContacts.Count
+                    + ";historical=" + storedContacts.Count + ";unique=" + names.Count;
+                Log.Info("[BuyerQuestions] history_scan_discovery run=" + evidence.Record.RunId
+                    + ";" + discoveryDetails);
+                evidence.Event("discovery_sources_complete", discoveryDetails);
+                if (names.Count <= 1)
+                    evidence.Event("insufficient_contact_coverage", "only_one_contact_discovered");
                 if (names.Count == 0)
                     throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
                 evidence.SetContactCount(names.Count);
@@ -189,6 +228,9 @@ namespace Bot.Knowledge
                         read += count;
                         successful.Add(buyer);
                         evidence.Contact(buyer, true, count, "history_read");
+                        Log.Info("[BuyerQuestions] history_scan_contact_complete run="
+                            + evidence.Record.RunId + ";contact=" + evidence.ContactHash(buyer)
+                            + ";buyerMessages=" + count);
                         ReportBuyer(progress, "已完成一位买家", ordinal, names.Count, read,
                             successful.Count, failed, evidence);
                         return true;
@@ -198,7 +240,9 @@ namespace Bot.Knowledge
                     {
                         // Do not log the buyer identity or exception message.
                         evidence.Event("contact_retryable_failure", ex.GetType().Name);
-                        Log.Info("[BuyerQuestions] scan_contact_failed type=" + ex.GetType().Name);
+                        Log.Info("[BuyerQuestions] scan_contact_failed run=" + evidence.Record.RunId
+                            + ";contact=" + evidence.ContactHash(buyer)
+                            + ";type=" + ex.GetType().Name);
                         return false;
                     }
                 };
@@ -221,10 +265,13 @@ namespace Bot.Knowledge
                         {
                             failed++;
                             evidence.Contact(pending[i], false, 0, "retry_exhausted");
+                            Log.Info("[BuyerQuestions] history_scan_contact_retry_exhausted run="
+                                + evidence.Record.RunId + ";contact=" + evidence.ContactHash(pending[i]));
                         }
                     }
-                    scanState = failed == 0 ? "completed" : "partial";
-                    phase = "all_contacts_processed";
+                    scanState = failed == 0 && names.Count > 1 ? "completed" : "partial";
+                    phase = names.Count <= 1 ? "incomplete_contact_discovery"
+                        : failed > 0 ? "some_contacts_failed" : "discovered_contacts_processed";
                 }
                 finally
                 {
@@ -247,7 +294,10 @@ namespace Bot.Knowledge
                 }
                 ReportBuyer(progress, "买家历史消息扫描结束", names.Count, names.Count,
                     read, successful.Count, failed, evidence);
-                Log.Info("[BuyerQuestions] history_scan_complete completed=" + successful.Count
+                Log.Info("[BuyerQuestions] history_scan_complete run=" + evidence.Record.RunId
+                    + ";discovered=" + names.Count + ";coverage="
+                    + (names.Count <= 1 ? "insufficient" : "unverified")
+                    + ";completed=" + successful.Count
                     + ";failed=" + failed + ";events=" + read
                     + ";interrupted=" + evidence.Record.InterruptedContacts
                     + ";retries=" + evidence.Record.RetryAttempts);
@@ -262,8 +312,13 @@ namespace Bot.Knowledge
                     InterruptionCount = evidence.Record.InterruptedContacts,
                     RunId = evidence.Record.RunId,
                     PackagePath = evidence.ExpectedPackagePath,
+                    ContactCoverageVerified = false,
+                    CoverageWarning = names.Count <= 1
+                        ? "仅发现 " + names.Count + " 个联系人，不能认定已扫描全店历史消息。"
+                        : "已扫描发现到的联系人，但第三方千牛接口未提供完整总人数/分页终态，无法证明全量覆盖。",
                     Diagnostics = "读取完成 " + successful.Count + "，失败 " + failed
-                        + "；处理事件 " + read + "。扫描记录为匿名脱敏内容。"
+                        + "；处理事件 " + read + "。联系人来源 " + discoveryDetails
+                        + "。扫描记录为匿名脱敏内容。"
                 };
             }
             catch (OperationCanceledException) { scanState = "cancelled"; phase = "user_cancelled"; throw; }
@@ -622,6 +677,7 @@ namespace Bot.Knowledge
 
                         if (chatWindow == null || allBuyerHeader == null)
                         {
+                            Log.Info("[BuyerQuestions] scan_contact_source_warning source=chat_ui;reason=all_buyer_header_missing");
                             diagnostics.AppendLine("千牛聊天主窗口中未找到“全部买家”栏。");
                             return names.ToList();
                         }
@@ -699,6 +755,8 @@ namespace Bot.Knowledge
                 catch (Exception ex)
                 {
                     diagnostics.AppendLine("读取聊天界面“全部买家”列表失败：" + Safe(ex.Message));
+                    Log.Info("[BuyerQuestions] scan_contact_source_error source=chat_ui;type="
+                        + ex.GetType().Name);
                 }
 
                 diagnostics.AppendLine("聊天界面“全部买家”列表读取到 " + names.Count + " 个联系人。");
@@ -856,6 +914,8 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 diagnostics.AppendLine("联系人接口 relation.rebase 失败：" + Safe(ex.Message));
+                Log.Info("[BuyerQuestions] scan_contact_source_error source=relation.rebase;type="
+                    + ex.GetType().Name);
             }
 
             try
@@ -875,6 +935,8 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 diagnostics.AppendLine("联系人接口 contact.search 失败：" + Safe(ex.Message));
+                Log.Info("[BuyerQuestions] scan_contact_source_error source=contact.search;type="
+                    + ex.GetType().Name);
             }
 
             return names.ToList();

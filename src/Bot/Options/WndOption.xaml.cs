@@ -47,6 +47,8 @@ namespace Bot.Options
                     + seller + ", error=" + ex.Message);
             }
             InitializeComponent();
+            SettingsOperationAudit.Attach(this,
+                () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
             Loaded += WndOption_Loaded;
         }
 
@@ -174,6 +176,7 @@ namespace Bot.Options
             if (page == null) return;
             if (!string.IsNullOrWhiteSpace(page.FeaturePage)) _featureSettings.NavigateTo(page.FeaturePage);
             _currentPage = page;
+            Log.Info("[SettingsOperation] surface=bot_settings;event=navigate;page=" + page.Title);
             contentHost.Content = page.Control;
             txtPageTitle.Text = page.Title;
             txtPageDescription.Text = page.Description;
@@ -240,14 +243,22 @@ namespace Bot.Options
             Util.Assert(!string.IsNullOrEmpty(seller));
             try
             {
+                Log.Info("[SettingsOperation] surface=bot_settings;event=save_started;page="
+                    + (_currentPage == null ? "other" : _currentPage.Title)
+                    + ";visitedSections=" + _visitedOptions.Count);
                 RunInShopScope(delegate
                 {
                     foreach (var options in _visitedOptions.ToList()) options.Save(seller);
                 });
-                Log.Info("设置已保存，保留设置窗口继续编辑: seller=" + seller);
+                SettingsOperationAudit.SaveResult("bot_settings",
+                    _currentPage == null ? "other" : _currentPage.Title, "save_all", true);
+                Log.Info("设置已保存，保留设置窗口继续编辑（内容不记录）");
             }
             catch (Exception ex)
             {
+                SettingsOperationAudit.SaveResult("bot_settings",
+                    _currentPage == null ? "other" : _currentPage.Title,
+                    "save_all", false, ex);
                 Log.Exception(ex);
                 Show();
                 Activate();
@@ -261,6 +272,8 @@ namespace Bot.Options
         private void btnRestoreCurrentPageToDef_Click(object sender, RoutedEventArgs e)
         {
             if (_currentPage == null || _currentPage.Control == null) return;
+            Log.Info("[SettingsOperation] surface=bot_settings;event=restore_default;page="
+                + _currentPage.Title);
             RunInShopScope(_currentPage.Control.RestoreDefault);
         }
 

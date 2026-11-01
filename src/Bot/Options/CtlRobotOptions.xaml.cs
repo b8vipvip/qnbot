@@ -467,6 +467,10 @@ namespace Bot.Options
             _tabs.Items.Add(new TabItem { Header = "账号与授权", Content = BuildLicenseTab() });
             _tabs.Items.Add(new TabItem { Header = "商业化合规清单", Content = BuildComplianceTab() });
             SelectPage(selectedPage);
+            SettingsOperationAudit.Attach(this,
+                () => (_tabs.SelectedItem as TabItem) == null
+                    ? "other" : Convert.ToString((_tabs.SelectedItem as TabItem).Header),
+                "feature_settings");
         }
 
         public static void MyShow(Window owner, string selectedPage)
@@ -934,10 +938,18 @@ namespace Bot.Options
                 }
                 if (_complianceItems != null) BotFeatureStore.SaveComplianceChecklist(_complianceItems.ToList());
                 _status.Text = "已保存：" + DateTime.Now.ToString("HH:mm:ss");
-                Log.Info("功能设置已保存");
+                SettingsOperationAudit.SaveResult("feature_settings",
+                    (_tabs.SelectedItem as TabItem) == null ? "other"
+                        : Convert.ToString((_tabs.SelectedItem as TabItem).Header),
+                    "save_all", true);
+                Log.Info("功能设置已保存（值不记录）");
             }
             catch (Exception ex)
             {
+                SettingsOperationAudit.SaveResult("feature_settings",
+                    (_tabs.SelectedItem as TabItem) == null ? "other"
+                        : Convert.ToString((_tabs.SelectedItem as TabItem).Header),
+                    "save_all", false, ex);
                 Log.Exception(ex);
                 _status.Text = "保存失败：" + ex.Message;
             }

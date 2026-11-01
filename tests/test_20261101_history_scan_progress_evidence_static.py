@@ -36,7 +36,7 @@ def test_package_saved_for_success_error_cancel_without_buyer_identity():
     assert "BuyerHistoryScanEvidenceSession.cs" in targets
     assert "evidence.Complete(scanState, phase);" in scan
     assert 'scanState = "cancelled"; phase = "user_cancelled";' in scan
-    assert 'scanState = failed == 0 ? "completed" : "partial";' in scan
+    assert 'scanState = failed == 0 && names.Count > 1 ? "completed" : "partial";' in scan
     assert "PackagePath = evidence.ExpectedPackagePath" in scan
     assert 'new ShopScopedPathProvider().GetLogRoot(shop)' in evidence
     assert '"buyer-history-scans"' in evidence
