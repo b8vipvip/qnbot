@@ -91,28 +91,34 @@ namespace Bot.Knowledge
         }
         internal static void Observe(string seller, string text, string messageKey, DateTime timestamp)
         {
+            try { ObserveForHistoryScan(seller, text, messageKey, timestamp); }
+            catch (Exception ex) { Log.ErrorWithMaxCount("买家消息归档失败: " + ex.GetType().Name, 10); }
+        }
+
+        // Unlike the live-message best-effort path, the backfill scanner must
+        // receive DB write errors. Otherwise it may checkpoint a buyer as
+        // completed even when the archive failed and permanently skip them.
+        internal static void ObserveForHistoryScan(string seller, string text,
+            string messageKey, DateTime timestamp)
+        {
             text = Redact(text);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(text)) return;
             if (timestamp == DateTime.MinValue) timestamp = DateTime.Now;
             var receipt = Hash("event:" + messageKey);
-            try
+            var state = Get(seller);
+            lock (state.Sync)
             {
-                var state = Get(seller);
-                lock (state.Sync)
+                if (!string.IsNullOrWhiteSpace(messageKey)
+                    && state.Db.ReadOneRecord<BuyerQuestionRow>(x => x.ReceiptHash == receipt) != null) return;
+                state.Db.SaveOneRecord(new BuyerQuestionRow
                 {
-                    if (!string.IsNullOrWhiteSpace(messageKey)
-                        && state.Db.ReadOneRecord<BuyerQuestionRow>(x => x.ReceiptHash == receipt) != null) return;
-                    state.Db.SaveOneRecord(new BuyerQuestionRow
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        ReceiptHash = string.IsNullOrWhiteSpace(messageKey) ? Guid.NewGuid().ToString("N") : receipt,
-                        Text = text, ReceivedAtTicks = timestamp.Ticks,
-                        GroupKey = "exact-" + Hash(KnowledgeEngineV2Semantics.Compact(text)).Substring(0, 20),
-                        GroupTitle = text.Length > 85 ? text.Substring(0, 85) : text
-                    });
-                }
+                    Id = Guid.NewGuid().ToString("N"),
+                    ReceiptHash = string.IsNullOrWhiteSpace(messageKey) ? Guid.NewGuid().ToString("N") : receipt,
+                    Text = text, ReceivedAtTicks = timestamp.Ticks,
+                    GroupKey = "exact-" + Hash(KnowledgeEngineV2Semantics.Compact(text)).Substring(0, 20),
+                    GroupTitle = text.Length > 85 ? text.Substring(0, 85) : text
+                });
             }
-            catch (Exception ex) { Log.ErrorWithMaxCount("买家消息归档失败: " + ex.GetType().Name, 10); }
         }
         internal static List<BuyerQuestionRow> Read(string seller)
         {
