@@ -115,6 +115,14 @@ namespace Bot.Knowledge
                     result = "原有知识标记为高风险，已阻止覆盖。";
                     return false;
                 }
+                if (exact.Count == 1
+                    && ((record.Conditions != null && record.Conditions.Count > 0)
+                        || (record.RequiredContext != null && record.RequiredContext.Count > 0)
+                        || (record.ProductIds != null && record.ProductIds.Count > 0)))
+                {
+                    result = "该问题原有知识限定了商品或业务上下文，不能直接改成无条件直答；请在知识中心编辑场景条件。";
+                    return false;
+                }
                 var old = record.Answer ?? string.Empty;
                 record.Answer = answer;
                 record.ShortAnswer = answer;
