@@ -38,7 +38,7 @@ def test_completed_buyers_survive_crash_and_only_unfinished_are_scanned():
     assert "checkpoint.ArchivedMessages += count;" in scan
     assert "BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);" in scan
     assert 'checkpoint.State = scanState;' in scan
-    assert '"history_scan_resumed run="' in scan
+    assert '"[BuyerQuestions] history_scan_resumed run="' in scan
     assert "ResumeCheckpointId = checkpoint.Id" in scan
     assert "PreviouslyCompletedContacts = previouslyCompleted" in scan
 
