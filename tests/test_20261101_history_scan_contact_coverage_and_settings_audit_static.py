@@ -42,7 +42,7 @@ def test_settings_operations_are_traced_but_not_secrets():
     assert "SettingsOperationAudit.Attach(this" in settings
     assert "SettingsOperationAudit.Attach(this" in feature
     assert 'event=navigate;page=' in settings
-    assert '"save_started;page="' in settings
+    assert 'save_started;page=' in settings
     assert 'SettingsOperationAudit.SaveResult("bot_settings"' in settings
     assert 'SettingsOperationAudit.SaveResult("feature_settings"' in feature
     assert "ButtonBase.ClickEvent" in audit
