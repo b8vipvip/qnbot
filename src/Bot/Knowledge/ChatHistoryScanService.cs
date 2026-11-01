@@ -154,6 +154,7 @@ namespace Bot.Knowledge
                     throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
                 evidence.SetContactCount(names.Count);
                 var successful = new HashSet<string>(StringComparer.Ordinal);
+                var lastScannerBuyer = string.Empty;
                 var read = 0;
                 var failed = 0;
                 var pending = new List<string>();
@@ -169,6 +170,7 @@ namespace Bot.Knowledge
                         successful.Count, failed, evidence);
                     try
                     {
+                        lastScannerBuyer = buyer;
                         var ccode = await ResolveConversationCodeAsync(qn, buyer, token,
                             reason => evidence.Retry(reason));
                         if (string.IsNullOrWhiteSpace(ccode))
@@ -235,7 +237,7 @@ namespace Bot.Knowledge
                         {
                             var now = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
                             var current = CleanNick(FindString(now, "nick", "buyerNick", "display"));
-                            if (names.Contains(current))
+                            if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal))
                                 qn.OpenChat(originalBuyer);
                             else evidence.Event("restore_skipped", "foreground_changed_externally");
                         }
@@ -258,6 +260,7 @@ namespace Bot.Knowledge
                     RetryCount = evidence.Record.RetryAttempts,
                     InterruptionCount = evidence.Record.InterruptedContacts,
                     RunId = evidence.Record.RunId,
+                    PackagePath = evidence.ExpectedPackagePath,
                     Diagnostics = "读取完成 " + successful.Count + "，失败 " + failed
                         + "；处理事件 " + read + "。扫描记录为匿名脱敏内容。"
                 };
