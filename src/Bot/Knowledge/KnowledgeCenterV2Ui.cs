@@ -302,10 +302,19 @@ namespace Bot.Knowledge
             transfer.Click += delegate { SelectNav("导入导出"); };
             var help = Button("使用帮助", 92);
             help.Click += delegate { KnowledgeCenterHelpWindow.MyShow(_owner, _seller); };
+            // Former settings intermediary actions now live in Knowledge
+            // Center V2 itself. The V1 view is read-only and shop-scoped.
+            var legacyPreview = Button("旧版知识库预览", 136);
+            legacyPreview.ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能";
+            legacyPreview.Click += delegate
+            {
+                LegacyKnowledgePreviewWindow.MyShow(_owner, _seller);
+            };
             buttonPanel.Children.Add(refresh);
             buttonPanel.Children.Add(debug);
             buttonPanel.Children.Add(transfer);
             buttonPanel.Children.Add(help);
+            buttonPanel.Children.Add(legacyPreview);
             Grid.SetColumn(buttonPanel, 2);
             grid.Children.Add(buttonPanel);
             return grid;

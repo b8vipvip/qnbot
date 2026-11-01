@@ -60,7 +60,7 @@ namespace Bot.Options
 
             CaptureLegacyOffHoursControls();
             RemoveMeaninglessLicensePage();
-            ReplaceKnowledgePageWithEmbeddedLauncher();
+            RemoveLegacyKnowledgeGuideTab();
             OrganizeAutoReplyRulesPage();
             RemoveLegacyOffHoursFromNotificationPage();
             OrganizeHandoffStrategyPage();
@@ -80,7 +80,9 @@ namespace Bot.Options
             // are not a reliable way to enhance this page. Rewrite the real embedded auto-reply
             // content here, after its final structure has been constructed.
             EnhanceEmbeddedOrderTemplateHint();
-            NavigateTo("知识库");
+            // Knowledge is now an external direct destination, not an embedded
+            // launcher tab. Initialize a real settings page for other controls.
+            NavigateTo("自动回复规则");
         }
 
         public string Seller { get; private set; }
@@ -207,90 +209,15 @@ namespace Bot.Options
             SetPrivateField(_legacyWindow, "_offlineAuth", null);
         }
 
-        private void ReplaceKnowledgePageWithEmbeddedLauncher()
+        private void RemoveLegacyKnowledgeGuideTab()
         {
-            var knowledgeTab = _tabs.Items
-                .OfType<TabItem>()
-                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "知识库", StringComparison.Ordinal));
-            if (knowledgeTab == null) return;
-
-            var panel = new StackPanel { Margin = new Thickness(26) };
-            panel.Children.Add(new TextBlock
-            {
-                Text = "知识库中心",
-                FontSize = 22,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55))
-            });
-            panel.Children.Add(new TextBlock
-            {
-                Text = "知识库使用独立管理界面，支持智能导入、搜索、编辑、分类整理和 JSON 导入导出。数据仍按当前店铺独立保存。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
-                Margin = new Thickness(0, 10, 0, 18)
-            });
-            var actions = new WrapPanel();
-            var button = new Button
-            {
-                Content = "打开知识库中心",
-                Width = 160,
-                Height = 36,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
-                Cursor = System.Windows.Input.Cursors.Hand
-            };
-            button.Click += delegate
-            {
-                KnowledgeCenterWindow.MyShow(Window.GetWindow(this));
-            };
-            var help = new Button
-            {
-                Content = "使用帮助",
-                Width = 110,
-                Height = 36,
-                Margin = new Thickness(10, 0, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Background = Brushes.White,
-                Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(147, 172, 222)),
-                Cursor = System.Windows.Input.Cursors.Hand
-            };
-            help.Click += delegate
-            {
-                KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);
-            };
-            var legacyPreview = new Button
-            {
-                Content = "旧版知识库预览",
-                Width = 150,
-                Height = 36,
-                Margin = new Thickness(10, 0, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Background = Brushes.White,
-                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能"
-            };
-            legacyPreview.Click += delegate
-            {
-                LegacyKnowledgePreviewWindow.MyShow(Window.GetWindow(this), Seller);
-            };
-            actions.Children.Add(button);
-            actions.Children.Add(help);
-            actions.Children.Add(legacyPreview);
-            panel.Children.Add(actions);
-            knowledgeTab.Content = new Border
-            {
-                Background = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
-                Margin = new Thickness(8),
-                Child = panel
-            };
+            // The setting sidebar opens Knowledge Center V2 directly. Remove
+            // the old intermediate launcher so it cannot surface as a blank
+            // or stale page after a settings navigation or layout refresh.
+            var knowledgeTab = _tabs.Items.OfType<TabItem>()
+                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "知识库",
+                    StringComparison.Ordinal));
+            if (knowledgeTab != null) _tabs.Items.Remove(knowledgeTab);
         }
 
         private void OrganizeAutoReplyRulesPage()

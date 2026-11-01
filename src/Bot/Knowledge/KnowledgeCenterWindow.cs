@@ -125,6 +125,26 @@ namespace Bot.Knowledge
             wnd.Show();
         }
 
+        /// <summary>
+        /// Open V2 from a seller-locked settings window. Never silently fall
+        /// back to another active QN account when settings belong to a different
+        /// shop; preserving the ShopKey is essential for multi-seller clients.
+        /// </summary>
+        internal static KnowledgeCenterWindow ShowForSeller(Window owner, string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0)
+                throw new InvalidOperationException("未识别当前店铺，无法打开知识中心。");
+            var shop = Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            if (shop == null)
+                throw new InvalidOperationException("当前店铺未建立有效的 ShopKey，无法打开知识中心。");
+            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            Bot.ShopScope.ShopScopedUiBridge.Attach(window, shop);
+            if (owner != null) window.Owner = owner;
+            window.Show();
+            return window;
+        }
+
         public static void ShowManagerAndLocate(Window owner, string seller, string buyer, string question, string answer)
         {
             var wnd = new KnowledgeCenterWindow();
