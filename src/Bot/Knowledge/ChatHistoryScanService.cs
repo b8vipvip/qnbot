@@ -263,7 +263,14 @@ namespace Bot.Knowledge
                         foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
-                            BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time);
+                            // Some QN history pages omit message keys. Use a
+                            // deterministic per-buyer fallback receipt so
+                            // replay after a crash does not double-insert.
+                            var receipt = string.IsNullOrWhiteSpace(turn.MessageKey)
+                                ? "history:" + buyer + "|" + turn.Time.Ticks + "|" + turn.Text
+                                : turn.MessageKey;
+                            BuyerMessageArchiveService.ObserveForHistoryScan(
+                                seller, turn.Text, receipt, turn.Time);
                             count++;
                         }
                         // The archive observes idempotent message keys. Only
