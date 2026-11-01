@@ -25,6 +25,10 @@ namespace Bot.Knowledge
         public int ReadMessages { get; set; }
         public int InterruptedContacts { get; set; }
         public int RetryAttempts { get; set; }
+        public Dictionary<string, int> DiscoverySourceCounts { get; set; }
+        public Dictionary<string, int> DiscoveryUniqueCounts { get; set; }
+        public bool ContactCoverageVerified { get; set; }
+        public string CoverageWarning { get; set; }
         public string PackagePath { get; set; }
     }
 
@@ -59,7 +63,11 @@ namespace Bot.Knowledge
             _record = new BuyerHistoryScanEvidence
             {
                 RunId = id, StartedAt = DateTime.UtcNow.ToString("o"),
-                Status = "running", Phase = "starting"
+                Status = "running", Phase = "starting",
+                DiscoverySourceCounts = new Dictionary<string, int>(),
+                DiscoveryUniqueCounts = new Dictionary<string, int>(),
+                ContactCoverageVerified = false,
+                CoverageWarning = "联系人发现可能不完整；尚未取得千牛全店人数和翻页终态证据。"
             };
             File.WriteAllText(_eventsFile, "", Encoding.UTF8);
             File.WriteAllText(_messagesFile, "", Encoding.UTF8);
@@ -86,6 +94,27 @@ namespace Bot.Knowledge
                         read = _record.ReadMessages, interruptions = _record.InterruptedContacts,
                         retries = _record.RetryAttempts
                     }) + Environment.NewLine, Encoding.UTF8);
+                SaveManifest();
+            }
+        }
+
+        // Numeric source counters only: never include customer names in the
+        // shop log or downloadable discovery manifest.
+        internal void Discovery(string source, int found, int unique)
+        {
+            lock (_sync)
+            {
+                if (_record.DiscoverySourceCounts == null)
+                    _record.DiscoverySourceCounts = new Dictionary<string, int>();
+                if (_record.DiscoveryUniqueCounts == null)
+                    _record.DiscoveryUniqueCounts = new Dictionary<string, int>();
+                _record.DiscoverySourceCounts[source] = found;
+                _record.DiscoveryUniqueCounts[source] = unique;
+                File.AppendAllText(_eventsFile, JsonConvert.SerializeObject(new
+                {
+                    utc = DateTime.UtcNow.ToString("o"), type = "discovery_source",
+                    source = source, found = found, unique = unique
+                }) + Environment.NewLine, Encoding.UTF8);
                 SaveManifest();
             }
         }
