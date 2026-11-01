@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Input;
 
 namespace Bot.Knowledge
 {
@@ -121,7 +122,8 @@ namespace Bot.Knowledge
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             var intro = new TextBlock
             {
-                Text = "管理每条已回显 Bot 消息的来源、编辑店铺固定话术，并可直接用 Bot 回复反查知识库中的问题。来源记录与知识记录分开保存。",
+                Text = "管理已发送 Bot 消息的来源。右键某条回复可修改答案并经人工确认立即设为本店直答；"
+                    + "历史已发送内容不会被覆盖或重新发送。图片、链接及依赖上下文的问题须补全完整独立问题。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 Margin = new Thickness(4, 2, 4, 10)
@@ -172,6 +174,38 @@ namespace Bot.Knowledge
                 var row = _sourceGrid.SelectedItem as BotReplySourceRow;
                 _selectedSource = row == null ? null : row.Entity;
                 LoadSourceEditor(_selectedSource);
+            };
+            // Select the row under the pointer BEFORE opening the menu. A
+            // previously selected row must never receive a correction by mistake.
+            _sourceGrid.PreviewMouseRightButtonDown += (sender, args) =>
+            {
+                var target = args.OriginalSource as DependencyObject;
+                var row = FindSourceRow(target);
+                if (row == null)
+                {
+                    _sourceGrid.SelectedItem = null;
+                    return;
+                }
+                row.IsSelected = true;
+                row.Focus();
+            };
+            var sourceMenu = new ContextMenu();
+            var correctReply = new MenuItem { Header = "修改 Bot 回复并设为直答" };
+            correctReply.Click += delegate { CorrectSelectedReplyAsDirect(); };
+            sourceMenu.Items.Add(correctReply);
+            var findFromMenu = new MenuItem { Header = "用该回复检索知识" };
+            findFromMenu.Click += delegate { SearchKnowledgeFromSelected(); };
+            sourceMenu.Items.Add(findFromMenu);
+            _sourceGrid.ContextMenu = sourceMenu;
+            _sourceGrid.ContextMenuOpening += (sender, args) =>
+            {
+                var chosen = _sourceGrid.SelectedItem as BotReplySourceRow;
+                if (chosen == null || chosen.Entity == null)
+                {
+                    args.Handled = true;
+                    return;
+                }
+                correctReply.IsEnabled = IsSentBotReply(chosen.Entity);
             };
             Grid.SetRow(_sourceGrid, 1); root.Children.Add(_sourceGrid);
 
@@ -431,6 +465,62 @@ namespace Bot.Knowledge
             _selectedSource.AnswerSource = source;
             _sourceStatus.Text = "来源已保存至当前消息；其他消息与后续回复不受影响。";
             FilterSources();
+        }
+
+        private static DataGridRow FindSourceRow(DependencyObject target)
+        {
+            while (target != null && !(target is DataGridRow))
+                target = VisualTreeHelper.GetParent(target);
+            return target as DataGridRow;
+        }
+
+        private static bool IsSentBotReply(BotConversationHistoryEntity entity)
+        {
+            return entity != null && !string.IsNullOrWhiteSpace(entity.EntityId)
+                && !string.IsNullOrWhiteSpace(entity.Answer)
+                && (string.Equals(entity.StatusKind, "sent", StringComparison.OrdinalIgnoreCase)
+                    || entity.EntityId.StartsWith("bot-echo-", StringComparison.Ordinal));
+        }
+
+        private void CorrectSelectedReplyAsDirect()
+        {
+            var selected = _sourceGrid.SelectedItem as BotReplySourceRow;
+            var entity = selected == null ? null : selected.Entity;
+            if (!IsSentBotReply(entity) || string.IsNullOrWhiteSpace(_seller))
+            {
+                MessageBox.Show(_owner, "只能选中当前店铺已发送或回显的 Bot 回复后进行直答纠正。",
+                    "修改 Bot 回复", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            // The source record is immutable evidence, not the future answer.
+            // A picture/link placeholder must never become a global direct rule.
+            string completeQuestion, reviewedAnswer;
+            if (!BotReplyDirectReviewWindow.Edit(_owner, entity, out completeQuestion, out reviewedAnswer))
+                return;
+            if (!BotReplyDirectReviewWindow.IsStandaloneQuestion(completeQuestion))
+            {
+                MessageBox.Show(_owner, "请填写独立、完整的买家问题，明确商品或业务场景。"
+                    + "不能使用 [图片]、[链接] 或“这个可以吗”等上下文占位问题建立通用直答。",
+                    "不能建立无条件直答", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            // Never call UpdateAnswerSource or change the stored Answer field:
+            // the historical reply remains a faithful record of what was sent.
+            string outcome, id;
+            if (!KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                _seller, completeQuestion, reviewedAnswer, entity.EntityId, out outcome, out id))
+            {
+                MessageBox.Show(_owner, outcome, "保存直答失败",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                _sourceStatus.Text = "直答未更新：" + outcome;
+                return;
+            }
+            _sourceStatus.Text = "已立即启用本店直答：" + completeQuestion
+                + "（知识ID：" + id + "）；历史已发送消息保持不变。";
+            MessageBox.Show(_owner, outcome
+                + "\n\n该直答仅匹配完整独立的问题，图片识别、订单状态及业务安全规则仍优先判断。"
+                + "\n当前历史 Bot 回复原文不变，也不会重新发送旧消息。",
+                "直答已保存", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void SearchKnowledgeFromSelected()
@@ -755,6 +845,146 @@ namespace Bot.Knowledge
                 }
             }
             public string Reason { get; set; }
+        }
+    }
+
+    internal static class BotReplyDirectReviewWindow
+    {
+        internal static bool IsStandaloneQuestion(string question)
+        {
+            question = (question ?? string.Empty).Trim();
+            if (question.Length < 5 || question.Length > 500) return false;
+            // A redacted image/link or one-line conversational shorthand is not
+            // sufficient to create a globally applicable exact-match response.
+            if (question == "[图片]" || question == "[链接]"
+                || question.StartsWith("[图片]", StringComparison.Ordinal)
+                || question.StartsWith("[链接]", StringComparison.Ordinal)
+                || KnowledgeEngineV2Semantics.IsContextDependent(question)
+                || KnowledgeEngineV2Semantics.IsHighRisk(question))
+                return false;
+            return true;
+        }
+
+        public static bool Edit(Window owner, BotConversationHistoryEntity source,
+            out string question, out string answer)
+        {
+            question = null; answer = null;
+            if (source == null) return false;
+            var dialog = new Window
+            {
+                Title = "修改 Bot 回复 · 人工审核后立即设为直答",
+                Width = 770, Height = 620, MinWidth = 560, MinHeight = 510,
+                WindowStartupLocation = owner == null
+                    ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
+                ShowInTaskbar = false
+            };
+            if (owner != null) dialog.Owner = owner;
+            var content = new DockPanel { Margin = new Thickness(14) };
+            var note = new TextBlock
+            {
+                Text = "将纠正后的答案保存为当前店铺的最高优先人工审核直答。"
+                    + "下次匹配到完整独立的相同问题时优先使用；不会更改或重发历史消息。"
+                    + "如果原消息为图片/链接，请把图片或商品场景转写为准确、独立的文字问题，"
+                    + "否则不得设为无条件直答。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10),
+                Foreground = Brushes.DimGray
+            };
+            DockPanel.SetDock(note, Dock.Top); content.Children.Add(note);
+            var footer = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            var save = new Button { Content = "确认并立即设为直答", Width = 165,
+                Height = 32, Margin = new Thickness(0, 0, 9, 0) };
+            var cancel = new Button { Content = "取消", Width = 85, Height = 32 };
+            footer.Children.Add(save); footer.Children.Add(cancel);
+            DockPanel.SetDock(footer, Dock.Bottom); content.Children.Add(footer);
+
+            var editor = new Grid();
+            editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            editor.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            editor.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.35, GridUnitType.Star) });
+            editor.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var oldQuestion = new TextBlock
+            {
+                Text = "原买家消息（只读）：" + (source.Question ?? ""),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 9)
+            };
+            Grid.SetRow(oldQuestion, 0); editor.Children.Add(oldQuestion);
+            var questionLabel = new TextBlock
+            {
+                Text = "完整独立的匹配问题（可修改）",
+                FontWeight = FontWeights.SemiBold
+            };
+            Grid.SetRow(questionLabel, 1); editor.Children.Add(questionLabel);
+            var questionInput = new TextBox
+            {
+                Text = source.Question ?? string.Empty, AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MinHeight = 66, Margin = new Thickness(0, 5, 0, 10)
+            };
+            Grid.SetRow(questionInput, 3); editor.Children.Add(questionInput);
+            var questionHint = new TextBlock
+            {
+                Text = "例如：投影仪 A 型号是否支持酷狗 APP？（不要只写 [图片]）",
+                Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap
+            };
+            Grid.SetRow(questionHint, 2); editor.Children.Add(questionHint);
+            var answerLabel = new TextBlock
+            {
+                Text = "纠正后的 Bot 直答（初始值为当时实际发送内容）",
+                FontWeight = FontWeights.SemiBold
+            };
+            Grid.SetRow(answerLabel, 4); editor.Children.Add(answerLabel);
+            var answerInput = new TextBox
+            {
+                Text = source.Answer ?? string.Empty, AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MinHeight = 125, Margin = new Thickness(0, 5, 0, 5)
+            };
+            Grid.SetRow(answerInput, 5); editor.Children.Add(answerInput);
+            var warning = new TextBlock
+            {
+                Text = "请确认商品事实和答案准确性。历史回复、来源记录与实际发送日志不会改写。",
+                Foreground = Brushes.DarkOrange, TextWrapping = TextWrapping.Wrap
+            };
+            Grid.SetRow(warning, 6); editor.Children.Add(warning);
+            content.Children.Add(editor);
+            cancel.Click += delegate { dialog.DialogResult = false; };
+            save.Click += delegate
+            {
+                var q = (questionInput.Text ?? "").Trim();
+                var a = (answerInput.Text ?? "").Trim();
+                if (!IsStandaloneQuestion(q) || a.Length < 2 || a.Length > 4000)
+                {
+                    MessageBox.Show(dialog,
+                        "请填写完整独立的问题（5～500 字）与明确答案（2～4000 字）。"
+                        + "图片/链接占位符或依赖上下文的短句不能直接成为无条件直答。",
+                        "直答校验失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                if (MessageBox.Show(dialog,
+                    "确认在当前店铺立即启用以下直答？\n\n问题：" + q
+                        + "\n\n新答案：" + a
+                        + "\n\n注意：保存后影响后续符合匹配条件的真实买家消息，"
+                        + "不重发、不修改任何历史消息。",
+                    "最终确认 · 启用生产直答",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    return;
+                question = q; answer = a;
+                dialog.DialogResult = true;
+            };
+            dialog.Content = content;
+            return dialog.ShowDialog() == true;
         }
     }
 
