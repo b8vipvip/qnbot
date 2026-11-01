@@ -23,6 +23,8 @@ namespace Bot.Knowledge
         public DateTime? StartTime { get; set; }
         public DateTime? EndTime { get; set; }
         public int MaxContacts { get; set; }
+        // Supplied only when user explicitly elects to continue a stored job.
+        public string ResumeCheckpointId { get; set; }
 
         public ChatHistoryScanOptions()
         {
@@ -78,6 +80,8 @@ namespace Bot.Knowledge
         public int InterruptionCount { get; set; }
         public string RunId { get; set; }
         public string PackagePath { get; set; }
+        public string ResumeCheckpointId { get; set; }
+        public int PreviouslyCompletedContacts { get; set; }
         public bool ContactCoverageVerified { get; set; }
         public string CoverageWarning { get; set; }
     }
@@ -123,12 +127,32 @@ namespace Bot.Knowledge
                 throw new InvalidOperationException("当前店铺已有历史扫描任务，不能同时切换同一千牛会话。");
 
             BuyerHistoryScanEvidenceSession evidence = null;
+            BuyerHistoryScanCheckpoint checkpoint = null;
             string scanState = "failed";
             string phase = "initialization";
             try
             {
+                // Resume state is bound to ShopKey, Windows user and options.
+                // The private encrypted contact list is NEVER added to evidence ZIPs.
+                checkpoint = string.IsNullOrWhiteSpace(options.ResumeCheckpointId)
+                    ? null : BuyerHistoryScanCheckpointStore.Load(
+                        seller, options.ResumeCheckpointId, options);
                 evidence = new BuyerHistoryScanEvidenceSession(seller);
+                if (checkpoint == null)
+                    checkpoint = BuyerHistoryScanCheckpointStore.Create(
+                        seller, evidence.Record.RunId, options);
+                else
+                {
+                    evidence.Event("resumed", "checkpoint_loaded");
+                    Log.Info("[BuyerQuestions] history_scan_resumed run=" + evidence.Record.RunId
+                        + ";checkpoint=" + checkpoint.Id
+                        + ";previouslyCompleted=" + checkpoint.Completed.Count);
+                }
+                checkpoint.State = "running";
+                checkpoint.LastRunId = evidence.Record.RunId;
+                BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
                 Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
+                    + ";checkpoint=" + checkpoint.Id
                     + ";maxContacts=" + options.MaxContacts);
                 var qn = QN.FindExistingBySellerNick(seller);
                 if (qn == null || qn.CDP == null || qn.Seller == null
@@ -178,8 +202,17 @@ namespace Bot.Knowledge
                     evidence.Event("source_error", "history_store_" + ex.GetType().Name);
                 }
                 evidence.Discovery("bot_reply_history", storedContacts.Count, contacts.Count);
+                // Merge previously discovered contacts so a UI/API outage in
+                // this session cannot discard unfinished work. Also discover
+                // new buyers on resume to extend coverage beyond the old list.
+                foreach (var previous in checkpoint.Contacts)
+                    AddContact(contacts, previous, seller);
                 var names = contacts.Where(IsPlausibleBuyerNick).OrderBy(x => x, StringComparer.Ordinal)
                     .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
+                checkpoint.Contacts = names;
+                checkpoint.Completed = checkpoint.Completed
+                    .Where(names.Contains).Distinct(StringComparer.Ordinal).ToList();
+                BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
                 evidence.Discovery("merged_and_validated", names.Count, names.Count);
                 var discoveryDetails = "visible=" + visible.Count + ";manager=" + managerContacts.Count
                     + ";managerOpened=" + managerOpened + ";api=" + apiContacts.Count
@@ -192,9 +225,17 @@ namespace Bot.Knowledge
                 if (names.Count == 0)
                     throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
                 evidence.SetContactCount(names.Count);
-                var successful = new HashSet<string>(StringComparer.Ordinal);
+                var successful = new HashSet<string>(checkpoint.Completed, StringComparer.Ordinal);
+                var previouslyCompleted = successful.Count;
                 var lastScannerBuyer = string.Empty;
-                var read = 0;
+                var read = checkpoint.ArchivedMessages;
+                if (previouslyCompleted > 0)
+                {
+                    evidence.Event("resume_skipped", "previous_successes");
+                    ReportBuyer(progress, "从断点继续，跳过已完成的 "
+                        + previouslyCompleted + " 位买家", previouslyCompleted,
+                        names.Count, read, successful.Count, 0, evidence);
+                }
                 var failed = 0;
                 var pending = new List<string>();
 
@@ -225,8 +266,17 @@ namespace Bot.Knowledge
                             BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time);
                             count++;
                         }
-                        read += count;
-                        successful.Add(buyer);
+                        // The archive observes idempotent message keys. Only
+                        // checkpoint a contact after its entire pagination and
+                        // archive write succeeded. A crash before Save will
+                        // replay the contact safely on the next run.
+                        if (successful.Add(buyer))
+                        {
+                            checkpoint.Completed.Add(buyer);
+                            checkpoint.ArchivedMessages += count;
+                            BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                            read = checkpoint.ArchivedMessages;
+                        }
                         evidence.Contact(buyer, true, count, "history_read");
                         Log.Info("[BuyerQuestions] history_scan_contact_complete run="
                             + evidence.Record.RunId + ";contact=" + evidence.ContactHash(buyer)
@@ -252,6 +302,7 @@ namespace Bot.Knowledge
                     for (int i = 0; i < names.Count; i++)
                     {
                         token.ThrowIfCancellationRequested();
+                        if (successful.Contains(names[i])) continue;
                         if (!await scanContact(names[i], i + 1)) pending.Add(names[i]);
                     }
                     for (int i = 0; i < pending.Count; i++)
@@ -272,6 +323,8 @@ namespace Bot.Knowledge
                     scanState = failed == 0 && names.Count > 1 ? "completed" : "partial";
                     phase = names.Count <= 1 ? "incomplete_contact_discovery"
                         : failed > 0 ? "some_contacts_failed" : "discovered_contacts_processed";
+                    checkpoint.State = scanState;
+                    BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
                 }
                 finally
                 {
@@ -295,6 +348,8 @@ namespace Bot.Knowledge
                 ReportBuyer(progress, "买家历史消息扫描结束", names.Count, names.Count,
                     read, successful.Count, failed, evidence);
                 Log.Info("[BuyerQuestions] history_scan_complete run=" + evidence.Record.RunId
+                    + ";checkpoint=" + checkpoint.Id
+                    + ";resumedPrevious=" + previouslyCompleted
                     + ";discovered=" + names.Count + ";coverage="
                     + (names.Count <= 1 ? "insufficient" : "unverified")
                     + ";completed=" + successful.Count
@@ -312,6 +367,8 @@ namespace Bot.Knowledge
                     InterruptionCount = evidence.Record.InterruptedContacts,
                     RunId = evidence.Record.RunId,
                     PackagePath = evidence.ExpectedPackagePath,
+                    ResumeCheckpointId = checkpoint.Id,
+                    PreviouslyCompletedContacts = previouslyCompleted,
                     ContactCoverageVerified = false,
                     CoverageWarning = names.Count <= 1
                         ? "仅发现 " + names.Count + " 个联系人，不能认定已扫描全店历史消息。"
@@ -329,6 +386,21 @@ namespace Bot.Knowledge
             }
             finally
             {
+                // Persist terminal state even on user cancel, network outage,
+                // or a UI close. Checkpoint was saved after each prior buyer.
+                if (checkpoint != null)
+                {
+                    try
+                    {
+                        checkpoint.State = scanState;
+                        BuyerHistoryScanCheckpointStore.Save(seller, checkpoint);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("[BuyerQuestions] history_scan_checkpoint_save_failed type="
+                            + ex.GetType().Name);
+                    }
+                }
                 try
                 {
                     if (evidence != null)
