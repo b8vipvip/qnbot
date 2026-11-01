@@ -1,6 +1,8 @@
 using BotLib;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using Microsoft.Win32;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,6 +56,9 @@ namespace Bot.Knowledge
         private readonly Button _groupButton;
         private readonly Button _scanButton;
         private readonly Button _stopScan;
+        private readonly ProgressBar _scanProgress;
+        private readonly TextBox _scanLog;
+        private string _lastScanProgressKey;
         private CancellationTokenSource _cancel;
         private CancellationTokenSource _scanCancellation;
 
@@ -96,6 +101,9 @@ namespace Bot.Knowledge
             _stopScan.IsEnabled = false;
             _stopScan.Click += delegate { if (_scanCancellation != null) _scanCancellation.Cancel(); };
             toolbar.Children.Add(_stopScan);
+            var records = Button("扫描记录 / 数据包", 145);
+            records.Click += delegate { ShowScanRecords(); };
+            toolbar.Children.Add(records);
             _groupButton = Button("AI分析优化", 120);
             _groupButton.Click += delegate
             {
@@ -119,6 +127,19 @@ namespace Bot.Knowledge
             _status = new TextBlock { Text = "尚未读取", Margin = new Thickness(0, 0, 0, 8),
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap };
             DockPanel.SetDock(_status, Dock.Top); root.Children.Add(_status);
+            var scanDetail = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            _scanProgress = new ProgressBar { Height = 14, Minimum = 0, Maximum = 100,
+                Value = 0, ToolTip = "扫描进度 = 已处理联系人 / 总联系人；重试阶段单独显示。" };
+            scanDetail.Children.Add(_scanProgress);
+            _scanLog = new TextBox
+            {
+                Height = 80, IsReadOnly = true, AcceptsReturn = true,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                TextWrapping = TextWrapping.Wrap,
+                ToolTip = "仅显示匿名进度事件。完整日志和脱敏结果存储在扫描数据包中。"
+            };
+            scanDetail.Children.Add(_scanLog);
+            DockPanel.SetDock(scanDetail, Dock.Top); root.Children.Add(scanDetail);
 
             _list = new DataGrid
             {
@@ -321,37 +342,75 @@ namespace Bot.Knowledge
             w.Content = panel; w.ShowDialog();
         }
 
+        private void UpdateScanProgress(ChatHistoryScanProgress p)
+        {
+            if (p == null || _scanCancellation == null) return;
+            var count = Math.Max(1, p.ContactCount);
+            _scanProgress.Value = Math.Min(100,
+                Math.Round(100.0 * Math.Min(p.ContactIndex, count) / count));
+            _status.Text = p.Phase + " · " + p.ContactIndex + "/" + p.ContactCount
+                + " · 已读消息 " + p.MessageCount
+                + " · 失败 " + p.FailedCount
+                + " · 会话切换 " + p.InterruptionCount
+                + " · 重试 " + p.RetryCount;
+            var key = p.Phase + "|" + p.ContactIndex + "|" + p.ContactCount + "|"
+                + p.RetryCount + "|" + p.MessageCount;
+            if (key == _lastScanProgressKey) return;
+            _lastScanProgressKey = key;
+            var line = DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text;
+            _scanLog.AppendText(line + Environment.NewLine);
+            if (_scanLog.Text.Length > 12000) _scanLog.Text = _scanLog.Text.Substring(
+                _scanLog.Text.Length - 8000);
+            _scanLog.ScrollToEnd();
+        }
+
         private async Task ScanHistoryAsync()
         {
             if (_scanCancellation != null) return;
             if (MessageBox.Show(Window.GetWindow(this),
-                "扫描当前店铺千牛可访问的全部买家历史消息。"
-                + " 过程中需要切换聊天以读取历史记录，结束后恢复原会话。"
-                + " 仅保存脱敏后的消息文本，不导入知识库，也不会调用AI或发送客服消息。是否开始？",
+                "扫描本店可访问的历史买家消息。扫描器需要短暂切换千牛会话取得会话ID；"
+                + "新买家消息如果抢占窗口，扫描器会重新确认会话并重试，可能导致个别联系人稍后补扫。"
+                + " 不暂停正常接待与自动回复。全部日志和脱敏消息自动归档为数据包，"
+                + "取消任务也会保留已提取部分。是否开始？",
                 "扫描历史买家消息", MessageBoxButton.YesNo,
                 MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             _scanCancellation = new CancellationTokenSource();
             _scanButton.IsEnabled = false;
             _stopScan.IsEnabled = true;
+            _scanProgress.Value = 0;
+            _scanLog.Text = string.Empty;
+            _lastScanProgressKey = null;
             try
             {
-                _status.Text = "正在扫描本店可访问的全部历史买家消息...";
+                _status.Text = "正在扫描本店可访问的历史消息...";
                 var scan = await new ChatHistoryScanService().ScanBuyerMessagesAsync(
                     _seller, new ChatHistoryScanOptions { ScanAll = true, MaxContacts = 5000 },
-                    progress => Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        if (_scanCancellation != null)
-                            _status.Text = "扫描进度 " + progress.ContactIndex + "/"
-                                + progress.ContactCount + "；已读取消息 " + progress.MessageCount;
-                    })), _scanCancellation.Token);
+                    p => Dispatcher.BeginInvoke(new Action(() => UpdateScanProgress(p))),
+                    _scanCancellation.Token);
                 RefreshView();
-                _status.Text = "历史扫描完成：已扫描 " + scan.ScannedContacts
-                    + "/" + scan.ContactCount + " 位联系人，读取 " + scan.MessageCount
-                    + " 条买家消息，失败 " + scan.FailedContacts
-                    + " 个；重复事件自动去重。请调整日期范围查看。";
+                _scanProgress.Value = 100;
+                _status.Text = "历史扫描结束：成功 " + scan.ScannedContacts + "/"
+                    + scan.ContactCount + " 位联系人；消息 " + scan.MessageCount
+                    + "；失败 " + scan.FailedContacts
+                    + "；会话切换 " + scan.InterruptionCount
+                    + "；重试 " + scan.RetryCount
+                    + "。数据包已保存在店铺扫描记录中。";
+                _scanLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text
+                    + Environment.NewLine + "任务 " + scan.RunId
+                    + Environment.NewLine + "ZIP：" + scan.PackagePath + Environment.NewLine);
+                _scanLog.ScrollToEnd();
             }
-            catch (OperationCanceledException) { _status.Text = "扫描已取消，已保存的归档消息保留。"; }
-            catch (Exception ex) { _status.Text = "扫描失败：" + ex.Message; }
+            catch (OperationCanceledException)
+            {
+                _status.Text = "扫描已取消，已完成的消息和部分数据包保留；可点击“扫描记录 / 数据包”查看。";
+                _scanLog.AppendText(_status.Text + Environment.NewLine);
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "扫描失败：" + ex.Message + "；请到扫描记录查看已保存部分。";
+                _scanLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + _status.Text
+                    + Environment.NewLine);
+            }
             finally
             {
                 _scanCancellation.Dispose();
@@ -359,6 +418,114 @@ namespace Bot.Knowledge
                 _scanButton.IsEnabled = true;
                 _stopScan.IsEnabled = false;
             }
+        }
+
+        private void ShowScanRecords()
+        {
+            IList<BuyerHistoryScanEvidence> data;
+            try { data = BuyerHistoryScanEvidenceSession.List(_seller); }
+            catch (Exception ex)
+            {
+                _status.Text = "无法读取本店历史扫描记录：" + ex.Message; return;
+            }
+            var w = new Window
+            {
+                Owner = Window.GetWindow(this),
+                Title = "扫描记录与结果数据包（仅当前店铺）",
+                Width = 900, Height = 490, MinWidth = 640, MinHeight = 320,
+                ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+            };
+            var dock = new DockPanel { Margin = new Thickness(12) };
+            var note = new TextBlock
+            {
+                Text = "扫描记录存放在本店日志目录；每次任务均生成 manifest.json、events.jsonl、"
+                    + "messages-redacted.jsonl 及 ZIP。不主动保存买家昵称和原始消息 Key，"
+                    + "并对常见敏感信息脱敏；文本仍可能含个人信息，请仅交给授权人员。",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
+            };
+            DockPanel.SetDock(note, Dock.Top); dock.Children.Add(note);
+            var buttons = new WrapPanel { Margin = new Thickness(0, 9, 0, 0) };
+            var export = Button("导出选中数据包", 155);
+            var refresh = Button("刷新记录", 90);
+            var close = Button("关闭", 75);
+            buttons.Children.Add(export); buttons.Children.Add(refresh); buttons.Children.Add(close);
+            DockPanel.SetDock(buttons, Dock.Bottom); dock.Children.Add(buttons);
+            var list = new DataGrid
+            {
+                ItemsSource = data, AutoGenerateColumns = false, IsReadOnly = true,
+                CanUserAddRows = false, CanUserDeleteRows = false,
+                SelectionMode = DataGridSelectionMode.Single
+            };
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "开始时间（UTC）", Binding = new Binding("StartedAt"),
+                Width = new DataGridLength(190)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "状态", Binding = new Binding("Status"), Width = new DataGridLength(85)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "联系人", Binding = new Binding("ContactCount"),
+                Width = new DataGridLength(85)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "成功", Binding = new Binding("CompletedContacts"),
+                Width = new DataGridLength(65)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "失败", Binding = new Binding("FailedContacts"),
+                Width = new DataGridLength(65)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "消息数", Binding = new Binding("ReadMessages"),
+                Width = new DataGridLength(75)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "切换", Binding = new Binding("InterruptedContacts"),
+                Width = new DataGridLength(65)
+            });
+            list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "重试", Binding = new Binding("RetryAttempts"),
+                Width = new DataGridLength(65)
+            });
+            dock.Children.Add(list);
+            refresh.Click += delegate { list.ItemsSource = BuyerHistoryScanEvidenceSession.List(_seller); };
+            close.Click += delegate { w.Close(); };
+            export.Click += delegate
+            {
+                var selected = list.SelectedItem as BuyerHistoryScanEvidence;
+                if (selected == null || string.IsNullOrWhiteSpace(selected.PackagePath)
+                    || !File.Exists(selected.PackagePath))
+                {
+                    MessageBox.Show(w, "请选择已经生成 ZIP 的扫描记录；未完成的任务可稍后刷新。");
+                    return;
+                }
+                var dialog = new SaveFileDialog
+                {
+                    Title = "导出历史消息扫描诊断数据包",
+                    Filter = "ZIP 数据包 (*.zip)|*.zip",
+                    FileName = selected.RunId + ".zip",
+                    AddExtension = true, DefaultExt = ".zip"
+                };
+                if (dialog.ShowDialog(w) != true) return;
+                if (string.Equals(Path.GetFullPath(dialog.FileName),
+                    Path.GetFullPath(selected.PackagePath), StringComparison.OrdinalIgnoreCase))
+                    return;
+                try
+                {
+                    File.Copy(selected.PackagePath, dialog.FileName, true);
+                    MessageBox.Show(w, "数据包已导出。");
+                }
+                catch (Exception ex) { MessageBox.Show(w, "导出失败：" + ex.Message); }
+            };
+            w.Content = dock; w.ShowDialog();
         }
 
         internal static string Prompt(Window owner, string title, string old)

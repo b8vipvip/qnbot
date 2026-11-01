@@ -8,6 +8,7 @@ using FlaUI.UIA3;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -39,6 +40,10 @@ namespace Bot.Knowledge
         public int MessageCount { get; set; }
         public int PairCount { get; set; }
         public int TextChars { get; set; }
+        public int FailedCount { get; set; }
+        public int RetryCount { get; set; }
+        public int InterruptionCount { get; set; }
+        public string RunId { get; set; }
 
         public override string ToString()
         {
@@ -69,10 +74,16 @@ namespace Bot.Knowledge
         public int TextChars { get; set; }
         public KnowledgeImportResult ImportResult { get; set; }
         public string Diagnostics { get; set; }
+        public int RetryCount { get; set; }
+        public int InterruptionCount { get; set; }
+        public string RunId { get; set; }
+        public string PackagePath { get; set; }
     }
 
     public sealed class ChatHistoryScanService
     {
+        private static readonly ConcurrentDictionary<string, byte> ActiveBuyerScans =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private const int PageSize = 100;
         private const int MaxHistoryPages = 200;
         private static readonly string[] NickFields =
@@ -105,86 +116,193 @@ namespace Bot.Knowledge
         {
             options = options ?? new ChatHistoryScanOptions();
             ValidateOptions(options);
-            var qn = QN.FindExistingBySellerNick((seller ?? string.Empty).Trim());
-            if (qn == null || qn.CDP == null || qn.Seller == null
-                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
-                    StringComparison.Ordinal))
-                throw new InvalidOperationException("无法绑定当前店铺千牛会话，请先登录该店铺并打开聊天。");
+            seller = (seller ?? string.Empty).Trim();
+            if (!ActiveBuyerScans.TryAdd(seller, 0))
+                throw new InvalidOperationException("当前店铺已有历史扫描任务，不能同时切换同一千牛会话。");
 
-            var diagnostics = new StringBuilder();
-            var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
-            Report(progress, "正在搜集本店全部可访问的买家联系人...", 0, 0,
-                string.Empty, 0, 0, 0);
-            var contacts = new HashSet<string>(StringComparer.Ordinal);
-            AddContact(contacts, originalBuyer, seller);
-            var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
-            foreach (var name in visible) AddContact(contacts, name, seller);
-            var managerOpened = false;
-            if (contacts.Count <= 1)
-            {
-                managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
-                if (managerOpened)
-                    foreach (var name in await ReadVisibleMessageManagerContactsAsync(diagnostics, token))
-                        AddContact(contacts, name, seller);
-            }
-            foreach (var name in await ReadContactsFromApisAsync(qn, diagnostics, token))
-                AddContact(contacts, name, seller);
-            var names = contacts.Where(IsPlausibleBuyerNick)
-                .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
-            if (names.Count == 0)
-                throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
-
-            var received = 0;
-            var completed = 0;
-            var failed = 0;
+            BuyerHistoryScanEvidenceSession evidence = null;
+            string scanState = "failed";
+            string phase = "initialization";
             try
             {
-                for (var i = 0; i < names.Count; i++)
+                evidence = new BuyerHistoryScanEvidenceSession(seller);
+                var qn = QN.FindExistingBySellerNick(seller);
+                if (qn == null || qn.CDP == null || qn.Seller == null
+                    || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
+                        StringComparison.Ordinal))
+                    throw new InvalidOperationException("无法绑定当前店铺千牛会话，请登录店铺并打开聊天。");
+                var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
+                var diagnostics = new StringBuilder();
+                Report(progress, "正在搜集本店可访问的联系人", 0, 0, "", 0, 0, 0);
+                var contacts = new HashSet<string>(StringComparer.Ordinal);
+                AddContact(contacts, originalBuyer, seller);
+                var visible = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+                foreach (var nick in visible) AddContact(contacts, nick, seller);
+                var managerOpened = false;
+                if (contacts.Count <= 1)
+                {
+                    managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                    if (managerOpened)
+                        foreach (var nick in await ReadVisibleMessageManagerContactsAsync(diagnostics, token))
+                            AddContact(contacts, nick, seller);
+                }
+                foreach (var nick in await ReadContactsFromApisAsync(qn, diagnostics, token))
+                    AddContact(contacts, nick, seller);
+                var names = contacts.Where(IsPlausibleBuyerNick).OrderBy(x => x, StringComparer.Ordinal)
+                    .Take(Math.Max(1, Math.Min(5000, options.MaxContacts))).ToList();
+                if (names.Count == 0)
+                    throw new InvalidOperationException("千牛没有提供可扫描的买家联系人。");
+                evidence.SetContactCount(names.Count);
+                var successful = new HashSet<string>(StringComparer.Ordinal);
+                var lastScannerBuyer = string.Empty;
+                var read = 0;
+                var failed = 0;
+                var pending = new List<string>();
+
+                // Each buyer is bound to a validated ccode BEFORE remote pagination.
+                // New buyer messages may steal the foreground chat during this step,
+                // so failed resolutions are recorded and retried once at the end.
+                Func<string, int, Task<bool>> scanContact = async (buyer, ordinal) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    // Do not emit buyer names into progress, runtime diagnostics or archive.
-                    Report(progress, "扫描历史买家消息（仅归档，不调用AI）",
-                        i + 1, names.Count, string.Empty, received, 0, 0);
+                    var count = 0;
+                    ReportBuyer(progress, "正在扫描买家消息", ordinal, names.Count, read,
+                        successful.Count, failed, evidence);
                     try
                     {
-                        var ccode = await ResolveConversationCodeAsync(qn, names[i], token);
-                        if (string.IsNullOrWhiteSpace(ccode)) { failed++; continue; }
-                        var turns = await ReadHistoryAsync(qn, seller, names[i], ccode, options, token);
-                        foreach (var turn in turns.Where(x => x.Role == "buyer"))
+                        lastScannerBuyer = buyer;
+                        var ccode = await ResolveConversationCodeAsync(qn, buyer, token,
+                            reason => evidence.Retry(reason));
+                        if (string.IsNullOrWhiteSpace(ccode))
+                            throw new InvalidOperationException("conversation_not_stable");
+                        var turns = await ReadHistoryAsync(qn, seller, buyer, ccode, options,
+                            token, reason => evidence.Retry(reason));
+                        var buyerTurns = turns.Where(x => x.Role == "buyer").ToList();
+                        evidence.Messages(buyer, buyerTurns.Select(x =>
+                            Tuple.Create(x.Text, x.Time, x.MessageKey)));
+                        foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
                             BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time);
-                            received++;
+                            count++;
                         }
-                        completed++;
+                        read += count;
+                        successful.Add(buyer);
+                        evidence.Contact(buyer, true, count, "history_read");
+                        ReportBuyer(progress, "已完成一位买家", ordinal, names.Count, read,
+                            successful.Count, failed, evidence);
+                        return true;
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
-                        failed++;
-                        Log.Info("[BuyerQuestions] history_scan_contact_failed type=" + ex.GetType().Name);
+                        // Do not log the buyer identity or exception message.
+                        evidence.Event("contact_retryable_failure", ex.GetType().Name);
+                        Log.Info("[BuyerQuestions] scan_contact_failed type=" + ex.GetType().Name);
+                        return false;
+                    }
+                };
+
+                try
+                {
+                    for (int i = 0; i < names.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (!await scanContact(names[i], i + 1)) pending.Add(names[i]);
+                    }
+                    for (int i = 0; i < pending.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        evidence.Retry("failed_contact_retry");
+                        ReportBuyer(progress, "重试先前被会话切换打断的联系人",
+                            names.Count - pending.Count + i + 1, names.Count,
+                            read, successful.Count, failed, evidence);
+                        if (!await scanContact(pending[i], names.Count - pending.Count + i + 1))
+                        {
+                            failed++;
+                            evidence.Contact(pending[i], false, 0, "retry_exhausted");
+                        }
+                    }
+                    scanState = failed == 0 ? "completed" : "partial";
+                    phase = "all_contacts_processed";
+                }
+                finally
+                {
+                    // Do not override a newly-arrived active buyer's chat.
+                    // Restore only if the current conversation still belongs to
+                    // the scanner's last selected contact.
+                    if (!string.IsNullOrWhiteSpace(originalBuyer))
+                    {
+                        try
+                        {
+                            var now = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
+                            var current = CleanNick(FindString(now, "nick", "buyerNick", "display"));
+                            if (string.Equals(current, CleanNick(lastScannerBuyer), StringComparison.Ordinal)
+                                && BotActivityCoordinator.GetSnapshot(seller).ActiveCount == 0)
+                                qn.OpenChat(originalBuyer);
+                            else evidence.Event("restore_skipped", "foreground_changed_externally");
+                        }
+                        catch { evidence.Event("restore_failed", "ui_unavailable"); }
                     }
                 }
+                ReportBuyer(progress, "买家历史消息扫描结束", names.Count, names.Count,
+                    read, successful.Count, failed, evidence);
+                Log.Info("[BuyerQuestions] history_scan_complete completed=" + successful.Count
+                    + ";failed=" + failed + ";events=" + read
+                    + ";interrupted=" + evidence.Record.InterruptedContacts
+                    + ";retries=" + evidence.Record.RetryAttempts);
+                return new ChatHistoryScanResult
+                {
+                    MessageManagerOpened = managerOpened,
+                    ContactCount = names.Count,
+                    ScannedContacts = successful.Count,
+                    FailedContacts = failed,
+                    MessageCount = read,
+                    RetryCount = evidence.Record.RetryAttempts,
+                    InterruptionCount = evidence.Record.InterruptedContacts,
+                    RunId = evidence.Record.RunId,
+                    PackagePath = evidence.ExpectedPackagePath,
+                    Diagnostics = "读取完成 " + successful.Count + "，失败 " + failed
+                        + "；处理事件 " + read + "。扫描记录为匿名脱敏内容。"
+                };
+            }
+            catch (OperationCanceledException) { scanState = "cancelled"; phase = "user_cancelled"; throw; }
+            catch (Exception ex)
+            {
+                scanState = "failed"; phase = ex.GetType().Name;
+                throw;
             }
             finally
             {
-                if (!string.IsNullOrWhiteSpace(originalBuyer))
-                    try { qn.OpenChat(originalBuyer); } catch { }
+                try
+                {
+                    if (evidence != null)
+                    {
+                        evidence.Complete(scanState, phase);
+                        evidence.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("[BuyerQuestions] scan_evidence_save_failed type=" + ex.GetType().Name);
+                }
+                byte ignored; ActiveBuyerScans.TryRemove(seller, out ignored);
             }
-            Report(progress, "买家消息扫描完成", names.Count, names.Count,
-                string.Empty, received, 0, 0);
-            Log.Info("[BuyerQuestions] history_scan_complete contacts=" + completed
-                + ";failed=" + failed + ";events=" + received);
-            return new ChatHistoryScanResult
+        }
+
+        private static void ReportBuyer(Action<ChatHistoryScanProgress> progress,
+            string phase, int index, int count, int read, int completed, int failed,
+            BuyerHistoryScanEvidenceSession evidence)
+        {
+            if (progress == null) return;
+            progress(new ChatHistoryScanProgress
             {
-                MessageManagerOpened = managerOpened,
-                ContactCount = names.Count,
-                ScannedContacts = completed,
-                FailedContacts = failed,
-                MessageCount = received,
-                Diagnostics = "完成联系人 " + completed + "；读取失败 " + failed
-                    + "；买家消息事件 " + received + "。仅归档脱敏文本，不记录身份。"
-            };
+                Phase = phase, ContactIndex = index, ContactCount = count,
+                MessageCount = read, FailedCount = failed,
+                RetryCount = evidence.Record.RetryAttempts,
+                InterruptionCount = evidence.Record.InterruptedContacts,
+                RunId = evidence.Record.RunId
+            });
         }
 
         public async Task<ChatHistoryScanResult> ScanAndImportAsync(
@@ -821,16 +939,53 @@ namespace Bot.Knowledge
             return Regex.IsMatch(value, @"[\p{L}\d_]");
         }
 
-        private static async Task<string> ResolveConversationCodeAsync(QN qn, string buyer, CancellationToken token)
+        // The scanner must yield the foreground chat to active Bot tasks.
+        // Waiting is bounded: when busy persists, the contact is deferred for
+        // the retry pass, not forced open while a real buyer is being served.
+        private static async Task WaitForSafeChatSwitchAsync(QN qn,
+            CancellationToken token, Action<string> onInterruption)
         {
+            bool announced = false;
+            for (int i = 0; i < 40; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (BotActivityCoordinator.GetSnapshot(qn.Seller.Nick).ActiveCount == 0) return;
+                if (!announced && onInterruption != null)
+                {
+                    onInterruption("bot_busy_wait");
+                    announced = true;
+                }
+                await Task.Delay(250, token);
+            }
+            throw new InvalidOperationException("bot_active_foreground_busy");
+        }
+
+        private static async Task<string> ResolveConversationCodeAsync(QN qn, string buyer,
+            CancellationToken token, Action<string> onInterruption = null)
+        {
+            await WaitForSafeChatSwitchAsync(qn, token, onInterruption);
             qn.OpenChat(buyer);
-            for (var attempt = 0; attempt < 28; attempt++)
+            int consecutiveMismatch = 0;
+            for (var attempt = 0; attempt < 36; attempt++)
             {
                 token.ThrowIfCancellationRequested();
                 await Task.Delay(250, token);
                 var current = await qn.CDP.Invoke<JObject>("im.uiutil.GetCurrentConversationID");
                 var currentNick = FindString(current, "nick", "buyerNick", "display");
-                if (!string.Equals(CleanNick(currentNick), CleanNick(buyer), StringComparison.Ordinal)) continue;
+                if (!string.Equals(CleanNick(currentNick), CleanNick(buyer), StringComparison.Ordinal))
+                {
+                    if (!string.IsNullOrWhiteSpace(currentNick) && onInterruption != null)
+                        onInterruption("switched");
+                    consecutiveMismatch++;
+                    if (consecutiveMismatch >= 4)
+                    {
+                        consecutiveMismatch = 0;
+                        await WaitForSafeChatSwitchAsync(qn, token, onInterruption);
+                        qn.OpenChat(buyer); // Re-pin only when Bot is not actively handling a message.
+                    }
+                    continue;
+                }
+                consecutiveMismatch = 0;
                 var ccode = FindString(current, "ccode");
                 if (!string.IsNullOrWhiteSpace(ccode)) return ccode;
             }
@@ -880,7 +1035,7 @@ namespace Bot.Knowledge
             string buyer,
             string ccode,
             ChatHistoryScanOptions options,
-            CancellationToken token)
+            CancellationToken token, Action<string> onInterruption = null)
         {
             var turns = new List<HistoryTurn>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -891,15 +1046,31 @@ namespace Bot.Knowledge
             for (var page = 0; page < MaxHistoryPages; page++)
             {
                 token.ThrowIfCancellationRequested();
-                var response = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+                JObject response = null;
+                for (var retry = 0; retry < 3; retry++)
                 {
-                    cid = new { ccode = ccode, type = 1 },
-                    count = PageSize,
-                    gohistory = 1,
-                    msgid = cursorId,
-                    msgtime = cursorTime
-                });
-                if (response == null) break;
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        response = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+                        {
+                            cid = new { ccode = ccode, type = 1 },
+                            count = PageSize,
+                            gohistory = 1,
+                            msgid = cursorId,
+                            msgtime = cursorTime
+                        });
+                        if (response != null) break;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception)
+                    {
+                        if (retry == 2) throw;
+                    }
+                    if (onInterruption != null) onInterruption("page_retry");
+                    await Task.Delay(300 * (retry + 1), token);
+                }
+                if (response == null) throw new InvalidOperationException("history_page_unavailable");
 
                 var result = response["result"] ?? response;
                 var resultObject = result as JObject;

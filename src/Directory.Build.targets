@@ -25,6 +25,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\BuyerMessageManagementPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\BuyerMessageManagementPage.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\BuyerHistoryScanEvidenceSession.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\BuyerHistoryScanEvidenceSession.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
   </ItemGroup>

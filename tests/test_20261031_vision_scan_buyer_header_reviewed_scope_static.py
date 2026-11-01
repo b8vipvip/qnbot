@@ -29,7 +29,8 @@ def test_history_scan_uses_real_contact_discovery_and_native_paginated_history_w
         "public async Task<ChatHistoryScanResult> ScanAndImportAsync(", 1)[0]
     assert "ReadVisibleChatBuyerListContactsAsync" in part
     assert "ReadContactsFromApisAsync" in part
-    assert "ReadHistoryAsync(qn, seller, names[i], ccode, options, token)" in part
+    assert "ReadHistoryAsync(qn, seller, buyer, ccode, options," in part
+    assert "pending.Add(names[i]);" in part
     assert 'turns.Where(x => x.Role == "buyer")' in part
     assert "BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time)" in part
     assert "KnowledgeAiService" not in part
@@ -47,7 +48,8 @@ def test_archive_supports_inclusive_date_range_filter_and_scan_with_progress():
     assert 'Button("取消扫描", 90)' in page
     assert "new ChatHistoryScanService().ScanBuyerMessagesAsync(" in page
     assert 'ScanAll = true, MaxContacts = 5000' in page
-    assert "progress.ContactIndex" in page
+    assert "p.ContactIndex" in page
+    assert 'private void ShowScanRecords()' in page
     assert "DatePicker" in page
 
 def test_manual_direct_edit_needs_explicit_standalone_scope_for_ambiguous_prompt():
