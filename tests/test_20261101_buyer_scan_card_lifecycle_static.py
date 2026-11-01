@@ -28,7 +28,7 @@ def test_card_close_does_not_cancel_scan_or_remove_saved_evidence():
     assert "_scanCardClose.IsEnabled = true;" in scan
     assert "_scanCardTitle.Text = \"历史消息扫描 · 已取消\";" in scan
     assert "_scanCardTitle.Text = \"历史消息扫描 · 失败\";" in scan
-    assert "历史消息扫描 · 部分完成" in scan
+    assert "历史消息扫描 · 覆盖待核实" in scan
     assert "scan.FailedContacts == 0" in scan
     assert "BuyerHistoryScanEvidenceSession.List(_seller)" in ui
     assert "File.Copy(selected.PackagePath, dialog.FileName, true)" in ui
