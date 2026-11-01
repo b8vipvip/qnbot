@@ -27,7 +27,8 @@ def test_scan_retries_remote_pages_and_does_not_save_foreign_buyer_turns():
     assert 'throw new InvalidOperationException("history_page_unavailable")' in scan
     assert 'turns.Where(x => x.Role == "buyer")' in scan
     assert "else return false;" in scan
-    assert "BuyerMessageArchiveService.Observe(seller, turn.Text, turn.MessageKey, turn.Time);" in scan
+    assert "BuyerMessageArchiveService.ObserveForHistoryScan(" in scan
+    assert "turn.Text, receipt, turn.Time" in scan
 
 def test_package_saved_for_success_error_cancel_without_buyer_identity():
     scan = src("src/Bot/Knowledge/ChatHistoryScanService.cs")
