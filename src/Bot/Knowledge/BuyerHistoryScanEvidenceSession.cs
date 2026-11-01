@@ -134,6 +134,8 @@ namespace Bot.Knowledge
             foreach (var turn in turns)
             {
                 var text = BuyerMessageArchiveService.Redact(turn.Item1);
+                if (!string.IsNullOrWhiteSpace(buyer))
+                    text = text.Replace(buyer, "[买家]");
                 // Contact/account identity never appears in the data; each
                 // incoming event is keyed only by a per-scan salted digest.
                 using (var sha = SHA256.Create())
