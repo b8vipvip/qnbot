@@ -60,7 +60,7 @@ namespace Bot.ChromeNs
     /// </summary>
     public static class LocalOcrService
     {
-        private const int DefaultTimeoutMs = 10000;
+        private const int DefaultTimeoutMs = 22000; // Server 16s inference + admission/network margin.
         private const int MaxEvidenceChars = 6000;
         private const long MaxImageBytes = 8L * 1024L * 1024L;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(30);
