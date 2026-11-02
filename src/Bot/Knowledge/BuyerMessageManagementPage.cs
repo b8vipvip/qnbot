@@ -640,7 +640,11 @@ namespace Bot.Knowledge
             {
                 // A cancelled or failed scan may already have archived some
                 // messages. Reload them too, not only after normal completion.
+                // Preserve the scan summary rather than replacing it with the
+                // generic filtering status from RefreshView().
+                var scanStatus = _status.Text;
                 RefreshView();
+                _status.Text = scanStatus;
                 _scanCancellation.Dispose();
                 _scanCancellation = null;
                 _scanButton.IsEnabled = true;
