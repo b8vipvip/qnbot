@@ -318,9 +318,13 @@ namespace Bot.Knowledge
                         // The scanner uses a stable key per turn for pairing even
                         // when the upstream pagination omits a native message key.
                         evidence.Messages(buyer, buyerTurns.Select(x =>
-                            Tuple.Create(x.Text, x.Time, x.MessageKey,
-                                matchedBotReplies.ContainsKey(x.MessageKey ?? string.Empty)
-                                    ? matchedBotReplies[x.MessageKey] : string.Empty)));
+                        {
+                            var key = string.IsNullOrWhiteSpace(x.MessageKey)
+                                ? "scan-turn:" + turns.IndexOf(x) : x.MessageKey;
+                            string botEcho;
+                            matchedBotReplies.TryGetValue(key, out botEcho);
+                            return Tuple.Create(x.Text, x.Time, x.MessageKey, botEcho ?? string.Empty);
+                        }));
                         foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
