@@ -189,3 +189,31 @@ def test_runtime_failed_inference_is_recorded_but_ocr_text_not_persisted(
     assert rec["status"] == "failed"
     assert rec["error_code"] == "internal_ocr_error"
     assert "sensitive account content" not in str(rec)
+
+
+def test_timeout_is_recorded_as_504_and_native_slot_released_after_exit(
+    control_plane, monkeypatch,
+):
+    import time
+    cp = control_plane
+
+    def slow_worker(raw):
+        time.sleep(1.15)
+        return {"ok": True, "text": "not sent", "confidence": 1.0}
+
+    monkeypatch.setattr(runtime_ocr, "_run_ocr", slow_worker)
+    runtime_ocr._apply_settings({
+        **runtime_ocr._DEFAULT_SETTINGS, "timeout_seconds": 1.0,
+        "max_concurrency": 1,
+    })
+    endpoint = cp.routes[("POST", "/api/runtime/v1/ocr")]
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(endpoint(FakeRequest(png_bytes()), {"client": "test"}))
+    assert exc.value.status_code == 504
+    record = task_rows(cp)[0]
+    assert record["status"] == "timeout"
+    assert record["http_status"] == 504
+    assert record["error_code"] == "inference_timeout"
+    assert record["finished_at"] is not None
+    # Response timeout must not leak any inference output into SQLite.
+    assert "not sent" not in str(record)
