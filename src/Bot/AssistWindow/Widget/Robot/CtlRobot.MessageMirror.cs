@@ -6,6 +6,7 @@ using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -20,6 +21,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _messageMirrorBuyer = string.Empty;
         private string _messageMirrorSignature = string.Empty;
         private DateTime _messageMirrorLastRemoteRefresh = DateTime.MinValue;
+        private bool _buyerDirectAnswerSaveInProgress;
 
         private void StartMessageMirror()
         {
@@ -400,6 +402,16 @@ namespace Bot.AssistWindow.Widget.Robot
                     string.IsNullOrWhiteSpace(botQuestion) ? botAction.MirrorQuestionText : botQuestion,
                     messageText, botEchoRecordId, bubble)
                 : BuildCopyOnlyContextMenu(messageText, bubble);
+            // Only genuine, non-withdrawn buyer text can become a reviewed direct
+            // answer. Seller/Bot/system rows keep their existing context menus.
+            if (!isSeller
+                && string.Equals(turn.Role, "user", StringComparison.Ordinal)
+                && !turn.Withdrawn
+                && !string.IsNullOrWhiteSpace(turn.Text))
+            {
+                bubble.ContextMenu = BuildMessageMirrorBuyerContextMenu(
+                    seller, turn.Text, turn.MessageKey, bubble);
+            }
 
             var stack = new StackPanel
             {
@@ -555,6 +567,64 @@ namespace Bot.AssistWindow.Widget.Robot
             };
             menu.Items.Add(editSource);
             return menu;
+        }
+
+        private ContextMenu BuildMessageMirrorBuyerContextMenu(
+            string seller, string question, string sourceMessageId, FrameworkElement placementTarget)
+        {
+            var menu = BuildCopyOnlyContextMenu(question, placementTarget);
+            var add = new MenuItem { Header = "添加直答消息" };
+            add.Click += async (s, e) =>
+                await AddBuyerDirectAnswerFromMirror(seller, question, sourceMessageId);
+            menu.Items.Add(add);
+            return menu;
+        }
+
+        private async Task AddBuyerDirectAnswerFromMirror(
+            string seller, string question, string sourceMessageId)
+        {
+            if (_buyerDirectAnswerSaveInProgress
+                || string.IsNullOrWhiteSpace(seller)
+                || string.IsNullOrWhiteSpace(question))
+                return;
+
+            var owner = Window.GetWindow(this);
+            // Prefill only the selected buyer question. The operator must
+            // explicitly supply and approve an answer; nothing is sent to Qianniu.
+            var editor = new ConversationEditWindow(question, string.Empty, true);
+            if (owner != null) editor.Owner = owner;
+            if (editor.ShowDialog() != true) return;
+
+            // Snapshot input and seller before the async DB write, so a chat
+            // switch cannot attach the approved answer to a different store.
+            var approvedQuestion = editor.EditedQuestion;
+            var approvedAnswer = editor.EditedAnswer;
+            _buyerDirectAnswerSaveInProgress = true;
+            try
+            {
+                string status = string.Empty;
+                string savedId = string.Empty;
+                var saved = await Task.Run(() =>
+                    KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                        seller, approvedQuestion, approvedAnswer, sourceMessageId,
+                        out status, out savedId));
+                if (saved)
+                    Log.Info("买家消息右键人工直答已保存: knowledge_id=" + savedId);
+                MessageBox.Show(owner, status,
+                    saved ? "直答保存成功" : "直答未保存",
+                    MessageBoxButton.OK,
+                    saved ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                MessageBox.Show(owner, "保存直答失败，知识库没有确认更新。请检查运行日志。",
+                    "直答保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                _buyerDirectAnswerSaveInProgress = false;
+            }
         }
 
         private ContextMenu BuildCopyOnlyContextMenu(string messageText, FrameworkElement placementTarget)
