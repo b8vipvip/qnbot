@@ -78,6 +78,7 @@ namespace Bot.Knowledge
         public string Diagnostics { get; set; }
         public int RetryCount { get; set; }
         public int InterruptionCount { get; set; }
+        public int FilteredMessages { get; set; }
         public string RunId { get; set; }
         public string PackagePath { get; set; }
         public string ResumeCheckpointId { get; set; }
@@ -370,7 +371,10 @@ namespace Bot.Knowledge
                     + ";failed=" + failed + ";events=" + read
                     + ";interrupted=" + evidence.Record.InterruptedContacts
                     + ";retries=" + evidence.Record.RetryAttempts
-                    + ";excluded=" + evidence.Record.ExcludedMessages);
+                    + ";excluded=" + evidence.Record.ExcludedMessages
+                    + ";filteredReasons=" + string.Join(",",
+                        evidence.Record.ExcludedByReason.OrderBy(x => x.Key)
+                            .Select(x => x.Key + "=" + x.Value)));
                 return new ChatHistoryScanResult
                 {
                     MessageManagerOpened = managerOpened,
@@ -380,6 +384,7 @@ namespace Bot.Knowledge
                     MessageCount = read,
                     RetryCount = evidence.Record.RetryAttempts,
                     InterruptionCount = evidence.Record.InterruptedContacts,
+                    FilteredMessages = evidence.Record.ExcludedMessages,
                     RunId = evidence.Record.RunId,
                     PackagePath = evidence.ExpectedPackagePath,
                     ResumeCheckpointId = checkpoint.Id,
