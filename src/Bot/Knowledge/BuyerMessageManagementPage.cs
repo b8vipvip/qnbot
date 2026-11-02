@@ -543,8 +543,13 @@ namespace Bot.Knowledge
             var buttons = new WrapPanel { Margin = new Thickness(0, 9, 0, 0) };
             var export = Button("导出选中数据包", 155);
             var refresh = Button("刷新记录", 90);
+            var updateMessages = Button("更新消息", 100);
+            updateMessages.ToolTip = "合并本店所有扫描记录的消息，按原消息时间和内容去重后更新买家消息列表";
             var close = Button("关闭", 75);
-            buttons.Children.Add(export); buttons.Children.Add(refresh); buttons.Children.Add(close);
+            buttons.Children.Add(export);
+            buttons.Children.Add(refresh);
+            buttons.Children.Add(updateMessages);
+            buttons.Children.Add(close);
             DockPanel.SetDock(buttons, Dock.Bottom); dock.Children.Add(buttons);
             var list = new DataGrid
             {
@@ -594,6 +599,53 @@ namespace Bot.Knowledge
             dock.Children.Add(list);
             refresh.Click += delegate { list.ItemsSource = BuyerHistoryScanEvidenceSession.List(_seller); };
             close.Click += delegate { w.Close(); };
+            updateMessages.Click += async delegate
+            {
+                if (!updateMessages.IsEnabled) return;
+                if (MessageBox.Show(w,
+                    "将读取当前店铺全部历史扫描记录，包括已完成、部分完成和已取消任务中保存的消息。"
+                    + "先合并相同消息事件，再与买家消息库去重，仅新增缺失的消息。"
+                    + "不会修改原扫描数据包、直答知识或已发送的 Bot 回复。是否更新？",
+                    "确认更新买家消息", MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                updateMessages.IsEnabled = false;
+                refresh.IsEnabled = false;
+                try
+                {
+                    _status.Text = "正在合并扫描记录并去重更新买家消息...";
+                    var result = await System.Threading.Tasks.Task.Run(() =>
+                        BuyerHistoryScanMessageMergeService.MergeAll(_seller));
+                    RefreshView();
+                    var summary = "已读取扫描任务 " + result.ScansRead
+                        + " 个，原始消息 " + result.RowsRead
+                        + " 条；跨扫描重复 " + result.DuplicateInScans
+                        + " 条，消息库已有 " + result.AlreadyArchived
+                        + " 条，无效 " + result.InvalidRows
+                        + " 条；新增入库 " + result.NewlyArchived + " 条。"
+                        + (result.ScansFailed > 0
+                            ? "\n有 " + result.ScansFailed
+                                + " 个数据包读取失败，请查看运行日志。"
+                            : "");
+                    _status.Text = "更新消息完成：新增 " + result.NewlyArchived
+                        + " 条，扫描记录 " + result.ScansRead + " 个。";
+                    MessageBox.Show(w, summary, "更新消息结果",
+                        MessageBoxButton.OK,
+                        result.ScansFailed > 0 ? MessageBoxImage.Warning
+                            : MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    _status.Text = "更新扫描消息失败：" + ex.GetType().Name;
+                    MessageBox.Show(w, "更新消息失败：" + ex.Message
+                        + "\n已成功入库的消息再次运行会自动去重。",
+                        "更新消息", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally
+                {
+                    updateMessages.IsEnabled = true;
+                    refresh.IsEnabled = true;
+                }
+            };
             export.Click += delegate
             {
                 var selected = list.SelectedItem as BuyerHistoryScanEvidence;
