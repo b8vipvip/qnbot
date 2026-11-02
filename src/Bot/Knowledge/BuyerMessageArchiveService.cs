@@ -120,6 +120,54 @@ namespace Bot.Knowledge
                 });
             }
         }
+        // A saved scan package cannot carry a stable buyer ID or raw
+        // message key: both were deliberately removed from diagnostics.
+        // Text+timestamp is therefore the strongest cross-run identity
+        // available. Collisions (different buyers sending identical text in
+        // the same timestamp) are conservatively deduplicated, not inflated.
+        // All comparisons/inserts run under the same lock as live Observe.
+        internal static void ImportScannedMessages(string seller,
+            IList<BuyerHistoryScannedMessage> rows, BuyerHistoryScanMergeResult result)
+        {
+            if (result == null) throw new ArgumentNullException("result");
+            if (rows == null || rows.Count == 0) return;
+            var state = Get(seller);
+            lock (state.Sync)
+            {
+                var known = new HashSet<string>(
+                    state.Db.ReadRecords<BuyerQuestionRow>(null)
+                        .Where(x => x != null && x.ReceivedAtTicks > 0
+                            && !string.IsNullOrWhiteSpace(x.Text))
+                        .Select(x => BuyerHistoryScanMessageMergeService.Fingerprint(
+                            x.Text, new DateTime(x.ReceivedAtTicks))),
+                    StringComparer.Ordinal);
+                foreach (var item in rows)
+                {
+                    if (item == null || item.Timestamp == DateTime.MinValue) continue;
+                    var text = Redact(item.Text);
+                    if (text.Length == 0) continue;
+                    var fingerprint = BuyerHistoryScanMessageMergeService.Fingerprint(
+                        text, item.Timestamp);
+                    if (known.Contains(fingerprint))
+                    {
+                        result.AlreadyArchived++;
+                        continue;
+                    }
+                    state.Db.SaveOneRecord(new BuyerQuestionRow
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        ReceiptHash = Hash("scan-import:" + fingerprint),
+                        Text = text, ReceivedAtTicks = item.Timestamp.Ticks,
+                        GroupKey = "exact-" + Hash(KnowledgeEngineV2Semantics.Compact(text))
+                            .Substring(0, 20),
+                        GroupTitle = text.Length > 85 ? text.Substring(0, 85) : text
+                    });
+                    known.Add(fingerprint);
+                    result.NewlyArchived++;
+                }
+            }
+        }
+
         internal static List<BuyerQuestionRow> Read(string seller)
         {
             var state = Get(seller);
