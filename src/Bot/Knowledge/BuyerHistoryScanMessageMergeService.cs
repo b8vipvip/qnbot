@@ -55,6 +55,8 @@ namespace Bot.Knowledge
 
         internal static BuyerHistoryScanMergeResult MergeAll(string seller)
         {
+            if (ChatHistoryScanService.IsBuyerScanActive(seller))
+                throw new InvalidOperationException("历史消息扫描仍在运行，请先完成或取消扫描再更新消息。");
             var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
             if (shop == null)
                 throw new InvalidOperationException("未找到当前店铺的 ShopKey，无法导入扫描数据。");
