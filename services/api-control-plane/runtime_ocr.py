@@ -567,8 +567,8 @@ def install(control_plane: Any) -> None:
                     asyncio.shield(worker_task), timeout=float(settings["timeout_seconds"])
                 )
             except asyncio.TimeoutError as exc:
-                # ONNX inference can still run in the threadpool. Preserve
-                # admission capacity until native inference really finishes.
+                # Keep the concurrency slot until the underlying inference actually exits.
+                # Native ONNX inference can continue after HTTP 504.
                 deferred_release = True
                 _release_when_done(worker_task)
                 raise HTTPException(status_code=504, detail="服务端OCR推理超时") from exc
