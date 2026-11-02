@@ -602,6 +602,12 @@ namespace Bot.Knowledge
             updateMessages.Click += async delegate
             {
                 if (!updateMessages.IsEnabled) return;
+                if (_scanCancellation != null || ChatHistoryScanService.IsBuyerScanActive(_seller))
+                {
+                    MessageBox.Show(w, "历史消息扫描正在进行，请完成或取消扫描后再更新消息。",
+                        "更新消息", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
                 if (MessageBox.Show(w,
                     "将读取当前店铺全部历史扫描记录，包括已完成、部分完成和已取消任务中保存的消息。"
                     + "先合并相同消息事件，再与买家消息库去重，仅新增缺失的消息。"
