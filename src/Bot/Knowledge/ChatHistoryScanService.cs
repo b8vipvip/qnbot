@@ -78,6 +78,7 @@ namespace Bot.Knowledge
         public string Diagnostics { get; set; }
         public int RetryCount { get; set; }
         public int InterruptionCount { get; set; }
+        public int FilteredMessages { get; set; }
         public string RunId { get; set; }
         public string PackagePath { get; set; }
         public string ResumeCheckpointId { get; set; }
@@ -261,7 +262,8 @@ namespace Bot.Knowledge
                         if (string.IsNullOrWhiteSpace(ccode))
                             throw new InvalidOperationException("conversation_not_stable");
                         var turns = await ReadHistoryAsync(qn, seller, buyer, ccode, options,
-                            token, reason => evidence.Retry(reason));
+                            token, reason => evidence.Retry(reason),
+                            reason => evidence.Excluded(reason));
                         var buyerTurns = turns.Where(x => x.Role == "buyer").ToList();
                         evidence.Messages(buyer, buyerTurns.Select(x =>
                             Tuple.Create(x.Text, x.Time, x.MessageKey)));
@@ -368,7 +370,11 @@ namespace Bot.Knowledge
                     + ";completed=" + successful.Count
                     + ";failed=" + failed + ";events=" + read
                     + ";interrupted=" + evidence.Record.InterruptedContacts
-                    + ";retries=" + evidence.Record.RetryAttempts);
+                    + ";retries=" + evidence.Record.RetryAttempts
+                    + ";excluded=" + evidence.Record.ExcludedMessages
+                    + ";filteredReasons=" + string.Join(",",
+                        evidence.Record.ExcludedByReason.OrderBy(x => x.Key)
+                            .Select(x => x.Key + "=" + x.Value)));
                 return new ChatHistoryScanResult
                 {
                     MessageManagerOpened = managerOpened,
@@ -378,6 +384,7 @@ namespace Bot.Knowledge
                     MessageCount = read,
                     RetryCount = evidence.Record.RetryAttempts,
                     InterruptionCount = evidence.Record.InterruptedContacts,
+                    FilteredMessages = evidence.Record.ExcludedMessages,
                     RunId = evidence.Record.RunId,
                     PackagePath = evidence.ExpectedPackagePath,
                     ResumeCheckpointId = checkpoint.Id,
@@ -1182,7 +1189,8 @@ namespace Bot.Knowledge
             string buyer,
             string ccode,
             ChatHistoryScanOptions options,
-            CancellationToken token, Action<string> onInterruption = null)
+            CancellationToken token, Action<string> onInterruption = null,
+            Action<string> onExcluded = null)
         {
             var turns = new List<HistoryTurn>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1234,7 +1242,11 @@ namespace Bot.Knowledge
                     var key = IncomingMessageSafety.BuildMessageKey(message, ExtractMessageText(message));
                     if (!seen.Add(key)) continue;
                     HistoryTurn turn;
-                    if (TryConvertTurn(message, seller, buyer, options, out turn)) turns.Add(turn);
+                    string excluded;
+                    if (TryConvertTurn(message, seller, buyer, options,
+                        out turn, out excluded)) turns.Add(turn);
+                    else if (!string.IsNullOrWhiteSpace(excluded) && onExcluded != null)
+                        onExcluded(excluded);
                 }
 
                 var oldest = messages.OrderBy(GetMessageTime).FirstOrDefault();
@@ -1275,9 +1287,10 @@ namespace Bot.Knowledge
             string seller,
             string buyer,
             ChatHistoryScanOptions options,
-            out HistoryTurn turn)
+            out HistoryTurn turn, out string excludeReason)
         {
             turn = null;
+            excludeReason = null;
             if (message == null || message.fromid == null || message.toid == null) return false;
             var time = GetMessageTime(message);
             if (!options.ScanAll)
@@ -1301,6 +1314,12 @@ namespace Bot.Knowledge
                 && string.Equals(to, CleanNick(buyer), StringComparison.Ordinal)) role = "seller";
             else return false;
 
+            // Reject system-generated buyer-side cards before persisting scan
+            // evidence or buyer question rows. Seller/assistant messages are
+            // preserved for independent history features.
+            if (role == "buyer" && BuyerHistoryMessageFilter.ShouldExcludeRaw(
+                message, seller, text, out excludeReason))
+                return false;
             turn = new HistoryTurn
             {
                 Role = role, Text = text, Time = time,

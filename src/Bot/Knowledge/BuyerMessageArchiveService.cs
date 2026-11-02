@@ -103,6 +103,9 @@ namespace Bot.Knowledge
         {
             text = Redact(text);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(text)) return;
+            // Backfill and live archiving share this path. A historical system
+            // notice must not be stored as a buyer-authored question.
+            if (BuyerHistoryMessageFilter.IsExcludedArchivedText(text)) return;
             if (timestamp == DateTime.MinValue) timestamp = DateTime.Now;
             var receipt = Hash("event:" + messageKey);
             var state = Get(seller);
@@ -146,6 +149,11 @@ namespace Bot.Knowledge
                     if (item == null || item.Timestamp == DateTime.MinValue) continue;
                     var text = Redact(item.Text);
                     if (text.Length == 0) continue;
+                    if (BuyerHistoryMessageFilter.IsExcludedArchivedText(text))
+                    {
+                        result.ExcludedNonBuyerRows++;
+                        continue;
+                    }
                     var fingerprint = BuyerHistoryScanMessageMergeService.Fingerprint(
                         text, item.Timestamp);
                     if (known.Contains(fingerprint))
@@ -187,7 +195,11 @@ namespace Bot.Knowledge
                 throw new ArgumentException("开始时间不能晚于结束时间");
             var rows = Read(seller).Where(x =>
                 (!start.HasValue || x.ReceivedAtTicks >= start.Value.Ticks)
-                && (!end.HasValue || x.ReceivedAtTicks <= end.Value.Ticks));
+                && (!end.HasValue || x.ReceivedAtTicks <= end.Value.Ticks)
+                // Keep the archived original rows for audit/recovery; hide
+                // legacy system/card/link artifacts from buyer-question lists
+                // and subsequent AI suggestion groups.
+                && !BuyerHistoryMessageFilter.IsExcludedArchivedText(x.Text));
             if (!string.IsNullOrWhiteSpace(query))
                 rows = rows.Where(x => (x.Text ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
                     || (x.GroupTitle ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);

@@ -19,6 +19,7 @@ namespace Bot.Knowledge
         public int ScansFailed { get; set; }
         public int RowsRead { get; set; }
         public int InvalidRows { get; set; }
+        public int ExcludedNonBuyerRows { get; set; }
         public int DuplicateInScans { get; set; }
         public int AlreadyArchived { get; set; }
         public int NewlyArchived { get; set; }
@@ -128,7 +129,9 @@ namespace Bot.Knowledge
                 seller, unique.Values.ToList(), result);
             Log.Info("[BuyerQuestions] scan_merge_complete scans=" + result.ScansRead
                 + ";failed=" + result.ScansFailed + ";rows=" + result.RowsRead
-                + ";invalid=" + result.InvalidRows + ";duplicateInScans="
+                + ";invalid=" + result.InvalidRows
+                + ";excludedNonBuyer=" + result.ExcludedNonBuyerRows
+                + ";duplicateInScans="
                 + result.DuplicateInScans + ";alreadyArchived=" + result.AlreadyArchived
                 + ";added=" + result.NewlyArchived);
             return result;
@@ -155,6 +158,13 @@ namespace Bot.Knowledge
                     DateTimeStyles.RoundtripKind, out time) || time == DateTime.MinValue)
                 {
                     result.InvalidRows++;
+                    return;
+                }
+                // Older packages predate raw message-type filtering. Never
+                // reimport their recognizable card/notice/link summaries.
+                if (BuyerHistoryMessageFilter.IsExcludedArchivedText(text))
+                {
+                    result.ExcludedNonBuyerRows++;
                     return;
                 }
                 var fingerprint = Fingerprint(text, time);

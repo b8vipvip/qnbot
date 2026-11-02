@@ -25,6 +25,8 @@ namespace Bot.Knowledge
         public int ReadMessages { get; set; }
         public int InterruptedContacts { get; set; }
         public int RetryAttempts { get; set; }
+        public int ExcludedMessages { get; set; }
+        public Dictionary<string, int> ExcludedByReason { get; set; }
         public Dictionary<string, int> DiscoverySourceCounts { get; set; }
         public Dictionary<string, int> DiscoveryUniqueCounts { get; set; }
         public bool ContactCoverageVerified { get; set; }
@@ -68,6 +70,7 @@ namespace Bot.Knowledge
                 RunId = id, StartedAt = DateTime.UtcNow.ToString("o"),
                 Status = "running", Phase = "starting",
                 DiscoverySourceCounts = new Dictionary<string, int>(),
+                ExcludedByReason = new Dictionary<string, int>(),
                 DiscoveryUniqueCounts = new Dictionary<string, int>(),
                 ContactCoverageVerified = false,
                 CoverageWarning = "联系人发现可能不完整；尚未取得千牛全店人数和翻页终态证据。"
@@ -153,6 +156,20 @@ namespace Bot.Knowledge
             {
                 _record.CumulativeCompletedContacts = count;
                 SaveManifest();
+            }
+        }
+
+        internal void Excluded(string reason)
+        {
+            lock (_sync)
+            {
+                _record.ExcludedMessages++;
+                int count;
+                if (!_record.ExcludedByReason.TryGetValue(reason ?? "unknown", out count))
+                    count = 0;
+                _record.ExcludedByReason[reason ?? "unknown"] = count + 1;
+                // Save a compact numeric summary with contact/finish events;
+                // never log raw system text or identifiers.
             }
         }
 
