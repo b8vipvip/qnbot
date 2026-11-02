@@ -20,7 +20,7 @@ def test_duplicate_messages_show_one_plain_row_with_frequency_no_time_column():
     assert 'row.IsSemanticMerged ? SemanticTemplate : ExactTemplate' in ui
     assert '"（接收" + x.Count() + "次）"' in ui
     assert 'Messages = g.Messages' in ui  # source events stay available for counted deletes
-    assert 'GroupBy(x => x.GroupKey ?? x.Id)' in archive
+    assert 'BotReply = x.BotReplyText ?? string.Empty' in archive
     assert 'Count = g.Count()' in archive
     assert 'state.Db.ReadOneRecord<BuyerQuestionRow>(x => x.ReceiptHash == receipt)' in archive
 
