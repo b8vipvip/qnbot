@@ -90,6 +90,11 @@ namespace Bot.Knowledge
     {
         private static readonly ConcurrentDictionary<string, byte> ActiveBuyerScans =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        internal static bool IsBuyerScanActive(string seller)
+        {
+            return ActiveBuyerScans.ContainsKey((seller ?? string.Empty).Trim());
+        }
+
         private const int PageSize = 100;
         private const int MaxHistoryPages = 200;
         private static readonly string[] NickFields =
