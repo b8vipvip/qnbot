@@ -17,6 +17,7 @@ namespace Bot.Knowledge
     // The archive continues to store one row per actual buyer message event.
     internal sealed class BuyerMessageListItem
     {
+        public int Sequence { get; set; }
         public BuyerQuestionRow Message { get; set; }
         public DateTime ReceivedAt { get; set; }
         public string Text { get; set; }
@@ -54,6 +55,8 @@ namespace Bot.Knowledge
         private readonly DatePicker _startDate;
         private readonly DatePicker _endDate;
         private readonly TextBlock _status;
+        private readonly TextBlock _footerStats;
+        private readonly Button _getDirectButton;
         private readonly Button _groupButton;
         private readonly Button _scanButton;
         private readonly Button _stopScan;
@@ -139,9 +142,21 @@ namespace Bot.Knowledge
             // explicitly closes it, at which point the message grid expands.
             var scanContents = new DockPanel();
             var scanHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            // Some Windows themes render the multiplication glyph as an empty
+            // square. A plain Chinese caption is reliably visible across WPF
+            // fonts and high-DPI configurations, even while disabled.
             _scanCardClose = new Button
             {
-                Content = "×", Width = 28, Height = 26, IsEnabled = false,
+                Content = new TextBlock
+                {
+                    Text = "关闭", FontSize = 12, FontWeight = FontWeights.SemiBold,
+                    Foreground = Brushes.Black,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                },
+                Width = 62, Height = 27, IsEnabled = false,
+                Background = Brushes.WhiteSmoke,
+                BorderBrush = Brushes.Gray,
+                BorderThickness = new Thickness(1),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 ToolTip = "扫描结束后可关闭此进度卡片，不会删除扫描记录或数据包。"
             };
@@ -200,6 +215,16 @@ namespace Bot.Knowledge
                 FontSize = 13
             };
             VirtualizingPanel.SetVirtualizationMode(_list, VirtualizationMode.Recycling);
+            _list.Columns.Add(new DataGridTextColumn
+            {
+                Header = "序号", Binding = new Binding("Sequence"),
+                SortMemberPath = "Sequence", Width = new DataGridLength(65),
+                IsReadOnly = true
+            });
+            // Keep numbers aligned with the current visible sort order.
+            _list.Sorting += (sender, e) =>
+                Dispatcher.BeginInvoke(new Action(() => RenumberVisibleRows()),
+                    System.Windows.Threading.DispatcherPriority.ContextIdle);
             // Exact groups render as plain text without an expansion icon.
             var plain = new FrameworkElementFactory(typeof(TextBlock));
             plain.SetBinding(TextBlock.TextProperty, new Binding("Text"));
@@ -276,6 +301,29 @@ namespace Bot.Knowledge
                     _list, e.OriginalSource as DependencyObject) as DataGridRow;
                 if (row != null) ShowMessageDetails(row.Item as BuyerMessageListItem);
             };
+            // Footer belongs to the bottom of the page rather than below the
+            // scrolled rows. It must stay visible even on a long list.
+            var footer = new DockPanel
+            {
+                LastChildFill = false, Margin = new Thickness(0, 8, 0, 0)
+            };
+            _getDirectButton = Button("获取直答", 100);
+            _getDirectButton.ToolTip = "逐组检索本店正式知识库已人工审核的直答，命中后更新列表，不调用AI或发送消息";
+            _getDirectButton.Click += async delegate { await GetDirectAnswersAsync(); };
+            DockPanel.SetDock(_getDirectButton, Dock.Right);
+            footer.Children.Add(_getDirectButton);
+            _footerStats = new TextBlock
+            {
+                Text = "买家消息内容 0 条 / 直答 0 条",
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Right,
+                Margin = new Thickness(0, 0, 18, 0),
+                Foreground = Brushes.DimGray
+            };
+            DockPanel.SetDock(_footerStats, Dock.Right);
+            footer.Children.Add(_footerStats);
+            DockPanel.SetDock(footer, Dock.Bottom);
+            root.Children.Add(footer);
             root.Children.Add(_list);
             Loaded += delegate { RefreshView(); };
             Unloaded += delegate
@@ -346,14 +394,98 @@ namespace Bot.Knowledge
                     };
                 }).OrderByDescending(x => x.ReceivedAt)
                     .ThenBy(x => x.Message.Id, StringComparer.Ordinal).ToList();
+                for (var index = 0; index < rows.Count; index++)
+                    rows[index].Sequence = index + 1;
                 _list.ItemsSource = rows;
+                UpdateFooterStats(rows);
                 _status.Text = "当前筛选结果：" + grouped.Sum(x => x.Count) + "次接收，"
                     + rows.Count + "条去重/语义分组；其中 "
                     + rows.Count(x => x.IsSemanticMerged) + "组包含不同问法；"
                     + rows.Count(x => !string.IsNullOrWhiteSpace(x.DirectAnswer))
                     + "组命中已审核直答，直答单元格可右键操作。";
             }
-            catch (Exception ex) { _status.Text = "加载消息失败：" + ex.Message; }
+            catch (Exception ex)
+            {
+                _status.Text = "加载消息失败：" + ex.Message;
+                if (_footerStats != null) _footerStats.Text = "消息列表加载失败";
+            }
+        }
+
+        private void UpdateFooterStats(IList<BuyerMessageListItem> rows)
+        {
+            if (_footerStats == null) return;
+            var count = rows == null ? 0 : rows.Count;
+            var answered = rows == null ? 0 : rows.Count(x =>
+                !string.IsNullOrWhiteSpace(x.DirectAnswer));
+            _footerStats.Text = "买家消息内容 " + count
+                + " 条 / 直答 " + answered + " 条";
+        }
+
+        private void RenumberVisibleRows()
+        {
+            if (_list == null || _list.ItemsSource == null) return;
+            var view = CollectionViewSource.GetDefaultView(_list.ItemsSource);
+            var sequence = 0;
+            foreach (var row in view.Cast<object>().OfType<BuyerMessageListItem>())
+                row.Sequence = ++sequence;
+            _list.Items.Refresh();
+        }
+
+        // Inspect *all archived groups*, not only the date-filtered rows.
+        // This is deliberately a lookup, never an AI generation or a production
+        // knowledge mutation. Unknown, ambiguous, context-dependent and
+        // non-reviewed answers stay blank.
+        private async Task GetDirectAnswersAsync()
+        {
+            if (!_getDirectButton.IsEnabled) return;
+            _getDirectButton.IsEnabled = false;
+            _status.Text = "正在检索全部买家消息的已审核直答...";
+            try
+            {
+                var result = await Task.Run(() =>
+                {
+                    var groups = BuyerMessageArchiveService.Groups(_seller,
+                        (DateTime?)null, (DateTime?)null, "");
+                    var knowledge = KnowledgeEngineV2Repository.LoadAll(_seller);
+                    var applied = BuyerMessageArchiveService.ReadOptimizations(_seller)
+                        .Where(x => x.Status == "applied")
+                        .OrderByDescending(x => x.AppliedAtTicks)
+                        .GroupBy(x => x.GroupKey)
+                        .ToDictionary(x => x.Key, x => x.First());
+                    var matches = 0;
+                    foreach (var group in groups)
+                    {
+                        var variants = group.Messages.Select(x => x.Text)
+                            .Distinct(StringComparer.Ordinal);
+                        var match = BuyerMessageArchiveService.FindConfirmedDirect(
+                            _seller, variants, knowledge);
+                        if (match != null) { matches++; continue; }
+                        BuyerAiOptimizationRow revision;
+                        if (!applied.TryGetValue(group.Key, out revision)) continue;
+                        var record = knowledge.FirstOrDefault(x => x.Id == revision.KnowledgeId);
+                        if (record != null && record.Enabled && record.Status == "active"
+                            && !string.IsNullOrWhiteSpace(revision.AppliedAnswer)
+                            && record.Answer == revision.AppliedAnswer)
+                            matches++;
+                    }
+                    return Tuple.Create(groups.Count, matches);
+                });
+                RefreshView();
+                _status.Text = "获取直答完成：全部买家消息内容 " + result.Item1
+                    + " 组，命中已审核直答 " + result.Item2
+                    + " 组，未命中 " + (result.Item1 - result.Item2)
+                    + " 组；当前列表已刷新，按日期与搜索条件显示。"
+                    + " 未匹配的直答列保持空白，未调用AI、未发送消息。";
+                Log.Info("[BuyerQuestions] direct_lookup_complete groups=" + result.Item1
+                    + ";matched=" + result.Item2 + ";unmatched="
+                    + (result.Item1 - result.Item2));
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "获取直答失败：" + ex.Message;
+                Log.Info("[BuyerQuestions] direct_lookup_failed type=" + ex.GetType().Name);
+            }
+            finally { _getDirectButton.IsEnabled = true; }
         }
 
         private void ShowMessageDetails(BuyerMessageListItem item)
@@ -506,6 +638,9 @@ namespace Bot.Knowledge
             }
             finally
             {
+                // A cancelled or failed scan may already have archived some
+                // messages. Reload them too, not only after normal completion.
+                RefreshView();
                 _scanCancellation.Dispose();
                 _scanCancellation = null;
                 _scanButton.IsEnabled = true;
