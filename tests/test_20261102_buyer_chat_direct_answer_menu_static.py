@@ -38,7 +38,7 @@ def test_confirmed_operator_answer_is_saved_to_scoped_v2_knowledge():
     assert 'private bool _buyerDirectAnswerSaveInProgress;' in MIRROR
     assert 'finally' in MIRROR
     assert '_buyerDirectAnswerSaveInProgress = false;' in MIRROR
-    assert 'Nothing is sent to Qianniu.' in MIRROR
+    assert 'nothing is sent to Qianniu.' in MIRROR
 
 
 def test_dialog_requires_complete_question_and_answer_before_save():
