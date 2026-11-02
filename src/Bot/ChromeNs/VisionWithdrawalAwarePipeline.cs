@@ -264,8 +264,12 @@ namespace Bot.ChromeNs
             }
             string humanReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out humanReason))
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                out humanReason, trustedOcrKnowledge))
             {
+                Log.Info("图片OCR知识回复抑制: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick + ", reviewedOcr=" + trustedOcrKnowledge
+                    + ", reason=" + humanReason);
                 lifecycleLease.MarkCompleted("vision_human_relevance_suppressed");
                 if (ctl != null) ctl.SetSkipped(humanReason);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
