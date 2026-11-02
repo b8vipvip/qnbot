@@ -666,6 +666,7 @@ namespace Bot.Knowledge
                 _status.Text = "历史扫描结束：成功 " + scan.ScannedContacts + "/"
                     + scan.ContactCount + " 位联系人（跳过上次已完成 "
                     + scan.PreviouslyCompletedContacts + " 位）；累计消息 " + scan.MessageCount
+                    + "；过滤非买家消息 " + scan.FilteredMessages
                     + "；失败 " + scan.FailedContacts
                     + "；会话切换 " + scan.InterruptionCount
                     + "；重试 " + scan.RetryCount
@@ -819,6 +820,7 @@ namespace Bot.Knowledge
                         + " 个，原始消息 " + result.RowsRead
                         + " 条；跨扫描重复 " + result.DuplicateInScans
                         + " 条，消息库已有 " + result.AlreadyArchived
+                        + " 条，系统/卡片/链接过滤 " + result.ExcludedNonBuyerRows
                         + " 条，无效 " + result.InvalidRows
                         + " 条；新增入库 " + result.NewlyArchived + " 条。"
                         + (result.ScansFailed > 0
