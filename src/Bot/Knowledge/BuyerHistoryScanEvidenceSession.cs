@@ -199,13 +199,24 @@ namespace Bot.Knowledge
 
         internal void Messages(string buyer, IEnumerable<Tuple<string, DateTime, string>> turns)
         {
+            Messages(buyer, turns.Select(x =>
+                Tuple.Create(x.Item1, x.Item2, x.Item3, string.Empty)));
+        }
+
+        internal void Messages(string buyer,
+            IEnumerable<Tuple<string, DateTime, string, string>> turns)
+        {
             var pseudonym = ContactHash(buyer);
             var lines = new StringBuilder();
             foreach (var turn in turns)
             {
                 var text = BuyerMessageArchiveService.Redact(turn.Item1);
+                var botReply = BuyerMessageArchiveService.Redact(turn.Item4);
                 if (!string.IsNullOrWhiteSpace(buyer))
+                {
                     text = text.Replace(buyer, "[买家]");
+                    botReply = botReply.Replace(buyer, "[买家]");
+                }
                 // Contact/account identity never appears in the data; each
                 // incoming event is keyed only by a per-scan salted digest.
                 using (var sha = SHA256.Create())
@@ -217,7 +228,8 @@ namespace Bot.Knowledge
                     {
                         contact = pseudonym,
                         utc_or_local_time = turn.Item2 == DateTime.MinValue ? "" : turn.Item2.ToString("o"),
-                        event_hash = fingerprint, text = text
+                        event_hash = fingerprint, text = text,
+                        bot_reply = botReply
                     }));
                 }
             }
