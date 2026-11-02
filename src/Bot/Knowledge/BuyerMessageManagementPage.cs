@@ -231,6 +231,8 @@ namespace Bot.Knowledge
             plain.SetBinding(FrameworkElement.ToolTipProperty, new Binding("Text"));
             plain.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
             plain.SetValue(TextBlock.MarginProperty, new Thickness(5, 6, 5, 6));
+            plain.AddHandler(UIElement.PreviewMouseRightButtonDownEvent,
+                new System.Windows.Input.MouseButtonEventHandler(ShowBuyerMessageCopyMenu));
 
             // Semantic groups render distinct wordings and their occurrence counts.
             var expander = new FrameworkElementFactory(typeof(Expander));
@@ -245,6 +247,8 @@ namespace Bot.Knowledge
             details.SetValue(VirtualizingPanel.IsVirtualizingProperty, true);
             details.SetValue(VirtualizingPanel.VirtualizationModeProperty, VirtualizationMode.Recycling);
             expander.AppendChild(details);
+            expander.AddHandler(UIElement.PreviewMouseRightButtonDownEvent,
+                new System.Windows.Input.MouseButtonEventHandler(ShowBuyerMessageCopyMenu));
             _list.Columns.Add(new DataGridTemplateColumn
             {
                 Header = "买家消息内容",
@@ -270,6 +274,14 @@ namespace Bot.Knowledge
                     {
                         _list.SelectedItem = item;
                         var menu = new ContextMenu();
+                        var copy = new MenuItem
+                        {
+                            Header = "复制直答消息",
+                            IsEnabled = !string.IsNullOrWhiteSpace(item.DirectAnswer)
+                        };
+                        copy.Click += delegate { CopyMessageText(item.DirectAnswer); };
+                        menu.Items.Add(copy);
+                        menu.Items.Add(new Separator());
                         var edit = new MenuItem { Header = "修改直答" };
                         edit.Click += delegate { EditDirectAnswer(item); };
                         menu.Items.Add(edit);
@@ -331,6 +343,48 @@ namespace Bot.Knowledge
                 if (_cancel != null) _cancel.Cancel();
                 if (_scanCancellation != null) _scanCancellation.Cancel();
             };
+        }
+
+        private void ShowBuyerMessageCopyMenu(
+            object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            var target = sender as FrameworkElement;
+            var source = e.OriginalSource as DependencyObject;
+            if (target == null || source == null) return;
+            var row = ItemsControl.ContainerFromElement(_list, source) as DataGridRow;
+            var item = row == null ? target.DataContext as BuyerMessageListItem
+                : row.Item as BuyerMessageListItem;
+            if (item == null) return;
+            _list.SelectedItem = item;
+            var copyText = item.Text;
+            var clicked = source as FrameworkElement;
+            if (item.IsSemanticMerged && clicked != null && clicked.DataContext is string)
+                copyText = (string)clicked.DataContext;
+            var menu = new ContextMenu();
+            var copy = new MenuItem
+            {
+                Header = "复制买家消息",
+                IsEnabled = !string.IsNullOrWhiteSpace(copyText)
+            };
+            var captured = copyText;
+            copy.Click += delegate { CopyMessageText(captured); };
+            menu.Items.Add(copy);
+            target.ContextMenu = menu;
+        }
+
+        private void CopyMessageText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            try
+            {
+                Clipboard.SetText(text);
+                _status.Text = "已复制消息内容。";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "复制失败：" + ex.GetType().Name;
+                Log.Info("[BuyerQuestions] message_copy_failed type=" + ex.GetType().Name);
+            }
         }
 
         private static Button Button(string label, double width)
