@@ -27,7 +27,7 @@ def test_server_ocr_has_safe_defaults_and_persisted_admin_settings():
 
     assert "OCR_ENABLED=true" in env
     assert "OCR_MAX_IMAGE_BYTES=8388608" in env
-    assert "OCR_TIMEOUT_SECONDS=8" in env
+    assert "OCR_TIMEOUT_SECONDS=16" in env
     assert "OCR_MAX_CONCURRENCY=2" in env
     assert "OCR_MAX_TEXT_CHARS=6000" in env
     assert "不配置以下变量也能直接运行" in env
