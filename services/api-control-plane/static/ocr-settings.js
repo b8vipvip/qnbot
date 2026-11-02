@@ -132,7 +132,126 @@ async function resetOcrSettings(){
   }
 }
 
+
+const ocrTaskState={page:1,pageSize:20,status:"all",generation:0};
+const OCR_TASK_LABELS={
+  queued:"排队中",running:"识别中",success:"成功",timeout:"超时",
+  failed:"失败",rejected:"已拒绝",interrupted:"已中断"
+};
+const OCR_TASK_PHASES={
+  admission:"等待执行",inference:"模型推理",validation:"输入校验",
+  returned:"识别返回",server_restarted:"服务重启"
+};
+const OCR_TASK_ERRORS={
+  invalid_image_or_hash:"图片或哈希无效",
+  invalid_image:"图片格式无效",
+  image_too_large:"图片过大",
+  ocr_disabled_or_unavailable:"OCR 已停用或不可用",
+  inference_timeout:"OCR 推理超时",
+  request_cancelled:"请求已取消",
+  server_restarted:"服务重启导致中断",
+  internal_ocr_error:"OCR 内部错误",
+  http_error:"服务响应异常"
+};
+function ocrSafeNumber(v){return Number.isFinite(Number(v))?Number(v):0}
+function ocrTaskDate(value){
+  if(!value)return "-";
+  const parsed=new Date(value);
+  return Number.isNaN(parsed.getTime())?String(value):parsed.toLocaleString("zh-CN",{hour12:false});
+}
+function ocrTaskCell(tr,value,cssClass=""){
+  const td=document.createElement("td");
+  td.textContent=String(value??"-");
+  if(cssClass)td.className=cssClass;
+  tr.appendChild(td);
+  return td;
+}
+function ocrRenderTaskRows(items){
+  const tbody=ocrEl("ocrTaskRows");
+  tbody.replaceChildren();
+  if(!items.length){
+    const tr=document.createElement("tr");
+    const td=document.createElement("td");
+    td.colSpan=9;
+    td.className="ocr-task-empty";
+    td.textContent="当前筛选条件下没有 OCR 任务";
+    tr.appendChild(td);tbody.appendChild(tr);
+    return;
+  }
+  items.forEach(task=>{
+    const tr=document.createElement("tr");
+    ocrTaskCell(tr,ocrTaskDate(task.started_at));
+    const id=ocrTaskCell(tr,task.task_id||"-");
+    id.title=task.task_id||"";
+    id.style.fontFamily="monospace";
+    id.style.fontSize="11px";
+    const status=ocrTaskCell(tr,OCR_TASK_LABELS[task.status]||task.status||"-","ocr-task-state");
+    status.dataset.state=task.status||"";
+    ocrTaskCell(tr,OCR_TASK_PHASES[task.phase]||task.phase||"-");
+    ocrTaskCell(tr,`${ocrSafeNumber(task.queue_ms)} / ${ocrSafeNumber(task.inference_ms)} / ${ocrSafeNumber(task.elapsed_ms)} ms`);
+    ocrTaskCell(tr,`${(ocrSafeNumber(task.image_bytes)/1024).toFixed(1)} KB`);
+    ocrTaskCell(tr,task.status==="success"?
+      `${ocrSafeNumber(task.text_chars)} 字 / ${(ocrSafeNumber(task.confidence)*100).toFixed(1)}%`:"-");
+    ocrTaskCell(tr,task.http_status?String(task.http_status):"-");
+    ocrTaskCell(tr,OCR_TASK_ERRORS[task.error_code]||task.error_code||"-");
+    tbody.appendChild(tr);
+  });
+}
+async function loadOcrTasks(){
+  const current=++ocrTaskState.generation;
+  const refresh=ocrEl("ocrTaskRefreshBtn");
+  refresh.disabled=true;
+  try{
+    const params=new URLSearchParams({
+      page:String(ocrTaskState.page),
+      page_size:String(ocrTaskState.pageSize),
+      status:ocrTaskState.status
+    });
+    const data=await ocrApi("/api/admin/ocr/tasks?"+params.toString());
+    if(current!==ocrTaskState.generation)return;
+    const total=Math.max(0,ocrSafeNumber(data.total));
+    const pages=Math.max(1,Math.ceil(total/ocrTaskState.pageSize));
+    if(ocrTaskState.page>pages){
+      ocrTaskState.page=pages;
+      await loadOcrTasks();
+      return;
+    }
+    ocrRenderTaskRows(Array.isArray(data.items)?data.items:[]);
+    const counts=data.counts||{};
+    const all=Object.values(counts).reduce((sum,count)=>sum+ocrSafeNumber(count),0);
+    ocrEl("ocrTaskSummary").textContent=
+      `已保留 ${all} 条 · 成功 ${ocrSafeNumber(counts.success)} · 超时 ${ocrSafeNumber(counts.timeout)} · 失败 ${ocrSafeNumber(counts.failed)} · 正在执行 ${ocrSafeNumber(counts.running)+ocrSafeNumber(counts.queued)} · 当前筛选 ${total} 条`;
+    ocrEl("ocrTaskPageInfo").textContent=`第 ${ocrTaskState.page}/${pages} 页 · 每页 ${ocrTaskState.pageSize} 条`;
+    ocrEl("ocrTaskPrev").disabled=ocrTaskState.page<=1;
+    ocrEl("ocrTaskNext").disabled=ocrTaskState.page>=pages;
+    ocrEl("ocrTaskError").textContent="";
+  }catch(err){
+    if(current===ocrTaskState.generation){
+      ocrEl("ocrTaskError").textContent=err.message||String(err);
+      ocrEl("ocrTaskError").className="ocr-result bad";
+    }
+  }finally{
+    if(current===ocrTaskState.generation)refresh.disabled=false;
+  }
+}
+ocrEl("ocrTaskFilter").addEventListener("change",()=>{
+  ocrTaskState.status=ocrEl("ocrTaskFilter").value;
+  ocrTaskState.page=1;
+  loadOcrTasks();
+});
+ocrEl("ocrTaskRefreshBtn").addEventListener("click",loadOcrTasks);
+ocrEl("ocrTaskPrev").addEventListener("click",()=>{
+  if(ocrTaskState.page>1){ocrTaskState.page--;loadOcrTasks()}
+});
+ocrEl("ocrTaskNext").addEventListener("click",()=>{
+  ocrTaskState.page++;
+  loadOcrTasks();
+});
+// Refresh active tasks while the administrator is viewing this page.
+setInterval(()=>{if(!document.hidden)loadOcrTasks()},15000);
+
 ocrEl("ocrSettingsForm").addEventListener("submit",saveOcrSettings);
 ocrEl("ocrResetBtn").addEventListener("click",resetOcrSettings);
-ocrEl("ocrRefreshBtn").addEventListener("click",loadOcrSettings);
+ocrEl("ocrRefreshBtn").addEventListener("click",()=>{loadOcrSettings();loadOcrTasks()});
 loadOcrSettings();
+loadOcrTasks();
