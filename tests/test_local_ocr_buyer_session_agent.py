@@ -40,7 +40,8 @@ def test_server_ocr_runtime_is_authenticated_bounded_and_windows_release_exclude
     assert 'request.headers.get("x-image-sha256"' in runtime
     assert "hashlib.sha256(raw).hexdigest()" in runtime
     assert "asyncio.Semaphore" in runtime
-    assert "asyncio.wait_for(asyncio.shield(task)" in runtime
+    assert "asyncio.shield(worker_task)" in runtime
+    assert "_release_when_done(worker_task)" in runtime
     assert "run_in_threadpool(_run_ocr, raw)" in runtime
     assert "RapidOCR" in runtime
     assert "runtime_ocr.install(control_plane)" in bootstrap

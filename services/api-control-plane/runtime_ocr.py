@@ -6,7 +6,10 @@ import io
 import os
 import threading
 import time
+import uuid
 from typing import Any, Dict, Optional
+
+from fastapi import Query
 
 from fastapi import Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -218,6 +221,99 @@ def _settings_payload(settings: Dict[str, Any], source: str, updated_at: str = "
     }
 
 
+
+# OCR task ledger deliberately contains NO image bytes, extracted text, buyer identity,
+# API credentials or client-provided arbitrary strings. Admin-only, bounded history.
+_TASK_RETENTION = 5000
+_TASK_STATES = {"queued", "running", "success", "timeout", "failed", "rejected", "interrupted"}
+_TASK_FILTERS = _TASK_STATES | {"all"}
+
+
+def _create_task_record(cp: Any, request_id: str) -> None:
+    with cp.db() as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_ocr_task_records(
+                task_id, started_at, status, phase, http_status
+            ) VALUES (?, ?, 'queued', 'admission', 0)
+            """,
+            (request_id, cp.iso_now()),
+        )
+        # Keep the newest 5000 entries across restarts. Prune in small batches.
+        count = conn.execute("SELECT COUNT(*) FROM runtime_ocr_task_records").fetchone()[0]
+        if count > _TASK_RETENTION:
+            conn.execute(
+                """DELETE FROM runtime_ocr_task_records WHERE task_id IN (
+                    SELECT task_id FROM runtime_ocr_task_records
+                    ORDER BY started_at ASC, rowid ASC LIMIT ?
+                )""",
+                (count - _TASK_RETENTION,),
+            )
+
+
+def _update_task_record(cp: Any, request_id: str, status_value: str,
+                        phase: str, *, http_status: int = 0,
+                        error_code: str = "", queue_ms: int = 0,
+                        inference_ms: int = 0, elapsed_ms: int = 0,
+                        image_bytes: int = 0, image_hash: str = "",
+                        text_chars: int = 0, confidence: float = 0.0,
+                        terminal: bool = False) -> None:
+    if status_value not in _TASK_STATES:
+        raise ValueError("invalid_ocr_task_state")
+    # error_code is selected from fixed strings at call-sites (never upstream text).
+    with cp.db() as conn:
+        conn.execute(
+            """
+            UPDATE runtime_ocr_task_records SET
+                status=?, phase=?, http_status=?, error_code=?, queue_ms=?,
+                inference_ms=?, elapsed_ms=?, image_bytes=?, image_hash_prefix=?,
+                text_chars=?, confidence=?, finished_at=?
+            WHERE task_id=?
+            """,
+            (status_value, phase, http_status, error_code,
+             max(0, int(queue_ms)), max(0, int(inference_ms)),
+             max(0, int(elapsed_ms)), max(0, int(image_bytes)),
+             image_hash[:12], max(0, int(text_chars)),
+             max(0.0, min(1.0, float(confidence))),
+             cp.iso_now() if terminal else None, request_id),
+        )
+
+
+def _list_task_records(cp: Any, page: int, page_size: int,
+                       state: str) -> Dict[str, Any]:
+    if state not in _TASK_FILTERS:
+        raise HTTPException(status_code=400, detail="无效OCR状态过滤器")
+    clause = "" if state == "all" else " WHERE status = ?"
+    args = () if state == "all" else (state,)
+    offset = (page - 1) * page_size
+    with cp.db() as conn:
+        total = int(conn.execute(
+            "SELECT COUNT(*) FROM runtime_ocr_task_records" + clause, args
+        ).fetchone()[0])
+        rows = conn.execute(
+            """SELECT task_id, started_at, finished_at, status, phase,
+                      http_status, error_code, queue_ms, inference_ms,
+                      elapsed_ms, image_bytes, image_hash_prefix,
+                      text_chars, confidence
+               FROM runtime_ocr_task_records""" + clause
+            + " ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            args + (page_size, offset),
+        ).fetchall()
+        summary_rows = conn.execute(
+            "SELECT status, COUNT(*) AS total FROM runtime_ocr_task_records GROUP BY status"
+        ).fetchall()
+    return {
+        "items": [dict(row) for row in rows],
+        "total": total, "page": page, "page_size": page_size,
+        "status": state,
+        "counts": {str(row["status"]): int(row["total"]) for row in summary_rows},
+        "retention_limit": _TASK_RETENTION,
+        # This ledger reflects OCR inference only. Client-side knowledge lookup
+        # and actual buyer-message delivery are intentionally not asserted here.
+        "scope": "server_ocr_only",
+    }
+
+
 def init_db(control_plane: Optional[Any] = None) -> None:
     cp = control_plane or _CONTROL_PLANE
     if cp is None:
@@ -255,6 +351,41 @@ def init_db(control_plane: Optional[Any] = None) -> None:
                 now,
                 "environment-defaults",
             ),
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_ocr_task_records (
+                task_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                http_status INTEGER NOT NULL DEFAULT 0,
+                error_code TEXT NOT NULL DEFAULT '',
+                queue_ms INTEGER NOT NULL DEFAULT 0,
+                inference_ms INTEGER NOT NULL DEFAULT 0,
+                elapsed_ms INTEGER NOT NULL DEFAULT 0,
+                image_bytes INTEGER NOT NULL DEFAULT 0,
+                image_hash_prefix TEXT NOT NULL DEFAULT '',
+                text_chars INTEGER NOT NULL DEFAULT 0,
+                confidence REAL NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_task_started "
+            "ON runtime_ocr_task_records(started_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_task_status_started "
+            "ON runtime_ocr_task_records(status, started_at DESC)"
+        )
+        # A service restart interrupts in-flight tasks from the previous process.
+        conn.execute(
+            """UPDATE runtime_ocr_task_records SET status='interrupted',
+               phase='server_restarted', error_code='server_restarted',
+               finished_at=? WHERE status IN ('queued','running')""",
+            (now,),
         )
         row = conn.execute("SELECT * FROM runtime_ocr_settings WHERE id = 1").fetchone()
         # Upgrade only the untouched old 8s bootstrap default. Never override
@@ -297,6 +428,15 @@ def install(control_plane: Any) -> None:
             return _settings_payload(_current_settings(), "environment-defaults")
         settings = _apply_settings(_row_to_settings(row))
         return _settings_payload(settings, "database", row["updated_at"], row["updated_by"])
+
+    @app.get("/api/admin/ocr/tasks")
+    async def get_runtime_ocr_tasks(
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+        status_filter: str = Query(default="all", alias="status"),
+        admin_username: str = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        return _list_task_records(control_plane, page, page_size, status_filter)
 
     @app.put("/api/admin/ocr/settings")
     async def update_runtime_ocr_settings(
@@ -372,53 +512,144 @@ def install(control_plane: Any) -> None:
         request: Request,
         client: Dict[str, Any] = Depends(require_client),
     ) -> Dict[str, Any]:
-        settings = _current_settings()
-        if not settings["enabled"]:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="服务端OCR已被管理员停用")
-
-        max_image_bytes = int(settings["max_image_bytes"])
-        content_length = request.headers.get("content-length", "").strip()
-        if content_length:
-            try:
-                if int(content_length) > max_image_bytes:
-                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="OCR图片超过大小限制")
-            except ValueError:
-                pass
-
-        raw = await request.body()
-        if not raw:
-            raise HTTPException(status_code=400, detail="OCR图片不能为空")
-        if len(raw) > max_image_bytes:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="OCR图片超过大小限制")
-
-        supplied_hash = request.headers.get("x-image-sha256", "").strip().lower()
-        actual_hash = hashlib.sha256(raw).hexdigest()
-        if supplied_hash and supplied_hash != actual_hash:
-            raise HTTPException(status_code=400, detail="OCR图片哈希校验失败")
-
-        await _acquire_ocr_slot(int(settings["max_concurrency"]))
-        task = asyncio.create_task(run_in_threadpool(_run_ocr, raw))
-        release_immediately = True
+        task_id = uuid.uuid4().hex
+        started = time.perf_counter()
+        cp = control_plane
+        _create_task_record(cp, task_id)
+        stage = "validation"
+        queue_ms = 0
+        image_size = 0
+        image_hash = ""
+        worker_task: Optional[asyncio.Task] = None
+        inference_started = 0.0
+        slot_owned = False
+        deferred_release = False
+        terminal = False
         try:
-            result = await asyncio.wait_for(asyncio.shield(task), timeout=float(settings["timeout_seconds"]))
+            settings = _current_settings()
+            if not settings["enabled"]:
+                raise HTTPException(status_code=503, detail="服务端OCR已被管理员停用")
+
+            max_image_bytes = int(settings["max_image_bytes"])
+            content_length = request.headers.get("content-length", "").strip()
+            if content_length:
+                try:
+                    if int(content_length) > max_image_bytes:
+                        raise HTTPException(status_code=413, detail="OCR图片超过大小限制")
+                except ValueError:
+                    pass
+
+            raw = await request.body()
+            image_size = len(raw)
+            if not raw:
+                raise HTTPException(status_code=400, detail="OCR图片不能为空")
+            if image_size > max_image_bytes:
+                raise HTTPException(status_code=413, detail="OCR图片超过大小限制")
+
+            supplied_hash = request.headers.get("x-image-sha256", "").strip().lower()
+            image_hash = hashlib.sha256(raw).hexdigest()
+            if supplied_hash and supplied_hash != image_hash:
+                raise HTTPException(status_code=400, detail="OCR图片哈希校验失败")
+
+            stage = "admission"
+            queued_at = time.perf_counter()
+            await _acquire_ocr_slot(int(settings["max_concurrency"]))
+            slot_owned = True
+            queue_ms = int((time.perf_counter() - queued_at) * 1000)
+            stage = "inference"
+            inference_started = time.perf_counter()
+            _update_task_record(cp, task_id, "running", "inference",
+                                queue_ms=queue_ms, image_bytes=image_size,
+                                image_hash=image_hash)
+            worker_task = asyncio.create_task(run_in_threadpool(_run_ocr, raw))
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.shield(worker_task), timeout=float(settings["timeout_seconds"])
+                )
+            except asyncio.TimeoutError as exc:
+                # Keep the concurrency slot until the underlying inference actually exits.
+                # Native ONNX inference can continue after HTTP 504.
+                deferred_release = True
+                _release_when_done(worker_task)
+                raise HTTPException(status_code=504, detail="服务端OCR推理超时") from exc
+
+            inference_ms = int((time.perf_counter() - inference_started) * 1000)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            _update_task_record(
+                cp, task_id, "success", "returned", http_status=200,
+                queue_ms=queue_ms, inference_ms=inference_ms, elapsed_ms=elapsed_ms,
+                image_bytes=image_size, image_hash=image_hash,
+                text_chars=len(result.get("text", "")),
+                confidence=float(result.get("confidence", 0.0)), terminal=True,
+            )
+            terminal = True
             return {
                 **result,
-                "imageSha256": actual_hash,
+                "imageSha256": image_hash,
                 "cacheable": True,
+                "ocrTaskId": task_id,
             }
-        except asyncio.TimeoutError as exc:
-            # Keep the concurrency slot until the underlying inference actually exits.
-            # This prevents timed-out native inference threads from accumulating without bound.
-            release_immediately = False
-            _release_when_done(task)
-            raise HTTPException(status_code=504, detail="服务端OCR推理超时") from exc
+        except HTTPException as exc:
+            if not terminal:
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                inference_ms = (int((time.perf_counter() - inference_started) * 1000)
+                                if inference_started else 0)
+                # Error codes are static identifiers; never persist image text.
+                error_code = {
+                    400: "invalid_image_or_hash",
+                    413: "image_too_large",
+                    503: "ocr_disabled_or_unavailable",
+                    504: "inference_timeout",
+                }.get(exc.status_code, "http_error")
+                state = "timeout" if exc.status_code == 504 else (
+                    "rejected" if stage == "validation" else "failed")
+                _update_task_record(
+                    cp, task_id, state, stage, http_status=exc.status_code,
+                    error_code=error_code, queue_ms=queue_ms,
+                    inference_ms=inference_ms, elapsed_ms=elapsed_ms,
+                    image_bytes=image_size, image_hash=image_hash, terminal=True,
+                )
+                terminal = True
+            raise
         except ValueError as exc:
+            _update_task_record(
+                cp, task_id, "rejected", stage, http_status=400,
+                error_code="invalid_image", queue_ms=queue_ms,
+                inference_ms=int((time.perf_counter() - inference_started) * 1000)
+                if inference_started else 0,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                image_bytes=image_size, image_hash=image_hash, terminal=True,
+            )
+            terminal = True
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except HTTPException:
+        except asyncio.CancelledError:
+            # Requests disconnected during admission or inference must not
+            # remain in a misleading running state.
+            _update_task_record(
+                cp, task_id, "interrupted", stage, http_status=499,
+                error_code="request_cancelled", queue_ms=queue_ms,
+                inference_ms=int((time.perf_counter() - inference_started) * 1000)
+                if inference_started else 0,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                image_bytes=image_size, image_hash=image_hash, terminal=True,
+            )
+            terminal = True
             raise
         except Exception as exc:
-            # Never include OCR text or image bytes in logs/errors.
+            _update_task_record(
+                cp, task_id, "failed", stage, http_status=503,
+                error_code="internal_ocr_error", queue_ms=queue_ms,
+                inference_ms=int((time.perf_counter() - inference_started) * 1000)
+                if inference_started else 0,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                image_bytes=image_size, image_hash=image_hash, terminal=True,
+            )
+            terminal = True
             raise HTTPException(status_code=503, detail="服务端OCR暂不可用") from exc
         finally:
-            if release_immediately:
-                _release_ocr_slot()
+            if slot_owned:
+                if worker_task is not None and not worker_task.done() and not deferred_release:
+                    # A cancelled request must not free its native inference slot.
+                    _release_when_done(worker_task)
+                elif not deferred_release:
+                    _release_ocr_slot()

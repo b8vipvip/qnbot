@@ -64,6 +64,7 @@ def test_install_is_idempotent(monkeypatch):
     runtime_ocr.install(fake)
     assert [(method, path) for method, path, _ in routes] == [
         ("GET", "/api/admin/ocr/settings"),
+        ("GET", "/api/admin/ocr/tasks"),
         ("PUT", "/api/admin/ocr/settings"),
         ("POST", "/api/admin/ocr/settings/reset"),
         ("POST", "/api/runtime/v1/ocr"),

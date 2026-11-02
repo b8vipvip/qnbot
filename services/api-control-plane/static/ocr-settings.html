@@ -22,6 +22,21 @@
     .ocr-result.good{color:#15803d}.ocr-result.bad{color:#b42318}
     .ocr-env{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.8}
     .ocr-priority-help{margin-top:8px;padding:10px 12px;border-radius:8px;background:rgba(127,127,127,.05);line-height:1.6}
+    .ocr-task-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .ocr-task-toolbar select{width:auto;min-width:120px}
+    .ocr-task-table-wrap{overflow-x:auto;width:100%;border:1px solid var(--border,#e5e7eb);border-radius:8px}
+    .ocr-task-table{width:100%;border-collapse:collapse;min-width:990px;font-size:12px}
+    .ocr-task-table th,.ocr-task-table td{padding:9px 10px;border-bottom:1px solid var(--border,#e5e7eb);text-align:left;white-space:nowrap}
+    .ocr-task-table th{color:var(--muted,#667085);background:rgba(127,127,127,.06);font-weight:600}
+    .ocr-task-table tr:last-child td{border-bottom:0}
+    .ocr-task-table td:last-child{white-space:normal;min-width:140px}
+    .ocr-task-muted{font-size:12px;color:var(--muted,#667085)}
+    .ocr-task-summary{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0;color:var(--muted,#667085);font-size:13px}
+    .ocr-task-pagination{display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+    .ocr-task-empty{text-align:center;padding:22px;color:var(--muted,#667085)}
+    .ocr-task-state{font-weight:600}
+    .ocr-task-state[data-state="success"]{color:#15803d}
+    .ocr-task-state[data-state="timeout"],.ocr-task-state[data-state="failed"],.ocr-task-state[data-state="rejected"]{color:#b42318}
     @media(max-width:700px){.ocr-shell{padding:8px}.form-grid{grid-template-columns:1fr!important}.span-2{grid-column:auto!important}}
   </style>
 </head>
@@ -76,7 +91,7 @@
         </label>
         <label>单请求超时（秒）
           <input id="ocrTimeoutSeconds" type="number" min="1" max="30" step="0.5" required>
-          <span class="hint">允许范围 1–30 秒，默认 8 秒。</span>
+          <span class="hint">允许范围 1–30 秒，默认 16 秒。</span>
         </label>
         <label>最大并发
           <input id="ocrMaxConcurrency" type="number" min="1" max="8" step="1" required>
@@ -95,12 +110,52 @@
     </form>
   </section>
 
+
+  <section class="panel" aria-labelledby="ocrTasksHeading">
+    <div class="panel-head">
+      <div>
+        <h2 id="ocrTasksHeading">OCR 任务记录</h2>
+        <p>记录服务端 OCR 每次调用的排队、推理与响应状态。仅保存诊断指标，不存储识别文字、原图或买家资料。最多保留最近 5000 条。</p>
+      </div>
+      <div class="ocr-task-toolbar">
+        <label for="ocrTaskFilter">状态</label>
+        <select id="ocrTaskFilter" aria-label="筛选 OCR 任务状态">
+          <option value="all">全部状态</option>
+          <option value="queued">排队中</option>
+          <option value="running">识别中</option>
+          <option value="success">成功</option>
+          <option value="timeout">超时</option>
+          <option value="failed">失败</option>
+          <option value="rejected">已拒绝</option>
+          <option value="interrupted">已中断</option>
+        </select>
+        <button id="ocrTaskRefreshBtn" class="secondary" type="button">刷新任务</button>
+      </div>
+    </div>
+    <div id="ocrTaskSummary" class="ocr-task-summary" aria-live="polite">正在读取任务记录…</div>
+    <div class="ocr-task-table-wrap">
+      <table class="ocr-task-table">
+        <thead>
+          <tr><th>开始时间</th><th>任务 ID</th><th>状态</th><th>阶段</th><th>排队 / 推理 / 总耗时</th><th>图片大小</th><th>识别字数 / 置信度</th><th>响应</th><th>原因代码</th></tr>
+        </thead>
+        <tbody id="ocrTaskRows"><tr><td colspan="9" class="ocr-task-empty">尚无任务记录</td></tr></tbody>
+      </table>
+    </div>
+    <div class="ocr-task-pagination">
+      <span id="ocrTaskPageInfo" class="ocr-task-muted">第 1 页</span>
+      <button id="ocrTaskPrev" class="secondary" type="button" disabled>上一页</button>
+      <button id="ocrTaskNext" class="secondary" type="button" disabled>下一页</button>
+    </div>
+    <p class="hint">这里的“成功”仅表示 OCR 服务端已返回识别结果；客户端知识库命中与向买家发送消息的状态不在本列表内。超时后原生推理可能仍占用计算资源，列表记录的是请求超时终态。</p>
+    <div id="ocrTaskError" class="ocr-result" role="status"></div>
+  </section>
+
   <section class="panel">
     <div class="panel-head"><div><h2>环境变量默认值</h2><p>这些参数不是必填项，只用于首次初始化或点击“恢复环境默认值”。</p></div></div>
     <div class="ocr-env">
       OCR_ENABLED=true<br>
       OCR_MAX_IMAGE_BYTES=8388608<br>
-      OCR_TIMEOUT_SECONDS=8<br>
+      OCR_TIMEOUT_SECONDS=16<br>
       OCR_MAX_CONCURRENCY=2<br>
       OCR_MAX_TEXT_CHARS=6000<br>
       OCR_VISION_PRIORITY=ocr_first
@@ -108,6 +163,6 @@
     <p class="hint">识别引擎固定为 RapidOCR/ONNXRuntime；当前没有需要人工选择的模型路径或模型名称。模型由服务端镜像构建过程预取。</p>
   </section>
 </main>
-<script src="/static/ocr-settings.js?v=2"></script>
+<script src="/static/ocr-settings.js?v=3"></script>
 </body>
 </html>
