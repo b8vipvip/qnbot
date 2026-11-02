@@ -24,6 +24,9 @@ namespace Bot.Knowledge
         public long ReceivedAtTicks { get; set; }
         public string GroupKey { get; set; }
         public string GroupTitle { get; set; }
+        // OCR/knowledge direct answer is distinct from an actual Bot echo.
+        // This column only contains verified [A] transport echoes from history.
+        public string BotReplyText { get; set; }
     }
     internal sealed class BuyerAiOptimizationRow
     {
@@ -99,9 +102,10 @@ namespace Bot.Knowledge
         // receive DB write errors. Otherwise it may checkpoint a buyer as
         // completed even when the archive failed and permanently skip them.
         internal static void ObserveForHistoryScan(string seller, string text,
-            string messageKey, DateTime timestamp)
+            string messageKey, DateTime timestamp, string botReplyText = null)
         {
             text = Redact(text);
+            botReplyText = Redact(botReplyText);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(text)) return;
             // Backfill and live archiving share this path. A historical system
             // notice must not be stored as a buyer-authored question.
@@ -111,13 +115,41 @@ namespace Bot.Knowledge
             var state = Get(seller);
             lock (state.Sync)
             {
-                if (!string.IsNullOrWhiteSpace(messageKey)
-                    && state.Db.ReadOneRecord<BuyerQuestionRow>(x => x.ReceiptHash == receipt) != null) return;
+                var previous = !string.IsNullOrWhiteSpace(messageKey)
+                    ? state.Db.ReadOneRecord<BuyerQuestionRow>(x => x.ReceiptHash == receipt)
+                    : null;
+                if (previous != null)
+                {
+                    // A later history scan may enrich a live-received question
+                    // with its actual Bot echo; never discard this information.
+                    if (string.IsNullOrWhiteSpace(previous.BotReplyText)
+                        && !string.IsNullOrWhiteSpace(botReplyText))
+                    {
+                        previous.BotReplyText = botReplyText;
+                        state.Db.SaveOneRecord(previous);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(botReplyText)
+                        && !string.Equals(previous.BotReplyText, botReplyText, StringComparison.Ordinal))
+                    {
+                        // Preserve a different real Bot answer as a distinct variant.
+                        var variantReceipt = Hash("event:" + messageKey + "|bot:" + botReplyText);
+                        if (state.Db.ReadOneRecord<BuyerQuestionRow>(
+                            x => x.ReceiptHash == variantReceipt) == null)
+                            state.Db.SaveOneRecord(new BuyerQuestionRow
+                            {
+                                Id = Guid.NewGuid().ToString("N"), ReceiptHash = variantReceipt,
+                                Text = text, BotReplyText = botReplyText,
+                                ReceivedAtTicks = timestamp.Ticks, GroupKey = previous.GroupKey,
+                                GroupTitle = previous.GroupTitle
+                            });
+                    }
+                    return;
+                }
                 state.Db.SaveOneRecord(new BuyerQuestionRow
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     ReceiptHash = string.IsNullOrWhiteSpace(messageKey) ? Guid.NewGuid().ToString("N") : receipt,
-                    Text = text, ReceivedAtTicks = timestamp.Ticks,
+                    Text = text, BotReplyText = botReplyText, ReceivedAtTicks = timestamp.Ticks,
                     GroupKey = "exact-" + Hash(KnowledgeEngineV2Semantics.Compact(text)).Substring(0, 20),
                     GroupTitle = text.Length > 85 ? text.Substring(0, 85) : text
                 });
@@ -137,40 +169,62 @@ namespace Bot.Knowledge
             var state = Get(seller);
             lock (state.Sync)
             {
-                var known = new HashSet<string>(
-                    state.Db.ReadRecords<BuyerQuestionRow>(null)
-                        .Where(x => x != null && x.ReceivedAtTicks > 0
-                            && !string.IsNullOrWhiteSpace(x.Text))
-                        .Select(x => BuyerHistoryScanMessageMergeService.Fingerprint(
-                            x.Text, new DateTime(x.ReceivedAtTicks))),
-                    StringComparer.Ordinal);
+                var existing = state.Db.ReadRecords<BuyerQuestionRow>(null)
+                    .Where(x => x != null && x.ReceivedAtTicks > 0
+                        && !string.IsNullOrWhiteSpace(x.Text)).ToList();
+                var byEvent = existing.GroupBy(x =>
+                    BuyerHistoryScanMessageMergeService.Fingerprint(
+                        x.Text, new DateTime(x.ReceivedAtTicks)))
+                    .ToDictionary(x => x.Key, x => x.ToList(), StringComparer.Ordinal);
                 foreach (var item in rows)
                 {
                     if (item == null || item.Timestamp == DateTime.MinValue) continue;
                     var text = Redact(item.Text);
+                    var botReply = Redact(item.BotReplyText);
                     if (text.Length == 0) continue;
                     if (BuyerHistoryMessageFilter.IsExcludedArchivedText(text))
                     {
                         result.ExcludedNonBuyerRows++;
                         continue;
                     }
-                    var fingerprint = BuyerHistoryScanMessageMergeService.Fingerprint(
-                        text, item.Timestamp);
-                    if (known.Contains(fingerprint))
+                    var eventKey = BuyerHistoryScanMessageMergeService.Fingerprint(text, item.Timestamp);
+                    List<BuyerQuestionRow> variants;
+                    if (!byEvent.TryGetValue(eventKey, out variants))
+                    {
+                        variants = new List<BuyerQuestionRow>();
+                        byEvent[eventKey] = variants;
+                    }
+                    if (variants.Any(x => string.Equals(
+                        x.BotReplyText ?? string.Empty, botReply, StringComparison.Ordinal))
+                        || (botReply.Length == 0 && variants.Count > 0))
                     {
                         result.AlreadyArchived++;
                         continue;
                     }
-                    state.Db.SaveOneRecord(new BuyerQuestionRow
+                    var unpaired = variants.FirstOrDefault(x => string.IsNullOrWhiteSpace(x.BotReplyText));
+                    if (unpaired != null && botReply.Length > 0)
+                    {
+                        // Migrate an existing anonymous/live question to its first
+                        // confirmed Bot reply without inventing a duplicate event.
+                        unpaired.BotReplyText = botReply;
+                        state.Db.SaveOneRecord(unpaired);
+                        result.AlreadyArchived++;
+                        continue;
+                    }
+                    var fingerprint = BuyerHistoryScanMessageMergeService.Fingerprint(
+                        text, item.Timestamp, botReply);
+                    var record = new BuyerQuestionRow
                     {
                         Id = Guid.NewGuid().ToString("N"),
                         ReceiptHash = Hash("scan-import:" + fingerprint),
-                        Text = text, ReceivedAtTicks = item.Timestamp.Ticks,
+                        Text = text, BotReplyText = botReply,
+                        ReceivedAtTicks = item.Timestamp.Ticks,
                         GroupKey = "exact-" + Hash(KnowledgeEngineV2Semantics.Compact(text))
                             .Substring(0, 20),
                         GroupTitle = text.Length > 85 ? text.Substring(0, 85) : text
-                    });
-                    known.Add(fingerprint);
+                    };
+                    state.Db.SaveOneRecord(record);
+                    variants.Add(record);
                     result.NewlyArchived++;
                 }
             }
@@ -203,9 +257,14 @@ namespace Bot.Knowledge
             if (!string.IsNullOrWhiteSpace(query))
                 rows = rows.Where(x => (x.Text ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
                     || (x.GroupTitle ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
-            return rows.GroupBy(x => x.GroupKey ?? x.Id).Select(g => new BuyerQuestionGroup
+            // Same question with different confirmed Bot replies is a distinct
+            // display variant; repeated identical question/answer pairs count once.
+            return rows.GroupBy(x => new {
+                Key = x.GroupKey ?? x.Id,
+                BotReply = x.BotReplyText ?? string.Empty
+            }).Select(g => new BuyerQuestionGroup
             {
-                Key = g.Key,
+                Key = g.Key.Key,
                 Title = g.Select(x => x.GroupTitle).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? g.First().Text,
                 Count = g.Count(), Latest = new DateTime(g.Max(x => x.ReceivedAtTicks)),
                 Messages = g.OrderByDescending(x => x.ReceivedAtTicks).ToList()
