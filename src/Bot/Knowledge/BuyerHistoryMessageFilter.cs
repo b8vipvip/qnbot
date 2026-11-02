@@ -1,4 +1,6 @@
 using Bot.ChromeNs;
+using Bot.ChatRecord;
+using Bot.Automation.ChatDeskNs;
 using System;
 using System.Text.RegularExpressions;
 
