@@ -44,7 +44,7 @@ function ocrRender(data){
   ocrEl("ocrUpdatedAt").textContent=data.updated_at||"-";
   ocrEl("ocrEnabled").checked=!!data.enabled;
   ocrEl("ocrMaxImageMb").value=(Number(data.max_image_bytes||0)/OCR_MIB).toFixed(2).replace(/\.00$/,"");
-  ocrEl("ocrTimeoutSeconds").value=String(data.timeout_seconds??8);
+  ocrEl("ocrTimeoutSeconds").value=String(data.timeout_seconds??16);
   ocrEl("ocrMaxConcurrency").value=String(data.max_concurrency??2);
   ocrEl("ocrMaxTextChars").value=String(data.max_text_chars??6000);
 }
