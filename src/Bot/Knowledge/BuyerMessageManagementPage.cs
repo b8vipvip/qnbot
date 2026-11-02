@@ -28,6 +28,7 @@ namespace Bot.Knowledge
         public List<string> Details { get; set; }
         public bool IsSemanticMerged { get; set; }
         public string DirectAnswer { get; set; }
+        public string BotReplyText { get; set; }
         public string DirectKnowledgeId { get; set; }
         public BuyerAiOptimizationRow AppliedRevision { get; set; }
     }
@@ -260,6 +261,34 @@ namespace Bot.Knowledge
                 SortMemberPath = "Text", MinWidth = 280,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
+            var botReplyFactory = new FrameworkElementFactory(typeof(TextBlock));
+            botReplyFactory.SetBinding(TextBlock.TextProperty, new Binding("BotReplyText"));
+            botReplyFactory.SetBinding(FrameworkElement.ToolTipProperty, new Binding("BotReplyText"));
+            botReplyFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            botReplyFactory.SetValue(TextBlock.MarginProperty, new Thickness(5, 5, 5, 5));
+            botReplyFactory.AddHandler(UIElement.PreviewMouseRightButtonDownEvent,
+                new System.Windows.Input.MouseButtonEventHandler((sender, e) =>
+                {
+                    var target = sender as FrameworkElement;
+                    var row = target == null ? null : target.DataContext as BuyerMessageListItem;
+                    if (row == null) return;
+                    var menu = new ContextMenu();
+                    var copy = new MenuItem
+                    {
+                        Header = "复制Bot回复消息",
+                        IsEnabled = !string.IsNullOrWhiteSpace(row.BotReplyText)
+                    };
+                    copy.Click += delegate { CopyMessageText(row.BotReplyText); };
+                    menu.Items.Add(copy);
+                    target.ContextMenu = menu;
+                }));
+            _list.Columns.Add(new DataGridTemplateColumn
+            {
+                Header = "Bot回复消息",
+                CellTemplate = new DataTemplate { VisualTree = botReplyFactory },
+                SortMemberPath = "BotReplyText", MinWidth = 240,
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
             var answerFactory = new FrameworkElementFactory(typeof(TextBlock));
             answerFactory.SetBinding(TextBlock.TextProperty, new Binding("DirectAnswer"));
             answerFactory.SetBinding(FrameworkElement.ToolTipProperty, new Binding("DirectAnswer"));
@@ -434,6 +463,8 @@ namespace Bot.Knowledge
                         // the normal context and eligibility checks.
                         DirectAnswer = match != null ? match.Answer
                             : revision != null ? revision.AppliedAnswer : "",
+                        // Historical transport echo, NOT the expected knowledge answer.
+                        BotReplyText = g.Messages.First().BotReplyText ?? string.Empty,
                         DirectKnowledgeId = match != null ? match.Id
                             : revision != null ? revision.KnowledgeId : "",
                         AppliedRevision = revision,
@@ -556,6 +587,7 @@ namespace Bot.Knowledge
             var info = new TextBlock
             {
                 Text = "接收次数：" + item.GroupCount
+                    + "    Bot已回复：" + (!string.IsNullOrWhiteSpace(item.BotReplyText) ? "是" : "否")
                     + "    直答：" + (string.IsNullOrWhiteSpace(item.DirectAnswer) ? "未匹配" : "已匹配"),
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
             };
