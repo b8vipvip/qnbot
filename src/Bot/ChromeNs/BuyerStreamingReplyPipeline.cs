@@ -466,7 +466,14 @@ namespace Bot.ChromeNs
             @"(?:^|\s)(?:不是|不对|说错了|我说的是|改一下|改成|算了|不用了|不用|取消|撤回|别回|不要回复|前面错了)(?:$|[，。！？\s])",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason)
+        internal static bool IsGreetingOnly(string message)
+        {
+            var value = (message ?? string.Empty).Trim().Trim('。', '，', ',', '！', '!', '～', '~', ' ');
+            return new[] { "在的", "在的亲", "在的亲亲", "您好", "你好", "亲", "在吗", "收到", "稍等", "在的，亲", "在的亲！" }
+                .Contains(value, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason, bool trustedReviewedImageAnswer = false)
         {
             reason = string.Empty;
             try
@@ -485,8 +492,26 @@ namespace Bot.ChromeNs
                         && x.SourceTimestamp > dispatchedAt.AddMilliseconds(120));
                 if (newerHuman)
                 {
-                    reason = "人工客服已在本轮回复，抑制未发送的普通AI答案";
-                    return false;
+                    // A short greeting is not an answer to a screenshot. Only an
+                    // already-reviewed OCR+Knowledge V2 answer can continue; any
+                    // substantive human reply retains the no-duplicate safeguard.
+                    var humanEchoes = recent.Where(x => x != null
+                        && x.Role == "assistant"
+                        && x.Timestamp != DateTime.MinValue
+                        && x.Timestamp > dispatchedAt.AddMilliseconds(120)
+                        && !string.IsNullOrWhiteSpace(x.Text)
+                        && !x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (trustedReviewedImageAnswer && humanEchoes.Count > 0
+                        && humanEchoes.All(x => IsGreetingOnly(x.Text)))
+                    {
+                        reason = "人工仅发送简短接待语，允许已审核OCR知识回答图片问题";
+                    }
+                    else
+                    {
+                        reason = "人工客服已在本轮作出实质回复或无法确认仅为接待语，禁止重复回复";
+                        return false;
+                    }
                 }
                 var newerBuyer = recent
                     .Where(x => x != null

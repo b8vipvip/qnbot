@@ -112,6 +112,52 @@ namespace Bot.Knowledge
             public string MessageKey;
         }
 
+        // Only explicitly Bot-marked seller echoes are matched to buyer turns.
+        // Never treat a human operator's seller reply as an automatic Bot reply.
+        internal static Dictionary<string, string> MatchBotRepliesToBuyerTurns(
+            IEnumerable<Tuple<string, string, DateTime, string>> turns)
+        {
+            var answers = new Dictionary<string, string>(StringComparer.Ordinal);
+            string pendingBuyerKey = null;
+            DateTime pendingBuyerAt = DateTime.MinValue;
+            foreach (var turn in (turns ?? Enumerable.Empty<Tuple<string, string, DateTime, string>>())
+                .Where(x => x != null).OrderBy(x => x.Item3))
+            {
+                if (turn.Item1 == "buyer")
+                {
+                    pendingBuyerKey = turn.Item4;
+                    pendingBuyerAt = turn.Item3;
+                    continue;
+                }
+                if (turn.Item1 != "seller") continue;
+                var raw = (turn.Item2 ?? "").Trim();
+                if (!raw.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Human responses terminate this unmatched question; do not
+                    // misattribute a later background Bot echo to an old question.
+                    pendingBuyerKey = null;
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(pendingBuyerKey)
+                    || pendingBuyerAt == DateTime.MinValue
+                    || turn.Item3 == DateTime.MinValue
+                    || turn.Item3 < pendingBuyerAt
+                    || turn.Item3 - pendingBuyerAt > TimeSpan.FromMinutes(30))
+                    continue;
+                var reply = BuyerMessageArchiveService.Redact(
+                    raw.Substring(0, raw.Length - 3).TrimEnd());
+                if (reply.Length == 0) continue;
+                string old;
+                if (answers.TryGetValue(pendingBuyerKey, out old))
+                {
+                    if (!old.Split(new[] { "\n" }, StringSplitOptions.None).Contains(reply))
+                        answers[pendingBuyerKey] = old + "\n" + reply;
+                }
+                else answers[pendingBuyerKey] = reply;
+            }
+            return answers;
+        }
+
         private sealed class ContactHistory
         {
             public string Buyer;
@@ -265,8 +311,20 @@ namespace Bot.Knowledge
                             token, reason => evidence.Retry(reason),
                             reason => evidence.Excluded(reason));
                         var buyerTurns = turns.Where(x => x.Role == "buyer").ToList();
+                        var matchedBotReplies = MatchBotRepliesToBuyerTurns(
+                            turns.Select((x, i) => Tuple.Create(x.Role, x.Text, x.Time,
+                                string.IsNullOrWhiteSpace(x.MessageKey)
+                                    ? "scan-turn:" + i : x.MessageKey)));
+                        // The scanner uses a stable key per turn for pairing even
+                        // when the upstream pagination omits a native message key.
                         evidence.Messages(buyer, buyerTurns.Select(x =>
-                            Tuple.Create(x.Text, x.Time, x.MessageKey)));
+                        {
+                            var key = string.IsNullOrWhiteSpace(x.MessageKey)
+                                ? "scan-turn:" + turns.IndexOf(x) : x.MessageKey;
+                            string botEcho;
+                            matchedBotReplies.TryGetValue(key, out botEcho);
+                            return Tuple.Create(x.Text, x.Time, x.MessageKey, botEcho ?? string.Empty);
+                        }));
                         foreach (var turn in buyerTurns)
                         {
                             token.ThrowIfCancellationRequested();
@@ -276,8 +334,13 @@ namespace Bot.Knowledge
                             var receipt = string.IsNullOrWhiteSpace(turn.MessageKey)
                                 ? "history:" + buyer + "|" + turn.Time.Ticks + "|" + turn.Text
                                 : turn.MessageKey;
+                            string botReply;
+                            matchedBotReplies.TryGetValue(
+                                string.IsNullOrWhiteSpace(turn.MessageKey)
+                                    ? "scan-turn:" + turns.IndexOf(turn) : turn.MessageKey,
+                                out botReply);
                             BuyerMessageArchiveService.ObserveForHistoryScan(
-                                seller, turn.Text, receipt, turn.Time);
+                                seller, turn.Text, receipt, turn.Time, botReply);
                             count++;
                         }
                         // The archive observes idempotent message keys. Only

@@ -60,7 +60,7 @@ namespace Bot.ChromeNs
     /// </summary>
     public static class LocalOcrService
     {
-        private const int DefaultTimeoutMs = 10000;
+        private const int DefaultTimeoutMs = 22000; // Server 16s inference + admission/network margin.
         private const int MaxEvidenceChars = 6000;
         private const long MaxImageBytes = 8L * 1024L * 1024L;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(30);
@@ -210,6 +210,33 @@ namespace Bot.ChromeNs
             {
                 return Failure("服务端OCR异常: " + ex.Message, startedAt, sha256);
             }
+        }
+
+        // OCR-to-text-AI fallback may reuse successful OCR evidence but must
+        // NEVER restart a failed/504 inference immediately (which would queue
+        // behind a still-running ONNX worker and double load).
+        internal static LocalOcrResult TryGetCachedRecognition(string imagePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+                    return null;
+                var hash = ComputeSha256(imagePath);
+                var cached = TryReadCache(hash);
+                if (cached == null) return null;
+                return new LocalOcrResult
+                {
+                    Success = true,
+                    Text = Limit(cached.Text),
+                    Confidence = cached.Confidence,
+                    CacheHit = true,
+                    ElapsedMs = 0,
+                    Engine = cached.Engine,
+                    ImageSha256 = hash,
+                    Error = string.Empty
+                };
+            }
+            catch { return null; }
         }
 
         public static string BuildPromptEvidence(LocalOcrResult result)

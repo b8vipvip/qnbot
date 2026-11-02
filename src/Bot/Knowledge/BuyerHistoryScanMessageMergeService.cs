@@ -29,6 +29,7 @@ namespace Bot.Knowledge
     {
         public string Text { get; set; }
         public DateTime Timestamp { get; set; }
+        public string BotReplyText { get; set; }
     }
 
     /// <summary>
@@ -43,13 +44,15 @@ namespace Bot.Knowledge
         private const string DataFile = "messages-redacted.jsonl";
         private const int MaximumLineLength = 200000;
 
-        internal static string Fingerprint(string text, DateTime time)
+        internal static string Fingerprint(string text, DateTime time,
+            string botReply = null)
         {
             var normalized = BuyerMessageArchiveService.Redact(text);
+            var reply = BuyerMessageArchiveService.Redact(botReply);
             using (var sha = SHA256.Create())
             {
                 var bytes = Encoding.UTF8.GetBytes(time.Ticks.ToString(CultureInfo.InvariantCulture)
-                    + "|" + normalized);
+                    + "|" + normalized + "|" + reply);
                 return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
             }
         }
@@ -153,6 +156,7 @@ namespace Bot.Knowledge
                 var record = JObject.Parse(line);
                 var text = BuyerMessageArchiveService.Redact((string)record["text"]);
                 var stamp = (string)record["utc_or_local_time"];
+                var botReply = BuyerMessageArchiveService.Redact((string)record["bot_reply"]);
                 DateTime time;
                 if (text.Length == 0 || !DateTime.TryParse(stamp, CultureInfo.InvariantCulture,
                     DateTimeStyles.RoundtripKind, out time) || time == DateTime.MinValue)
@@ -167,11 +171,11 @@ namespace Bot.Knowledge
                     result.ExcludedNonBuyerRows++;
                     return;
                 }
-                var fingerprint = Fingerprint(text, time);
+                var fingerprint = Fingerprint(text, time, botReply);
                 if (!unique.ContainsKey(fingerprint))
                     unique.Add(fingerprint, new BuyerHistoryScannedMessage
                     {
-                        Text = text, Timestamp = time
+                        Text = text, Timestamp = time, BotReplyText = botReply
                     });
                 else
                     result.DuplicateInScans++;

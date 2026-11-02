@@ -51,7 +51,7 @@ def test_buyer_list_collapses_identical_messages_and_uses_ai_semantic_keys():
     assert "Details = wordings.Select(" in ui
     assert "BuyerMessageContentSelector" in ui
     assert "SelectMany(x => x.Messages.Select(m => m.Id))" in ui
-    assert "GroupBy(x => x.GroupKey ?? x.Id)" in archive
+    assert "BotReply = x.BotReplyText ?? string.Empty" in archive
     assert '"exact-" + Hash(' in archive
     assert '"ai-" + Hash(' in archive
     assert "BuyerMessageArchiveService.Groups(_seller, start, end, _search.Text)" in ui

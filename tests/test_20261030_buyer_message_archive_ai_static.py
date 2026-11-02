@@ -30,7 +30,7 @@ def test_time_range_frequency_is_actual_message_occurrences():
     source = src("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
     assert "ReceivedAtTicks >= cutoff" in source
     assert "Count = g.Count()" in source
-    assert "GroupBy(x => x.GroupKey ?? x.Id)" in source
+    assert "BotReply = x.BotReplyText ?? string.Empty" in source
     assert "for (var offset = 0; offset < unique.Count; offset += 60)" in source
     assert "if (assigned.Count != batch.Count)" in source
 

@@ -52,10 +52,11 @@ def test_database_is_locked_and_compares_existing_fingerprints_before_insert():
     assert "lock (state.Sync)" in block
     assert "ReadRecords<BuyerQuestionRow>" in block
     assert "BuyerHistoryScanMessageMergeService.Fingerprint(" in block
-    assert "known.Contains(fingerprint)" in block
+    assert "byEvent.TryGetValue(eventKey, out variants)" in block
     assert "result.AlreadyArchived++" in block
-    assert "state.Db.SaveOneRecord(new BuyerQuestionRow" in block
-    assert "known.Add(fingerprint);" in block
+    assert "state.Db.SaveOneRecord(unpaired);" in block
+    assert "state.Db.SaveOneRecord(record);" in block
+    assert "variants.Add(record);" in block
     assert "result.NewlyArchived++" in block
     assert 'Hash("scan-import:" + fingerprint)' in block
     assert "KnowledgeEngineV2Repository" not in block

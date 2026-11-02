@@ -57,7 +57,8 @@ def test_human_reply_supersedes_old_normal_ai_output_but_not_order_ledger():
     assert "var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);" in source
     assert "x.Kind == BuyerSessionEventKind.SellerHumanReply" in source
     assert "x.SourceTimestamp > dispatchedAt.AddMilliseconds(120)" in source
-    assert "人工客服已在本轮回复，抑制未发送的普通AI答案" in source
+    assert "人工客服已在本轮作出实质回复或无法确认仅为接待语，禁止重复回复" in source
+    assert "trustedReviewedImageAnswer && humanEchoes.Count > 0" in source
     assert "if (!ParallelReplyRelevanceGate.ShouldSend(" in source
     assert 'lease.MarkCompleted("streaming_relevance_suppressed");' in source
 

@@ -70,8 +70,19 @@ namespace Bot.ChromeNs
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
             if (endpoints.Count < 1)
             {
-                Log.Info("[VisionRoute] route=no_multimodal_endpoint; local_ocr_direct=false");
-                return Fail("未配置可用的视觉模型，且本地OCR未命中可安全直答的知识");
+                // This is explicitly an OCR-TEXT fallback, not an invented
+                // image-capable provider. Only reuse verified cached OCR text;
+                // failed OCR (especially HTTP 504) must never be retried here.
+                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken);
+                if (textFallback != null)
+                {
+                    Log.Info("[VisionRoute] route=ocr_text_ai_fallback; visualAiCalled=false"
+                        + ";ocrChars=" + textFallback.LocalOcrText.Length);
+                    return textFallback;
+                }
+                Log.Info("[VisionRoute] route=no_multimodal_endpoint; local_ocr_direct=false"
+                    + ";ocr_text_ai_fallback=false");
+                return Fail("未配置可用的视觉模型，OCR知识未安全命中且OCR文字AI兜底不可用");
             }
             Log.Info("[VisionRoute] route=multimodal_ai; candidateEndpoints=" + endpoints.Count);
 
@@ -247,6 +258,75 @@ namespace Bot.ChromeNs
                 }
             }
             return last ?? Fail("所有视觉接口失败");
+        }
+
+        private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync(
+            VisionReplyTask task, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var textEndpoints = AiEndpointStore.GetEnabledEndpoints();
+                if (textEndpoints == null || textEndpoints.Count == 0) return null;
+                var image = await _resolver.ResolveAsync(task.Message, null, cancellationToken);
+                if (image == null || !image.Success) return null;
+                var ocr = LocalOcrService.TryGetCachedRecognition(image.LocalCachePath);
+                if (ocr == null || !ocr.Success || ocr.Confidence < 0.88
+                    || string.IsNullOrWhiteSpace(ocr.Text)
+                    || ocr.Text.Trim().Length < 8) return null;
+
+                // The fallback model never receives pixels. It may explain
+                // readable OCR text but must not claim to have seen image details.
+                var question = (task.CombinedQuestion ?? "[图片]").Trim();
+                var evidence = ocr.Text.Length > 2500 ? ocr.Text.Substring(0, 2500) : ocr.Text;
+                var messages = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "你是客服OCR文字辅助助手。你没有看到图片，只得到OCR提取的文字。"
+                            + "不要声称已经看到图片的布局、Logo或设备；不得猜测商品兼容性、订单状态、充值是否成功。"
+                            + "能确定的只说明文字显示的事实，不能确定时询问买家具体问题或请买家补充清晰截图。"
+                            + "不要要求买家公开账号密码或验证码。只输出包含answer字段的JSON对象，内容为简洁自然的中文回复。"
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = "买家本轮文字：" + question + "\\n图片OCR文字（可能识别有误）：\\n" + evidence
+                    }
+                };
+                // Use the customer's existing text AI configuration, without
+                // silently claiming that it supports multimodal input.
+                var ai = await Task.Run(() => MyOpenAI.CallStructuredChat(
+                    messages, 260, 0.1, 25, cancellationToken), cancellationToken);
+                if (ai == null || !ai.Success || string.IsNullOrWhiteSpace(ai.Answer))
+                    return null;
+                JObject obj;
+                try { obj = JObject.Parse(ai.Answer.Trim()); }
+                catch { return null; }
+                var answer = Convert.ToString(obj["answer"]).Trim();
+                if (string.IsNullOrWhiteSpace(answer)) return null;
+                return new VisionRequestResult
+                {
+                    Success = true,
+                    Answer = BotMessageSuffixService.Apply(task.SellerNick, answer),
+                    EndpointName = "ocr-text-ai-fallback",
+                    VisionModel = "text-only-OCR-evidence",
+                    VisualQuestion = question,
+                    VisualSummary = string.Empty,
+                    VisualTags = "ocr-text-only",
+                    LocalOcrText = ocr.Text,
+                    LocalOcrConfidence = ocr.Confidence,
+                    LocalOcrCacheHit = true,
+                    LocalOcrLatencyMs = ocr.ElapsedMs,
+                    LocalOcrEngine = ocr.Engine
+                };
+            }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("OCR文字AI兜底失败: " + ex.GetType().Name, 10);
+                return null;
+            }
         }
 
         public static JObject BuildVisionPayload(AiEndpointConfig endpoint, string imageUrl, string prompt)

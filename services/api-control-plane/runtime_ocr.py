@@ -42,7 +42,7 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
 # used. OCR therefore works out of the box and does not require manual environment configuration.
 _DEFAULT_ENABLED = _env_bool("OCR_ENABLED", True)
 _MAX_IMAGE_BYTES = _env_int("OCR_MAX_IMAGE_BYTES", 8 * 1024 * 1024, 256 * 1024, 64 * 1024 * 1024)
-_TIMEOUT_SECONDS = _env_float("OCR_TIMEOUT_SECONDS", 8.0, 1.0, 30.0)
+_TIMEOUT_SECONDS = _env_float("OCR_TIMEOUT_SECONDS", 16.0, 1.0, 30.0)
 _MAX_CONCURRENCY = _env_int("OCR_MAX_CONCURRENCY", 2, 1, 8)
 _MAX_TEXT_CHARS = _env_int("OCR_MAX_TEXT_CHARS", 6000, 256, 12000)
 _DEFAULT_SETTINGS: Dict[str, Any] = {
@@ -257,6 +257,20 @@ def init_db(control_plane: Optional[Any] = None) -> None:
             ),
         )
         row = conn.execute("SELECT * FROM runtime_ocr_settings WHERE id = 1").fetchone()
+        # Upgrade only the untouched old 8s bootstrap default. Never override
+        # an administrator-defined timeout, even when it equals eight seconds.
+        # The 16s budget covers observed 8s inference 504s on cold/contended
+        # machines; in-flight ONNX workers remain bounded by the admission gate.
+        if (row is not None
+            and os.getenv("OCR_TIMEOUT_SECONDS") is None
+            and row["updated_by"] == "environment-defaults"
+            and float(row["timeout_seconds"]) == 8.0):
+            conn.execute(
+                "UPDATE runtime_ocr_settings SET timeout_seconds = ?, "
+                "updated_at = ?, updated_by = ? WHERE id = 1",
+                (16.0, now, "bootstrap-timeout-migration"),
+            )
+            row = conn.execute("SELECT * FROM runtime_ocr_settings WHERE id = 1").fetchone()
     if row is not None:
         _apply_settings(_row_to_settings(row))
 
