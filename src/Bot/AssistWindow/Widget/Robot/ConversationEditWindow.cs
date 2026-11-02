@@ -11,9 +11,9 @@ namespace Bot.AssistWindow.Widget.Robot
         public string EditedQuestion { get { return (_question.Text ?? string.Empty).Trim(); } }
         public string EditedAnswer { get { return (_answer.Text ?? string.Empty).Trim(); } }
 
-        public ConversationEditWindow(string question, string answer)
+        public ConversationEditWindow(string question, string answer, bool addDirectAnswer = false)
         {
-            Title = "修改答案";
+            Title = addDirectAnswer ? "添加直答消息" : "修改答案";
             Width = 620;
             Height = 430;
             MinWidth = 520;
@@ -29,7 +29,7 @@ namespace Bot.AssistWindow.Widget.Robot
             root.Children.Add(buttons);
             var cancel = new Button { Content = "取消", Width = 86, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
             cancel.Click += (s, e) => { DialogResult = false; };
-            var save = new Button { Content = "保存修改", Width = 96, Height = 30, IsDefault = true };
+            var save = new Button { Content = addDirectAnswer ? "保存直答" : "保存修改", Width = 96, Height = 30, IsDefault = true };
             save.Click += (s, e) =>
             {
                 if (string.IsNullOrWhiteSpace(EditedAnswer) || string.IsNullOrWhiteSpace(EditedQuestion))
@@ -69,7 +69,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 ToolTip = "将图片占位符或省略提问补全为独立、准确的业务问题，精确命中时优先于普通知识。" };
             Grid.SetRow(_question, 1);
             panel.Children.Add(_question);
-            var aLabel = new TextBlock { Text = "修改后的答案", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 12, 0, 6) };
+            var aLabel = new TextBlock { Text = addDirectAnswer ? "直答消息（人工确认后保存，不会立即发送给买家）" : "修改后的答案", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 12, 0, 6) };
             Grid.SetRow(aLabel, 2);
             panel.Children.Add(aLabel);
             _answer = new TextBox { Text = answer ?? string.Empty, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8) };
