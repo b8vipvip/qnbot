@@ -89,7 +89,10 @@ def test_failed_bot_draft_cleanup_requires_same_buyer_exact_text_and_bot_ownersh
     cleanup = qnrpa[cleanup_start:cleanup_end]
     assert "IsExpectedBuyer(buyer, currentBuyer)" in cleanup
     assert "EditorMatchesExpectedText(currentText, expected)" in cleanup
-    assert "IsKnownBotOwnedDraftText(currentText)" in cleanup
+    # Cancelled sends set LastSendWasCancelled=true, so
+    # IsKnownBotOwnedDraftText deliberately cannot authorize this cleanup.
+    assert "IsOwnedDraftForBuyer(buyer, currentText)" in cleanup
+    assert "IsKnownBotOwnedDraftText(currentText)" not in cleanup
     assert "buyerBeforeClear" in cleanup
     assert "IsExpectedBuyer(buyer, buyerBeforeClear)" in cleanup
     assert "PressCtrlA()" in cleanup
