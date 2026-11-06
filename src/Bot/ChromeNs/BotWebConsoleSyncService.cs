@@ -13,6 +13,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -65,6 +66,36 @@ namespace Bot.ChromeNs
             public DateTime NextSyncUtc = DateTime.MinValue;
             public int Syncing;
             public bool Loaded;
+        }
+
+        // The sync timer runs every second, but the underlying store writes
+        // shops.json + the per-shop profile on GetOrCreate. A weak per-QN cache
+        // preserves timely seller-identity changes without retaining dead QNs.
+        private static readonly TimeSpan ShopSnapshotRefreshInterval = TimeSpan.FromMinutes(1);
+
+        private sealed class CachedShopSnapshot
+        {
+            public readonly object Sync = new object();
+            public string Nick;
+            public string TargetId;
+            public string Display;
+            public ShopContext Shop;
+            public DateTime NextRefreshUtc;
+        }
+
+        private static readonly ConditionalWeakTable<QN, CachedShopSnapshot> ShopSnapshots =
+            new ConditionalWeakTable<QN, CachedShopSnapshot>();
+        private static long _shopSnapshotCacheHits;
+        private static long _shopSnapshotRefreshes;
+
+        internal static long ShopSnapshotCacheHits
+        {
+            get { return Interlocked.Read(ref _shopSnapshotCacheHits); }
+        }
+
+        internal static long ShopSnapshotRefreshes
+        {
+            get { return Interlocked.Read(ref _shopSnapshotRefreshes); }
         }
 
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -344,14 +375,50 @@ namespace Bot.ChromeNs
                     if (qn == null || qn.Seller == null) continue;
                     try
                     {
-                        var shop = Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
-                        result[shop.ShopKey] = shop;
+                        var shop = ResolveShopSnapshot(qn);
+                        if (shop != null) result[shop.ShopKey] = shop;
                     }
                     catch { }
                 }
             }
             catch { }
             return result.Values.ToList();
+        }
+
+        private static ShopContext ResolveShopSnapshot(QN qn)
+        {
+            var seller = qn == null ? null : qn.Seller;
+            if (seller == null) return null;
+
+            var nick = seller.Nick ?? string.Empty;
+            var targetId = seller.TargetId ?? string.Empty;
+            var display = seller.Display ?? string.Empty;
+            var cache = ShopSnapshots.GetValue(qn, _ => new CachedShopSnapshot());
+            lock (cache.Sync)
+            {
+                var now = DateTime.UtcNow;
+                if (cache.Shop != null
+                    && now < cache.NextRefreshUtc
+                    && string.Equals(cache.Nick, nick, StringComparison.Ordinal)
+                    && string.Equals(cache.TargetId, targetId, StringComparison.Ordinal)
+                    && string.Equals(cache.Display, display, StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref _shopSnapshotCacheHits);
+                    return cache.Shop;
+                }
+
+                // A new seller, TargetId, display name, or elapsed presence
+                // interval refreshes immediately through the validated store.
+                // A failed/corrupt registry still fails closed as before.
+                var shop = Profiles.GetOrCreate(ShopIdentityResolver.Resolve(seller)).ToContext();
+                cache.Nick = nick;
+                cache.TargetId = targetId;
+                cache.Display = display;
+                cache.Shop = shop;
+                cache.NextRefreshUtc = now.Add(ShopSnapshotRefreshInterval);
+                Interlocked.Increment(ref _shopSnapshotRefreshes);
+                return shop;
+            }
         }
 
         private static void QueueSync(ShopWebState state)

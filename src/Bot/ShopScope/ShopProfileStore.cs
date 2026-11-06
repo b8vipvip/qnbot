@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace Bot.ShopScope
 {
@@ -12,7 +13,17 @@ namespace Bot.ShopScope
         private const string RegistrySchema = "qnbot.shop-registry";
         private static readonly string LegacyRegistrySchema = "qianniu" + "-ai-bot.shop-registry";
         private const int CurrentSchemaVersion = 1;
+        // LastSeenAtUtc is presence metadata, not a per-second heartbeat.
+        // Coalesce unchanged profiles: the old GetOrCreate path wrote *both*
+        // profile.json and shops.json on every sync timer tick.
+        private static readonly TimeSpan LastSeenWriteInterval = TimeSpan.FromMinutes(1);
         private static readonly object RegistrySync = new object();
+        private static long _registryWriteCount;
+
+        internal static long RegistryWriteCount
+        {
+            get { return Interlocked.Read(ref _registryWriteCount); }
+        }
         private readonly IShopScopedPathProvider _paths;
 
         public ShopProfileStore(IShopScopedPathProvider paths)
@@ -30,6 +41,7 @@ namespace Bot.ShopScope
                 var registry = LoadRegistry();
                 var existing = registry.Shops.FirstOrDefault(x => SameIdentity(x, shop));
                 var now = DateTime.UtcNow;
+                var changed = false;
 
                 if (existing == null)
                 {
@@ -53,6 +65,7 @@ namespace Bot.ShopScope
                         LastSeenAtUtc = now
                     };
                     registry.Shops.Add(existing);
+                    changed = true;
                 }
                 else
                 {
@@ -61,16 +74,28 @@ namespace Bot.ShopScope
                         throw new InvalidDataException(
                             "The same seller identity is already registered with another ShopKey.");
                     }
+                    if (!string.Equals(existing.DisplayName, shop.DisplayName, StringComparison.Ordinal)
+                        || (shop.HasStableSellerId && !existing.HasStableSellerId)
+                        || existing.LastSeenAtUtc == DateTime.MinValue
+                        || now < existing.LastSeenAtUtc
+                        || now - existing.LastSeenAtUtc >= LastSeenWriteInterval)
+                    {
+                        changed = true;
+                    }
                     existing.DisplayName = shop.DisplayName;
                     existing.HasStableSellerId = existing.HasStableSellerId || shop.HasStableSellerId;
-                    existing.LastSeenAtUtc = now;
+                    if (changed) existing.LastSeenAtUtc = now;
                 }
 
-                registry.Shops = registry.Shops
-                    .OrderBy(x => x.ShopKey, StringComparer.Ordinal)
-                    .ToList();
-                WriteProfile(existing);
-                SaveRegistry(registry);
+                if (changed)
+                {
+                    registry.Shops = registry.Shops
+                        .OrderBy(x => x.ShopKey, StringComparer.Ordinal)
+                        .ToList();
+                    WriteProfile(existing);
+                    SaveRegistry(registry);
+                    Interlocked.Increment(ref _registryWriteCount);
+                }
                 return Clone(existing);
             }
         }

@@ -24,6 +24,12 @@ namespace Bot.ChromeNs
         private static int _refreshQueued;
         private static FieldInfo _conversationField;
         private static string _lastSignature = string.Empty;
+        private static long _unchangedAliasMergeSkips;
+
+        internal static long UnchangedAliasMergeSkips
+        {
+            get { return Interlocked.Read(ref _unchangedAliasMergeSkips); }
+        }
 
         public static void Start()
         {
@@ -111,10 +117,34 @@ namespace Bot.ChromeNs
             map.TryGetValue(displayKey, out displayList);
             if ((internalList == null || internalList.Count == 0) && (displayList == null || displayList.Count == 0)) return;
 
-            var merged = new List<CtlConversation>();
-            foreach (var item in (displayList ?? new List<CtlConversation>()).Concat(internalList ?? new List<CtlConversation>()))
+            // After the initial alias merge both dictionary keys reference the
+            // same UI list. The old 500-ms timer still created another list
+            // and performed an O(n²) Any/ReferenceEquals dedupe on every tick.
+            // Detect the already-shared identity *before* constructing controls
+            // or allocating an intermediate merged list.
+            if (internalList != null && ReferenceEquals(internalList, displayList))
             {
-                if (item != null && !merged.Any(x => ReferenceEquals(x, item))) merged.Add(item);
+                var existingSignature = seller + "#" + visibleBuyer + "#"
+                    + internalNick + "#" + display + "#" + internalList.Count;
+                if (string.Equals(existingSignature, _lastSignature, StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref _unchangedAliasMergeSkips);
+                    return;
+                }
+                _lastSignature = existingSignature;
+                ctl.ReShowAfterQNChange();
+                return;
+            }
+
+            var merged = new List<CtlConversation>();
+            var unique = new HashSet<CtlConversation>();
+            foreach (var item in displayList ?? Enumerable.Empty<CtlConversation>())
+            {
+                if (item != null && unique.Add(item)) merged.Add(item);
+            }
+            foreach (var item in internalList ?? Enumerable.Empty<CtlConversation>())
+            {
+                if (item != null && unique.Add(item)) merged.Add(item);
             }
             map[internalKey] = merged;
             map[displayKey] = merged;
