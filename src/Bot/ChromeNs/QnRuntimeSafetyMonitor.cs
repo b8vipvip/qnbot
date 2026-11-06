@@ -296,7 +296,10 @@ namespace Bot.ChromeNs
                             + ", gen2Collections=" + GC.CollectionCount(2)
                             + ", handles=" + process.HandleCount
                             + ", monitoredQn=" + Subscribed.Count
-                            + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount));
+                            + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount)
+                            + ", timelineStates=" + ConversationContextStore.CachedTimelineCount
+                            + ", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount
+                            + ", imageRecords=" + VisionImageCacheService.CachedRecordCount);
                     }
                 }
                 catch (Exception metricsError)
