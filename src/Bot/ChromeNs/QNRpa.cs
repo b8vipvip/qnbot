@@ -1049,7 +1049,7 @@ namespace Bot.ChromeNs
                     string currentText;
                     if (!TryGetEditorText(out currentText)
                         || !EditorMatchesExpectedText(currentText, expected)
-                        || !IsKnownBotOwnedDraftText(currentText))
+                        || !IsOwnedDraftForBuyer(buyer, currentText))
                         return false;
 
                     if (DateTime.UtcNow >= cleanupDeadlineUtc || !FocusEditor())
@@ -1059,7 +1059,7 @@ namespace Bot.ChromeNs
                     string focusedText;
                     if (!TryGetEditorText(out focusedText)
                         || !EditorMatchesExpectedText(focusedText, expected)
-                        || !IsKnownBotOwnedDraftText(focusedText))
+                        || !IsOwnedDraftForBuyer(buyer, focusedText))
                         return false;
                     if (DateTime.UtcNow >= cleanupDeadlineUtc) return false;
 
