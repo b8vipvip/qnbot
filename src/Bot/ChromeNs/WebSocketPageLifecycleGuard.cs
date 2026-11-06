@@ -74,6 +74,25 @@ namespace Bot.ChromeNs
         private static long _duplicateProbePayloadsSuppressed;
         private static int _initialized;
 
+        // The server must forget every transport-identity key when the physical
+        // socket closes. Long-running field logs observed thousands of different
+        // reconnect session IDs in a single process lifetime.
+        internal static void ForgetClosedSession(string sessionId)
+        {
+            if (string.IsNullOrWhiteSpace(sessionId)) return;
+            string ignoredSeller;
+            byte ignoredStandby;
+            InertCandidate ignoredCandidate;
+            SessionSellers.TryRemove(sessionId, out ignoredSeller);
+            StandbyLogged.TryRemove(sessionId, out ignoredStandby);
+            InertCandidates.TryRemove(sessionId, out ignoredCandidate);
+        }
+
+        internal static int TrackedSessionCount
+        {
+            get { return SessionSellers.Count; }
+        }
+
         public static object InitializeForApp()
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
