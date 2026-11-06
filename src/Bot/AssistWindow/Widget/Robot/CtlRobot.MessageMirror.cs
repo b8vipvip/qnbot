@@ -105,6 +105,9 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void RefreshMessageMirror(bool force)
         {
+            // Hidden WPF panels still exist and may retain DispatcherTimer ticks.
+            // The authoritative transport timeline keeps updating without the UI.
+            if (!IsVisible) return;
             try
             {
                 var qn = ResolveMessageMirrorQn();
