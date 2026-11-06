@@ -62,6 +62,7 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, CacheRecord> Records =
             new ConcurrentDictionary<string, CacheRecord>(StringComparer.Ordinal);
+        internal static int CachedRecordCount { get { return Records.Count; } }
         private static readonly object CleanupSync = new object();
         private static DateTime _lastCleanup = DateTime.MinValue;
 

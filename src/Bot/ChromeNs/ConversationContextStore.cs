@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
@@ -45,11 +46,22 @@ namespace Bot.ChromeNs
             public readonly Dictionary<string, DateTime> WithdrawnAnswers =
                 new Dictionary<string, DateTime>(StringComparer.Ordinal);
             public DateTime LastRemoteRefresh = DateTime.MinValue;
+            // Activity time, not message time: remote history may contain old timestamps.
+            public DateTime LastTouchedUtc = DateTime.UtcNow;
             public PendingPresetReply PendingPreset;
         }
 
         private static readonly ConcurrentDictionary<string, TimelineState> States =
             new ConcurrentDictionary<string, TimelineState>(StringComparer.Ordinal);
+        // Keep full 72-hour AI context for returning buyers. Evict only inactive
+        // timelines; the on-disk chat/Bot history and Knowledge V2 are untouched.
+        private const int SoftTimelineStateLimit = 256;
+        private static readonly TimeSpan TimelineContextWindow = TimeSpan.FromHours(72);
+        private static readonly TimeSpan TimelineMaxIdle = TimeSpan.FromDays(8);
+        private static readonly TimeSpan TimelineSweepInterval = TimeSpan.FromMinutes(10);
+        private static long _lastTimelineSweepUtcTicks;
+
+        internal static int CachedTimelineCount { get { return States.Count; } }
 
         /// <summary>
         /// Exact match only. Preset content is read from the shop-scoped editable
@@ -305,6 +317,7 @@ namespace Bot.ChromeNs
             var now = DateTime.Now;
             lock (state.Sync)
             {
+                state.LastTouchedUtc = DateTime.UtcNow;
                 Cleanup(state, now);
                 var eligible = state.Turns
                     .Where(t => t != null && !t.Withdrawn && !string.IsNullOrWhiteSpace(t.Text))
@@ -352,6 +365,7 @@ namespace Bot.ChromeNs
             var now = DateTime.Now;
             lock (state.Sync)
             {
+                state.LastTouchedUtc = DateTime.UtcNow;
                 Cleanup(state, now);
                 var take = Math.Max(10, Math.Min(100, maxTurns));
                 // OrderBy is stable: when Qianniu gives several messages the same timestamp,
@@ -761,7 +775,46 @@ namespace Bot.ChromeNs
 
         private static TimelineState GetState(string seller, string buyer)
         {
-            return States.GetOrAdd(Key(seller, buyer), _ => new TimelineState());
+            var state = States.GetOrAdd(Key(seller, buyer), _ => new TimelineState());
+            lock (state.Sync) state.LastTouchedUtc = DateTime.UtcNow;
+            SweepInactiveTimelinesIfDue();
+            return state;
+        }
+
+        private static void SweepInactiveTimelinesIfDue()
+        {
+            var now = DateTime.UtcNow;
+            var ticks = Interlocked.Read(ref _lastTimelineSweepUtcTicks);
+            if (ticks != 0 && now.Ticks - ticks < TimelineSweepInterval.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastTimelineSweepUtcTicks, now.Ticks, ticks) != ticks)
+                return;
+
+            var removed = 0;
+            var candidates = States.ToArray()
+                .OrderBy(pair => pair.Value == null ? DateTime.MinValue : pair.Value.LastTouchedUtc);
+            foreach (var pair in candidates)
+            {
+                var state = pair.Value;
+                if (state == null) continue;
+                lock (state.Sync)
+                {
+                    var idle = now - state.LastTouchedUtc;
+                    // The soft limit never evicts a buyer needed by the 72-hour
+                    // message-context window. A live preset cannot be dropped.
+                    if (idle < TimelineMaxIdle
+                        && (States.Count <= SoftTimelineStateLimit || idle < TimelineContextWindow))
+                        continue;
+                    if (state.PendingPreset != null && state.PendingPreset.ExpiresAt >= DateTime.Now)
+                        continue;
+                    TimelineState current;
+                    if (!States.TryGetValue(pair.Key, out current) || !ReferenceEquals(current, state))
+                        continue;
+                    TimelineState ignored;
+                    if (States.TryRemove(pair.Key, out ignored)) removed++;
+                }
+            }
+            if (removed > 0)
+                Log.Info("会话上下文缓存清理: removed=" + removed + ", retained=" + States.Count);
         }
 
         private static string Key(string seller, string buyer)

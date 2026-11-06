@@ -29,7 +29,9 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 _messageMirrorTimer = new DispatcherTimer
                 {
-                    Interval = TimeSpan.FromMilliseconds(350)
+                    // Realtime arrivals and buyer switches already request an immediate refresh.
+                    // The fallback polling must not rescan up to 100 messages 3x/second.
+                    Interval = TimeSpan.FromSeconds(1)
                 };
                 _messageMirrorTimer.Tick += (s, e) => RefreshMessageMirror(false);
                 Unloaded += CtlRobot_MessageMirrorUnloaded;
@@ -103,6 +105,9 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void RefreshMessageMirror(bool force)
         {
+            // Hidden WPF panels still exist and may retain DispatcherTimer ticks.
+            // The authoritative transport timeline keeps updating without the UI.
+            if (!IsVisible) return;
             try
             {
                 var qn = ResolveMessageMirrorQn();

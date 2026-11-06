@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 
 namespace Bot.Knowledge
 {
@@ -230,6 +231,11 @@ namespace Bot.Knowledge
             decision.TotalMs = total.ElapsedMilliseconds;
         }
 
+        private const int SoftWorkingMemoryLimit = 256;
+        private static long _lastWorkingMemorySweepTicks;
+
+        internal static int CachedWorkingMemoryCount { get { return Working.Count; } }
+
         private static KnowledgeV2WorkingMemory GetWorkingMemory(string seller, string buyer)
         {
             KnowledgeV2WorkingMemory memory;
@@ -255,6 +261,41 @@ namespace Bot.Knowledge
                 if (query.Intent != "general") current.Intent = query.Intent;
                 if (query.Entities != null && query.Entities.Count > 0) current.Entities = query.Entities.Take(8).ToList();
                 current.UpdatedAt = DateTime.Now;
+            }
+            SweepExpiredWorkingMemoryIfDue();
+        }
+
+        private static void SweepExpiredWorkingMemoryIfDue()
+        {
+            var now = DateTime.Now;
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var previous = Interlocked.Read(ref _lastWorkingMemorySweepTicks);
+            if (previous != 0 && nowTicks - previous < TimeSpan.FromMinutes(10).Ticks)
+                return;
+            if (Interlocked.CompareExchange(ref _lastWorkingMemorySweepTicks, nowTicks, previous)
+                != previous) return;
+
+            // The resolver already ignores memory older than 45 minutes.
+            // Retain slightly longer to avoid races with in-flight queries;
+            // always remove entries idle for 24 hours, and pressure-prune
+            // only entries outside the resolver's 45-minute context window.
+            foreach (var pair in Working.ToArray().OrderBy(x =>
+                x.Value == null ? DateTime.MinValue : x.Value.UpdatedAt))
+            {
+                var memory = pair.Value;
+                if (memory == null) continue;
+                lock (memory)
+                {
+                    var idle = now - memory.UpdatedAt;
+                    if (idle < TimeSpan.FromDays(1)
+                        && (Working.Count <= SoftWorkingMemoryLimit
+                            || idle < TimeSpan.FromMinutes(60))) continue;
+                    KnowledgeV2WorkingMemory current;
+                    if (!Working.TryGetValue(pair.Key, out current)
+                        || !ReferenceEquals(current, memory)) continue;
+                    KnowledgeV2WorkingMemory ignored;
+                    Working.TryRemove(pair.Key, out ignored);
+                }
             }
         }
 

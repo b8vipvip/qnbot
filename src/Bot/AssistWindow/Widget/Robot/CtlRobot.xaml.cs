@@ -38,6 +38,12 @@ namespace Bot.AssistWindow.Widget.Robot
         private ConcurrentDictionary<string, List<CtlConversation>> buyerConversations;
         private DispatcherTimer _statsTimer;
         private bool _dashboardVisible;
+        private string _lastApiStatsSignature = string.Empty;
+        // Only recent UI answer cards are retained; the durable history stays in SQLite.
+        private const int MaxCachedBuyerPanels = 16;
+        private const int MaxCachedAnswerCardsPerBuyer = 120;
+        private readonly ConcurrentDictionary<string, long> _buyerPanelAccessTicks =
+            new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
         private int _goodsRefreshGeneration;
 
         public CtlRobot(Desk desk, RightPanel rp)
@@ -47,6 +53,7 @@ namespace Bot.AssistWindow.Widget.Robot
             _rightPanel = rp;
             buyerConversations = new ConcurrentDictionary<string, List<CtlConversation>>();
             Loaded += CtlRobot_Loaded;
+            Unloaded += CtlRobot_Unloaded;
         }
 
         private WndAssist Wnd
@@ -70,10 +77,21 @@ namespace Bot.AssistWindow.Widget.Robot
             RefreshRunStatus();
             RefreshStats();
             StartMessageMirror();
-            _statsTimer = new DispatcherTimer();
-            _statsTimer.Interval = TimeSpan.FromSeconds(3);
-            _statsTimer.Tick += (s, args) => RefreshStats();
+            if (_statsTimer == null)
+            {
+                _statsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                _statsTimer.Tick += (s, args) =>
+                {
+                    if (_dashboardVisible) RefreshStats();
+                };
+            }
             _statsTimer.Start();
+        }
+
+        private void CtlRobot_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (_statsTimer != null) _statsTimer.Stop();
+            CloseDataDesk();
         }
 
         private void RefreshRunStatus()
@@ -127,6 +145,7 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             buyerConversations.AddOrUpdate(key, id => conversations, (k, v) => conversations);
+            PruneConversationUiCache(key);
 
             if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null
                 && QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
@@ -134,6 +153,57 @@ namespace Bot.AssistWindow.Widget.Robot
                 RefreshMessageMirror(false);
             }
             return ctlConversation;
+        }
+
+        private void PruneConversationUiCache(string currentKey)
+        {
+            if (string.IsNullOrEmpty(currentKey)) return;
+            _buyerPanelAccessTicks[currentKey] = DateTime.UtcNow.Ticks;
+            List<CtlConversation> current;
+            if (buyerConversations.TryGetValue(currentKey, out current) && current != null
+                && current.Count > MaxCachedAnswerCardsPerBuyer)
+            {
+                var excess = current.Count - MaxCachedAnswerCardsPerBuyer;
+                var released = current.Take(excess).ToList();
+                current.RemoveRange(0, excess);
+                ReleaseConversationUiHandlers(released);
+            }
+
+            if (buyerConversations.Count <= MaxCachedBuyerPanels) return;
+            var activeQn = QN.CurQN;
+            var activeKey = activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
+                ? string.Format("{0}#{1}", activeQn.Seller.Nick, activeQn.Buyer.Nick)
+                : string.Empty;
+            // LRU applies only to transient WPF answer controls, never the persisted
+            // question/answer records or the currently viewed buyer. Background
+            // sellers must not evict the visible buyer's live action cards.
+            foreach (var key in _buyerPanelAccessTicks
+                .OrderBy(item => item.Value).Select(item => item.Key).ToList())
+            {
+                if (buyerConversations.Count <= MaxCachedBuyerPanels) break;
+                if (string.Equals(key, currentKey, StringComparison.Ordinal)
+                    || string.Equals(key, activeKey, StringComparison.Ordinal)) continue;
+                List<CtlConversation> stale;
+                if (buyerConversations.TryRemove(key, out stale))
+                {
+                    ReleaseConversationUiHandlers(stale);
+                    byte ignoredHistory;
+                    _historyLoadedKeys.TryRemove(key, out ignoredHistory);
+                }
+                long ignoredTimestamp;
+                _buyerPanelAccessTicks.TryRemove(key, out ignoredTimestamp);
+            }
+        }
+
+        private void ReleaseConversationUiHandlers(IEnumerable<CtlConversation> controls)
+        {
+            if (controls == null) return;
+            foreach (var control in controls)
+            {
+                if (control == null) continue;
+                control.ResendRequested -= CtlConversation_ResendRequested;
+                control.EditRequested -= CtlConversation_EditRequested;
+            }
         }
 
         private async void CtlConversation_ResendRequested(object sender, ConversationResendEventArgs e)
@@ -468,6 +538,9 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void RefreshStats()
         {
+            // The dashboard is collapsed by default. Do not allocate its API cards
+            // during every message or periodic tick while it cannot be seen.
+            if (!_dashboardVisible) return;
             try
             {
                 var snapshot = BotRuntimeStats.GetSnapshot();
@@ -482,6 +555,15 @@ namespace Bot.AssistWindow.Widget.Robot
                 txtAvgLatency.Text = "平均耗时：" + snapshot.AvgLatencyMs + "ms，失败：" + snapshot.TodayAiFailedCalls + "/今日";
                 txtLastError.Text = string.IsNullOrWhiteSpace(snapshot.LastError) ? "" : "最近错误：" + snapshot.LastError;
 
+                var apiSignature = snapshot.ApiUsages == null || snapshot.ApiUsages.Count == 0
+                    ? "empty"
+                    : string.Join("\u001f", snapshot.ApiUsages.Select(api =>
+                        (api.EndpointName ?? string.Empty) + "|" + api.TodayCalls + "|"
+                        + api.TodayTokens + "|" + api.TotalTokens + "|" + api.FailedCalls
+                        + "|" + api.AvgLatencyMs));
+                if (string.Equals(apiSignature, _lastApiStatsSignature, StringComparison.Ordinal))
+                    return;
+                _lastApiStatsSignature = apiSignature;
                 panelApiStats.Children.Clear();
                 if (snapshot.ApiUsages == null || snapshot.ApiUsages.Count < 1)
                 {
