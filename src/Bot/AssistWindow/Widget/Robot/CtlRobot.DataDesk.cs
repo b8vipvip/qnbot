@@ -233,6 +233,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private TextBlock _txtAvgLatency;
         private TextBlock _txtLastError;
         private StackPanel _panelApiStats;
+        private string _lastApiStatsSignature = string.Empty;
+        private DateTime _lastAnchorDockUtc = DateTime.MinValue;
 
         public DataDeskWindow(Window owner, FrameworkElement anchor)
         {
@@ -271,6 +273,11 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void Anchor_LayoutUpdated(object sender, EventArgs e)
         {
+            // LayoutUpdated can fire for every changed descendant, including the
+            // data cards rebuilt on a statistics tick. Avoid docking on every pass.
+            var now = DateTime.UtcNow;
+            if (now - _lastAnchorDockUtc < TimeSpan.FromMilliseconds(250)) return;
+            _lastAnchorDockUtc = now;
             DockToOwner();
         }
 
@@ -313,7 +320,8 @@ namespace Bot.AssistWindow.Widget.Robot
                     anchorHeight = Math.Max(200, p2.Y - p1.Y);
                 }
 
-                Height = anchorHeight > 200 ? anchorHeight : Height;
+                if (anchorHeight > 200 && Math.Abs(Height - anchorHeight) >= 1)
+                    Height = anchorHeight;
                 var work = SystemParameters.WorkArea;
                 var rightLeft = anchorLeft + anchorWidth;
                 var leftLeft = anchorLeft - Width;
@@ -332,8 +340,10 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
 
                 var targetTop = Math.Max(work.Top, Math.Min(anchorTop, work.Bottom - Height));
-                Left = targetLeft;
-                Top = targetTop;
+                // Setting the same dependency properties can itself retrigger WPF
+                // layout and Owner/anchor notifications on memory-constrained PCs.
+                if (Math.Abs(Left - targetLeft) >= 0.5) Left = targetLeft;
+                if (Math.Abs(Top - targetTop) >= 0.5) Top = targetTop;
             }
             catch (Exception ex)
             {
@@ -464,6 +474,15 @@ namespace Bot.AssistWindow.Widget.Robot
                 _txtAvgLatency.Text = "平均耗时：" + snapshot.AvgLatencyMs + "ms，失败：" + snapshot.TodayAiFailedCalls + "/今日";
                 _txtLastError.Text = string.IsNullOrWhiteSpace(snapshot.LastError) ? string.Empty : "最近错误：" + snapshot.LastError;
 
+                var apiSignature = snapshot.ApiUsages == null || snapshot.ApiUsages.Count == 0
+                    ? "empty"
+                    : string.Join("\u001f", snapshot.ApiUsages.Select(api =>
+                        (api.EndpointName ?? string.Empty) + "|" + api.TodayCalls + "|"
+                        + api.TodayTokens + "|" + api.TotalTokens + "|" + api.FailedCalls
+                        + "|" + api.AvgLatencyMs));
+                if (string.Equals(apiSignature, _lastApiStatsSignature, StringComparison.Ordinal))
+                    return;
+                _lastApiStatsSignature = apiSignature;
                 _panelApiStats.Children.Clear();
                 if (snapshot.ApiUsages == null || snapshot.ApiUsages.Count < 1)
                 {
