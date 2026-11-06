@@ -480,6 +480,11 @@ namespace Bot.ChromeNs
                         try
                         {
                             TouchSession(session);
+                            // Every injected WebView sends this fixed heartbeat every 3s.
+                            // With 68 standby sockets that is ~1,360 frames/minute;
+                            // never allocate JObject/WSocketMessage for the hot path.
+                            if (string.Equals(value, "{\"type\":\"hi\"}", StringComparison.Ordinal))
+                                return;
                             var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
                             if (wMsg == null || wMsg.Type == "hi") return;
 
