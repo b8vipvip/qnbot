@@ -154,7 +154,16 @@ namespace Bot.ChromeNs
                 Seller == null ? string.Empty : Seller.Nick,
                 text);
 
+            var sendGateWaitAt = DateTime.UtcNow;
             await _sendGate.WaitAsync(cancellationToken);
+            var sendGateAcquiredAt = DateTime.UtcNow;
+            var sendGateWaitMs = (long)(sendGateAcquiredAt - sendGateWaitAt).TotalMilliseconds;
+            if (sendGateWaitMs >= 2000)
+            {
+                Log.Info("可靠发送等待锁耗时较长: buyerRef="
+                    + MyWebSocketServer.DiagnosticRef("buyer", buyer)
+                    + ", waitMs=" + sendGateWaitMs);
+            }
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -240,6 +249,15 @@ namespace Bot.ChromeNs
             finally
             {
                 _sendGate.Release();
+                var heldMs = (long)(DateTime.UtcNow - sendGateAcquiredAt).TotalMilliseconds;
+                if (heldMs >= 5000)
+                {
+                    Log.Info("可靠发送锁已释放: buyerRef="
+                        + MyWebSocketServer.DiagnosticRef("buyer", buyer)
+                        + ", heldMs=" + heldMs
+                        + ", cancelled=" + rpa.LastSendWasCancelled
+                        + ", reason=" + rpa.GetSendFailureReason());
+                }
             }
         }
 
