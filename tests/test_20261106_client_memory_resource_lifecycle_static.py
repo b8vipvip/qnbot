@@ -39,6 +39,7 @@ def test_ui_only_answer_cache_is_bounded_without_deleting_history():
 def test_mirror_fallback_poll_is_throttled_without_disabling_refresh():
     mirror = source("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     assert "Interval = TimeSpan.FromSeconds(1)" in mirror
+    assert "if (!IsVisible) return;" in mirror
     assert "RefreshMessageMirror(true);" in mirror
     assert "if (_messageMirrorTimer != null) _messageMirrorTimer.Stop();" in mirror
 
