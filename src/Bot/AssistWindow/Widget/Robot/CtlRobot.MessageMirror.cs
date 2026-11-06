@@ -20,6 +20,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _messageMirrorSeller = string.Empty;
         private string _messageMirrorBuyer = string.Empty;
         private string _messageMirrorSignature = string.Empty;
+        private List<ConversationContextTurn> _messageMirrorRenderedTurns;
         private DateTime _messageMirrorLastRemoteRefresh = DateTime.MinValue;
         private bool _buyerDirectAnswerSaveInProgress;
 
@@ -127,6 +128,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     _messageMirrorSeller = seller;
                     _messageMirrorBuyer = buyer;
                     _messageMirrorSignature = string.Empty;
+                    _messageMirrorRenderedTurns = null;
                     _messageMirrorLastRemoteRefresh = DateTime.MinValue;
                     RequestMessageMirrorHistory(qn, seller, buyer, true);
                 }
@@ -145,13 +147,85 @@ namespace Bot.AssistWindow.Widget.Robot
 
                 var keepBottom = force || identityChanged
                     || scvBody.ScrollableHeight - scvBody.VerticalOffset < 48;
+                if (!force && !identityChanged
+                    && TryAppendBuyerMessages(seller, buyer, turns, keepBottom))
+                {
+                    _messageMirrorSignature = signature;
+                    _messageMirrorRenderedTurns = turns;
+                    return;
+                }
+
                 _messageMirrorSignature = signature;
                 RenderMessageMirror(seller, buyer, turns, keepBottom);
+                _messageMirrorRenderedTurns = turns;
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("刷新千牛镜像聊天区失败：" + ex.Message, 10);
             }
+        }
+
+        private static bool SameDisplayedTurn(ConversationContextTurn x, ConversationContextTurn y)
+        {
+            return x != null && y != null
+                && string.Equals(x.Role, y.Role, StringComparison.Ordinal)
+                && x.Timestamp == y.Timestamp
+                && string.Equals(x.MessageKey, y.MessageKey, StringComparison.Ordinal)
+                && x.Withdrawn == y.Withdrawn
+                && string.Equals(x.Text, y.Text, StringComparison.Ordinal);
+        }
+
+        private bool TryAppendBuyerMessages(
+            string seller, string buyer, IList<ConversationContextTurn> turns, bool keepBottom)
+        {
+            var displayed = _messageMirrorRenderedTurns;
+            if (displayed == null || displayed.Count == 0
+                || turns == null || turns.Count <= displayed.Count
+                || stkDialog.Children.Count == 0
+                || grdTipNoConv.Visibility != Visibility.Collapsed)
+                return false;
+
+            // Validate the entire immutable visible prefix *before* adding controls.
+            // History backfills, deletions, withdrawals, Bot echoes, source edits,
+            // date/order changes and 100-message window shifts must use the
+            // original full render path to preserve provenance and action menus.
+            for (var i = 0; i < displayed.Count; i++)
+                if (!SameDisplayedTurn(displayed[i], turns[i])) return false;
+            for (var i = displayed.Count; i < turns.Count; i++)
+            {
+                var turn = turns[i];
+                if (turn == null
+                    || !string.Equals(turn.Role, "user", StringComparison.Ordinal)
+                    || turn.Withdrawn)
+                    return false;
+            }
+
+            DateTime? previousDate = null;
+            for (var i = displayed.Count - 1; i >= 0; i--)
+            {
+                if (displayed[i] == null || displayed[i].Timestamp == DateTime.MinValue)
+                    continue;
+                previousDate = displayed[i].Timestamp.Date;
+                break;
+            }
+
+            for (var i = displayed.Count; i < turns.Count; i++)
+            {
+                var turn = turns[i];
+                if (turn.Timestamp != DateTime.MinValue
+                    && (!previousDate.HasValue || previousDate.Value != turn.Timestamp.Date))
+                {
+                    stkDialog.Children.Add(BuildMessageMirrorDateSeparator(turn.Timestamp.Date));
+                    previousDate = turn.Timestamp.Date;
+                }
+                stkDialog.Children.Add(BuildMessageMirrorBubble(turn, seller, buyer));
+            }
+
+            if (keepBottom)
+                Dispatcher.BeginInvoke(
+                    new Action(() => scvBody.ScrollToEnd()),
+                    DispatcherPriority.Background);
+            return true;
         }
 
         private static string BuildMessageMirrorSignature(
@@ -188,6 +262,7 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             _messageMirrorSignature = signature;
+            _messageMirrorRenderedTurns = null;
             stkDialog.Children.Clear();
             grdTipNoConv.Visibility = Visibility.Visible;
             stkDialog.Children.Add(grdTipNoConv);
