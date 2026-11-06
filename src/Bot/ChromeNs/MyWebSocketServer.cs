@@ -634,6 +634,9 @@ namespace Bot.ChromeNs
                         _standbyLoggedSessions.TryRemove(session.SessionID, out ignoredStandbyLog);
                         ReleaseSellerSession(session.SessionID);
                         BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
+                        // Session-scoped lifecycle-guard dictionaries must not keep
+                        // a strong reference to every old 12-second reconnect lease.
+                        WebSocketPageLifecycleGuard.ForgetClosedSession(session.SessionID);
                         Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
                             + ", reason=" + value);
                         CDPClient removed;
