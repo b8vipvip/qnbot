@@ -70,3 +70,21 @@ def test_original_100_turn_history_is_not_truncated_by_append_optimization():
     assert "GetMirrorTurns(seller, buyer, 100)" in mirror
     assert "Math.Min(100, maxTurns)" in source
     assert "eligible.Skip(Math.Max(0, eligible.Count - take))" in source
+
+
+def test_gc_etw_collection_is_bounded_opt_in_and_does_not_change_processes():
+    script = src("scripts/Collect-QnBotGcTrace.ps1")
+    assert "DurationSeconds = 120" in script
+    assert "ValidateRange(15, 600)" in script
+    assert "MaxFileMiB = 64" in script
+    assert "ValidateRange(16, 128)" in script
+    assert "logman.exe" in script
+    assert "start $session" in script
+    assert "stop $session -ets" in script
+    assert "finally" in script
+    assert "Microsoft-Windows-DotNETRuntime" in script
+    assert "0x1 0x4" in script
+    assert "Stop-Process" not in script
+    assert "GC]::Collect" not in script
+    assert "Invoke-WebRequest" not in script
+    assert "Upload" not in script
