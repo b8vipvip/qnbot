@@ -480,6 +480,11 @@ namespace Bot.ChromeNs
                         try
                         {
                             TouchSession(session);
+                            // Every injected WebView sends this fixed heartbeat every 3s.
+                            // With 68 standby sockets that is ~1,360 frames/minute;
+                            // never allocate JObject/WSocketMessage for the hot path.
+                            if (string.Equals(value, "{\"type\":\"hi\"}", StringComparison.Ordinal))
+                                return;
                             var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
                             if (wMsg == null || wMsg.Type == "hi") return;
 
@@ -634,6 +639,9 @@ namespace Bot.ChromeNs
                         _standbyLoggedSessions.TryRemove(session.SessionID, out ignoredStandbyLog);
                         ReleaseSellerSession(session.SessionID);
                         BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
+                        // Session-scoped lifecycle-guard dictionaries must not keep
+                        // a strong reference to every old 12-second reconnect lease.
+                        WebSocketPageLifecycleGuard.ForgetClosedSession(session.SessionID);
                         Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
                             + ", reason=" + value);
                         CDPClient removed;

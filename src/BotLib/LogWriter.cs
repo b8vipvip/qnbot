@@ -44,7 +44,7 @@ namespace BotLib
                 DateTime.Now.ToString(),
                 _environmentStr,
                 reason,
-                ((double)GC.GetTotalMemory(true) / Math.Pow(2.0, 20.0)).ToString("0.0")
+                ((double)GC.GetTotalMemory(false) / Math.Pow(2.0, 20.0)).ToString("0.0")
             }));
             _file.Close();
         }
@@ -122,14 +122,29 @@ namespace BotLib
 
         private int UpdateWriteCount(string text)
         {
-            int num = 0;
-            if (_wcache.ContainsKey(text))
+            // Field logs can carry a different session ID on every reconnect.
+            // A lifetime dictionary of whole log strings retains those IDs
+            // indefinitely, even though the underlying log segments rotate.
+            text = text ?? string.Empty;
+            if (text.Length > 8192) return 0; // Do not retain oversized payloads.
+            lock (_writeCountSync)
             {
-                num = _wcache[text];
-                num++;
+                int count;
+                if (_wcache.TryGetValue(text, out count))
+                {
+                    if (count < 21) count++;
+                    _wcache[text] = count;
+                    return count;
+                }
+
+                while (_wcache.Count >= MaxWriteCountKeys && _writeCountOrder.Count > 0)
+                {
+                    _wcache.Remove(_writeCountOrder.Dequeue());
+                }
+                _wcache[text] = 0;
+                _writeCountOrder.Enqueue(text);
+                return 0;
             }
-            _wcache[text] = num;
-            return num;
         }
 
         public void Assert(string msg)
@@ -184,7 +199,10 @@ namespace BotLib
 
         public bool LimitSameStringWriteCount = true;
 
-        private Dictionary<string, int> _wcache = new Dictionary<string, int>();
+        private const int MaxWriteCountKeys = 2048;
+        private readonly object _writeCountSync = new object();
+        private readonly Queue<string> _writeCountOrder = new Queue<string>();
+        private readonly Dictionary<string, int> _wcache = new Dictionary<string, int>(StringComparer.Ordinal);
 
         private class LoopSaveFile
         {

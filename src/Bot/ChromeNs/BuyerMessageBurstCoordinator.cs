@@ -536,14 +536,19 @@ namespace Bot.ChromeNs
             public string LatestText { get; set; }
             public DateTime LatestReceivedAt { get; set; }
             public long LatestGeneration { get; set; }
+            public DateTime LastTouchedUtc { get; set; }
         }
 
         private const int SemanticContinuationWindowSeconds = 180;
+        private const int SoftRecentBuyerTextLimit = 512;
+        private static readonly TimeSpan RecentBuyerTextMaxIdle = TimeSpan.FromMinutes(30);
+        private static readonly TimeSpan RecentBuyerTextSweepInterval = TimeSpan.FromMinutes(10);
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, RecentBuyerText> _recentBuyerTexts =
             new ConcurrentDictionary<string, RecentBuyerText>(StringComparer.Ordinal);
+        private long _lastRecentBuyerTextSweepTicks;
         private readonly Func<BuyerMessageBurstLease, Task> _handler;
         private readonly BuyerSessionAgent _sessionAgent = new BuyerSessionAgent();
 
@@ -1081,6 +1086,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
             var key = Key(item.SellerNick, item.BuyerNick);
             var receivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
+            SweepRecentBuyerTextsIfDue();
             var dependent = LooksLikeSemanticContinuation(text);
             if (dependent)
             {
@@ -1097,7 +1103,8 @@ namespace Bot.ChromeNs
                         AnchorGeneration = existing.AnchorGeneration,
                         LatestText = text,
                         LatestReceivedAt = receivedAt,
-                        LatestGeneration = item.SessionGeneration
+                        LatestGeneration = item.SessionGeneration,
+                        LastTouchedUtc = DateTime.UtcNow
                     };
                     if (_recentBuyerTexts.TryUpdate(key, updated, existing)) return;
                 }
@@ -1110,8 +1117,36 @@ namespace Bot.ChromeNs
                 AnchorGeneration = item.SessionGeneration,
                 LatestText = text,
                 LatestReceivedAt = receivedAt,
-                LatestGeneration = item.SessionGeneration
+                LatestGeneration = item.SessionGeneration,
+                LastTouchedUtc = DateTime.UtcNow
             };
+        }
+
+        private void SweepRecentBuyerTextsIfDue()
+        {
+            var now = DateTime.UtcNow;
+            var previous = Interlocked.Read(ref _lastRecentBuyerTextSweepTicks);
+            if (previous != 0 && now.Ticks - previous < RecentBuyerTextSweepInterval.Ticks)
+                return;
+            if (Interlocked.CompareExchange(ref _lastRecentBuyerTextSweepTicks, now.Ticks, previous)
+                != previous) return;
+
+            foreach (var pair in _recentBuyerTexts.ToArray())
+            {
+                var value = pair.Value;
+                if (value == null) continue;
+                var idle = now - value.LastTouchedUtc;
+                // Never drop a live 180-second continuation anchor merely
+                // because many unrelated buyers have contacted the shop.
+                if (idle < RecentBuyerTextMaxIdle
+                    && (_recentBuyerTexts.Count <= SoftRecentBuyerTextLimit
+                        || idle < TimeSpan.FromSeconds(SemanticContinuationWindowSeconds + 60)))
+                    continue;
+                // Remove only the value we examined. A parallel receive may
+                // have replaced it with a newer anchor while we were sweeping.
+                ((ICollection<KeyValuePair<string, RecentBuyerText>>)_recentBuyerTexts)
+                    .Remove(pair);
+            }
         }
 
         private static bool LooksLikeSemanticContinuation(string value)
