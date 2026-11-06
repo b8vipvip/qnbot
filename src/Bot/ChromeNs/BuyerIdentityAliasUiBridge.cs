@@ -24,6 +24,12 @@ namespace Bot.ChromeNs
         private static int _refreshQueued;
         private static FieldInfo _conversationField;
         private static string _lastSignature = string.Empty;
+        private static long _unchangedAliasMergeSkips;
+
+        internal static long UnchangedAliasMergeSkips
+        {
+            get { return Interlocked.Read(ref _unchangedAliasMergeSkips); }
+        }
 
         public static void Start()
         {
@@ -121,7 +127,10 @@ namespace Bot.ChromeNs
                 var existingSignature = seller + "#" + visibleBuyer + "#"
                     + internalNick + "#" + display + "#" + internalList.Count;
                 if (string.Equals(existingSignature, _lastSignature, StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref _unchangedAliasMergeSkips);
                     return;
+                }
                 _lastSignature = existingSignature;
                 ctl.ReShowAfterQNChange();
                 return;
