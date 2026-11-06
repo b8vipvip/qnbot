@@ -57,3 +57,16 @@ def test_memory_samples_report_gc_velocity_and_guard_count_without_forcing_gc():
     assert "WebSocketPageLifecycleGuard.TrackedSessionCount" in monitor
     assert "GC.GetTotalMemory(false)" in monitor
     assert "GC.Collect(" not in monitor
+
+
+def test_heartbeat_hot_path_skips_deserialization_but_touches_liveness():
+    server = src("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    marker = 'if (string.Equals(value, "{\\\"type\\\":\\\"hi\\\"}", StringComparison.Ordinal))'
+    assert marker in server
+    assert server.index("TouchSession(session);", server.index("webSocket.NewMessageReceived"))
+           < server.index(marker)
+           < server.index("JsonConvert.DeserializeObject<WSocketMessage>(value)")
+    # Other inbound message types and the existing fallback still go through
+    # the established business dispatch and legacy heartbeat check.
+    assert 'if (wMsg == null || wMsg.Type == "hi") return;' in server
+    assert 'OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type, wMsg.Response))' in server
