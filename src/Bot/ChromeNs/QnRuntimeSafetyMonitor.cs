@@ -6,6 +6,7 @@ using DbEntity.Response;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -282,6 +283,26 @@ namespace Bot.ChromeNs
                     + ", seller=" + (snapshot == null ? string.Empty : snapshot.Seller)
                     + ", buyer=" + (snapshot == null ? string.Empty : snapshot.Buyer)
                     + ", diagnosticsAgeSeconds=" + age);
+                // Low-frequency, privacy-free counters allow comparing idle memory
+                // growth with active QN subscriptions without forcing a GC cycle.
+                try
+                {
+                    using (var process = Process.GetCurrentProcess())
+                    {
+                        process.Refresh();
+                        Log.Info("Bot资源采样: workingSetMiB=" + (process.WorkingSet64 / 1048576)
+                            + ", privateMiB=" + (process.PrivateMemorySize64 / 1048576)
+                            + ", managedHeapMiB=" + (GC.GetTotalMemory(false) / 1048576)
+                            + ", gen2Collections=" + GC.CollectionCount(2)
+                            + ", handles=" + process.HandleCount
+                            + ", monitoredQn=" + Subscribed.Count
+                            + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount));
+                    }
+                }
+                catch (Exception metricsError)
+                {
+                    Log.ErrorWithMaxCount("采集Bot资源计数器失败：" + metricsError.GetType().Name, 5);
+                }
             }
             catch (Exception ex)
             {
