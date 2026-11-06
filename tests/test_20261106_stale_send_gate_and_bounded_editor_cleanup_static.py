@@ -91,3 +91,14 @@ def test_cancellation_keeps_real_send_and_buyer_integrity_checks():
     assert "SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text" in rpa
     assert "if (!ok && rpa.LastSendWasCancelled)" in qn
     assert "禁止重试" in qn
+
+
+def test_live_send_gate_duration_is_visible_before_the_stalled_call_returns():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    assert "private long _sendGateHeldSinceUtcTicks;" in qn
+    assert "internal long CurrentSendGateHeldSeconds" in qn
+    assert "Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, sendGateAcquiredAt.Ticks)" in qn
+    assert "Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, 0);" in qn
+    assert '", sendGateHeldSeconds=" + QN.GetRuntimeSafetySnapshot()' in monitor
+    assert "Select(q => q.CurrentSendGateHeldSeconds)" in monitor
