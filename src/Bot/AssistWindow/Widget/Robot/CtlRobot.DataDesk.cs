@@ -28,7 +28,19 @@ namespace Bot.AssistWindow.Widget.Robot
             _diagnosticsTimer = new DispatcherTimer();
             _diagnosticsTimer.Interval = TimeSpan.FromSeconds(2);
             _diagnosticsTimer.Tick += (s, args) => RefreshStatusDiagnostics();
-            _diagnosticsTimer.Start();
+            Loaded += CtlRobot_DiagnosticsLoaded;
+            Unloaded += CtlRobot_DiagnosticsUnloaded;
+        }
+
+        private void CtlRobot_DiagnosticsLoaded(object sender, RoutedEventArgs e)
+        {
+            if (_diagnosticsTimer != null) _diagnosticsTimer.Start();
+            RefreshStatusDiagnostics();
+        }
+
+        private void CtlRobot_DiagnosticsUnloaded(object sender, RoutedEventArgs e)
+        {
+            if (_diagnosticsTimer != null) _diagnosticsTimer.Stop();
         }
 
         public void ShowDataDesk(Window owner)
