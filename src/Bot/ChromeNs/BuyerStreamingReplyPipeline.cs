@@ -936,6 +936,10 @@ namespace Bot.ChromeNs
                         {
                             var buffer = new StringBuilder();
                             Task<string> pendingRead = null;
+                            // One cancellation waiter for the entire stream. The old
+                            // 120ms polling allocated a new timer/task roughly 500x
+                            // per minute per stalled stream, even with no SSE input.
+                            var cancelled = Task.Delay(Timeout.Infinite, token);
                             var lastPreviewAt = DateTime.MinValue;
                             var lastPreviewLength = 0;
 
@@ -943,13 +947,11 @@ namespace Bot.ChromeNs
                             {
                                 token.ThrowIfCancellationRequested();
                                 if (pendingRead == null) pendingRead = reader.ReadLineAsync();
-                                var completed = await Task.WhenAny(
-                                    pendingRead,
-                                    Task.Delay(120, token));
+                                var completed = await Task.WhenAny(pendingRead, cancelled);
                                 if (completed != pendingRead)
                                 {
                                     token.ThrowIfCancellationRequested();
-                                    continue;
+                                    throw new OperationCanceledException(token);
                                 }
 
                                 var line = await pendingRead;
@@ -1005,15 +1007,16 @@ namespace Bot.ChromeNs
                 var result = new StringBuilder();
                 var buffer = new char[4096];
                 Task<int> pendingRead = null;
+                var cancelled = Task.Delay(Timeout.Infinite, token);
                 while (true)
                 {
                     token.ThrowIfCancellationRequested();
                     if (pendingRead == null) pendingRead = reader.ReadAsync(buffer, 0, buffer.Length);
-                    var completed = await Task.WhenAny(pendingRead, Task.Delay(120, token)).ConfigureAwait(false);
+                    var completed = await Task.WhenAny(pendingRead, cancelled).ConfigureAwait(false);
                     if (completed != pendingRead)
                     {
                         token.ThrowIfCancellationRequested();
-                        continue;
+                        throw new OperationCanceledException(token);
                     }
 
                     var read = await pendingRead.ConfigureAwait(false);
