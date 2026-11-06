@@ -170,13 +170,19 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             if (buyerConversations.Count <= MaxCachedBuyerPanels) return;
+            var activeQn = QN.CurQN;
+            var activeKey = activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
+                ? string.Format("{0}#{1}", activeQn.Seller.Nick, activeQn.Buyer.Nick)
+                : string.Empty;
             // LRU applies only to transient WPF answer controls, never the persisted
-            // question/answer records or the currently viewed buyer.
+            // question/answer records or the currently viewed buyer. Background
+            // sellers must not evict the visible buyer's live action cards.
             foreach (var key in _buyerPanelAccessTicks
                 .OrderBy(item => item.Value).Select(item => item.Key).ToList())
             {
                 if (buyerConversations.Count <= MaxCachedBuyerPanels) break;
-                if (string.Equals(key, currentKey, StringComparison.Ordinal)) continue;
+                if (string.Equals(key, currentKey, StringComparison.Ordinal)
+                    || string.Equals(key, activeKey, StringComparison.Ordinal)) continue;
                 List<CtlConversation> stale;
                 if (buyerConversations.TryRemove(key, out stale))
                 {
