@@ -27,6 +27,19 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<int, bool>();
         private static Timer _patchTimer;
         private static int _initialized;
+        // A synchronous fallback can outlive cancellation even after the buyer
+        // generation is finalized. Track such work rather than blocking reply
+        // dispatch or pretending it was physically terminated.
+        private static int _unfinishedAnswerTasksAfterCancel;
+        private static long _answerTasksOutlivedCancellation;
+        internal static int UnfinishedAnswerTasksAfterCancel
+        {
+            get { return Volatile.Read(ref _unfinishedAnswerTasksAfterCancel); }
+        }
+        internal static long AnswerTasksOutlivedCancellation
+        {
+            get { return Interlocked.Read(ref _answerTasksOutlivedCancellation); }
+        }
 
         public static void Initialize()
         {
@@ -386,11 +399,25 @@ namespace Bot.ChromeNs
             var completed = await Task.WhenAny(task, cancelled).ConfigureAwait(false);
             if (completed != task)
             {
-                // Observe a late provider fault without waiting for the non-cooperative call.
+                // Never block buyer cancellation on non-cooperative legacy work.
+                // Count any unfinished provider task until its natural completion,
+                // including faulted/cancelled outcomes, and observe late faults.
+                Interlocked.Increment(ref _unfinishedAnswerTasksAfterCancel);
+                Interlocked.Increment(ref _answerTasksOutlivedCancellation);
                 task.ContinueWith(
-                    t => { var ignored = t.Exception; },
+                    t =>
+                    {
+                        try
+                        {
+                            var observed = t.Exception;
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref _unfinishedAnswerTasksAfterCancel);
+                        }
+                    },
                     CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
                 token.ThrowIfCancellationRequested();
             }
