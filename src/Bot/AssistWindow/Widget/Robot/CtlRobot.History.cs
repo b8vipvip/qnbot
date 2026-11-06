@@ -106,6 +106,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     .OrderBy(x => x.HistorySortTicks)
                     .ToList();
                 buyerConversations.AddOrUpdate(key, conversations, (k, old) => conversations);
+                PruneConversationUiCache(key);
 
                 var current = QN.CurQN;
                 if (current != null && current.Seller != null && current.Buyer != null
