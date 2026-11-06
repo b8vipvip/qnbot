@@ -46,17 +46,28 @@ def test_service_attitude_read_probe_is_bounded_cached_and_cannot_block_send_mai
 
 
 def test_stale_answer_cancellation_clears_only_exact_bot_owned_draft():
-    text = read(RELIABLE)
-    classify = text.index("LastSendWasCancelled = IsNonRetryableStaleAnswer")
-    cleanup_call = text.index("ClearCancelledExactBotDraftIfPresent()", classify)
-    helper = text.index("private void ClearCancelledExactBotDraftIfPresent()")
-    exact_before = text.index("EditorMatchesExpectedText(current, expected)", helper)
-    focus = text.index("FocusEditor()", exact_before)
-    exact_after = text.index("EditorMatchesExpectedText(focusedCurrent, expected)", focus)
-    clear = text.index("PressCtrlA()", exact_after)
-    assert classify < cleanup_call < helper < exact_before < focus < exact_after < clear
-    assert "LastSetPlainText = string.Empty" in text[helper:]
-    assert "避免旧答案滞留千牛输入框" in text
+    reliable = read(RELIABLE)
+    rpa = read(ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.cs")
+    classify = reliable.index("LastSendWasCancelled = IsNonRetryableStaleAnswer")
+    block = reliable[classify:reliable.index("private static bool IsNonRetryableStaleAnswer")]
+    # Regress the 2026-11-06 34-minute COM stall: error classification
+    # must be side-effect free. Finalization performs bounded cleanup.
+    assert "ClearCancelledExactBotDraftIfPresent" not in reliable
+    assert "TryGetEditorText" not in block
+    assert "FocusEditor" not in block
+
+    helper = rpa[rpa.index("private async Task ClearExpectedDraftIfSafeAsync"):
+                 rpa.index("private async Task<string> ReadCurrentBuyerForDraftCleanupAsync")]
+    exact_before = helper.index("EditorMatchesExpectedText(currentText, expected)")
+    owner_before = helper.index("IsOwnedDraftForBuyer(buyer, currentText)", exact_before)
+    focus = helper.index("!FocusEditor()", owner_before)
+    exact_after = helper.index("EditorMatchesExpectedText(focusedText, expected)", focus)
+    owner_after = helper.index("IsOwnedDraftForBuyer(buyer, focusedText)", exact_after)
+    clear = helper.index("PressCtrlA()", owner_after)
+    assert exact_before < owner_before < focus < exact_after < owner_after < clear
+    assert "RunUiMutationAsync(() =>" in helper
+    assert "cleanupDeadlineUtc" in helper
+    assert "ForgetOwnedDraft();" in helper
 
 
 def test_normal_restart_keeps_active_log_and_retention_only_deletes_archives():

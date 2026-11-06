@@ -45,9 +45,13 @@ namespace Bot.ChromeNs
             Log.Info("发送阶段失败: " + LastSendFailureReason);
             if (LastSendWasCancelled)
             {
-                Log.Info("发送失败已分类为不可重试的旧答案取消，可靠发送层必须立即停止重试: "
+                // Never synchronously touch the FlaUI/COM editor here.
+                // Field logs: 12:14:13 cancellation entered the old synchronous
+                // editor cleanup and did not return until 12:48:50, keeping
+                // QN._sendGate occupied for 34+ minutes. The caller's bounded
+                // owner-checked cleanup is responsible for the obsolete draft.
+                Log.Info("发送失败已分类为不可重试的旧答案取消，可靠发送层必须立即停止重试；草稿清理由有界发送收尾执行: "
                     + LastSendFailureReason);
-                ClearCancelledExactBotDraftIfPresent();
             }
         }
 
@@ -56,39 +60,6 @@ namespace Bot.ChromeNs
             var combined = (stage ?? string.Empty) + " " + (detail ?? string.Empty);
             return combined.IndexOf("买家已发送更新消息", StringComparison.Ordinal) >= 0
                 || combined.IndexOf("旧答案不会发送", StringComparison.Ordinal) >= 0;
-        }
-
-        /// <summary>
-        /// A cancelled Bot answer must not remain visible in Qianniu's composer after a newer buyer
-        /// turn invalidates it. Clear only when the current editor still matches LastSetPlainText
-        /// exactly, and re-check after focusing before sending any key input. Manual/operator text or
-        /// a newer Bot draft is never touched.
-        /// </summary>
-        private void ClearCancelledExactBotDraftIfPresent()
-        {
-            try
-            {
-                var expected = (LastSetPlainText ?? string.Empty).Trim();
-                if (expected.Length == 0) return;
-
-                string current;
-                if (!TryGetEditorText(out current) || !EditorMatchesExpectedText(current, expected)) return;
-                if (!FocusEditor()) return;
-
-                string focusedCurrent;
-                if (!TryGetEditorText(out focusedCurrent)
-                    || !EditorMatchesExpectedText(focusedCurrent, expected)) return;
-
-                PressCtrlA();
-                PressBackspace();
-                LastSetPlainText = string.Empty;
-                LatestSetTextTime = DateTime.MinValue;
-                Log.Info("已清除因买家更新消息而作废的Bot精确草稿，避免旧答案滞留千牛输入框");
-            }
-            catch (Exception ex)
-            {
-                Log.Info("清除作废Bot精确草稿失败，未触碰无法证明所有权的输入内容: " + ex.Message);
-            }
         }
 
         internal void SetSendCancellation(string stage, string detail)

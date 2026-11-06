@@ -280,7 +280,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<bool> RunUiMutationAsync(Func<bool> action, string stage)
+        private async Task<bool> RunUiMutationAsync(Func<bool> action, string stage, bool updateSendFailure = true)
         {
             if (action == null) return false;
 
@@ -289,7 +289,7 @@ namespace Bot.ChromeNs
             {
                 if (_activeUiMutationTask != null && !_activeUiMutationTask.IsCompleted)
                 {
-                    SetSendFailure(stage, "上一条UI草稿修改仍在安全退出，禁止并发启动新的草稿修改");
+                    if (updateSendFailure) SetSendFailure(stage, "上一条UI草稿修改仍在安全退出，禁止并发启动新的草稿修改");
                     Log.Info(stage + "已快速失败：上一条UI草稿修改仍在后台退出，避免两个任务并发清空/覆盖输入框。seller="
                         + SellerNick);
                     return false;
@@ -302,7 +302,7 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
-                    SetSendFailure(stage, ex.Message);
+                    if (updateSendFailure) SetSendFailure(stage, ex.Message);
                     return false;
                 }
             }
@@ -312,7 +312,7 @@ namespace Bot.ChromeNs
             {
                 // COM/UIA cannot be safely aborted. Release the send wait after a bounded interval,
                 // but retain the single mutation lease until the original worker actually exits.
-                SetSendFailure(stage, "UI草稿修改超过" + UiMutationTimeoutMs
+                if (updateSendFailure) SetSendFailure(stage, "UI草稿修改超过" + UiMutationTimeoutMs
                     + "ms，已停止等待；原任务保持独占租约直到安全退出");
                 Log.Info(stage + "等待超时，发送链路已释放等待但保留单一UI修改租约: seller="
                     + SellerNick + ", timeoutMs=" + UiMutationTimeoutMs);
@@ -333,7 +333,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                SetSendFailure(stage, ex.Message);
+                if (updateSendFailure) SetSendFailure(stage, ex.Message);
                 Log.Info(stage + "失败: " + ex.Message);
                 return false;
             }
@@ -1007,11 +1007,23 @@ namespace Bot.ChromeNs
             }
         }
 
+        /// <summary>
+        /// A timed-out / superseded send must never hold QN._sendGate waiting for
+        /// FlaUI/COM. Read the current buyer with a bounded CDP wait and perform
+        /// editor mutation on the existing single-owner UIA lease with a deadline.
+        /// The worker rechecks the exact owned text after focus, and if UIA stalls
+        /// past the deadline, it must not type/delete after waking up.
+        /// </summary>
         private async Task ClearExpectedDraftIfSafeAsync(string buyer, string expected, string reason)
         {
             try
             {
-                var currentBuyer = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(expected) || !HasOwnedRecentDraft(expected))
+                    return;
+
+                var cleanupDeadlineUtc = DateTime.UtcNow.AddMilliseconds(10000);
+                var currentBuyer = await ReadCurrentBuyerForDraftCleanupAsync("清理前会话确认")
+                    .ConfigureAwait(false);
                 if (!IsExpectedBuyer(buyer, currentBuyer))
                 {
                     Log.Info("发送失败草稿未清理：当前买家无法证明仍为目标买家。target=" + buyer
@@ -1019,17 +1031,8 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                string currentText;
-                if (!TryGetEditorText(out currentText)
-                    || !EditorMatchesExpectedText(currentText, expected)
-                    || !IsKnownBotOwnedDraftText(currentText))
-                {
-                    Log.Info("发送失败草稿未清理：输入框不是本次Bot精确草稿或所有权无法证明。buyer="
-                        + buyer + ", reason=" + reason);
-                    return;
-                }
-
-                var buyerBeforeClear = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                var buyerBeforeClear = await ReadCurrentBuyerForDraftCleanupAsync("清理前二次会话确认")
+                    .ConfigureAwait(false);
                 if (!IsExpectedBuyer(buyer, buyerBeforeClear))
                 {
                     Log.Info("发送失败草稿未清理：清理前买家已变化。target=" + buyer
@@ -1037,22 +1040,84 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                DispatcherEx.xInvoke(() =>
+                // Keep one active UI mutation lease, even if a COM call remains
+                // in flight. Never permit a later stale worker to erase a new
+                // manual draft after this cancellation window has expired.
+                var cleared = await RunUiMutationAsync(() =>
                 {
-                    string latestText;
-                    if (!TryGetEditorText(out latestText)
-                        || !EditorMatchesExpectedText(latestText, expected)
-                        || !IsKnownBotOwnedDraftText(latestText)
-                        || !FocusEditor()) return;
+                    if (DateTime.UtcNow >= cleanupDeadlineUtc) return false;
+                    string currentText;
+                    if (!TryGetEditorText(out currentText)
+                        || !EditorMatchesExpectedText(currentText, expected)
+                        || !IsOwnedDraftForBuyer(buyer, currentText))
+                        return false;
+
+                    if (DateTime.UtcNow >= cleanupDeadlineUtc || !FocusEditor())
+                        return false;
+                    if (DateTime.UtcNow >= cleanupDeadlineUtc) return false;
+
+                    string focusedText;
+                    if (!TryGetEditorText(out focusedText)
+                        || !EditorMatchesExpectedText(focusedText, expected)
+                        || !IsOwnedDraftForBuyer(buyer, focusedText))
+                        return false;
+                    if (DateTime.UtcNow >= cleanupDeadlineUtc) return false;
+
                     PressCtrlA();
+                    if (DateTime.UtcNow >= cleanupDeadlineUtc) return false;
                     PressBackspace();
                     ForgetOwnedDraft();
-                    Log.Info("已安全清除发送失败的Bot精确草稿: buyer=" + buyer + ", reason=" + reason);
-                });
+                    Log.Info("已安全清除发送失败的Bot精确草稿: buyer=" + buyer
+                        + ", reason=" + reason);
+                    return true;
+                }, "发送失败精确草稿有界清理", false).ConfigureAwait(false);
+
+                if (!cleared)
+                {
+                    Log.Info("发送失败草稿未清理：精确内容/控件所有权不再可证或有界UIA租约繁忙；"
+                        + "已释放发送任务等待且不会盲目删除人工输入。buyer=" + buyer
+                        + ", reason=" + reason);
+                }
             }
             catch (Exception ex)
             {
                 Log.Info("安全清理发送失败草稿异常，已保留输入框避免误删人工内容: " + ex.Message);
+            }
+        }
+
+        private async Task<string> ReadCurrentBuyerForDraftCleanupAsync(string stage)
+        {
+            Task<string> read;
+            try
+            {
+                read = ReadCurrentBuyerNickAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Info(stage + "无法启动，跳过清理: " + ex.Message);
+                return string.Empty;
+            }
+            var winner = await Task.WhenAny(read, Task.Delay(1500)).ConfigureAwait(false);
+            if (winner != read)
+            {
+                // CDP can outlive the caller; observe any late fault without
+                // awaiting a stalled provider call while the send gate is held.
+                read.ContinueWith(
+                    task => { var ignored = task.Exception; },
+                    System.Threading.CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+                Log.Info(stage + "超过1500ms，放弃清理但不阻塞后续发送");
+                return string.Empty;
+            }
+            try
+            {
+                return await read.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Info(stage + "失败，放弃清理: " + ex.Message);
+                return string.Empty;
             }
         }
 
