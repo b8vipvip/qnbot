@@ -303,6 +303,9 @@ namespace Bot.ChromeNs
                             + ", gen2SinceLastSample=" + Math.Max(0, gen2Collections - previousGen2)
                             + ", handles=" + process.HandleCount
                             + ", threads=" + process.Threads.Count
+                            + ", sendGateHeldSeconds=" + QN.GetRuntimeSafetySnapshot()
+                                .Where(q => q != null).Select(q => q.CurrentSendGateHeldSeconds)
+                                .DefaultIfEmpty(0L).Max()
                             + ", pendingCancelledAi=" + BuyerStreamingReplyPipeline.UnfinishedAnswerTasksAfterCancel
                             + ", cancelledAiTasksTotal=" + BuyerStreamingReplyPipeline.AnswerTasksOutlivedCancellation
                             + ", monitoredQn=" + Subscribed.Count
