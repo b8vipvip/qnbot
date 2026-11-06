@@ -297,9 +297,14 @@ namespace Bot.ChromeNs
                         Log.Info("Bot资源采样: workingSetMiB=" + (process.WorkingSet64 / 1048576)
                             + ", privateMiB=" + (process.PrivateMemorySize64 / 1048576)
                             + ", managedHeapMiB=" + (GC.GetTotalMemory(false) / 1048576)
+                            + ", gen0Collections=" + GC.CollectionCount(0)
+                            + ", gen1Collections=" + GC.CollectionCount(1)
                             + ", gen2Collections=" + gen2Collections
                             + ", gen2SinceLastSample=" + Math.Max(0, gen2Collections - previousGen2)
                             + ", handles=" + process.HandleCount
+                            + ", threads=" + process.Threads.Count
+                            + ", pendingCancelledAi=" + BuyerStreamingReplyPipeline.UnfinishedAnswerTasksAfterCancel
+                            + ", cancelledAiTasksTotal=" + BuyerStreamingReplyPipeline.AnswerTasksOutlivedCancellation
                             + ", monitoredQn=" + Subscribed.Count
                             + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount)
                             + ", timelineStates=" + ConversationContextStore.CachedTimelineCount

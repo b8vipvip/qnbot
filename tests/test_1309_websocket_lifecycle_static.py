@@ -71,7 +71,7 @@ def test_uia_control_refreshes_share_one_inflight_scan():
     assert "private async Task<bool> RefreshChatControlsCoreAsync()" in source
 
 
-def test_total_ai_budget_hard_stops_non_cooperative_provider_calls():
+def test_total_ai_budget_stops_waiting_for_non_cooperative_provider_calls():
     source = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
     assert "var answerTask = StreamingBuyerAnswerService.GetAnswerAsync(" in source
@@ -79,6 +79,10 @@ def test_total_ai_budget_hard_stops_non_cooperative_provider_calls():
     assert "private static async Task<T> AwaitWithCancellationAsync<T>" in source
     assert "var cancelled = Task.Delay(Timeout.Infinite, token);" in source
     assert "var completed = await Task.WhenAny(task, cancelled).ConfigureAwait(false);" in source
-    assert "TaskContinuationOptions.OnlyOnFaulted" in source
+    # The late-task observer must run for success, cancellation and faults,
+    # so the pending-task diagnostic counter never remains permanently raised.
+    assert "TaskContinuationOptions.ExecuteSynchronously" in source
+    assert "var observed = t.Exception;" in source
+    assert "Interlocked.Decrement(ref _unfinishedAnswerTasksAfterCancel);" in source
     assert "token.ThrowIfCancellationRequested();" in source
     assert "answer = await StreamingBuyerAnswerService.GetAnswerAsync(" not in source
