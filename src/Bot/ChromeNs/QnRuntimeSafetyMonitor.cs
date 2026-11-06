@@ -34,6 +34,7 @@ namespace Bot.ChromeNs
         private static Timer _timer;
         private static int _started;
         private static long _lastHeartbeatUtcTicks;
+        private static int _lastSampledGen2Collections;
 
         public static void Start()
         {
@@ -290,16 +291,21 @@ namespace Bot.ChromeNs
                     using (var process = Process.GetCurrentProcess())
                     {
                         process.Refresh();
+                        var gen2Collections = GC.CollectionCount(2);
+                        var previousGen2 = Interlocked.Exchange(
+                            ref _lastSampledGen2Collections, gen2Collections);
                         Log.Info("Bot资源采样: workingSetMiB=" + (process.WorkingSet64 / 1048576)
                             + ", privateMiB=" + (process.PrivateMemorySize64 / 1048576)
                             + ", managedHeapMiB=" + (GC.GetTotalMemory(false) / 1048576)
-                            + ", gen2Collections=" + GC.CollectionCount(2)
+                            + ", gen2Collections=" + gen2Collections
+                            + ", gen2SinceLastSample=" + Math.Max(0, gen2Collections - previousGen2)
                             + ", handles=" + process.HandleCount
                             + ", monitoredQn=" + Subscribed.Count
                             + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount)
                             + ", timelineStates=" + ConversationContextStore.CachedTimelineCount
                             + ", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount
-                            + ", imageRecords=" + VisionImageCacheService.CachedRecordCount);
+                            + ", imageRecords=" + VisionImageCacheService.CachedRecordCount
+                            + ", wsGuardSessionRefs=" + WebSocketPageLifecycleGuard.TrackedSessionCount);
                     }
                 }
                 catch (Exception metricsError)
