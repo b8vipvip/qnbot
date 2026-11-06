@@ -313,7 +313,11 @@ namespace Bot.ChromeNs
                             + ", timelineStates=" + ConversationContextStore.CachedTimelineCount
                             + ", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount
                             + ", imageRecords=" + VisionImageCacheService.CachedRecordCount
-                            + ", wsGuardSessionRefs=" + WebSocketPageLifecycleGuard.TrackedSessionCount);
+                            + ", wsGuardSessionRefs=" + WebSocketPageLifecycleGuard.TrackedSessionCount
+                            + ", shopRegistryWrites=" + Bot.ShopScope.ShopProfileStore.RegistryWriteCount
+                            + ", shopSnapshotHits=" + BotWebConsoleSyncService.ShopSnapshotCacheHits
+                            + ", shopSnapshotRefreshes=" + BotWebConsoleSyncService.ShopSnapshotRefreshes
+                            + ", aliasUiNoopSkips=" + BuyerIdentityAliasUiBridge.UnchangedAliasMergeSkips);
                     }
                 }
                 catch (Exception metricsError)
