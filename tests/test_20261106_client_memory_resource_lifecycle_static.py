@@ -53,3 +53,47 @@ def test_minute_resource_telemetry_is_non_invasive_and_privacy_safe():
     assert "process.HandleCount" in monitor
     assert "monitoredQn=" in monitor
     assert "GC.Collect(" not in monitor
+
+
+def test_timeline_cache_sweeps_only_after_context_window():
+    timeline = source("src/Bot/ChromeNs/ConversationContextStore.cs")
+    assert "SoftTimelineStateLimit = 256;" in timeline
+    assert "TimelineContextWindow = TimeSpan.FromHours(72);" in timeline
+    assert "TimelineMaxIdle = TimeSpan.FromDays(8);" in timeline
+    assert "SweepInactiveTimelinesIfDue();" in timeline
+    assert "idle < TimelineContextWindow" in timeline
+    assert "state.PendingPreset != null && state.PendingPreset.ExpiresAt >= DateTime.Now" in timeline
+    assert "ReferenceEquals(current, state)" in timeline
+    assert "States.TryRemove(pair.Key, out ignored)" in timeline
+    assert "CachedTimelineCount" in timeline
+    # Runtime changes must not accidentally truncate the existing 100-turn mirror.
+    assert "if (state.Turns.Count > 100)" in timeline
+
+
+def test_expired_working_memory_does_not_evict_active_buyers():
+    index = source("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "SoftWorkingMemoryLimit = 256;" in index
+    assert "memory.UpdatedAt >= DateTime.Now.AddMinutes(-45)" in index
+    assert "idle < TimeSpan.FromMinutes(60)" in index
+    assert "SweepExpiredWorkingMemoryIfDue();" in index
+    assert "ReferenceEquals(current, memory)" in index
+    assert "Working.TryRemove(pair.Key, out ignored)" in index
+
+
+def test_data_desk_avoids_layout_feedback_and_identical_api_card_rebuild():
+    data_desk = source("src/Bot/AssistWindow/Widget/Robot/CtlRobot.DataDesk.cs")
+    assert "TimeSpan.FromMilliseconds(250)" in data_desk
+    assert "Math.Abs(Height - anchorHeight) >= 1" in data_desk
+    assert "Math.Abs(Left - targetLeft) >= 0.5" in data_desk
+    assert "Math.Abs(Top - targetTop) >= 0.5" in data_desk
+    assert "_lastApiStatsSignature" in data_desk
+    assert "string.Equals(apiSignature, _lastApiStatsSignature, StringComparison.Ordinal)" in data_desk
+
+
+def test_resource_samples_know_cache_cardinalities_without_user_content():
+    monitor = source("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    assert '", timelineStates=" + ConversationContextStore.CachedTimelineCount' in monitor
+    assert '", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount' in monitor
+    assert '", imageRecords=" + VisionImageCacheService.CachedRecordCount' in monitor
+    images = source("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    assert "internal static int CachedRecordCount" in images
