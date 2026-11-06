@@ -98,3 +98,18 @@ def test_resource_samples_know_cache_cardinalities_without_user_content():
     assert '", imageRecords=" + VisionImageCacheService.CachedRecordCount' in monitor
     images = source("src/Bot/ChromeNs/VisionImageCacheService.cs")
     assert "internal static int CachedRecordCount" in images
+
+
+def test_windows_memory_sampler_is_read_only_and_collects_machine_pressure():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "Get-Process -Name $processNames" in collector
+    assert "Get-CimInstance Win32_OperatingSystem" in collector
+    assert "WorkingSetMiB" in collector
+    assert "PrivateMiB" in collector
+    assert "CpuPercentOfMachine" in collector
+    assert "SystemFreeMiB" in collector
+    assert "Export-Csv" in collector
+    assert "Get-Process -Name" in collector
+    assert "Stop-Process" not in collector
+    assert "GC]::Collect" not in collector
+    assert "Get-ChildItem" not in collector
