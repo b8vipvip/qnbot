@@ -53,6 +53,7 @@ namespace Bot.ChromeNs
         {
             public WebSocketSession Session;
             public DateTime StartedAtUtc;
+            public int ObservationScheduled;
         }
 
         private static readonly TimeSpan InertPageGrace = TimeSpan.FromSeconds(20);
@@ -174,6 +175,11 @@ namespace Bot.ChromeNs
 
         private static void ScheduleStandbyObservation(string sessionId, InertCandidate candidate, bool legacyRetireCapable)
         {
+            // A page can send multiple status messages during the 20-second
+            // qualification window. Schedule exactly one observer per candidate
+            // rather than one delayed Task per status event.
+            if (Interlocked.CompareExchange(ref candidate.ObservationScheduled, 1, 0) != 0)
+                return;
             Task.Run(async () =>
             {
                 var remaining = InertPageGrace - (DateTime.UtcNow - candidate.StartedAtUtc);
