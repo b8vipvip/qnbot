@@ -76,6 +76,17 @@ namespace Bot.ChromeNs
         private DateTime _lastSellerEchoTime = DateTime.MinValue;
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
+        private long _sendGateHeldSinceUtcTicks;
+
+        internal long CurrentSendGateHeldSeconds
+        {
+            get
+            {
+                var since = Interlocked.Read(ref _sendGateHeldSinceUtcTicks);
+                if (since <= 0) return 0;
+                return Math.Max(0, (DateTime.UtcNow.Ticks - since) / TimeSpan.TicksPerSecond);
+            }
+        }
         private const int ActiveBuyerConfirmDeadlineMs = 9000;
         private const int ActiveBuyerConfirmPollMs = 250;
         // Seller echoes may be repeated by several injected pages. Keep their transport-level
@@ -157,6 +168,7 @@ namespace Bot.ChromeNs
             var sendGateWaitAt = DateTime.UtcNow;
             await _sendGate.WaitAsync(cancellationToken);
             var sendGateAcquiredAt = DateTime.UtcNow;
+            Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, sendGateAcquiredAt.Ticks);
             var sendGateWaitMs = (long)(sendGateAcquiredAt - sendGateWaitAt).TotalMilliseconds;
             if (sendGateWaitMs >= 2000)
             {
@@ -248,6 +260,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
+                Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, 0);
                 _sendGate.Release();
                 var heldMs = (long)(DateTime.UtcNow - sendGateAcquiredAt).TotalMilliseconds;
                 if (heldMs >= 5000)
