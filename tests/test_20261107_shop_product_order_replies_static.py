@@ -25,8 +25,8 @@ def test_shop_cache_fail_closed_and_seven_day_refresh():
     assert "TimeSpan.FromHours(1)" in service
     assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in service
     assert "QN.FindExistingBySellerNick(seller)" in service
-    assert "InvokeMTop<ZnkfItemSearchResponse>" in service
-    assert "products.Count == 0" in service
+    assert "ShopCatalogMtopReader.FetchAsync(qn.CDP)" in service
+    assert "fetched.Products == null || fetched.Products.Count == 0" in service
     assert "File.Replace(temp, path, null)" in service
     assert "MatchOrderReply(string seller, string itemId)" in service
     assert "string.Equals(x.ItemId, itemId, StringComparison.Ordinal)" in service
@@ -40,10 +40,10 @@ def test_ui_shop_strategy_and_product_dropdown_are_connected():
     shop_ui = source("src/Bot/Options/ShopStrategyOptionsControl.cs")
     qn = source("src/Bot/ChromeNs/QN.cs")
     assert '"店铺策略"' in options and "OptionEnum.ShopStrategy" in options
-    assert "ShopOrderProductRulesUi(Seller)" in control
+    assert "ShopOrderProductRulesUi(Seller, orderReply, orderMode)" in control
     assert "_orderProductRulesUi.Save()" in control
     assert '"获取商品"' in product_ui
-    assert '"选择本店商品"' in product_ui
+    assert '"适用商品"' in product_ui
     assert "RefreshAsync(_seller, true)" in product_ui
     assert '"更新商品"' in shop_ui
     assert "RefreshAsync(_seller, true)" in shop_ui

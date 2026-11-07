@@ -31,6 +31,8 @@ namespace Bot.ChromeNs
     {
         public DateTime UpdatedAtUtc { get; set; }
         public List<ShopCatalogProduct> Products { get; set; }
+        public string Source { get; set; }
+        public bool Partial { get; set; }
     }
 
     /// <summary>
@@ -138,7 +140,7 @@ namespace Bot.ChromeNs
             try
             {
                 var snapshot = Load(seller);
-                if (!force && snapshot.UpdatedAtUtc != DateTime.MinValue &&
+                if (!force && !snapshot.Partial && snapshot.UpdatedAtUtc != DateTime.MinValue &&
                     DateTime.UtcNow - snapshot.UpdatedAtUtc < RefreshInterval)
                     return snapshot.Products.Count;
                 DateTime last;
@@ -152,41 +154,26 @@ namespace Bot.ChromeNs
                     string.IsNullOrWhiteSpace(qn.CDP.SessionId) || qn.Seller == null ||
                     !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
                     throw new InvalidOperationException("当前店铺千牛未连接，无法获取商品");
-                var products = new Dictionary<string, ShopCatalogProduct>(StringComparer.Ordinal);
-                for (var page = 1; page <= MaxPages; page++)
+                // Query the real seller merchandise management API and normalize its
+                // nested response envelope. The historical cs.item.search endpoint
+                // is not a seller-wide item list (and returned no data.data list).
+                var fetched = await ShopCatalogMtopReader.FetchAsync(qn.CDP)
+                    .ConfigureAwait(false);
+                if (fetched.Products == null || fetched.Products.Count == 0)
+                    throw new InvalidOperationException("千牛商品接口未返回有效商品，保留旧数据");
+                if (fetched.Partial && snapshot.Products.Count > 0 && !snapshot.Partial)
                 {
-                    // Reuse the QN authorized MTop channel and the repository's
-                    // existing ZnkfItemSearchResponse DTO; never scrape another shop.
-                    var response = await qn.CDP.InvokeMTop<ZnkfItemSearchResponse>(
-                        "mtop.taobao.qianniu.cs.item.search",
-                        new { keyword = "", pageNo = page, pageSize = PageSize })
-                        .ConfigureAwait(false);
-                    if (response == null || response.data == null || response.data.data == null)
-                        throw new InvalidOperationException("千牛商品接口没有返回有效列表，第 " + page + " 页");
-                    var entries = response.data.data;
-                    foreach (var item in entries.Where(x => x != null && x.itemId > 0))
-                    {
-                        var id = item.itemId.ToString();
-                        products[id] = new ShopCatalogProduct
-                        {
-                            ItemId = id,
-                            Title = (item.title ?? string.Empty).Trim(),
-                            Url = (item.itemUrl ?? string.Empty).Trim(),
-                            Status = (item.approveStatus ?? string.Empty).Trim()
-                        };
-                    }
-                    if (entries.Count < PageSize) break;
-                    if (page == MaxPages)
-                        throw new InvalidOperationException("本店商品已超过单次同步上限，缓存未覆盖，请检查分页");
+                    Log.Info("千牛仅返回推荐商品，已保留原完整商品列表: seller=" + seller
+                        + ", count=" + fetched.Products.Count);
+                    return snapshot.Products.Count;
                 }
-                if (products.Count == 0)
-                    throw new InvalidOperationException("千牛接口没有返回商品；保留原缓存和全部商品专属答案");
-
                 var updated = new ShopCatalogSnapshot
                 {
                     UpdatedAtUtc = DateTime.UtcNow,
-                    Products = products.Values.OrderBy(x => x.Title, StringComparer.Ordinal)
-                        .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList()
+                    Products = fetched.Products.OrderBy(x => x.Title, StringComparer.Ordinal)
+                        .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList(),
+                    Source = fetched.Source,
+                    Partial = fetched.Partial
                 };
                 var path = CachePath(seller);
                 var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -198,7 +185,9 @@ namespace Bot.ChromeNs
                 }
                 finally { if (File.Exists(temp)) File.Delete(temp); }
                 Log.Info("店铺商品缓存已更新: seller=" + seller + ", count=" + updated.Products.Count
-                    + ", updatedAtUtc=" + updated.UpdatedAtUtc.ToString("o"));
+                    + ", updatedAtUtc=" + updated.UpdatedAtUtc.ToString("o")
+                    + ", source=" + (updated.Source ?? "unknown")
+                    + ", partial=" + updated.Partial);
                 return updated.Products.Count;
             }
             finally { gate.Release(); }

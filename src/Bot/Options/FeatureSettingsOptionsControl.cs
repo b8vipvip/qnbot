@@ -133,8 +133,18 @@ namespace Bot.Options
             try
             {
                 SyncOffHoursToLegacyControls();
-                _saveAllMethod.Invoke(_legacyWindow, null);
-                if (_orderProductRulesUi != null) _orderProductRulesUi.Save();
+                // The shared legacy fields always persist the global (all items)
+                // template, even while the UI is currently editing one product.
+                try
+                {
+                    if (_orderProductRulesUi != null) _orderProductRulesUi.BeginSave();
+                    _saveAllMethod.Invoke(_legacyWindow, null);
+                    if (_orderProductRulesUi != null) _orderProductRulesUi.Save();
+                }
+                finally
+                {
+                    if (_orderProductRulesUi != null) _orderProductRulesUi.EndSave();
+                }
                 var effectiveSeller = seller ?? Seller;
                 if (_replyMode != null)
                 {
@@ -306,15 +316,21 @@ namespace Bot.Options
             };
 
             var inserted = BuildDeterministicRuleControls();
-            _orderProductRulesUi = new ShopOrderProductRulesUi(Seller);
             var legacyStack = FindPrimaryRuleStack(legacyContent);
+            var orderReply = GetPrivateField<TextBox>(_legacyWindow, "_orderPlacedReplyText");
+            var orderMode = GetPrivateField<ComboBox>(_legacyWindow, "_orderPlacedReplyMode");
+            var orderEnabled = GetPrivateField<CheckBox>(_legacyWindow, "_orderPlacedReplyEnabled");
+            if (legacyStack == null || orderEnabled == null || !legacyStack.Children.Contains(orderEnabled))
+                throw new InvalidOperationException("原“买家下单后自动发送”布局未找到，拒绝创建重复的商品回复配置。");
+            _orderProductRulesUi = new ShopOrderProductRulesUi(Seller, orderReply, orderMode);
             if (legacyStack != null)
             {
                 for (var i = inserted.Count - 1; i >= 0; i--)
                 {
                     legacyStack.Children.Insert(0, inserted[i]);
                 }
-                legacyStack.Children.Add(_orderProductRulesUi);
+                var orderIndex = legacyStack.Children.IndexOf(orderEnabled);
+                legacyStack.Children.Insert(orderIndex + 1, _orderProductRulesUi);
                 autoReplyTab.Content = new ScrollViewer
                 {
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -325,18 +341,9 @@ namespace Bot.Options
                 return;
             }
 
-            // Compatibility fallback for an older settings layout.
-            var body = new StackPanel { Margin = new Thickness(12, 8, 12, 14) };
-            foreach (var control in inserted) body.Children.Add(control);
-            body.Children.Add(_orderProductRulesUi);
-            if (legacyContent != null) body.Children.Add(legacyContent);
-            autoReplyTab.Content = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                CanContentScroll = false,
-                Content = body
-            };
+            // Do not silently recreate a second product editor if the legacy
+            // page changes; failing early is safer than writing the wrong reply.
+            throw new InvalidOperationException("自动回复规则布局不兼容，请检查客户端版本。");
         }
 
         private List<UIElement> BuildDeterministicRuleControls()

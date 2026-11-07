@@ -86,7 +86,7 @@ namespace Bot.Options
 
             AddPage("店铺与连接", "店铺绑定", "管理当前店铺身份、Bot 服务端地址、独立令牌和云端知识库同步。",
                 OptionEnum.ShopBinding, shopBinding);
-            AddPage("店铺与连接", "店铺策略", "本店商品缓存、每7天自动更新和立即更新商品。",
+            AddPage("店铺与连接", "店铺策略", "本店商品列表、每7天自动更新和立即获取商品。",
                 OptionEnum.ShopStrategy, shopStrategy);
             AddFeaturePage("回复与通知", "知识库", "管理店铺问答、智能导入、搜索、分类和云同步状态。",
                 OptionEnum.GoodsKnowledge, "知识库");
