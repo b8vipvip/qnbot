@@ -98,6 +98,34 @@ namespace Bot.Options
             };
             manualRow.Children.Add(addManual);
             root.Children.Add(manualRow);
+            var removeManual = new Button
+            {
+                Content = "移除选中的补录商品", Width = 154, Height = 26,
+                Margin = new Thickness(0, 6, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            removeManual.Click += (s, e) =>
+            {
+                var selected = _items.SelectedItem as ShopCatalogProduct;
+                if (selected == null || !selected.ManuallyAdded)
+                {
+                    MessageBox.Show("请先选中一条手动补录的商品。");
+                    return;
+                }
+                if (MessageBox.Show("确认移除本店手动补录商品？已配置的订单专属回复不会被删除。",
+                    "移除手动商品", MessageBoxButton.YesNo, MessageBoxImage.Question)
+                    != MessageBoxResult.Yes) return;
+                try
+                {
+                    ShopProductCatalogService.RemoveManualProduct(_seller, selected.ItemId);
+                    Reload();
+                }
+                catch (Exception ex)
+                {
+                    _status.Text = "移除补录商品失败：" + ex.Message;
+                }
+            };
+            root.Children.Add(removeManual);
             _status = new TextBlock
             {
                 Margin = new Thickness(0, 12, 0, 10),
