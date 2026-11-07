@@ -30,7 +30,6 @@
         HotKey,
         Robot,
         ShopBinding,
-        ShopStrategy,
         RemindPay,
         InviteOrder,
         DataManagement,
@@ -41,6 +40,7 @@
         Diagnostics,
         Compliance,
         AutoDelivery,
-        FeatureSettings
+        FeatureSettings,
+        ShopStrategy
     }
 }
