@@ -36,7 +36,7 @@ def test_incomplete_catalog_is_never_reported_as_complete():
     assert "if (!force && !snapshot.Partial" in service
     assert 'if (snapshot.Partial)' in view
     assert '只收到部分推荐商品，未完成全量同步' in view
-    assert '本店商品已完整更新' in view
+    assert '本店商品已完整同步' in view
     assert '不是经过验证的本店完整商品列表' in view
     assert 'snapshot.Partial' in chooser
     assert '本次仅获取到推荐商品' in chooser
