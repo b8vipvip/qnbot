@@ -38,7 +38,8 @@ def test_incomplete_catalog_is_never_reported_as_complete():
     assert '尚未完成本店商品全量同步' in view
     assert '本店商品已完整更新' in view
     assert '不是经过验证的本店完整商品列表' in view
-    assert 'if (snapshot.Partial)' in chooser
+    assert 'snapshot.Partial' in chooser
+    assert '本次仅获取到推荐商品' in chooser
 
 
 def test_optional_manual_product_is_shop_scoped_and_survives_partial_refresh():
