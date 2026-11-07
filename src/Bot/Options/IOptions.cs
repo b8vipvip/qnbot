@@ -30,6 +30,7 @@
         HotKey,
         Robot,
         ShopBinding,
+        ShopStrategy,
         RemindPay,
         InviteOrder,
         DataManagement,
