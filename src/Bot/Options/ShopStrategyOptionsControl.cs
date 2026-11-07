@@ -19,6 +19,8 @@ namespace Bot.Options
         private readonly TextBlock _status;
         private readonly DataGrid _items;
         private readonly Button _refresh;
+        private readonly TextBox _manualUrl;
+        private readonly TextBox _manualTitle;
 
         public ShopStrategyOptionsControl(string seller)
         {
@@ -45,6 +47,57 @@ namespace Bot.Options
             };
             _refresh.Click += async (s, e) => await RefreshNowAsync();
             root.Children.Add(_refresh);
+            root.Children.Add(new TextBlock
+            {
+                Text = "缺少商品时，可临时补录本店商品链接。人工补录不代表全店自动同步成功。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.Gray,
+                Margin = new Thickness(0, 12, 0, 6)
+            });
+            var manualRow = new StackPanel { Orientation = Orientation.Horizontal };
+            manualRow.Children.Add(new TextBlock
+            {
+                Text = "商品链接", Width = 65, VerticalAlignment = VerticalAlignment.Center
+            });
+            _manualUrl = new TextBox
+            {
+                Width = 260, Height = 27,
+                ToolTip = "例如 https://item.taobao.com/item.htm?id=123456789012"
+            };
+            manualRow.Children.Add(_manualUrl);
+            manualRow.Children.Add(new TextBlock
+            {
+                Text = "商品名称", Margin = new Thickness(12, 0, 0, 0),
+                Width = 65, VerticalAlignment = VerticalAlignment.Center
+            });
+            _manualTitle = new TextBox { Width = 170, Height = 27 };
+            manualRow.Children.Add(_manualTitle);
+            var addManual = new Button
+            {
+                Content = "补录商品", Width = 84, Height = 27,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            addManual.Click += (s, e) =>
+            {
+                try
+                {
+                    var id = ShopProductCatalogService.AddManualProduct(
+                        _seller, _manualUrl.Text, _manualTitle.Text);
+                    _manualUrl.Clear();
+                    _manualTitle.Clear();
+                    Reload();
+                    _status.Text = "已补录商品 ID：" + id
+                        + "（人工补录，非全量自动同步）。" + Environment.NewLine + _status.Text;
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("本店商品手动补录失败: seller=" + _seller
+                        + ", error=" + ex.Message);
+                    _status.Text = "补录失败：" + ex.Message;
+                }
+            };
+            manualRow.Children.Add(addManual);
+            root.Children.Add(manualRow);
             _status = new TextBlock
             {
                 Margin = new Thickness(0, 12, 0, 10),
@@ -120,7 +173,7 @@ namespace Bot.Options
                 }
                 else if (catalog.Partial)
                 {
-                    _status.Text = "已缓存 " + catalog.Products.Count + " 件【推荐商品】，不是本店完整商品列表；"
+                    _status.Text = "当前列表共 " + catalog.Products.Count + " 件（推荐商品/人工补录），不是经过验证的本店完整商品列表；"
                         + "本次完整同步未成功，系统会继续重试。缓存时间："
                         + catalog.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
                         + (string.IsNullOrWhiteSpace(catalog.LastFullCatalogError) ? ""
