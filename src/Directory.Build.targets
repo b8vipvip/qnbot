@@ -302,4 +302,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ShopStrategyOptionsControl.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\ShopStrategyOptionsControl.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ShopCatalogMtopReader.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ShopCatalogMtopReader.cs" />
+  </ItemGroup>
 </Project>
