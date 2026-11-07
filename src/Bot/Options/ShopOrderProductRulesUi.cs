@@ -194,9 +194,14 @@ namespace Bot.Options
             _status.Text = "正在通过本店千牛会话获取商品…";
             try
             {
-                var count = await ShopProductCatalogService.RefreshAsync(_seller, true);
+                await ShopProductCatalogService.RefreshAsync(_seller, true);
                 ReloadChoices(selected);
-                _status.Text += " 已获取 " + count + " 件商品，专属答案请点击底部“保存设置”。";
+                var snapshot = ShopProductCatalogService.Load(_seller);
+                _status.Text += snapshot.Partial
+                    ? " 本次仅获取到推荐商品，不代表本店完整清单；已保留已有规则。"
+                    : (!string.IsNullOrWhiteSpace(snapshot.LastFullCatalogError)
+                        ? " 最新全量接口未成功，仍保留原完整商品和预设答案。"
+                        : " 本店商品已完整更新，专属答案请点击“保存设置”。");
             }
             catch (Exception ex)
             {
