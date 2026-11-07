@@ -40,6 +40,7 @@
         Diagnostics,
         Compliance,
         AutoDelivery,
-        FeatureSettings
+        FeatureSettings,
+        ShopStrategy
     }
 }

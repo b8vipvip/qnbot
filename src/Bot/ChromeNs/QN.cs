@@ -114,6 +114,9 @@ namespace Bot.ChromeNs
             this._seller = seller;
             this.rpa = new QNRpa(this);
             this._buyerMessageBurstCoordinator = new BuyerMessageBurstCoordinator(ProcessBuyerBurstAsync);
+            // One per-shop low-frequency scheduler; actual refresh only after 7 days.
+            // It never opens a chat or sends a message.
+            ShopProductCatalogService.EnsureScheduled(seller == null ? null : seller.Nick);
         }
 
         public async Task<bool> SendTextAsync(string buyer, string text)

@@ -43,6 +43,7 @@ namespace Bot.Options
         private ComboBox _legacyOffHoursMode;
         private TextBox _legacyOffHoursFixedText;
         private string _currentPage;
+        private ShopOrderProductRulesUi _orderProductRulesUi;
 
         public FeatureSettingsOptionsControl(string seller)
         {
@@ -133,6 +134,7 @@ namespace Bot.Options
             {
                 SyncOffHoursToLegacyControls();
                 _saveAllMethod.Invoke(_legacyWindow, null);
+                if (_orderProductRulesUi != null) _orderProductRulesUi.Save();
                 var effectiveSeller = seller ?? Seller;
                 if (_replyMode != null)
                 {
@@ -304,6 +306,7 @@ namespace Bot.Options
             };
 
             var inserted = BuildDeterministicRuleControls();
+            _orderProductRulesUi = new ShopOrderProductRulesUi(Seller);
             var legacyStack = FindPrimaryRuleStack(legacyContent);
             if (legacyStack != null)
             {
@@ -311,6 +314,7 @@ namespace Bot.Options
                 {
                     legacyStack.Children.Insert(0, inserted[i]);
                 }
+                legacyStack.Children.Add(_orderProductRulesUi);
                 autoReplyTab.Content = new ScrollViewer
                 {
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -324,6 +328,7 @@ namespace Bot.Options
             // Compatibility fallback for an older settings layout.
             var body = new StackPanel { Margin = new Thickness(12, 8, 12, 14) };
             foreach (var control in inserted) body.Children.Add(control);
+            body.Children.Add(_orderProductRulesUi);
             if (legacyContent != null) body.Children.Add(legacyContent);
             autoReplyTab.Content = new ScrollViewer
             {

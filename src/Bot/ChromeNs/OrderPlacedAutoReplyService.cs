@@ -361,6 +361,38 @@ namespace Bot.ChromeNs
             if (plan == null || plan.Config == null) return Fail("下单自动回复计划为空");
             var cfg = plan.Config;
             await RefreshLocalSnapshotBeforeRenderAsync(plan, cfg.OrderPlacedReplyText);
+            // Only the new-order action uses a product override; buyer follow-up
+            // remains on its existing configured workflow. Match the canonical
+            // structured ItemId, never product-title fragments or the active chat.
+            if (!plan.IsBuyerFollowUp && plan.Snapshot != null)
+            {
+                try
+                {
+                    var productReply = ShopProductCatalogService.MatchOrderReply(
+                        plan.Seller, plan.Snapshot.ItemId);
+                    if (!string.IsNullOrWhiteSpace(productReply))
+                    {
+                        var renderedProduct = RenderTemplate(productReply, plan, "product-fixed-preset");
+                        if (!string.IsNullOrWhiteSpace(renderedProduct))
+                        {
+                            Log.Info("下单自动回复已命中本店商品专属答案: seller=" + plan.Seller
+                                + ", itemId=" + plan.Snapshot.ItemId + ", orderId=" + plan.OrderId);
+                            return new OrderPlacedReplyResolution
+                            {
+                                Success = true, Reply = renderedProduct,
+                                Source = "下单自动回复-商品专属固定答案"
+                            };
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Preserve the previously configured generic order response
+                    // if this shop's optional catalog/rule file is unavailable.
+                    Log.Info("下单商品专属答案读取失败，使用原规则: seller=" + plan.Seller
+                        + ", orderId=" + plan.OrderId + ", error=" + ex.Message);
+                }
+            }
             var mode = string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyMode) ? "固定预设答案" : cfg.OrderPlacedReplyMode.Trim();
             if (string.Equals(mode, "调用HTTP接口", StringComparison.Ordinal))
             {
