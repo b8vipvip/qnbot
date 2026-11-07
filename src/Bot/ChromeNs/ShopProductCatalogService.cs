@@ -20,6 +20,13 @@ namespace Bot.ChromeNs
         public string Url { get; set; }
         public string Status { get; set; }
         public bool ManuallyAdded { get; set; }
+        [JsonIgnore]
+        public bool LocalManaged { get; set; }
+        [JsonIgnore]
+        public string SourceLabel
+        {
+            get { return ManuallyAdded ? "本地新增" : (LocalManaged ? "本地修改" : "千牛同步"); }
+        }
         public override string ToString() { return (Title ?? "未命名商品") + "（" + ItemId + "）"; }
     }
 
@@ -39,6 +46,12 @@ namespace Bot.ChromeNs
         public DateTime LastFullCatalogAttemptUtc { get; set; }
     }
 
+    internal sealed class ShopCatalogManagedEdits
+    {
+        public List<ShopCatalogProduct> Overrides { get; set; }
+        public List<string> HiddenItemIds { get; set; }
+    }
+
     /// <summary>
     /// Seller-scoped product catalog. Only real, authorized QN MTop results may replace
     /// the last good cache. An empty/failed query never erases goods or custom replies.
@@ -48,6 +61,7 @@ namespace Bot.ChromeNs
     {
         private const string RulesKey = "shop.order.product-replies.v1";
         private const string ManualProductsKey = "shop.catalog.manual-products.v1";
+        private const string ManagedProductsKey = "shop.catalog.managed-products.v1";
         private const int PageSize = 50;
         private const int MaxPages = 20;
         private static readonly TimeSpan RefreshInterval = TimeSpan.FromDays(7);
@@ -92,6 +106,18 @@ namespace Bot.ChromeNs
                 if (!products.TryGetValue(manual.ItemId, out remote))
                     products[manual.ItemId] = manual;
             }
+            // The local management overlay is applied AFTER every automatic
+            // fetch. It changes only Bot's own catalog, not Taobao listings.
+            var managed = LoadManagedEdits(seller);
+            foreach (var local in managed.Overrides.Where(x =>
+                x != null && !string.IsNullOrWhiteSpace(x.ItemId)))
+            {
+                local.LocalManaged = true;
+                products[local.ItemId] = local;
+            }
+            foreach (var hidden in managed.HiddenItemIds.Where(x =>
+                !string.IsNullOrWhiteSpace(x)))
+                products.Remove(hidden);
             data.Products = products.Values.OrderBy(x => x.Title, StringComparer.Ordinal)
                 .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList();
             if (data.UpdatedAtUtc == DateTime.MinValue && data.Products.Count > 0)
@@ -100,6 +126,123 @@ namespace Bot.ChromeNs
                 data.Source = "manual";
             }
             return data;
+        }
+
+        private static ShopCatalogManagedEdits LoadManagedEdits(string seller)
+        {
+            string json;
+            var value = RuleStore(seller).TryGetString(ManagedProductsKey, out json)
+                && !string.IsNullOrWhiteSpace(json)
+                ? JsonConvert.DeserializeObject<ShopCatalogManagedEdits>(json)
+                : null;
+            value = value ?? new ShopCatalogManagedEdits();
+            value.Overrides = value.Overrides ?? new List<ShopCatalogProduct>();
+            value.HiddenItemIds = value.HiddenItemIds ?? new List<string>();
+            return value;
+        }
+
+        private static ShopCatalogProduct CloneForManagement(ShopCatalogProduct product)
+        {
+            return new ShopCatalogProduct
+            {
+                ItemId = (product.ItemId ?? "").Trim(),
+                Title = (product.Title ?? "").Trim(),
+                Url = (product.Url ?? "").Trim(),
+                Status = product.Status ?? "",
+                ManuallyAdded = product.ManuallyAdded
+            };
+        }
+
+        // Save a single atomic local overlay under the current shop's settings
+        // scope. A full QN refresh still writes its own raw snapshot; edits and
+        // hidden entries are restored on every Load without touching replies.
+        internal static void SaveManagedCatalog(string seller,
+            IEnumerable<ShopCatalogProduct> requested,
+            IEnumerable<ShopCatalogProduct> originalVisible)
+        {
+            if (string.IsNullOrWhiteSpace(seller))
+                throw new ArgumentException("当前店铺身份为空，不能保存商品列表");
+            var submitted = (requested ?? Enumerable.Empty<ShopCatalogProduct>())
+                .Select(CloneForManagement).ToList();
+            var originals = (originalVisible ?? Enumerable.Empty<ShopCatalogProduct>())
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.ItemId))
+                .ToDictionary(x => x.ItemId, CloneForManagement, StringComparer.Ordinal);
+            if (submitted.Count > 1000)
+                throw new InvalidOperationException("最多允许管理1000件商品");
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var row in submitted)
+            {
+                if (row.ItemId.Length < 6 || row.ItemId.Length > 20 ||
+                    !row.ItemId.All(char.IsDigit) || !ids.Add(row.ItemId))
+                    throw new InvalidOperationException("商品ID必须为唯一的6~20位数字：" + row.ItemId);
+                if (row.Title.Length == 0 || row.Title.Length > 240)
+                    throw new InvalidOperationException("请输入商品ID " + row.ItemId + " 的正确名称（最多240字）");
+                ShopCatalogProduct baseline;
+                bool known = originals.TryGetValue(row.ItemId, out baseline);
+                if (!known || !string.Equals(row.Url, baseline.Url, StringComparison.Ordinal))
+                    ValidateItemUrl(row.ItemId, row.Url);
+                // The item identity never changes in-place; an old row whose
+                // ItemId was changed would otherwise orphan its order rules.
+                if (!known && originals.Values.Any(x =>
+                    string.Equals(x.Title, row.Title, StringComparison.Ordinal)
+                    && string.Equals(x.Url, row.Url, StringComparison.Ordinal)))
+                    throw new InvalidOperationException("不能修改已有商品ID，请恢复原ID");
+            }
+            var gate = Gates.GetOrAdd(seller, _ => new SemaphoreSlim(1, 1));
+            if (!gate.Wait(0))
+                throw new InvalidOperationException("本店商品同步正在执行，请稍后保存");
+            try
+            {
+                var edits = LoadManagedEdits(seller);
+                var overrides = edits.Overrides.Where(x => x != null
+                    && !string.IsNullOrWhiteSpace(x.ItemId))
+                    .ToDictionary(x => x.ItemId, CloneForManagement, StringComparer.Ordinal);
+                var hidden = new HashSet<string>(edits.HiddenItemIds, StringComparer.Ordinal);
+                foreach (var id in originals.Keys.Where(id => !ids.Contains(id)))
+                {
+                    hidden.Add(id);  // hide from Bot, never delete from Taobao
+                    overrides.Remove(id);
+                }
+                foreach (var row in submitted)
+                {
+                    hidden.Remove(row.ItemId);
+                    ShopCatalogProduct baseline;
+                    var existing = originals.TryGetValue(row.ItemId, out baseline);
+                    if (existing &&
+                        string.Equals(baseline.Title, row.Title, StringComparison.Ordinal) &&
+                        string.Equals(baseline.Url, row.Url, StringComparison.Ordinal))
+                        continue; // automatic fields continue following QN
+                    row.ManuallyAdded = !existing || baseline.ManuallyAdded;
+                    row.Status = existing ? baseline.Status : "本地新增";
+                    overrides[row.ItemId] = row;
+                }
+                RuleStore(seller).SetString(ManagedProductsKey,
+                    JsonConvert.SerializeObject(new ShopCatalogManagedEdits
+                    {
+                        Overrides = overrides.Values.OrderBy(x => x.ItemId).ToList(),
+                        HiddenItemIds = hidden.OrderBy(x => x).ToList()
+                    }));
+                Log.Info("本店商品列表管理已保存: seller=" + seller
+                    + ", visible=" + submitted.Count
+                    + ", overrides=" + overrides.Count
+                    + ", hidden=" + hidden.Count
+                    + ", productReplyRulesUntouched=true");
+            }
+            finally { gate.Release(); }
+        }
+
+        private static void ValidateItemUrl(string itemId, string input)
+        {
+            Uri uri;
+            if (!Uri.TryCreate(input, UriKind.Absolute, out uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                || !IsTaobaoItemHost(uri.Host))
+                throw new InvalidOperationException("商品ID " + itemId + " 的链接必须是淘宝/天猫商品详情页");
+            var query = Regex.Match(uri.Query ?? "",
+                @"(?:^|[?&])(?:id|item_id|num_iid)=(\d{6,20})(?:&|$)",
+                RegexOptions.IgnoreCase);
+            if (!query.Success || !string.Equals(query.Groups[1].Value, itemId, StringComparison.Ordinal))
+                throw new InvalidOperationException("商品链接中的id必须与商品ID一致：" + itemId);
         }
 
         private static List<ShopCatalogProduct> LoadManualProducts(string seller)
