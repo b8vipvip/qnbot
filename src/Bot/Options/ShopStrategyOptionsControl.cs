@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 
 namespace Bot.Options
@@ -16,7 +17,7 @@ namespace Bot.Options
     {
         private string _seller;
         private readonly TextBlock _status;
-        private readonly ListBox _items;
+        private readonly DataGrid _items;
         private readonly Button _refresh;
 
         public ShopStrategyOptionsControl(string seller)
@@ -25,14 +26,14 @@ namespace Bot.Options
             var root = new StackPanel { Margin = new Thickness(18) };
             root.Children.Add(new TextBlock
             {
-                Text = "本店商品缓存",
+                Text = "商品列表",
                 FontSize = 16,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 8)
             });
             root.Children.Add(new TextBlock
             {
-                Text = "Bot 运行时每小时检查一次商品缓存是否已满 7 天，过期后通过当前店铺的千牛会话获取商品。失败保留旧缓存；此处可立即手动更新。",
+                Text = "展示当前店铺的商品信息。Bot 每 7 天自动同步一次；可以点击“更新商品”立即获取。失败时保留已有商品与回复规则。",
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10),
                 Foreground = Brushes.Gray
@@ -50,13 +51,59 @@ namespace Bot.Options
                 TextWrapping = TextWrapping.Wrap
             };
             root.Children.Add(_status);
-            _items = new ListBox { MinHeight = 280 };
-            root.Children.Add(_items);
-            Content = new ScrollViewer
+            _items = new DataGrid
             {
-                Content = root,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                IsReadOnly = true,
+                AutoGenerateColumns = false,
+                CanUserAddRows = false,
+                CanUserDeleteRows = false,
+                SelectionMode = DataGridSelectionMode.Single,
+                HeadersVisibility = DataGridHeadersVisibility.Column,
+                EnableRowVirtualization = true,
+                MinHeight = 280,
+                RowHeight = 32,
+                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 226, 233)),
+                BorderThickness = new Thickness(1)
             };
+            _items.Columns.Add(new DataGridTextColumn
+            {
+                Header = "商品名称",
+                Binding = new Binding("Title"),
+                Width = new DataGridLength(3, DataGridLengthUnitType.Star)
+            });
+            _items.Columns.Add(new DataGridTextColumn
+            {
+                Header = "商品 ID",
+                Binding = new Binding("ItemId"),
+                Width = new DataGridLength(1.4, DataGridLengthUnitType.Star)
+            });
+            _items.Columns.Add(new DataGridTextColumn
+            {
+                Header = "商品链接",
+                Binding = new Binding("Url"),
+                Width = new DataGridLength(2, DataGridLengthUnitType.Star)
+            });
+            _items.Columns.Add(new DataGridTextColumn
+            {
+                Header = "商品状态",
+                Binding = new Binding("Status"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            root.Children.Add(_items);
+            var layout = new DockPanel { Margin = new Thickness(18) };
+            // The grid fills the available height instead of becoming an unbounded
+            // nested list inside a scroll viewer.
+            var header = new StackPanel();
+            foreach (UIElement element in root.Children.Cast<UIElement>().ToList())
+            {
+                root.Children.Remove(element);
+                if (!ReferenceEquals(element, _items)) header.Children.Add(element);
+            }
+            DockPanel.SetDock(header, Dock.Top);
+            layout.Children.Add(header);
+            layout.Children.Add(_items);
+            Content = layout;
             Reload();
             ShopProductCatalogService.EnsureScheduled(_seller);
         }
@@ -72,7 +119,8 @@ namespace Bot.Options
                     : "共 " + catalog.Products.Count + " 件商品；缓存更新时间："
                       + catalog.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
                       + "；下次自动更新："
-                      + catalog.UpdatedAtUtc.AddDays(7).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+                      + catalog.UpdatedAtUtc.AddDays(7).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                      + (catalog.Partial ? "；当前仅获取到推荐商品，可能不完整，将继续尝试完整同步" : "");
             }
             catch (Exception ex)
             {
