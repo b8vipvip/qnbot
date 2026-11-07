@@ -35,9 +35,9 @@ def test_incomplete_catalog_is_never_reported_as_complete():
     assert "if (!mergedProducts.ContainsKey(cached.ItemId))" in service
     assert "if (!force && !snapshot.Partial" in service
     assert 'if (snapshot.Partial)' in view
-    assert '尚未完成本店商品全量同步' in view
-    assert '本店商品已完整更新' in view
-    assert '不是经过验证的本店完整商品列表' in view
+    assert '只收到部分推荐商品，未完成全量同步' in view
+    assert '本店商品已完整同步' in view
+    assert '不能据此认定全店总数' in view
     assert 'snapshot.Partial' in chooser
     assert '本次仅获取到推荐商品' in chooser
 
@@ -55,9 +55,10 @@ def test_optional_manual_product_is_shop_scoped_and_survives_partial_refresh():
     assert "ManuallyAdded = true" in service
     assert "!x.ManuallyAdded" in service
     assert "RemoveManualProduct(string seller, string itemId)" in service
-    assert "补录商品" in view
-    assert "移除选中的补录商品" in view
-    assert "当前列表共" in view
+    assert "新增商品" in view
+    assert "删除选中" in view
+    assert "保存商品列表" in view
+    assert "当前显示" in view
 
 
 def test_order_item_reply_still_uses_canonical_item_id_and_same_send():
