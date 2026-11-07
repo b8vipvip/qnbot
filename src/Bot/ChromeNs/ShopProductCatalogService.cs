@@ -113,6 +113,9 @@ namespace Bot.ChromeNs
                 x != null && !string.IsNullOrWhiteSpace(x.ItemId)))
             {
                 local.LocalManaged = true;
+                ShopCatalogProduct currentRemote;
+                if (!local.ManuallyAdded && products.TryGetValue(local.ItemId, out currentRemote))
+                    local.Status = currentRemote.Status; // stay current with QN status
                 products[local.ItemId] = local;
             }
             foreach (var hidden in managed.HiddenItemIds.Where(x =>
