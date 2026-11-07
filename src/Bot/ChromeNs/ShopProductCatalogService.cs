@@ -33,6 +33,8 @@ namespace Bot.ChromeNs
         public List<ShopCatalogProduct> Products { get; set; }
         public string Source { get; set; }
         public bool Partial { get; set; }
+        public string LastFullCatalogError { get; set; }
+        public DateTime LastFullCatalogAttemptUtc { get; set; }
     }
 
     /// <summary>
@@ -161,19 +163,32 @@ namespace Bot.ChromeNs
                     .ConfigureAwait(false);
                 if (fetched.Products == null || fetched.Products.Count == 0)
                     throw new InvalidOperationException("千牛商品接口未返回有效商品，保留旧数据");
-                if (fetched.Partial && snapshot.Products.Count > 0 && !snapshot.Partial)
+                var nowUtc = DateTime.UtcNow;
+                var mergedProducts = fetched.Products
+                    .ToDictionary(x => x.ItemId, x => x, StringComparer.Ordinal);
+                if (fetched.Partial)
                 {
-                    Log.Info("千牛仅返回推荐商品，已保留原完整商品列表: seller=" + seller
-                        + ", count=" + fetched.Products.Count);
-                    return snapshot.Products.Count;
+                    // Recommendations are not the full seller inventory. Never drop
+                    // items that were already in this seller's product cache.
+                    foreach (var cached in snapshot.Products.Where(x =>
+                        x != null && !string.IsNullOrWhiteSpace(x.ItemId)))
+                    {
+                        if (!mergedProducts.ContainsKey(cached.ItemId))
+                            mergedProducts[cached.ItemId] = cached;
+                    }
                 }
+                var keptFullCatalog = fetched.Partial && !snapshot.Partial
+                    && snapshot.Products.Count > 0;
                 var updated = new ShopCatalogSnapshot
                 {
-                    UpdatedAtUtc = DateTime.UtcNow,
-                    Products = fetched.Products.OrderBy(x => x.Title, StringComparer.Ordinal)
+                    UpdatedAtUtc = keptFullCatalog ? snapshot.UpdatedAtUtc : nowUtc,
+                    Products = (keptFullCatalog ? snapshot.Products : mergedProducts.Values.ToList())
+                        .OrderBy(x => x.Title, StringComparer.Ordinal)
                         .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList(),
-                    Source = fetched.Source,
-                    Partial = fetched.Partial
+                    Source = keptFullCatalog ? snapshot.Source : fetched.Source,
+                    Partial = keptFullCatalog ? false : fetched.Partial,
+                    LastFullCatalogError = fetched.Partial ? fetched.FullCatalogError : string.Empty,
+                    LastFullCatalogAttemptUtc = nowUtc
                 };
                 var path = CachePath(seller);
                 var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -187,7 +202,14 @@ namespace Bot.ChromeNs
                 Log.Info("店铺商品缓存已更新: seller=" + seller + ", count=" + updated.Products.Count
                     + ", updatedAtUtc=" + updated.UpdatedAtUtc.ToString("o")
                     + ", source=" + (updated.Source ?? "unknown")
-                    + ", partial=" + updated.Partial);
+                    + ", partial=" + updated.Partial
+                    + ", fullSourceSucceeded=" + (!fetched.Partial)
+                    + ", fullSourceError=" + (updated.LastFullCatalogError ?? ""));
+                if (fetched.Partial)
+                    Log.Info("shop_catalog_partial_only; seller=" + seller
+                        + "; returnedByRecommend=" + fetched.Products.Count
+                        + "; cachedVisible=" + updated.Products.Count
+                        + "; manualReviewRequired=true");
                 return updated.Products.Count;
             }
             finally { gate.Release(); }
