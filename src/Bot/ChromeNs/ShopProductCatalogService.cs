@@ -148,7 +148,8 @@ namespace Bot.ChromeNs
                 LastAttempts[seller] = DateTime.UtcNow;
 
                 var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null || qn.CDP == null || qn.Seller == null ||
+                if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated ||
+                    string.IsNullOrWhiteSpace(qn.CDP.SessionId) || qn.Seller == null ||
                     !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
                     throw new InvalidOperationException("当前店铺千牛未连接，无法获取商品");
                 var products = new Dictionary<string, ShopCatalogProduct>(StringComparer.Ordinal);
