@@ -188,11 +188,11 @@ namespace Bot.ChromeNs
                 var obj = node as JObject;
                 if (obj == null) continue;
                 var itemIdCandidate = Read(obj, "itemId", "item_id", "numIid", "num_iid",
-                    "auctionId", "itemNumId");
-                if (itemIdCandidate != null)
+                    "auctionId", "itemNumId", "id");
+                var productCandidate = ToProduct(obj);
+                if (itemIdCandidate != null || productCandidate != null)
                 {
                     page.ProductCandidateCount++;
-                    var productCandidate = ToProduct(obj);
                     if (productCandidate == null) page.UnreadableProductCount++;
                     else if (seen.Add(productCandidate.ItemId)) page.Products.Add(productCandidate);
                 }
