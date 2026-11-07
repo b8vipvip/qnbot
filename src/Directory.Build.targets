@@ -292,4 +292,14 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotReplyPresetService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotReplyPresetService.cs" />
   </ItemGroup>
+  <!-- Shop catalog and settings must also compile in WPF temporary projects. -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ShopProductCatalogService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ShopProductCatalogService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ShopOrderProductRulesUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\ShopOrderProductRulesUi.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ShopStrategyOptionsControl.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\ShopStrategyOptionsControl.cs" />
+  </ItemGroup>
 </Project>
