@@ -55,9 +55,10 @@ def test_optional_manual_product_is_shop_scoped_and_survives_partial_refresh():
     assert "ManuallyAdded = true" in service
     assert "!x.ManuallyAdded" in service
     assert "RemoveManualProduct(string seller, string itemId)" in service
-    assert "补录商品" in view
-    assert "移除选中的补录商品" in view
-    assert "当前列表共" in view
+    assert "新增商品" in view
+    assert "删除选中" in view
+    assert "保存商品列表" in view
+    assert "当前显示" in view
 
 
 def test_order_item_reply_still_uses_canonical_item_id_and_same_send():
