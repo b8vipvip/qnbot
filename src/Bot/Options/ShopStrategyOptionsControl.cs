@@ -19,6 +19,8 @@ namespace Bot.Options
         private readonly TextBlock _status;
         private readonly DataGrid _items;
         private readonly Button _refresh;
+        private readonly TextBox _manualUrl;
+        private readonly TextBox _manualTitle;
 
         public ShopStrategyOptionsControl(string seller)
         {
@@ -45,6 +47,85 @@ namespace Bot.Options
             };
             _refresh.Click += async (s, e) => await RefreshNowAsync();
             root.Children.Add(_refresh);
+            root.Children.Add(new TextBlock
+            {
+                Text = "缺少商品时，可临时补录本店商品链接。人工补录不代表全店自动同步成功。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.Gray,
+                Margin = new Thickness(0, 12, 0, 6)
+            });
+            var manualRow = new StackPanel { Orientation = Orientation.Horizontal };
+            manualRow.Children.Add(new TextBlock
+            {
+                Text = "商品链接", Width = 65, VerticalAlignment = VerticalAlignment.Center
+            });
+            _manualUrl = new TextBox
+            {
+                Width = 260, Height = 27,
+                ToolTip = "例如 https://item.taobao.com/item.htm?id=123456789012"
+            };
+            manualRow.Children.Add(_manualUrl);
+            manualRow.Children.Add(new TextBlock
+            {
+                Text = "商品名称", Margin = new Thickness(12, 0, 0, 0),
+                Width = 65, VerticalAlignment = VerticalAlignment.Center
+            });
+            _manualTitle = new TextBox { Width = 170, Height = 27 };
+            manualRow.Children.Add(_manualTitle);
+            var addManual = new Button
+            {
+                Content = "补录商品", Width = 84, Height = 27,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            addManual.Click += (s, e) =>
+            {
+                try
+                {
+                    var id = ShopProductCatalogService.AddManualProduct(
+                        _seller, _manualUrl.Text, _manualTitle.Text);
+                    _manualUrl.Clear();
+                    _manualTitle.Clear();
+                    Reload();
+                    _status.Text = "已补录商品 ID：" + id
+                        + "（人工补录，非全量自动同步）。" + Environment.NewLine + _status.Text;
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("本店商品手动补录失败: seller=" + _seller
+                        + ", error=" + ex.Message);
+                    _status.Text = "补录失败：" + ex.Message;
+                }
+            };
+            manualRow.Children.Add(addManual);
+            root.Children.Add(manualRow);
+            var removeManual = new Button
+            {
+                Content = "移除选中的补录商品", Width = 154, Height = 26,
+                Margin = new Thickness(0, 6, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            removeManual.Click += (s, e) =>
+            {
+                var selected = _items.SelectedItem as ShopCatalogProduct;
+                if (selected == null || !selected.ManuallyAdded)
+                {
+                    MessageBox.Show("请先选中一条手动补录的商品。");
+                    return;
+                }
+                if (MessageBox.Show("确认移除本店手动补录商品？已配置的订单专属回复不会被删除。",
+                    "移除手动商品", MessageBoxButton.YesNo, MessageBoxImage.Question)
+                    != MessageBoxResult.Yes) return;
+                try
+                {
+                    ShopProductCatalogService.RemoveManualProduct(_seller, selected.ItemId);
+                    Reload();
+                }
+                catch (Exception ex)
+                {
+                    _status.Text = "移除补录商品失败：" + ex.Message;
+                }
+            };
+            root.Children.Add(removeManual);
             _status = new TextBlock
             {
                 Margin = new Thickness(0, 12, 0, 10),
@@ -114,13 +195,27 @@ namespace Bot.Options
             {
                 var catalog = ShopProductCatalogService.Load(_seller);
                 _items.ItemsSource = catalog.Products;
-                _status.Text = catalog.Products.Count == 0
-                    ? "本店暂无商品缓存。请确认千牛登录后点击“更新商品”。"
-                    : "共 " + catalog.Products.Count + " 件商品；缓存更新时间："
-                      + catalog.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-                      + "；下次自动更新："
-                      + catalog.UpdatedAtUtc.AddDays(7).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-                      + (catalog.Partial ? "；当前仅获取到推荐商品，可能不完整，将继续尝试完整同步" : "");
+                if (catalog.Products.Count == 0)
+                {
+                    _status.Text = "本店暂无商品，请确认千牛登录后点击“更新商品”。";
+                }
+                else if (catalog.Partial)
+                {
+                    _status.Text = "当前列表共 " + catalog.Products.Count + " 件（推荐商品/人工补录），不是经过验证的本店完整商品列表；"
+                        + "本次完整同步未成功，系统会继续重试。缓存时间："
+                        + catalog.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        + (string.IsNullOrWhiteSpace(catalog.LastFullCatalogError) ? ""
+                            : "；全量接口失败原因：" + catalog.LastFullCatalogError);
+                }
+                else
+                {
+                    _status.Text = "本店完整商品列表 " + catalog.Products.Count + " 件；同步时间："
+                        + catalog.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        + "；下次计划同步："
+                        + catalog.UpdatedAtUtc.AddDays(7).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        + (string.IsNullOrWhiteSpace(catalog.LastFullCatalogError) ? ""
+                            : "；最近一次完整接口失败，仍保留上次完整列表：" + catalog.LastFullCatalogError);
+                }
             }
             catch (Exception ex)
             {
@@ -135,9 +230,17 @@ namespace Bot.Options
             _status.Text = "正在请求当前店铺的千牛商品信息…";
             try
             {
-                var count = await ShopProductCatalogService.RefreshAsync(_seller, true);
+                await ShopProductCatalogService.RefreshAsync(_seller, true);
                 Reload();
-                _status.Text = "本店商品更新成功，共 " + count + " 件；" + _status.Text;
+                var snapshot = ShopProductCatalogService.Load(_seller);
+                if (snapshot.Partial)
+                    _status.Text = "尚未完成本店商品全量同步。仅拿到推荐商品，不能据此判断商品总数。"
+                        + Environment.NewLine + _status.Text;
+                else if (!string.IsNullOrWhiteSpace(snapshot.LastFullCatalogError))
+                    _status.Text = "本次全量获取失败，保留旧完整列表。"
+                        + Environment.NewLine + _status.Text;
+                else
+                    _status.Text = "本店商品已完整更新。" + Environment.NewLine + _status.Text;
             }
             catch (Exception ex)
             {

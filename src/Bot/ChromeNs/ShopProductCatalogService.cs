@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +19,7 @@ namespace Bot.ChromeNs
         public string Title { get; set; }
         public string Url { get; set; }
         public string Status { get; set; }
+        public bool ManuallyAdded { get; set; }
         public override string ToString() { return (Title ?? "未命名商品") + "（" + ItemId + "）"; }
     }
 
@@ -33,6 +35,8 @@ namespace Bot.ChromeNs
         public List<ShopCatalogProduct> Products { get; set; }
         public string Source { get; set; }
         public bool Partial { get; set; }
+        public string LastFullCatalogError { get; set; }
+        public DateTime LastFullCatalogAttemptUtc { get; set; }
     }
 
     /// <summary>
@@ -43,6 +47,7 @@ namespace Bot.ChromeNs
     internal static class ShopProductCatalogService
     {
         private const string RulesKey = "shop.order.product-replies.v1";
+        private const string ManualProductsKey = "shop.catalog.manual-products.v1";
         private const int PageSize = 50;
         private const int MaxPages = 20;
         private static readonly TimeSpan RefreshInterval = TimeSpan.FromDays(7);
@@ -70,11 +75,107 @@ namespace Bot.ChromeNs
         internal static ShopCatalogSnapshot Load(string seller)
         {
             var path = CachePath(seller);
-            if (!File.Exists(path)) return new ShopCatalogSnapshot { Products = new List<ShopCatalogProduct>() };
-            var data = JsonConvert.DeserializeObject<ShopCatalogSnapshot>(File.ReadAllText(path));
+            var data = File.Exists(path)
+                ? JsonConvert.DeserializeObject<ShopCatalogSnapshot>(File.ReadAllText(path))
+                : new ShopCatalogSnapshot { Products = new List<ShopCatalogProduct>() };
             if (data == null) throw new InvalidDataException("店铺商品缓存结构无效");
             data.Products = data.Products ?? new List<ShopCatalogProduct>();
+            // A merchant may add a missing item by its original item URL.
+            // These remain clearly marked as manual and are never proof of a
+            // successful full seller catalog sync.
+            var products = data.Products.Where(x => x != null && !x.ManuallyAdded
+                && !string.IsNullOrWhiteSpace(x.ItemId))
+                .ToDictionary(x => x.ItemId, x => x, StringComparer.Ordinal);
+            foreach (var manual in LoadManualProducts(seller))
+            {
+                ShopCatalogProduct remote;
+                if (!products.TryGetValue(manual.ItemId, out remote))
+                    products[manual.ItemId] = manual;
+            }
+            data.Products = products.Values.OrderBy(x => x.Title, StringComparer.Ordinal)
+                .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList();
+            if (data.UpdatedAtUtc == DateTime.MinValue && data.Products.Count > 0)
+            {
+                data.Partial = true;
+                data.Source = "manual";
+            }
             return data;
+        }
+
+        private static List<ShopCatalogProduct> LoadManualProducts(string seller)
+        {
+            string json;
+            if (!RuleStore(seller).TryGetString(ManualProductsKey, out json)
+                || string.IsNullOrWhiteSpace(json)) return new List<ShopCatalogProduct>();
+            return (JsonConvert.DeserializeObject<List<ShopCatalogProduct>>(json)
+                ?? new List<ShopCatalogProduct>())
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.ItemId)
+                    && x.ItemId.All(char.IsDigit)).ToList();
+        }
+
+        internal static string AddManualProduct(string seller, string productUrl, string productTitle)
+        {
+            productUrl = (productUrl ?? string.Empty).Trim();
+            productTitle = (productTitle ?? string.Empty).Trim();
+            if (productTitle.Length == 0 || productTitle.Length > 240)
+                throw new ArgumentException("请输入长度不超过240字的本店商品名称");
+            Uri uri;
+            if (!Uri.TryCreate(productUrl, UriKind.Absolute, out uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                || !IsTaobaoItemHost(uri.Host))
+                throw new ArgumentException("请填写淘宝或天猫的商品详情链接");
+            var query = Regex.Match(uri.Query ?? string.Empty,
+                @"(?:^|[?&])(?:id|item_id|num_iid)=(\d{6,20})(?:&|$)",
+                RegexOptions.IgnoreCase);
+            if (!query.Success)
+                throw new ArgumentException("商品链接中没有有效商品 ID（id 参数）");
+            var itemId = query.Groups[1].Value;
+            var gate = Gates.GetOrAdd(seller, _ => new SemaphoreSlim(1, 1));
+            if (!gate.Wait(0)) throw new InvalidOperationException("正在同步本店商品，请稍后补录");
+            try
+            {
+                var all = LoadManualProducts(seller)
+                    .ToDictionary(x => x.ItemId, x => x, StringComparer.Ordinal);
+                if (all.Count >= 1000 && !all.ContainsKey(itemId))
+                    throw new InvalidOperationException("手动补录商品数量已达到上限");
+                all[itemId] = new ShopCatalogProduct
+                {
+                    ItemId = itemId, Title = productTitle,
+                    Url = uri.GetLeftPart(UriPartial.Path) + "?id=" + itemId,
+                    Status = "手动补录", ManuallyAdded = true
+                };
+                RuleStore(seller).SetString(ManualProductsKey,
+                    JsonConvert.SerializeObject(all.Values.OrderBy(x => x.ItemId).ToList()));
+                Log.Info("本店商品已人工补录: seller=" + seller + ", itemId=" + itemId);
+                return itemId;
+            }
+            finally { gate.Release(); }
+        }
+
+        internal static bool RemoveManualProduct(string seller, string itemId)
+        {
+            itemId = (itemId ?? string.Empty).Trim();
+            var gate = Gates.GetOrAdd(seller, _ => new SemaphoreSlim(1, 1));
+            if (!gate.Wait(0)) throw new InvalidOperationException("正在同步本店商品，请稍后删除");
+            try
+            {
+                var all = LoadManualProducts(seller);
+                var removed = all.RemoveAll(x => x.ItemId == itemId) > 0;
+                if (!removed) return false;
+                RuleStore(seller).SetString(ManualProductsKey,
+                    JsonConvert.SerializeObject(all));
+                Log.Info("已删除本店手动补录商品: seller=" + seller
+                    + ", itemId=" + itemId);
+                return true;
+            }
+            finally { gate.Release(); }
+        }
+
+        private static bool IsTaobaoItemHost(string host)
+        {
+            host = (host ?? string.Empty).Trim().ToLowerInvariant();
+            return host == "item.taobao.com" || host == "detail.tmall.com"
+                || host.EndsWith(".detail.tmall.com", StringComparison.Ordinal);
         }
 
         internal static List<ShopOrderProductReply> GetOrderRules(string seller)
@@ -161,19 +262,32 @@ namespace Bot.ChromeNs
                     .ConfigureAwait(false);
                 if (fetched.Products == null || fetched.Products.Count == 0)
                     throw new InvalidOperationException("千牛商品接口未返回有效商品，保留旧数据");
-                if (fetched.Partial && snapshot.Products.Count > 0 && !snapshot.Partial)
+                var nowUtc = DateTime.UtcNow;
+                var mergedProducts = fetched.Products
+                    .ToDictionary(x => x.ItemId, x => x, StringComparer.Ordinal);
+                if (fetched.Partial)
                 {
-                    Log.Info("千牛仅返回推荐商品，已保留原完整商品列表: seller=" + seller
-                        + ", count=" + fetched.Products.Count);
-                    return snapshot.Products.Count;
+                    // Recommendations are not the full seller inventory. Never drop
+                    // items that were already in this seller's product cache.
+                    foreach (var cached in snapshot.Products.Where(x =>
+                        x != null && !string.IsNullOrWhiteSpace(x.ItemId)))
+                    {
+                        if (!mergedProducts.ContainsKey(cached.ItemId))
+                            mergedProducts[cached.ItemId] = cached;
+                    }
                 }
+                var keptFullCatalog = fetched.Partial && !snapshot.Partial
+                    && snapshot.Products.Count > 0;
                 var updated = new ShopCatalogSnapshot
                 {
-                    UpdatedAtUtc = DateTime.UtcNow,
-                    Products = fetched.Products.OrderBy(x => x.Title, StringComparer.Ordinal)
+                    UpdatedAtUtc = keptFullCatalog ? snapshot.UpdatedAtUtc : nowUtc,
+                    Products = (keptFullCatalog ? snapshot.Products : mergedProducts.Values.ToList())
+                        .OrderBy(x => x.Title, StringComparer.Ordinal)
                         .ThenBy(x => x.ItemId, StringComparer.Ordinal).ToList(),
-                    Source = fetched.Source,
-                    Partial = fetched.Partial
+                    Source = keptFullCatalog ? snapshot.Source : fetched.Source,
+                    Partial = keptFullCatalog ? false : fetched.Partial,
+                    LastFullCatalogError = fetched.Partial ? fetched.FullCatalogError : string.Empty,
+                    LastFullCatalogAttemptUtc = nowUtc
                 };
                 var path = CachePath(seller);
                 var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -187,7 +301,14 @@ namespace Bot.ChromeNs
                 Log.Info("店铺商品缓存已更新: seller=" + seller + ", count=" + updated.Products.Count
                     + ", updatedAtUtc=" + updated.UpdatedAtUtc.ToString("o")
                     + ", source=" + (updated.Source ?? "unknown")
-                    + ", partial=" + updated.Partial);
+                    + ", partial=" + updated.Partial
+                    + ", fullSourceSucceeded=" + (!fetched.Partial)
+                    + ", fullSourceError=" + (updated.LastFullCatalogError ?? ""));
+                if (fetched.Partial)
+                    Log.Info("shop_catalog_partial_only; seller=" + seller
+                        + "; returnedByRecommend=" + fetched.Products.Count
+                        + "; cachedVisible=" + updated.Products.Count
+                        + "; manualReviewRequired=true");
                 return updated.Products.Count;
             }
             finally { gate.Release(); }

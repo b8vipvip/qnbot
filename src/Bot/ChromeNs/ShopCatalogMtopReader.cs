@@ -1,4 +1,5 @@
 using DbEntity;
+using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -14,6 +15,9 @@ namespace Bot.ChromeNs
         public string Source { get; set; }
         public bool Partial { get; set; }
         public int Pages { get; set; }
+        // Sanitized reason why the authoritative full-catalog source failed.
+        // Keep this even when the recommendation fallback returned products.
+        public string FullCatalogError { get; set; }
     }
 
     /// <summary>
@@ -40,7 +44,11 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                errors.Add("卖家商品管理:" + Short(ex.Message, 160));
+                var fullError = "卖家商品管理:" + Short(ex.Message, 200);
+                errors.Add(fullError);
+                Log.Info("shop_catalog_full_source_failed; api=" + SellerManageApi
+                    + "; reason=" + fullError
+                    + "; fallback=partial_recommendations_only");
                 if (cdp.IsInvalidated)
                     throw new InvalidOperationException("千牛会话已失效，停止商品查询；" + string.Join("; ", errors));
             }
@@ -60,7 +68,8 @@ namespace Bot.ChromeNs
                         Products = page.Products,
                         Source = SellerRecommendApi,
                         Partial = true,
-                        Pages = 1
+                        Pages = 1,
+                        FullCatalogError = string.Join("; ", errors)
                     };
                 }
                 errors.Add("推荐商品:" + (page.Error ?? "未返回商品"));
@@ -98,7 +107,10 @@ namespace Bot.ChromeNs
                     throw new InvalidOperationException("第" + pageNo + "页 " + parsed.Error);
                 pages++;
                 if (pageNo == 1 && parsed.Products.Count == 0)
-                    throw new InvalidOperationException("第1页无有效商品；响应结构=" + parsed.Shape);
+                    throw new InvalidOperationException("第1页无有效商品；响应结构=" + parsed.Shape
+                        + "; rootItems=" + parsed.ProductCandidateCount
+                        + "; unreadableItems=" + parsed.UnreadableProductCount
+                        + "; collectionKeys=" + parsed.CollectionKeys);
                 if (pageNo > 1 && parsed.Products.Count == 0) break;
 
                 var newIds = 0;
@@ -132,6 +144,9 @@ namespace Bot.ChromeNs
             public bool? HasMore;
             public string Error;
             public string Shape;
+            public int ProductCandidateCount;
+            public int UnreadableProductCount;
+            public string CollectionKeys;
         }
 
         internal static ShopCatalogFetchResult ParseSampleForTest(string raw)
@@ -167,11 +182,31 @@ namespace Bot.ChromeNs
             }
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            var candidateKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var node in Walk(root))
             {
-                var item = ToProduct(node as JObject);
-                if (item != null && seen.Add(item.ItemId))
-                    page.Products.Add(item);
+                var obj = node as JObject;
+                if (obj == null) continue;
+                var itemIdCandidate = Read(obj, "itemId", "item_id", "numIid", "num_iid",
+                    "auctionId", "itemNumId", "id");
+                var productCandidate = ToProduct(obj);
+                if (itemIdCandidate != null || productCandidate != null)
+                {
+                    page.ProductCandidateCount++;
+                    if (productCandidate == null) page.UnreadableProductCount++;
+                    else if (seen.Add(productCandidate.ItemId)) page.Products.Add(productCandidate);
+                }
+                // If the API structure changed, capture keys, not product data,
+                // buyer identifiers, response bodies or credentials.
+                foreach (var prop in obj.Properties())
+                {
+                    if ((prop.Value is JArray || prop.Value is JObject)
+                        && candidateKeys.Count < 20
+                        && new[] { "items", "list", "records", "result", "data", "rows",
+                            "products", "auctions", "table", "pagination", "page" }
+                            .Any(k => prop.Name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
+                        candidateKeys.Add(prop.Name);
+                }
 
                 var pagination = node as JObject;
                 if (pagination == null) continue;
@@ -195,6 +230,7 @@ namespace Bot.ChromeNs
                         page.HasMore = more;
                 }
             }
+            page.CollectionKeys = string.Join(",", candidateKeys.OrderBy(x => x, StringComparer.Ordinal).Take(20));
             return page;
         }
 
