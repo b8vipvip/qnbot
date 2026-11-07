@@ -16,7 +16,7 @@ def test_item_id_scoped_order_answers_keep_existing_delivery_pipeline():
         'string.Equals(mode, "调用HTTP接口"')
     assert "RenderTemplate(productReply, plan, \"product-fixed-preset\")" in resolver
     assert "ProcessOrderPlacedReplyAsync(OrderPlacedReplyPlan plan)" in resolver
-    assert "SendOrderPresetAnswerAsync(plan, resolution.Reply)" in resolver
+    assert "SendOrderPresetAnswerAsync(plan, answer)" in resolver
 
 
 def test_shop_cache_fail_closed_and_seven_day_refresh():
