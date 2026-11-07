@@ -17,7 +17,7 @@ def test_product_grid_is_directly_editable_with_explicit_commit_and_undo():
     assert "new ObservableCollection<ShopCatalogProduct>" in view
     assert "_items.BeginningEdit" in view
     assert "e.Column == _idColumn" in view
-    assert "_originalIds.Contains(row.ItemId)" in view
+    assert "_existingRows.Contains(row)" in view
     assert "_items.CommitEdit(DataGridEditingUnit.Cell, true)" in view
     assert "_items.CommitEdit(DataGridEditingUnit.Row, true)" in view
     assert "ShopProductCatalogService.SaveManagedCatalog" in view
