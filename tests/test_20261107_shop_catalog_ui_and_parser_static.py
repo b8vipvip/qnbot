@@ -22,7 +22,8 @@ def test_shop_catalog_query_is_seller_listing_not_buyer_item_search():
     assert "mtop.taobao.qianniu.cs.item.search" not in service.replace(
         "// is not a seller-wide item list (and returned no data.data list).", ""
     )
-    assert "if (fetched.Partial && snapshot.Products.Count > 0 && !snapshot.Partial)" in service
+    assert "var keptFullCatalog = fetched.Partial && !snapshot.Partial" in service
+    assert "if (!mergedProducts.ContainsKey(cached.ItemId))" in service
     assert "if (!force && !snapshot.Partial" in service
     assert "qn.CDP.IsInvalidated" in service
 
