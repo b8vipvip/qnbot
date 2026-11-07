@@ -83,7 +83,8 @@ namespace Bot.ChromeNs
             // A merchant may add a missing item by its original item URL.
             // These remain clearly marked as manual and are never proof of a
             // successful full seller catalog sync.
-            var products = data.Products.Where(x => x != null && !string.IsNullOrWhiteSpace(x.ItemId))
+            var products = data.Products.Where(x => x != null && !x.ManuallyAdded
+                && !string.IsNullOrWhiteSpace(x.ItemId))
                 .ToDictionary(x => x.ItemId, x => x, StringComparer.Ordinal);
             foreach (var manual in LoadManualProducts(seller))
             {
@@ -147,6 +148,25 @@ namespace Bot.ChromeNs
                     JsonConvert.SerializeObject(all.Values.OrderBy(x => x.ItemId).ToList()));
                 Log.Info("本店商品已人工补录: seller=" + seller + ", itemId=" + itemId);
                 return itemId;
+            }
+            finally { gate.Release(); }
+        }
+
+        internal static bool RemoveManualProduct(string seller, string itemId)
+        {
+            itemId = (itemId ?? string.Empty).Trim();
+            var gate = Gates.GetOrAdd(seller, _ => new SemaphoreSlim(1, 1));
+            if (!gate.Wait(0)) throw new InvalidOperationException("正在同步本店商品，请稍后删除");
+            try
+            {
+                var all = LoadManualProducts(seller);
+                var removed = all.RemoveAll(x => x.ItemId == itemId) > 0;
+                if (!removed) return false;
+                RuleStore(seller).SetString(ManualProductsKey,
+                    JsonConvert.SerializeObject(all));
+                Log.Info("已删除本店手动补录商品: seller=" + seller
+                    + ", itemId=" + itemId);
+                return true;
             }
             finally { gate.Release(); }
         }
