@@ -28,7 +28,7 @@ namespace Bot.Options
         private readonly DataGridTextColumn _nameColumn;
         private ObservableCollection<ShopCatalogProduct> _rows;
         private List<ShopCatalogProduct> _baseline = new List<ShopCatalogProduct>();
-        private HashSet<string> _originalIds = new HashSet<string>(StringComparer.Ordinal);
+        private HashSet<ShopCatalogProduct> _existingRows = new HashSet<ShopCatalogProduct>();
 
         public ShopStrategyOptionsControl(string seller)
         {
@@ -118,7 +118,7 @@ namespace Bot.Options
             _items.BeginningEdit += (s, e) =>
             {
                 var row = e.Row.Item as ShopCatalogProduct;
-                if (e.Column == _idColumn && row != null && _originalIds.Contains(row.ItemId))
+                if (e.Column == _idColumn && row != null && _existingRows.Contains(row))
                 {
                     e.Cancel = true;
                     _status.Text = "已有商品ID不能修改，否则原订单专属答案将失去匹配依据。"
@@ -194,10 +194,11 @@ namespace Bot.Options
             {
                 var snapshot = ShopProductCatalogService.Load(_seller);
                 _baseline = snapshot.Products.Select(Clone).ToList();
-                _originalIds = new HashSet<string>(_baseline.Select(x => x.ItemId),
-                    StringComparer.Ordinal);
                 _rows = new ObservableCollection<ShopCatalogProduct>(
                     snapshot.Products.Select(Clone));
+                // Key identity is immutable only for rows loaded from storage,
+                // not for new rows while the user is still entering their ID.
+                _existingRows = new HashSet<ShopCatalogProduct>(_rows);
                 _items.ItemsSource = _rows;
 
                 var localCount = _rows.Count(x => x.ManuallyAdded || x.LocalManaged);
@@ -218,7 +219,7 @@ namespace Bot.Options
                 _status.Text = "读取本店商品列表失败：" + ex.Message;
                 _items.ItemsSource = null;
                 _baseline.Clear();
-                _originalIds.Clear();
+                _existingRows.Clear();
                 _rows = new ObservableCollection<ShopCatalogProduct>();
             }
         }
