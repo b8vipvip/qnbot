@@ -24,6 +24,7 @@ namespace Bot.Options
         private string _selectedId;
         private bool _changing;
         private bool _dirty;
+        private bool _hasChanges;
 
         internal ShopOrderProductRulesUi(string seller)
         {
@@ -85,7 +86,14 @@ namespace Bot.Options
             var existing = _rules.FirstOrDefault(x =>
                 string.Equals(x.ItemId, _selectedId, StringComparison.Ordinal));
             var text = (_reply.Text ?? string.Empty).Trim();
+            if ((existing == null && text.Length == 0) ||
+                (existing != null && string.Equals(existing.Reply, text, StringComparison.Ordinal)))
+            {
+                _dirty = false;
+                return;
+            }
             if (existing != null) _rules.Remove(existing);
+            _hasChanges = true;
             if (text.Length > 0) _rules.Add(new ShopOrderProductReply
             {
                 ItemId = _selectedId, Reply = text
@@ -156,7 +164,9 @@ namespace Bot.Options
         internal void Save()
         {
             FlushDraft();
+            if (!_hasChanges) return;
             ShopProductCatalogService.SaveOrderRules(_seller, _rules);
+            _hasChanges = false;
         }
     }
 }
