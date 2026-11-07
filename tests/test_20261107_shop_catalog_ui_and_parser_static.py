@@ -51,14 +51,14 @@ def test_existing_order_fields_are_the_only_answer_editor():
 def test_shop_strategy_uses_real_grid_not_blank_listbox():
     view = read("src/Bot/Options/ShopStrategyOptionsControl.cs")
     assert 'Text = "商品列表"' in view
-    assert 'Header = "商品名称"' in view
-    assert 'Header = "商品 ID"' in view
-    assert 'Header = "商品链接"' in view
-    assert 'Header = "商品状态"' in view
+    assert 'Header = "商品名称（双击修改）"' in view
+    assert 'Header = "商品ID（已有商品不可改）"' in view
+    assert 'Header = "商品链接（双击修改）"' in view
+    assert 'Header = "状态"' in view
     assert "new DataGrid" in view
     assert "new ListBox" not in view
     assert "ShopProductCatalogService.RefreshAsync(_seller, true)" in view
-    assert "catalog.Partial" in view
+    assert "snapshot.Partial" in view
 
 
 def test_reader_included_in_production_windows_build():
