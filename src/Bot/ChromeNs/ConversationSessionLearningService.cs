@@ -584,7 +584,7 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                var report = LoadReport(session.EntityId) ?? NewReport(session);
+                report = LoadReport(session.EntityId) ?? NewReport(session);
                 report.Status = EnableAutomaticWrites ? "学习完成" : "学习完成（dry-run）";
                 report.Summary = EnableAutomaticWrites
                     ? summary
@@ -1107,6 +1107,7 @@ namespace Bot.ChromeNs
                         {
                             report.Status = "店铺身份无法唯一解析，待人工复核";
                             report.Error = "legacy_report_shop_scope_unavailable";
+                            report.CompletedAtTicks = DateTime.Now.Ticks;
                             report.UpdatedAtTicks = DateTime.Now.Ticks;
                             SaveReport(report);
                             continue;
@@ -1114,7 +1115,18 @@ namespace Bot.ChromeNs
                     }
 
                     var key = Key(report.ShopKey, report.Seller, report.Buyer);
-                    if (!resumedKeys.Add(key)) continue;
+                    if (!resumedKeys.Add(key))
+                    {
+                        // The newest pending report is processed first. Older
+                        // pending rows for the same shop/buyer must be terminally
+                        // marked instead of being silently retried on every restart.
+                        report.Status = "重复待恢复记录，已由最新轮次接管";
+                        report.Error = "superseded_pending_session_duplicate";
+                        report.CompletedAtTicks = DateTime.Now.Ticks;
+                        report.UpdatedAtTicks = DateTime.Now.Ticks;
+                        SaveReport(report);
+                        continue;
+                    }
                     var session = new ActiveSession
                     {
                         EntityId = report.EntityId,
@@ -1134,6 +1146,17 @@ namespace Bot.ChromeNs
                     if (!Active.TryAdd(key, session))
                     {
                         DisposeTimer(session);
+                        ActiveSession current;
+                        if (Active.TryGetValue(key, out current)
+                            && current != null
+                            && !string.Equals(current.EntityId, report.EntityId, StringComparison.Ordinal))
+                        {
+                            report.Status = "重复待恢复记录，已有更新轮次接管";
+                            report.Error = "superseded_by_active_session";
+                            report.CompletedAtTicks = DateTime.Now.Ticks;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                        }
                         continue;
                     }
                     var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
