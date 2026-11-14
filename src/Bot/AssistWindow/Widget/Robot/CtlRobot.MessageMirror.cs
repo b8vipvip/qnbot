@@ -339,8 +339,11 @@ namespace Bot.AssistWindow.Widget.Robot
                     {
                         // Every observed Bot echo gets a durable history row even if
                         // the transient answer card disappeared or the app restarted.
+                        var actionShopKey = string.IsNullOrWhiteSpace(_messageMirrorShopKey)
+                            ? ResolveShopKeyForConversation(seller, buyer)
+                            : _messageMirrorShopKey;
                         nativeBotConversation = CtlConversation.Create(
-                            seller, buyer, lastBuyerQuestion, botAnswer, true, source);
+                            seller, buyer, lastBuyerQuestion, botAnswer, true, source, actionShopKey);
                         nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");
                         nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;
                         nativeBotConversation.EditRequested += CtlConversation_EditRequested;
