@@ -309,8 +309,13 @@ namespace Bot.Options
                             ? string.Empty
                             : (exactQn.Seller.Nick ?? string.Empty).Trim();
                     }
-                    if (!string.Equals(attachedSeller, seller, StringComparison.Ordinal))
-                        shop = null;
+                    var sellerMatches = string.Equals(attachedSeller, seller, StringComparison.Ordinal);
+                    if (!sellerMatches && !shop.HasStableSellerId)
+                        sellerMatches = string.Equals(
+                            ShopKeyGenerator.NormalizeFallbackNickname(attachedSeller),
+                            ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                            StringComparison.Ordinal);
+                    if (!sellerMatches) shop = null;
                 }
                 if (shop == null)
                 {
