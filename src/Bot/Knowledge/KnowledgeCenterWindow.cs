@@ -25,6 +25,7 @@ namespace Bot.Knowledge
     public class KnowledgeCenterWindow : Window
     {
         internal string RequestedSeller { get; set; }
+        internal string RequestedShopKey { get; set; }
         private readonly TabControl _tabs;
         private readonly KnowledgeImportControl _import;
         private readonly KnowledgeManagerControl _manager;
@@ -145,9 +146,15 @@ namespace Bot.Knowledge
             return window;
         }
 
-        public static void ShowManagerAndLocate(Window owner, string seller, string buyer, string question, string answer)
+        public static void ShowManagerAndLocate(
+            Window owner, string seller, string buyer, string question, string answer,
+            string shopKey = "")
         {
-            var wnd = new KnowledgeCenterWindow();
+            var wnd = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = (shopKey ?? string.Empty).Trim()
+            };
             if (owner != null) wnd.Owner = owner;
             wnd.Show();
             wnd.NavigateToManager(seller, buyer, question, answer);
