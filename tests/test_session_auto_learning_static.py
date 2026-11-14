@@ -234,10 +234,12 @@ def test_learning_retries_never_overwrite_a_newer_same_buyer_session():
 def test_remote_history_coverage_counts_only_unique_accepted_messages():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     method = context[
-        context.index("private static bool RecordMessage"):
+        context.index("private static string RecordMessage"):
         context.index("private static string[] GetNativeMessageAliases")
     ]
-    assert "private static bool RecordMessage" in method
+    assert "private static string RecordMessage" in method
+    assert "return exact.MessageKey ?? string.Empty;" in method
+    assert "countedTimelineKeys.Add(canonicalTurnKey)" in context
     assert "return isNewHistoryObservation;" in method
     assert "if (RecordMessage(state, seller, buyer, item, text, true))" in context
     assert "result.MessagesInWindow++;" in context
