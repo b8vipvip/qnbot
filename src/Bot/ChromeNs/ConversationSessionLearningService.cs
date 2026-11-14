@@ -21,6 +21,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string CCode { get; set; }
@@ -54,6 +55,7 @@ namespace Bot.ChromeNs
     internal sealed class ConversationSessionLearningReportView
     {
         public string Id { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Status { get; set; }
@@ -96,6 +98,7 @@ namespace Bot.ChromeNs
         {
             public readonly object Sync = new object();
             public string EntityId;
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string CCode;
@@ -169,16 +172,31 @@ namespace Bot.ChromeNs
             var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, messageText);
             if (!isBuyer && !isSeller && !isWithdrawal) return;
 
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+            {
+                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("接待自动学习拒绝无法唯一解析店铺的消息: " + ex.Message, 10);
+                    return;
+                }
+            }
+
             var now = DateTime.Now;
             var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
-            var key = Key(seller, buyer);
+            var key = Key(shop.ShopKey, seller, buyer);
             if (isBuyer)
             {
                 ActiveSession session;
                 if (!Active.TryGetValue(key, out session))
                 {
-                    session = NewSession(seller, buyer, ccode, now);
-                    Active[key] = session;
+                    session = NewSession(shop.ShopKey, seller, buyer, ccode, now);
+                    if (!Active.TryAdd(key, session))
+                    {
+                        DisposeTimer(session);
+                        if (!Active.TryGetValue(key, out session)) return;
+                    }
                 }
                 lock (session.Sync)
                 {
@@ -313,11 +331,12 @@ namespace Bot.ChromeNs
             return sb.ToString().Trim();
         }
 
-        private static ActiveSession NewSession(string seller, string buyer, string ccode, DateTime now)
+        private static ActiveSession NewSession(string shopKey, string seller, string buyer, string ccode, DateTime now)
         {
             var session = new ActiveSession
             {
                 EntityId = Guid.NewGuid().ToString("N"),
+                ShopKey = (shopKey ?? string.Empty).Trim(),
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
                 CCode = (ccode ?? string.Empty).Trim(),
@@ -339,7 +358,7 @@ namespace Bot.ChromeNs
 
         private static async Task FinalizeAsync(ActiveSession session)
         {
-            var key = Key(session.Seller, session.Buyer);
+            var key = Key(session.ShopKey, session.Seller, session.Buyer);
             lock (session.Sync)
             {
                 // A round ends five minutes after the last buyer OR seller message.
@@ -1224,7 +1243,11 @@ namespace Bot.ChromeNs
         private static string Clean(string value, int max) { value = (value ?? string.Empty).Trim(); return max > 0 && value.Length > max ? value.Substring(0, max).Trim() : value; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty); }
         private static string StripAi(string value) { value = (value ?? string.Empty).Trim(); while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) value = value.Substring(0, value.Length - 4).TrimEnd(); return value; }
-        private static string Key(string seller, string buyer) { return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim(); }
+        private static string Key(string shopKey, string seller, string buyer)
+        {
+            return (shopKey ?? string.Empty).Trim() + "#" + (seller ?? string.Empty).Trim()
+                + "#" + (buyer ?? string.Empty).Trim();
+        }
         private static DateTime FromTicks(long ticks) { try { return ticks > 0 ? new DateTime(ticks) : DateTime.MinValue; } catch { return DateTime.MinValue; } }
         private static string TimeText(DateTime value) { return value == DateTime.MinValue ? "（未知）" : value.ToString("yyyy-MM-dd HH:mm:ss"); }
 
