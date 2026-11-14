@@ -10,6 +10,7 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -49,16 +50,18 @@ namespace Bot.ChromeNs
 
                 lock (sync)
                 {
-                    var take = Math.Max(1, Math.Min(200, maxTurns <= 0 ? 120 : maxTurns));
+                    // maxTurns is retained for source compatibility only. A learning
+                    // round must never silently analyze just the first 120/200 turns.
                     return turns
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
                         .Where(x => x.Role == "user" || x.Role == "assistant")
                         .Where(x => includeWithdrawn || !x.Withdrawn)
-                        .Where(x => x.Timestamp == DateTime.MinValue
-                            || ((from == DateTime.MinValue || x.Timestamp >= from)
-                                && (to == DateTime.MinValue || x.Timestamp <= to)))
+                        // Unknown timestamps cannot be safely assigned to this session.
+                        // The complete-history gate reports them as incomplete instead.
+                        .Where(x => x.Timestamp != DateTime.MinValue)
+                        .Where(x => (from == DateTime.MinValue || x.Timestamp >= from)
+                            && (to == DateTime.MinValue || x.Timestamp <= to))
                         .OrderBy(x => x.Timestamp)
-                        .Take(take)
                         .Select(CloneTurn)
                         .ToList();
                 }
@@ -68,6 +71,18 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("读取接待学习时间线失败：" + ex.Message, 10);
                 return new List<ConversationContextTurn>();
             }
+        }
+
+        public static Task<ConversationHistoryRefreshResult> RefreshRemoteHistoryCompleteAsync(
+            string seller,
+            string buyer,
+            string ccode,
+            DateTime from,
+            DateTime to,
+            CancellationToken cancellationToken)
+        {
+            return ConversationContextStore.RefreshLearningHistoryCompleteAsync(
+                seller, buyer, ccode, from, to, cancellationToken);
         }
 
         public static bool RefreshRemoteHistory(string seller, string buyer, string ccode)
