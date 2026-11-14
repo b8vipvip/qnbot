@@ -263,3 +263,32 @@ def test_ambiguous_seller_nick_never_falls_back_to_shared_legacy_timeline():
     assert "AmbiguousShopIdentityException" in locator
     assert "catch (AmbiguousShopIdentityException) { throw; }" in context
 
+def test_repeated_history_refresh_counts_canonical_turns_not_only_new_merges():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    refresh = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult>"):
+        context.index("private static int ReadInt")
+    ]
+    record = context[
+        context.index("private static string RecordMessage"):
+        context.index("private static string[] GetNativeMessageAliases")
+    ]
+    assert "private static string RecordMessage" in record
+    assert "return exact.MessageKey ?? string.Empty;" in record
+    assert "return precisePeers[0].MessageKey ?? string.Empty;" in record
+    assert "return opposite[0].MessageKey ?? string.Empty;" in record
+    assert "countedTimelineKeys.Add(canonicalTurnKey)" in refresh
+    assert "historyCoverage.MessagesInWindow != turns.Count" in read(
+        "src/Bot/ChromeNs/ConversationSessionLearningService.cs"
+    )
+
+
+def test_pagination_flag_accepts_boolean_and_numeric_json_values():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    parser = context[
+        context.index("private static int ReadInt"):
+        context.index("private static void MarkLastSellerTurnWithdrawn")
+    ]
+    assert "JTokenType.Boolean" in parser
+    assert "bool.TryParse(text, out boolean)" in parser
+    assert "double.TryParse(text, NumberStyles.Float" in parser
