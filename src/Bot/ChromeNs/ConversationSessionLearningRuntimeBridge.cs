@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -141,11 +142,28 @@ namespace Bot.ChromeNs
             {
                 var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (response == null || response.result == null) return;
-                foreach (var message in response.result
-                    .Where(x => x != null)
-                    .OrderBy(IncomingMessageSafety.GetSortValue))
+
+                ShopContext shop;
+                try
                 {
-                    ObserveMessage(qn, message);
+                    // The event source is the only unambiguous shop identity here.
+                    // Do not let duplicate seller nicknames collapse into a legacy key.
+                    shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("接待自动学习拒绝未绑定店铺的消息事件: " + ex.Message, 10);
+                    return;
+                }
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    foreach (var message in response.result
+                        .Where(x => x != null)
+                        .OrderBy(IncomingMessageSafety.GetSortValue))
+                    {
+                        ObserveMessage(qn, message);
+                    }
                 }
             }
             catch (Exception ex)
@@ -162,7 +180,15 @@ namespace Bot.ChromeNs
 
             var text = ExtractMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
-            if (!string.IsNullOrWhiteSpace(messageKey) && !Seen.TryAdd(messageKey, DateTime.Now)) return;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+            {
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                catch { return; }
+            }
+            var scopedMessageKey = shop.ShopKey + "|" + messageKey;
+            if (!string.IsNullOrWhiteSpace(messageKey)
+                && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
 
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)
