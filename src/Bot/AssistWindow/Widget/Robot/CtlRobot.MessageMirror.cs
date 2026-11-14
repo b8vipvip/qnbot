@@ -18,6 +18,7 @@ namespace Bot.AssistWindow.Widget.Robot
     public partial class CtlRobot
     {
         private DispatcherTimer _messageMirrorTimer;
+        private string _messageMirrorShopKey = string.Empty;
         private string _messageMirrorSeller = string.Empty;
         private string _messageMirrorBuyer = string.Empty;
         private string _messageMirrorSignature = string.Empty;
@@ -125,11 +126,14 @@ namespace Bot.AssistWindow.Widget.Robot
 
                 var seller = (qn.Seller.Nick ?? string.Empty).Trim();
                 var buyer = (qn.Buyer.Nick ?? string.Empty).Trim();
-                var identityChanged = !string.Equals(_messageMirrorSeller, seller, StringComparison.Ordinal)
+                var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey;
+                var identityChanged = !string.Equals(_messageMirrorShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals(_messageMirrorSeller, seller, StringComparison.Ordinal)
                     || !string.Equals(_messageMirrorBuyer, buyer, StringComparison.Ordinal);
 
                 if (identityChanged)
                 {
+                    _messageMirrorShopKey = shopKey;
                     _messageMirrorSeller = seller;
                     _messageMirrorBuyer = buyer;
                     _messageMirrorSignature = string.Empty;
@@ -267,6 +271,9 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             _messageMirrorSignature = signature;
+            _messageMirrorShopKey = string.Empty;
+            _messageMirrorSeller = string.Empty;
+            _messageMirrorBuyer = string.Empty;
             _messageMirrorRenderedTurns = null;
             stkDialog.Children.Clear();
             grdTipNoConv.Visibility = Visibility.Visible;
