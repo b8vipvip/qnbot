@@ -325,6 +325,7 @@ namespace Bot.Knowledge
         }
 
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly DataGrid _grid;
         private readonly ComboBox _filter;
         private readonly ComboBox _resultFilter;
@@ -333,9 +334,12 @@ namespace Bot.Knowledge
         private List<KnowledgeV2GovernanceAuditEntry> _all = new List<KnowledgeV2GovernanceAuditEntry>();
         private List<ConversationSessionLearningReportView> _sessions = new List<ConversationSessionLearningReportView>();
 
-        public KnowledgeV2AiOptimizationHistoryPage(Window owner, string seller)
+        public KnowledgeV2AiOptimizationHistoryPage(Window owner, string seller, string shopKey = "")
         {
-            _seller = seller ?? string.Empty;
+            _seller = (seller ?? string.Empty).Trim();
+            _shopKey = string.IsNullOrWhiteSpace(shopKey)
+                ? KnowledgeCenterV2Context.ResolveShopKey(owner, _seller)
+                : shopKey.Trim();
             var root = new DockPanel { Margin = new Thickness(12) };
             Content = root;
 
@@ -409,57 +413,38 @@ namespace Bot.Knowledge
 
         public void RefreshView()
         {
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
                 _all = new List<KnowledgeV2GovernanceAuditEntry>();
                 _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
-                _status.Text = "当前未识别店铺，无法读取优化记录。";
+                _status.Text = "当前未确认店铺ShopKey，无法读取优化记录。";
                 return;
             }
             try
             {
-                _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
-                    .Where(IsOptimizationHistory)
-                    .ToList();
-                string shopKey = string.Empty;
-                var scopedShop = ShopSettingsScope.Current;
-                if (scopedShop != null
-                    && string.Equals(scopedShop.DisplayName, _seller, StringComparison.Ordinal))
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                if (!string.IsNullOrWhiteSpace(shop.SellerNick)
+                    && !string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal))
+                    throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配。");
+
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    shopKey = scopedShop.ShopKey;
-                }
-                else
-                {
-                    var currentQn = QN.CurQN;
-                    if (currentQn != null && currentQn.Seller != null
-                        && string.Equals((currentQn.Seller.Nick ?? string.Empty).Trim(),
-                            _seller, StringComparison.Ordinal))
-                    {
-                        try { shopKey = ShopIdentityResolver.Resolve(currentQn.Seller).ShopKey; }
-                        catch { shopKey = string.Empty; }
-                    }
-                    else
-                    {
-                        try { shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(_seller).ShopKey; }
-                        catch
-                        {
-                            // Ambiguous display nicknames must not merge session reports
-                            // from separate ShopKeys in the V2 history panel.
-                        }
-                    }
-                }
-                _sessions = shopKey.Length == 0
-                    ? new List<ConversationSessionLearningReportView>()
-                    : ConversationSessionLearningService.GetReports(1000)
+                    _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
+                        .Where(IsOptimizationHistory)
+                        .ToList();
+                    _sessions = ConversationSessionLearningService.GetReports(1000)
                         .Where(x => x != null
-                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.ShopKey, _shopKey, StringComparison.Ordinal)
                             && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
                         .ToList();
+                }
                 ApplyFilter();
             }
             catch (Exception ex)
             {
+                _all = new List<KnowledgeV2GovernanceAuditEntry>();
+                _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
                 _status.Text = "读取优化记录失败：" + ex.Message;
             }
