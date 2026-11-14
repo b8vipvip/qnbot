@@ -36,6 +36,18 @@ namespace Bot.Options
         private OptionEnum _pendingPage = OptionEnum.Unknown;
         private bool _initialized;
 
+        private WndOption(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            _shop = shop;
+            Seller = !string.IsNullOrWhiteSpace(shop.SellerNick)
+                ? shop.SellerNick : shop.DisplayName;
+            InitializeComponent();
+            SettingsOperationAudit.Attach(this,
+                () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
+            Loaded += WndOption_Loaded;
+        }
+
         private WndOption(string seller)
         {
             Seller = seller;
@@ -259,6 +271,20 @@ namespace Bot.Options
         private void btnHelp_Click(object sender, RoutedEventArgs e)
         {
             if (_currentPage != null && _currentPage.Control != null) _currentPage.Control.NavHelp();
+        }
+
+        public static void MyShow(ShopContext shop, WndAssist owner = null,
+            OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            var windowKey = shop.ShopKey;
+            var wndOp = ShowSameNickOneInstance<WndOption>(windowKey, delegate
+            {
+                return new WndOption(shop);
+            }, owner, true);
+            ShopScopedUiBridge.Attach(wndOp, shop);
+            if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
+            if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
         }
 
         public static void MyShow(string seller, WndAssist owner = null,
