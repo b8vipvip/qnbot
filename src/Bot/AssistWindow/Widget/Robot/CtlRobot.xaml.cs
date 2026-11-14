@@ -15,6 +15,7 @@ using BotLib.Db.Sqlite;
 using BotLib.Wpf.Extensions;
 using System.Security.Cryptography;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using Bot.Knowledge;
 using Bot.AssistWindow.Widget.Robot;
 using System.Collections.Concurrent;
@@ -130,10 +131,19 @@ namespace Bot.AssistWindow.Widget.Robot
             BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
             RefreshStats();
 
-            var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply, answerSource);
+            var shopKey = ResolveShopKeyForConversation(seller, buyer);
+            var ctlConversation = CtlConversation.Create(
+                seller, buyer, question, answer, isAutoReply, answerSource, shopKey);
             ctlConversation.ResendRequested += CtlConversation_ResendRequested;
             ctlConversation.EditRequested += CtlConversation_EditRequested;
+            if (string.IsNullOrWhiteSpace(shopKey))
+            {
+                // A display nickname is not a shop identity. Do not mix cards when
+                // the active QN instance cannot prove which shop produced this reply.
+                Log.Info("Bot问答卡片未归档：无法唯一确认ShopKey，seller=" + seller);
+                return ctlConversation;
+            }
+            var key = BuildConversationKey(shopKey, seller, buyer);
             var conversations = buyerConversations.xTryGetValue(key);
             if (conversations == null || conversations.Count < 1)
             {
@@ -170,9 +180,13 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             if (buyerConversations.Count <= MaxCachedBuyerPanels) return;
-            var activeQn = QN.CurQN;
+            var activeQn = _preQN ?? QN.CurQN;
+            var activeShopKey = activeQn == null || activeQn.Seller == null
+                ? string.Empty
+                : ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
             var activeKey = activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
-                ? string.Format("{0}#{1}", activeQn.Seller.Nick, activeQn.Buyer.Nick)
+                && !string.IsNullOrWhiteSpace(activeShopKey)
+                ? BuildConversationKey(activeShopKey, activeQn.Seller.Nick, activeQn.Buyer.Nick)
                 : string.Empty;
             // LRU applies only to transient WPF answer controls, never the persisted
             // question/answer records or the currently viewed buyer. Background
@@ -193,6 +207,37 @@ namespace Bot.AssistWindow.Widget.Robot
                 long ignoredTimestamp;
                 _buyerPanelAccessTicks.TryRemove(key, out ignoredTimestamp);
             }
+        }
+
+        private string ResolveShopKeyForConversation(string seller, string buyer)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            var qn = _preQN;
+            if (qn == null || qn.Seller == null
+                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+            {
+                var current = QN.CurQN;
+                if (current != null && current.Seller != null
+                    && string.Equals((current.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                    qn = current;
+            }
+
+            if (qn != null && qn.Seller != null
+                && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+            {
+                try { return ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
+                catch { return string.Empty; }
+            }
+
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
+            catch { return string.Empty; }
+        }
+
+        private static string BuildConversationKey(string shopKey, string seller, string buyer)
+        {
+            return (shopKey ?? string.Empty).Trim() + "#"
+                + (seller ?? string.Empty).Trim() + "#"
+                + (buyer ?? string.Empty).Trim();
         }
 
         private void ReleaseConversationUiHandlers(IEnumerable<CtlConversation> controls)
