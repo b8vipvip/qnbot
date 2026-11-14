@@ -104,13 +104,17 @@ namespace Bot.Knowledge
             var route = BotReplySourceRouting.Resolve(source, manuallyCorrected);
             if (route.Kind == BotReplySourceRouting.RouteKind.AutoReplyRule)
             {
-                var active = ActiveShopSessionRegistry.GetActiveSellerNick();
-                if (!string.IsNullOrWhiteSpace(active)
-                    && !string.Equals(active, seller, StringComparison.Ordinal))
+                var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
+                var activeMismatch = !string.IsNullOrWhiteSpace(activeShopKey)
+                    ? !string.Equals(activeShopKey, shop.ShopKey, StringComparison.Ordinal)
+                    : !string.IsNullOrWhiteSpace(activeSeller)
+                        && !string.Equals(activeSeller, seller, StringComparison.Ordinal);
+                if (activeMismatch)
                 {
                     MessageBox.Show(owner,
-                        "当前活动客服与该消息所属客服不同。为避免跨店修改，请切换至该消息的客服账号后重试。"
-                        + "\n消息所属客服：" + seller,
+                        "当前活动店铺与该消息所属店铺不同。为避免跨店修改，请切换至该消息所属店铺后重试。"
+                        + "\n消息所属店铺：" + shop.ShopKey,
                         "店铺作用域保护", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
