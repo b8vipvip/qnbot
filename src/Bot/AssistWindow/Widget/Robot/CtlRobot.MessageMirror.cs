@@ -1,5 +1,6 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
@@ -68,23 +69,18 @@ namespace Bot.AssistWindow.Widget.Robot
             return qn;
         }
 
-        private List<ConversationContextTurn> LoadMessageMirrorTurns(string seller, string buyer)
+        private List<ConversationContextTurn> LoadMessageMirrorTurns(QN qn, string seller, string buyer)
         {
-            IDisposable scope = null;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-                if (shop != null) scope = ShopSettingsScope.Enter(shop);
-                return ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                using (ShopSettingsScope.Enter(shop))
+                    return ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("读取千牛镜像聊天记录失败：" + ex.Message, 10);
                 return new List<ConversationContextTurn>();
-            }
-            finally
-            {
-                if (scope != null) scope.Dispose();
             }
         }
 
@@ -101,7 +97,16 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             _messageMirrorLastRemoteRefresh = DateTime.Now;
-            ConversationContextStore.RequestMirrorRemoteRefresh(seller, buyer, ccode);
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                using (ShopSettingsScope.Enter(shop))
+                    ConversationContextStore.RequestMirrorRemoteRefresh(seller, buyer, ccode);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("请求千牛镜像历史刷新失败：未能确认ShopKey: " + ex.Message, 10);
+            }
         }
 
         private void RefreshMessageMirror(bool force)
@@ -133,7 +138,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     RequestMessageMirrorHistory(qn, seller, buyer, true);
                 }
 
-                var turns = LoadMessageMirrorTurns(seller, buyer);
+                var turns = LoadMessageMirrorTurns(qn, seller, buyer);
                 if (turns.Count == 0)
                 {
                     RequestMessageMirrorHistory(qn, seller, buyer, false);
