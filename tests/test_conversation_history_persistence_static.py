@@ -15,7 +15,7 @@ def test_history_is_persisted_in_bot_sqlite_with_bounded_retention():
     assert "SaveRecordsInTransaction" in source
     assert "RetentionDays = 90" in source
     assert "MaxTotalRecords = 10000" in source
-    assert "MaxRecordsPerConversation = 200" in source
+    assert "MaxRecentLoadCount = 200" in source
     assert "DefaultLoadCount = 100" in source
     assert "UpdatedAtTicks < ?" in source
     assert "order by UpdatedAtTicks desc limit" in source
