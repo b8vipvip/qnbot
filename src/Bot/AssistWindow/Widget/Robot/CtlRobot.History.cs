@@ -61,7 +61,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private void EnsureCurrentConversationHistoryLoaded()
         {
             if (buyerConversations == null) return;
-            var qn = _preQN ?? QN.CurQN;
+            var qn = ResolveMessageMirrorQn();
             if (qn == null || qn.Seller == null || qn.Buyer == null) return;
 
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
@@ -111,7 +111,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 buyerConversations.AddOrUpdate(key, conversations, (k, old) => conversations);
                 PruneConversationUiCache(key);
 
-                var current = _preQN ?? QN.CurQN;
+                var current = ResolveMessageMirrorQn();
                 if (current != null && current.Seller != null && current.Buyer != null
                     && string.Equals(current.Seller.Nick, seller, StringComparison.Ordinal)
                     && string.Equals(current.Buyer.Nick, buyer, StringComparison.Ordinal))
