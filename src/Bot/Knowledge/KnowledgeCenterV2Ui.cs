@@ -561,8 +561,10 @@ namespace Bot.Knowledge
         {
             try
             {
-                if (owner != null && !string.IsNullOrWhiteSpace(owner.RequestedShopKey))
-                    return owner.RequestedShopKey.Trim();
+                var knowledgeWindow = owner as KnowledgeCenterWindow;
+                if (knowledgeWindow != null
+                    && !string.IsNullOrWhiteSpace(knowledgeWindow.RequestedShopKey))
+                    return knowledgeWindow.RequestedShopKey.Trim();
                 var attached = ShopScopedUiBridge.Get(owner);
                 if (attached != null) return attached.ShopKey;
                 var current = QN.CurQN;
