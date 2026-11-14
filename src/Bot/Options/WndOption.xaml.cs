@@ -290,6 +290,10 @@ namespace Bot.Options
             try
             {
                 ShopContext shop = owner == null ? null : ShopScopedUiBridge.Get(owner);
+                if (shop != null
+                    && !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                    && !string.Equals(shop.DisplayName, seller, StringComparison.Ordinal))
+                    shop = null;
                 if (shop == null)
                 {
                     var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
