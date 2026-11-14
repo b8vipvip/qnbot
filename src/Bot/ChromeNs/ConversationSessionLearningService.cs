@@ -156,7 +156,7 @@ namespace Bot.ChromeNs
                 ResumePending();
                 CleanupReports();
             });
-            Log.Info("接待结束自动学习已启用：买家5分钟无新消息后自动复盘；本地优先模式会从完整买家/Bot/人工客服时间线提炼安全可复用问答并去重入库。" );
+            Log.Info("接待结束自动学习已启用：买家或客服连续5分钟无新消息后自动复盘；历史覆盖不完整时跳过AI与知识写入。" );
         }
 
         public static void ObserveLiveMessage(QNChatMessage message, string messageText, string seller, string buyer)
@@ -188,37 +188,56 @@ namespace Bot.ChromeNs
             var key = Key(shop.ShopKey, seller, buyer);
             if (isBuyer)
             {
-                ActiveSession session;
-                if (!Active.TryGetValue(key, out session))
+                while (true)
                 {
-                    session = NewSession(shop.ShopKey, seller, buyer, ccode, now);
-                    if (!Active.TryAdd(key, session))
+                    ActiveSession session;
+                    if (!Active.TryGetValue(key, out session))
                     {
-                        DisposeTimer(session);
-                        if (!Active.TryGetValue(key, out session)) return;
+                        var created = NewSession(shop.ShopKey, seller, buyer, ccode, now);
+                        if (!Active.TryAdd(key, created))
+                        {
+                            DisposeTimer(created);
+                            continue;
+                        }
+                        session = created;
                     }
+
+                    lock (session.Sync)
+                    {
+                        ActiveSession current;
+                        // FinalizeAsync removes a due session while holding the same
+                        // lock. Recheck dictionary ownership after acquiring it; if
+                        // that round was already retired, retry with a fresh session.
+                        if (!Active.TryGetValue(key, out current)
+                            || !ReferenceEquals(current, session))
+                            continue;
+
+                        session.LastBuyerAt = now;
+                        session.LastActivityAt = now;
+                        session.RetryCount = 0;
+                        if (!string.IsNullOrWhiteSpace(ccode)) session.CCode = ccode;
+                        SaveSnapshot(session, "等待接待结束");
+                        Schedule(session, TimeSpan.FromMinutes(InactivityMinutes));
+                    }
+                    return;
                 }
-                lock (session.Sync)
-                {
-                    session.LastBuyerAt = now;
-                    session.LastActivityAt = now;
-                    session.RetryCount = 0;
-                    if (!string.IsNullOrWhiteSpace(ccode)) session.CCode = ccode;
-                    SaveSnapshot(session, "等待接待结束");
-                    Schedule(session, TimeSpan.FromMinutes(InactivityMinutes));
-                }
-                return;
             }
 
-            ActiveSession existing;
-            if (Active.TryGetValue(key, out existing))
+            while (true)
             {
+                ActiveSession existing;
+                if (!Active.TryGetValue(key, out existing)) return;
                 lock (existing.Sync)
                 {
+                    ActiveSession current;
+                    if (!Active.TryGetValue(key, out current)
+                        || !ReferenceEquals(current, existing))
+                        continue;
                     existing.LastActivityAt = now;
                     if (!string.IsNullOrWhiteSpace(ccode)) existing.CCode = ccode;
                     SaveSnapshot(existing, "等待接待结束");
                     Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));
+                    return;
                 }
             }
         }
@@ -345,8 +364,6 @@ namespace Bot.ChromeNs
                 LastActivityAt = now
             };
             session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-            SaveSnapshot(session, "等待接待结束");
-            Log.Info("已开始接待自动学习轮次: seller=" + session.Seller + ", buyer=" + session.Buyer);
             return session;
         }
 
@@ -361,18 +378,21 @@ namespace Bot.ChromeNs
             var key = Key(session.ShopKey, session.Seller, session.Buyer);
             lock (session.Sync)
             {
-                // A round ends five minutes after the last buyer OR seller message.
+                // Serialize the due check and dictionary removal with message
+                // observation. Otherwise a buyer message can update this session
+                // after the timer checks it but just before TryRemove, losing that
+                // message and silently closing the new round.
                 var activityRemaining = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                 if (activityRemaining > TimeSpan.Zero)
                 {
                     Schedule(session, activityRemaining);
                     return;
                 }
-            }
 
-            ActiveSession current;
-            if (!Active.TryGetValue(key, out current) || !ReferenceEquals(current, session)) return;
-            if (!Active.TryRemove(key, out current)) return;
+                ActiveSession current;
+                if (!Active.TryGetValue(key, out current) || !ReferenceEquals(current, session)) return;
+                if (!Active.TryRemove(key, out current) || !ReferenceEquals(current, session)) return;
+            }
             DisposeTimer(session);
             SaveSnapshot(session, "正在复盘");
 
