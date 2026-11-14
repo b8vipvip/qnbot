@@ -786,6 +786,7 @@ namespace Bot.ChromeNs
         // On restart GetState recreates the in-memory timeline before paging, so the
         // persisted pending-session report can safely reconstruct its transcript.
         internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync(
+            string shopKey,
             string seller,
             string buyer,
             string ccode,
@@ -799,10 +800,11 @@ namespace Bot.ChromeNs
                 StopReason = string.Empty,
                 ErrorCode = string.Empty
             };
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             ccode = (ccode ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0)
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0)
             {
                 result.ErrorCode = "missing_conversation_scope";
                 return result;
@@ -813,10 +815,23 @@ namespace Bot.ChromeNs
                 return result;
             }
 
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-            if (shop == null)
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch
             {
                 result.ErrorCode = "shop_scope_unavailable";
+                return result;
+            }
+
+            if (shop == null
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.DisplayName, seller, StringComparison.Ordinal)
+                    && !string.Equals(shop.SellerId, seller, StringComparison.Ordinal))
+            {
+                result.ErrorCode = "shop_scope_mismatch";
                 return result;
             }
 
