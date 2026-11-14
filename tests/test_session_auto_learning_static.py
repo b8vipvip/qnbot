@@ -45,7 +45,8 @@ def test_reviewed_knowledge_prefers_strong_human_corrections():
 def test_runtime_bridge_uses_exact_seller_and_injects_store_style_as_system_context():
     source = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
 
-    assert "QN.FindExistingBySellerNick(seller)" in source
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in source
+    assert "QN.FindExistingBySellerNick(seller)" not in source
     assert "?? QN.CurQN" not in source
     assert "InjectLearnedStyle" in source
     assert 'Role = "system"' in source
@@ -111,7 +112,7 @@ def test_learning_timeline_uses_same_shop_scoped_key_as_context_store():
 def test_learning_history_refresh_is_typed_and_shop_scoped():
     ctx=read("src/Bot/ChromeNs/ConversationContextStore.cs")
     bridge=read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
-    assert 'ConversationContextStore.RefreshLearningHistoryCompleteAsync(' in ctx
+    assert 'internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync(' in ctx
     assert 'RefreshRemoteHistoryCompleteAsync(' in bridge
     assert 'method.Invoke(null, new[] { state, seller, buyer, ccode })' not in bridge
     assert 'ShopContextLocator.ResolveRuntimeByShopKey(shopKey)' in ctx
@@ -218,7 +219,8 @@ def test_learning_runtime_is_scoped_by_exact_qn_identity_and_shop_key():
     assert "ResolveRuntimeByShopKey(string shopKey)" in locator
     assert "ShopKey = session.ShopKey" in service
     assert "ShopKey text" in history
-    assert "LoadRangeComplete(session.ShopKey" in service
+    assert "BotConversationHistoryStore.LoadRangeComplete(" in service
+    assert "session.ShopKey, session.Seller, session.Buyer, from, endAt" in service
     assert "LoadRecentBySeller(shopKey, seller, 5000)" in read(
         "src/Bot/Knowledge/ChatHistoryScanService.cs"
     )
@@ -307,7 +309,8 @@ def test_nickname_fallback_identity_cannot_merge_multiple_unstable_qn_instances(
     assert "if (matches.Count > 1 && matches.Any(x => !x.Context.HasStableSellerId))" in locator
     assert "SellerNick" in context
     assert 'JsonProperty("seller_nick")' in profile
-    assert "ShopIdentityResolver.Resolve(x.Seller)" in locator
+    assert "ShopIdentityResolver.Resolve(qn.Seller)" in locator
+    assert "GetProfileSellerNick(x)" in locator
     assert "GetProfileSellerNick(ShopProfile profile)" in locator
     assert 'const string fallbackPrefix = "nick:";' in locator
     assert "GetProfileSellerNick(x)" in locator
@@ -414,6 +417,9 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
         settings.index("public static void MyShow(string seller"):
         settings.index("private void ShowPage")
     ]
+    settings_call = settings[
+        settings.index("var knowledge = KnowledgeCenterWindow.ShowForSeller"):
+    ]
     send = diagnostic[
         diagnostic.index("private static async Task<ShopApiDiagnosticReport> SendDiagnosticAnswerAsync"):
         diagnostic.index("private static ShopApiDiagnosticReport Failure")
@@ -428,7 +434,6 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
         "KnowledgeLearningService.AllowNextManualSend"
     )
     knowledge_window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
-    settings_call = show[show.index("var knowledge = KnowledgeCenterWindow.ShowForSeller"):]
     assert "ShowForSeller(this, Seller, _shop.ShopKey)" in settings_call
     assert "Window owner, string seller, string shopKey =" in knowledge_window
 
@@ -490,7 +495,6 @@ def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
     ]
     history_ui = window[
         window.index("internal sealed class AiOptimizationHistoryControl"):
-        window.index("namespace Bot")
     ]
     assert "public string ShopKey { get; set; }" in entity
     assert "GetRecords(\n            string shopKey, string seller, int maxCount)" in service
