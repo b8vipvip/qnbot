@@ -53,6 +53,7 @@ namespace Bot.AssistWindow.Widget.Robot
     public partial class CtlConversation : UserControl
     {
         private readonly string sendedChar = "   √√";
+        private string _shopKey = string.Empty;
         private string _seller = string.Empty;
         private string _buyer = string.Empty;
         private string _question = string.Empty;
@@ -70,15 +71,20 @@ namespace Bot.AssistWindow.Widget.Robot
             InitializeComponent();
         }
 
-        public static CtlConversation Create(string seller, string buyer, string question, string answer, bool isAutoReply = false, string answerSource = "")
+        public static CtlConversation Create(
+            string seller, string buyer, string question, string answer,
+            bool isAutoReply = false, string answerSource = "", string shopKey = "")
         {
             var dlg = new CtlConversation();
-            dlg.Setup(seller, buyer, question, answer, isAutoReply, answerSource);
+            dlg.Setup(seller, buyer, question, answer, isAutoReply, answerSource, shopKey);
             return dlg;
         }
 
-        public void Setup(string seller, string buyer, string question, string answer, bool isAutoReply, string answerSource)
+        public void Setup(
+            string seller, string buyer, string question, string answer,
+            bool isAutoReply, string answerSource, string shopKey = "")
         {
+            _shopKey = (shopKey ?? string.Empty).Trim();
             _seller = seller ?? string.Empty;
             _buyer = buyer ?? string.Empty;
             _question = question ?? string.Empty;
