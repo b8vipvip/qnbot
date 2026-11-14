@@ -285,10 +285,7 @@ def test_repeated_history_refresh_counts_canonical_turns_not_only_new_merges():
 
 def test_pagination_flag_accepts_boolean_and_numeric_json_values():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
-    parser = context[
-        context.index("private static int ReadInt"):
-        context.index("private static void MarkLastSellerTurnWithdrawn")
-    ]
+    parser = context[context.index("private static int ReadInt"):]
     assert "JTokenType.Boolean" in parser
     assert "bool.TryParse(text, out boolean)" in parser
     assert "double.TryParse(text, NumberStyles.Float" in parser
