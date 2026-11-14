@@ -241,7 +241,7 @@ namespace Bot.Options
             }
             try
             {
-                var knowledge = KnowledgeCenterWindow.ShowForSeller(this, Seller);
+                var knowledge = KnowledgeCenterWindow.ShowForSeller(this, Seller, _shop.ShopKey);
                 _knowledgeCenterWindow = knowledge;
                 knowledge.Closed += delegate
                 {
