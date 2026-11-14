@@ -92,5 +92,6 @@ def test_bot_echo_and_source_stamp_ids_include_shop_key():
     assert "BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer)" in history
     assert "ShopKey = shopKey" in history
     assert "where ShopKey = ? and Seller = ? and Buyer = ?" in history
-    assert "LoadRecentBySeller(shopKey, seller, maxCount)" in history
+    assert "LoadRecentBySeller(\n            string shopKey, string seller" in history
+    assert '"where ShopKey = ? and Seller = ? and UpdatedAtTicks' in history
 
