@@ -37,6 +37,24 @@ def test_standby_promotion_forces_rebind_even_when_status_text_is_unchanged():
     assert "Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));" in promotion
 
 
+def test_authority_promotion_reapplies_duplicate_session_cap():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    promotion = server[
+        server.index("private bool TryPromoteDuplicateSellerSession"):
+        server.index("internal bool IsAuthoritativeSellerSession")
+    ]
+
+    assert "_duplicateSellerSessions[previousOwner] = sellerNick;" in promotion
+    assert "_duplicateSellerSessions.TryRemove(sessionId, out ignored);" in promotion
+    assert "EnforceDuplicateSellerSessionCapLocked(sellerNick);" in promotion
+    assert promotion.index("_duplicateSellerSessions[previousOwner] = sellerNick;") < promotion.index(
+        "_duplicateSellerSessions.TryRemove(sessionId, out ignored);"
+    )
+    assert promotion.index("_duplicateSellerSessions.TryRemove(sessionId, out ignored);") < promotion.index(
+        "EnforceDuplicateSellerSessionCapLocked(sellerNick);"
+    )
+
+
 def test_first_authoritative_page_still_runs_full_cdp_initialization():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     status = server[server.index('if (wMsg.Type == "qnbotStatus")'):server.index('else if (wMsg.Type == "imsdkApiScan")')]
