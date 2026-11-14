@@ -54,7 +54,8 @@ def test_echo_source_identity_stays_stable_after_reconciliation():
     assert "SeenLive = source.SeenLive" in store
     assert "SeenHistory = source.SeenHistory" in store
     assert "turn.Timestamp, turn.MessageKey" in mirror
-    assert "BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer)" in history
+    assert "BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer)" in history
+    assert "BuildLegacyBotEchoEntityId" in history
 
 
 def test_native_dedup_diagnostics_do_not_log_buyer_or_reply_text():
