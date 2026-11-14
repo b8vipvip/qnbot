@@ -176,6 +176,7 @@ def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_
                       service.index("private static async Task<JObject> AnalyzeAsync")]
 
     assert "if (historyCoverage == null || !historyCoverage.IsComplete)" in finalize
+    assert "remote_history_turn_count_mismatch" in finalize
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
     assert "private const bool EnableAutomaticWrites = false;" in service
     assert "knowledgeCorpusComplete" in finalize
