@@ -44,10 +44,12 @@ def test_first_authoritative_page_still_runs_full_cdp_initialization():
 
 def test_injected_page_still_reconnects_after_normal_socket_close():
     inject = read("src/Bin/inject.js")
-    assert "function scheduleReconnect()" in inject
+    assert "function scheduleReconnect(delayMs)" in inject
     assert "setupWebSocket();" in inject
     assert "socket.onclose = function ()" in inject
-    assert "if (!websocketRetired) scheduleReconnect();" in inject
+    assert "scheduleReconnect();" in inject
+    assert "websocketStandbyUntil" in inject
+    assert "reconnectDelayMs = 3000;" in inject
     assert 'sendStatus("websocket-open", true);' in inject
 
 
