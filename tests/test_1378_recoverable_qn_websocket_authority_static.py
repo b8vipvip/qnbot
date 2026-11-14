@@ -13,7 +13,8 @@ def test_server_uses_recoverable_offline_standby_for_excess_duplicate_webviews()
 
     close_helper = server[server.index("private void ScheduleDuplicateSessionClose"):server.index("private void EnforceDuplicateSellerSessionCapLocked")]
     assert 'method = "retireDuplicate"' in close_helper
-    assert "retryAfterMs = 300000" in close_helper
+    assert "var retryAfterMs = 300000 +" in close_helper
+    assert "sessionId.GetHashCode() % 240000U" in close_helper
     assert "session.Send(command)" in close_helper
     assert "_standbyLoggedSessions" in server
     assert "_recoverableStandbySessions" in server
