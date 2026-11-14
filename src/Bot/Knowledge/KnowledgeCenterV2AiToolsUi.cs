@@ -423,11 +423,31 @@ namespace Bot.Knowledge
                     .Where(IsOptimizationHistory)
                     .ToList();
                 string shopKey = string.Empty;
-                try { shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(_seller).ShopKey; }
-                catch
+                var scopedShop = ShopSettingsScope.Current;
+                if (scopedShop != null
+                    && string.Equals(scopedShop.DisplayName, _seller, StringComparison.Ordinal))
                 {
-                    // Ambiguous display nicknames must not merge session reports
-                    // from separate ShopKeys in the V2 history panel.
+                    shopKey = scopedShop.ShopKey;
+                }
+                else
+                {
+                    var currentQn = QN.CurQN;
+                    if (currentQn != null && currentQn.Seller != null
+                        && string.Equals((currentQn.Seller.Nick ?? string.Empty).Trim(),
+                            _seller, StringComparison.Ordinal))
+                    {
+                        try { shopKey = ShopIdentityResolver.Resolve(currentQn.Seller).ShopKey; }
+                        catch { shopKey = string.Empty; }
+                    }
+                    else
+                    {
+                        try { shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(_seller).ShopKey; }
+                        catch
+                        {
+                            // Ambiguous display nicknames must not merge session reports
+                            // from separate ShopKeys in the V2 history panel.
+                        }
+                    }
                 }
                 _sessions = shopKey.Length == 0
                     ? new List<ConversationSessionLearningReportView>()
