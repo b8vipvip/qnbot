@@ -475,7 +475,7 @@ namespace Bot.Knowledge
                     Type = "会话自动学习",
                     Target = x.Buyer ?? "-",
                     Summary = (x.Summary ?? string.Empty) + " [应用 " + x.AppliedCount
-                        + " / 跳过 " + x.SkippedCount + "] "
+                        + " / 跳过 " + x.SkippedCount + "] [覆盖：" + x.InputCoverageSummary + "] "
                         + (string.IsNullOrWhiteSpace(x.Error) ? string.Empty : "原因：" + x.Error),
                     Result = NormalizeResult(x.Status),
                 }));
