@@ -69,3 +69,28 @@ def test_build_includes_history_store_and_partial_extensions():
     assert "BotConversationHistoryStore.cs" in targets
     assert "CtlConversation.History.cs" in targets
     assert "CtlRobot.History.cs" in targets
+
+def test_bot_conversation_history_and_source_echoes_are_shop_scoped():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    control = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.History.cs")
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+
+    assert "public string ShopKey { get; set; }" in history
+    assert "copy.ShopKey = (copy.ShopKey ?? string.Empty).Trim();" in history
+    assert "where ShopKey = ? and Seller = ? and Buyer = ?" in history
+    assert "ShopKey text" in history
+    assert "ShopKey = _shopKey ?? string.Empty" in control
+    assert "BuildConversationKey(shopKey, seller, buyer)" in robot
+    assert "BuildConversationKey(shopKey, seller, buyer)" in mirror
+    assert "LoadRecent(shopKey, seller, buyer" in mirror
+
+
+def test_bot_echo_and_source_stamp_ids_include_shop_key():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    assert "BuildSourceStampId(shopKey, seller, buyer, question, answer)" in history
+    assert "BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer)" in history
+    assert "ShopKey = shopKey" in history
+    assert "where ShopKey = ? and Seller = ? and Buyer = ?" in history
+    assert "LoadRecentBySeller(shopKey, seller, maxCount)" in history
+
