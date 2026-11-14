@@ -440,12 +440,13 @@ namespace Bot.Knowledge
         private void UpdateStatus()
         {
             if (_status == null) return;
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
-                _status.Text = "当前未识别店铺，知识页只读/不可执行检索。";
+                _status.Text = "当前未确认唯一ShopKey，知识页只读/不可执行店铺级检索或修改。";
                 return;
             }
-            _status.Text = "店铺：" + _seller + "　V2本地知识引擎（查询不触发定时全量重建）";
+            _status.Text = "店铺：" + _seller + "　ShopKey：" + _shopKey
+                + "　V2本地知识引擎（查询不触发定时全量重建）";
         }
     }
 
