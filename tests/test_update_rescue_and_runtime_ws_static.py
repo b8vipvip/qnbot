@@ -140,8 +140,8 @@ def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker()
     assert "127.0.0.1:41010监听未就绪" in repair
     assert "snapshot.WebSocketSessionCount <= 0" in repair
     assert "snapshot.AuthoritativeCdpSessionCount <= 0" in repair
-    assert "needInjectPaths.Count < 1" in qn_inject
-    assert "千牛注入已是最新版本" in qn_inject
+    assert "needInjectPaths.Count == 0" in qn_inject
+    assert "千牛注入资源已是当前版本且sign.json已清理" in qn_inject
 
 
 def test_post_update_recovery_preserves_qianniu_and_never_handles_login_ui():
