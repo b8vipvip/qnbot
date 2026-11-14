@@ -27,8 +27,8 @@ def test_live_seller_and_remote_history_share_one_canonical_timeline():
 
 def test_true_same_text_double_sends_are_not_collapsed_by_text_alone():
     store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
-    record = store.split("private static bool RecordMessage(", 1)[1].split(
-        "private static void MarkLastSellerTurnWithdrawn(", 1
+    record = store.split("private static string RecordMessage(", 1)[1].split(
+        "private static string[] GetNativeMessageAliases", 1
     )[0]
     assert "t.Role == role" in record
     assert "t.SeenLive && !t.SeenHistory" in record
