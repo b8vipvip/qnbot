@@ -565,20 +565,20 @@ namespace Bot.ChromeNs
                 if (IsSellerWithdrawal(message, text, seller)) MarkLastSellerTurnWithdrawn(state, timestamp);
                 return string.Empty;
             }
-            if (IsPlatformSystemTip(message, text)) return false;
+            if (IsPlatformSystemTip(message, text)) return string.Empty;
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
             string role;
             if (from == seller && to == buyer) role = "assistant";
             else if (from == buyer && to == seller) role = "user";
-            else return false;
+            else return string.Empty;
 
             var cleanText = IncomingMessageSafety.GetDisplayText(message, text);
             if (string.IsNullOrWhiteSpace(cleanText)
                 || string.Equals(cleanText, "[空白或未知消息]", StringComparison.Ordinal))
             {
-                return false;
+                return string.Empty;
             }
             var messageKey = ScopeKey(seller) + "|" + IncomingMessageSafety.BuildMessageKey(message, cleanText);
             var aliases = GetNativeMessageAliases(message);
@@ -594,7 +594,7 @@ namespace Bot.ChromeNs
                         || HasSharedNativeAlias(t.NativeAliases, aliases)));
                 if (exact != null)
                 {
-                    var isNewHistoryObservation = fromHistory && !exact.SeenHistory;
+
                     MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
                     return exact.MessageKey ?? string.Empty;
                 }
@@ -611,7 +611,7 @@ namespace Bot.ChromeNs
                         .ToList();
                 if (precisePeers.Count == 1)
                 {
-                    var isNewHistoryObservation = fromHistory && !precisePeers[0].SeenHistory;
+
                     MergeObservedIdentity(precisePeers[0], aliases, preciseTime, timestamp, fromHistory);
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
@@ -636,7 +636,7 @@ namespace Bot.ChromeNs
                     if (peers.Count == 1 && opposite.Count == 1
                         && (preciseTime == 0 || opposite[0].PreciseTimeTicks == 0))
                     {
-                        var isNewHistoryObservation = fromHistory && !opposite[0].SeenHistory;
+
                         MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory);
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
