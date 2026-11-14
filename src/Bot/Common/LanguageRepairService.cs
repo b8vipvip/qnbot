@@ -24,6 +24,7 @@ namespace Bot.Common
     public static class LanguageRepairService
     {
         private static readonly string[] WorkbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
+        private static readonly string[] ResourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "AliApp" };
         private static readonly string[] AbnormalLanguageTokens = { "zh-TW", "zh_TW", "zh-HK", "zh_HK", "traditional", "繁体", "繁體" };
         private static readonly string[] LanguageKeys = { "locale", "language", "lang" };
         private const string WebuiResDir = "newWebui";
@@ -35,7 +36,7 @@ namespace Bot.Common
         private const string LanguageScriptFileName = "qnbot-language.js";
         private const string EmbeddedInjectResource = "Bot.Resources.inject.js";
         private const string EmbeddedLanguageResource = "Bot.Resources.language.js";
-        private const string InjectVersionMarker = "20260714-zh-cn-v9";
+        private const string InjectVersionMarker = "20261114-ws-recoverable-reconnect-v12";
         private const string LanguageVersionMarker = "20260713-hans-all-pages-v3";
         private const string LanguageLockMarker = "qnbot persistent zh-CN language lock";
         private const string OldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
@@ -101,9 +102,11 @@ namespace Bot.Common
                 Log.Info("执行自动修复");
                 if (IsWorkbenchRunning())
                 {
-                    Log.Info("检测到千牛正在运行，关闭千牛WebView进程以修复语言缓存");
-                    KillWorkbenchProcesses();
-                    System.Threading.Thread.Sleep(2000);
+                    result.StatusText = "语言：待安全修复";
+                    result.Detail = "检测到千牛资源进程仍在运行；为保护登录态，本次不修改webui.zip/sign.json/CEF缓存，待千牛完全退出后重试。";
+                    Log.Info(result.Detail);
+                    WriteLanguageState(false, result.Detail);
+                    return result;
                 }
 
                 var success = 0;
@@ -124,8 +127,15 @@ namespace Bot.Common
 
                 if (success > 0 || languageScan.IsAbnormal || previousAbnormal)
                 {
-                    Log.Info("清理CEF缓存");
-                    ClearQianniuLanguageCaches(languageScan.IsAbnormal || previousAbnormal);
+                    if (IsWorkbenchRunning())
+                    {
+                        Log.Info("千牛资源进程已重新启动，跳过语言CEF缓存清理以保护当前会话。");
+                    }
+                    else
+                    {
+                        Log.Info("清理CEF临时缓存（保留Local Storage/Cookies/IndexedDB）");
+                        ClearQianniuLanguageCaches();
+                    }
                 }
 
                 result.Repaired = success > 0 || languageScan.IsAbnormal || previousAbnormal;
@@ -155,6 +165,8 @@ namespace Bot.Common
                 if (!File.Exists(webuiPath)) return false;
                 using (var zipFile = new ZipFile(webuiPath))
                 {
+                    var signPath = Path.Combine(resourcePath, WebuiResDir, SignFile);
+                    if (File.Exists(signPath) && new FileInfo(signPath).Length > 0) return false;
                     var recent = ReadZipEntryText(zipFile, ChatRecentHtmlFile);
                     if (string.IsNullOrWhiteSpace(recent)
                         || !ContainsScriptReference(recent, InjectedScriptSrc)
@@ -199,6 +211,11 @@ namespace Bot.Common
 
         private static bool RepairResourcePath(string resourcePath)
         {
+            if (IsWorkbenchRunning())
+            {
+                Log.Info("千牛资源进程仍在运行，延后语言资源修复: " + resourcePath);
+                return false;
+            }
             var webuiPath = Path.Combine(resourcePath, WebuiResDir, WebuiFile);
             var signPath = Path.Combine(resourcePath, WebuiResDir, SignFile);
             if (!File.Exists(webuiPath))
@@ -239,6 +256,11 @@ namespace Bot.Common
                     languageEntries.Add(GetZipDirectory(htmlEntry) + LanguageScriptFileName);
                 }
 
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("语言资源提交前检测到千牛重新启动，取消本次修复: " + webuiPath);
+                    return false;
+                }
                 zipFile.BeginUpdate();
                 foreach (var item in patchedHtml)
                 {
@@ -252,6 +274,11 @@ namespace Bot.Common
                 zipFile.CommitUpdate();
             }
 
+            if (IsWorkbenchRunning())
+            {
+                Log.Info("语言资源写入后检测到千牛重新启动，保留sign.json并等待下次安全修复: " + signPath);
+                return false;
+            }
             ClearSignJson(signPath);
             Log.Info("语言修复写入完成: " + resourcePath);
             return true;
@@ -259,6 +286,11 @@ namespace Bot.Common
 
         private static void ClearSignJson(string signPath)
         {
+            if (IsWorkbenchRunning())
+            {
+                Log.Info("千牛资源进程已启动，跳过sign.json清理。");
+                return;
+            }
             try
             {
                 if (!File.Exists(signPath)) return;
@@ -341,13 +373,17 @@ namespace Bot.Common
             return "繁体";
         }
 
-        private static void ClearQianniuLanguageCaches(bool includeLocalStorage)
+        private static void ClearQianniuLanguageCaches()
         {
-            var cacheNames = new HashSet<string>(new[] { "Cache", "Code Cache", "GPUCache" }, StringComparer.OrdinalIgnoreCase);
-            if (includeLocalStorage)
+            if (IsWorkbenchRunning())
             {
-                cacheNames.Add("Local Storage");
+                Log.Info("千牛资源进程仍在运行，跳过语言CEF缓存清理。");
+                return;
             }
+
+            // Only disposable Chromium caches are removed. Local Storage may contain
+            // authentication/session data, so it is never included in language repair.
+            var cacheNames = new HashSet<string>(new[] { "Cache", "Code Cache", "GPUCache" }, StringComparer.OrdinalIgnoreCase);
             var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var root in CollectQianniuProfileRoots())
             {
@@ -361,12 +397,17 @@ namespace Bot.Common
             int failed = 0;
             foreach (var target in targets.OrderByDescending(p => p.Length))
             {
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("千牛资源进程已启动，停止后续语言CEF缓存清理。");
+                    break;
+                }
                 try
                 {
                     if (!Directory.Exists(target)) continue;
                     Directory.Delete(target, true);
                     cleared++;
-                    Log.Info("清理CEF缓存: " + target);
+                    Log.Info("清理CEF临时缓存: " + target);
                 }
                 catch (Exception ex)
                 {
@@ -374,7 +415,8 @@ namespace Bot.Common
                     Log.Exception(ex, "ClearLanguageCache:" + target);
                 }
             }
-            Log.Info("清理CEF缓存完成: cleared=" + cleared + ", failed=" + failed + ", includeLocalStorage=" + includeLocalStorage + ", preserved=Cookies/IndexedDB/Login");
+            Log.Info("清理CEF临时缓存完成: cleared=" + cleared + ", failed=" + failed
+                + ", preserved=LocalStorage/Cookies/IndexedDB/Login");
         }
 
         private static List<string> CollectQianniuProfileRoots()
@@ -667,25 +709,20 @@ namespace Bot.Common
 
         private static bool IsWorkbenchRunning()
         {
-            return WorkbenchProcessNames.Any(name => Process.GetProcessesByName(name).Length > 0);
-        }
-
-        private static void KillWorkbenchProcesses()
-        {
-            foreach (var name in WorkbenchProcessNames)
+            foreach (var name in ResourceOwnerProcessNames)
             {
-                foreach (var p in Process.GetProcessesByName(name))
+                try
                 {
-                    try
-                    {
-                        p.Kill();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Exception(ex, "KillWorkbench:" + name);
-                    }
+                    if (Process.GetProcessesByName(name).Length > 0) return true;
+                }
+                catch (Exception ex)
+                {
+                    // Unknown process state is treated as running: never mutate a possibly live WebView.
+                    Log.ErrorWithMaxCount("无法确认千牛资源进程状态，延后语言修复: process=" + name + ", error=" + ex.Message, 5);
+                    return true;
                 }
             }
+            return false;
         }
 
         private static List<string> GetHtmlEntryNames(ZipFile zipFile)
