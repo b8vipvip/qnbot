@@ -59,16 +59,24 @@ def test_memory_samples_report_gc_velocity_and_guard_count_without_forcing_gc():
     assert "GC.Collect(" not in monitor
 
 
-def test_heartbeat_hot_path_skips_deserialization_but_touches_liveness():
+def test_heartbeat_hot_path_skips_deserialization_without_refreshing_business_liveness():
     server = src("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    handler = server[
+        server.index("webSocket.NewMessageReceived +="):
+        server.index("webSocket.SessionClosed +=")
+    ]
     marker = 'if (string.Equals(value, "{\\\"type\\\":\\\"hi\\\"}", StringComparison.Ordinal))'
-    assert marker in server
+    assert marker in handler
     assert (
-        server.index("TouchSession(session);", server.index("webSocket.NewMessageReceived"))
-        < server.index(marker)
-        < server.index("JsonConvert.DeserializeObject<WSocketMessage>(value)")
+        handler.index(marker)
+        < handler.index("JsonConvert.DeserializeObject<WSocketMessage>(value)")
     )
-    # Other inbound message types and the existing fallback still go through
-    # the established business dispatch and legacy heartbeat check.
-    assert 'if (wMsg == null || wMsg.Type == "hi") return;' in server
-    assert 'OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type, wMsg.Response))' in server
+    assert "TouchSession(session);" not in handler
+    assert "TouchSessionBusinessActivity(session);" in handler
+    assert (
+        handler.index('if (wMsg == null || wMsg.Type == "hi") return;')
+        < handler.index('wMsg.Type != "qnbotStatus"')
+        < handler.index("TouchSessionBusinessActivity(session);")
+    )
+    # Other inbound message types still use the established business dispatch.
+    assert 'OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type, wMsg.Response))' in handler
