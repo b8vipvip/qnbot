@@ -66,13 +66,16 @@ namespace Bot.AssistWindow.Widget.Robot
                 string candidateShopKey;
                 try { candidateShopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
                 catch { return null; }
-                if (!string.Equals(candidateShopKey, activeShopKey, StringComparison.Ordinal))
+                if (!string.Equals(candidateShopKey, activeShopKey, StringComparison.Ordinal)
+                    || !ActiveShopSessionRegistry.IsActive(qn))
                 {
-                    // _preQN can outlive a seller-tab switch. Rebind only to the
-                    // exact globally arbitrated ShopKey; a shared nickname is not
-                    // enough to keep rendering another account's conversation.
+                    // _preQN can outlive a seller-tab switch or CDP replacement.
+                    // Rebind only to the exact globally arbitrated ShopKey/session;
+                    // a shared nickname or even the same ShopKey is not enough to
+                    // keep rendering a stale conversation wrapper.
                     var current = QN.CurQN;
-                    if (current == null || current.Seller == null || current.Buyer == null)
+                    if (current == null || current.Seller == null || current.Buyer == null
+                        || !ActiveShopSessionRegistry.IsActive(current))
                         return null;
                     try
                     {
