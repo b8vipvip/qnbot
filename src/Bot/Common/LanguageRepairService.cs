@@ -24,7 +24,7 @@ namespace Bot.Common
     public static class LanguageRepairService
     {
         private static readonly string[] WorkbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
-        private static readonly string[] ResourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "AliApp" };
+        private static readonly string[] ResourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
         private static readonly string[] AbnormalLanguageTokens = { "zh-TW", "zh_TW", "zh-HK", "zh_HK", "traditional", "繁体", "繁體" };
         private static readonly string[] LanguageKeys = { "locale", "language", "lang" };
         private const string WebuiResDir = "newWebui";
