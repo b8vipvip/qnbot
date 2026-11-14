@@ -1,6 +1,7 @@
 using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,6 +18,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
@@ -444,9 +446,12 @@ namespace Bot.ChromeNs
 
             var copy = Clone(entity);
             copy.EntityId = (copy.EntityId ?? string.Empty).Trim();
+            copy.ShopKey = (copy.ShopKey ?? string.Empty).Trim();
             copy.Seller = (copy.Seller ?? string.Empty).Trim();
             copy.Buyer = (copy.Buyer ?? string.Empty).Trim();
-            if (copy.EntityId.Length == 0 || copy.Seller.Length == 0 || copy.Buyer.Length == 0) return;
+            if (copy.ShopKey.Length == 0) copy.ShopKey = ResolveShopKey(copy.Seller);
+            if (copy.EntityId.Length == 0 || copy.ShopKey.Length == 0
+                || copy.Seller.Length == 0 || copy.Buyer.Length == 0) return;
 
             var nowTicks = DateTime.Now.Ticks;
             if (copy.CreatedAtTicks <= 0)
@@ -460,15 +465,24 @@ namespace Bot.ChromeNs
             ScheduleFlush();
         }
 
-        public static List<BotConversationHistoryEntity> LoadRecent(string seller, string buyer, int maxCount = DefaultLoadCount)
+        public static List<BotConversationHistoryEntity> LoadRecent(
+            string seller, string buyer, int maxCount = DefaultLoadCount)
+        {
+            return LoadRecent(ResolveShopKey(seller), seller, buyer, maxCount);
+        }
+
+        public static List<BotConversationHistoryEntity> LoadRecent(
+            string shopKey, string seller, string buyer, int maxCount = DefaultLoadCount)
         {
             Initialize();
             FlushNow();
             EnsureSchema();
 
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0) return new List<BotConversationHistoryEntity>();
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
+                return new List<BotConversationHistoryEntity>();
 
             var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? DefaultLoadCount : maxCount));
             var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
@@ -478,7 +492,8 @@ namespace Bot.ChromeNs
                 {
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
-                        "where Seller = ? and Buyer = ? and UpdatedAtTicks >= ? order by CreatedAtTicks desc limit " + take,
+                        "where ShopKey = ? and Seller = ? and Buyer = ? and UpdatedAtTicks >= ? order by CreatedAtTicks desc limit " + take,
+                        shopKey,
                         seller,
                         buyer,
                         cutoffTicks);
@@ -552,6 +567,7 @@ namespace Bot.ChromeNs
         // Learning needs every Bot card in the session window. UI paging remains
         // bounded through LoadRange, but this query intentionally has no 120/200 limit.
         public static List<BotConversationHistoryEntity> LoadRangeComplete(
+            string shopKey,
             string seller,
             string buyer,
             DateTime from,
@@ -561,9 +577,10 @@ namespace Bot.ChromeNs
             FlushNow();
             EnsureSchema();
 
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0)
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
                 return new List<BotConversationHistoryEntity>();
 
             var fromTicks = from == DateTime.MinValue
@@ -582,8 +599,9 @@ namespace Bot.ChromeNs
                 {
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
-                        "where Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
+                        "where ShopKey = ? and Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
                         + "order by CreatedAtTicks asc",
+                        shopKey,
                         seller,
                         buyer,
                         fromTicks,
@@ -723,6 +741,7 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create table if not exists BotConversationHistoryEntity ("
                     + "EntityId text primary key not null,"
+                    + "ShopKey text,"
                     + "Seller text not null,"
                     + "Buyer text not null,"
                     + "Question text,"
@@ -737,6 +756,17 @@ namespace Bot.ChromeNs
                     + "CreatedAtTicks integer not null default 0,"
                     + "UpdatedAtTicks integer not null default 0"
                     + ")");
+                try
+                {
+                    DbHelper.Db.Execute("alter table BotConversationHistoryEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
+                DbHelper.Db.Execute(
+                    "create index if not exists IX_BotConversationHistory_ShopSellerBuyerCreated "
+                    + "on BotConversationHistoryEntity(ShopKey, Seller, Buyer, CreatedAtTicks)");
                 DbHelper.Db.Execute(
                     "create index if not exists IX_BotConversationHistory_SellerBuyerUpdated "
                     + "on BotConversationHistoryEntity(Seller, Buyer, UpdatedAtTicks)");
@@ -778,11 +808,24 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static string ResolveShopKey(string seller)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current.ShopKey;
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Bot问答历史拒绝无法唯一解析店铺的记录: " + ex.Message, 10);
+                return string.Empty;
+            }
+        }
+
         private static BotConversationHistoryEntity Clone(BotConversationHistoryEntity source)
         {
             return new BotConversationHistoryEntity
             {
                 EntityId = source.EntityId,
+                ShopKey = source.ShopKey,
                 Seller = source.Seller,
                 Buyer = source.Buyer,
                 Question = source.Question,
