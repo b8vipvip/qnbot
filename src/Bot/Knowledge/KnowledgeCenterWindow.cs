@@ -152,7 +152,8 @@ namespace Bot.Knowledge
                     ? string.Empty
                     : (exactQn.Seller.Nick ?? string.Empty).Trim();
             }
-            var sellerMatches = string.Equals(resolvedSeller, seller, StringComparison.Ordinal);
+            var sellerMatches = string.Equals(resolvedSeller, seller, StringComparison.Ordinal)
+                || (shop.HasStableSellerId && resolvedSeller.Length == 0);
             if (!sellerMatches && !shop.HasStableSellerId && resolvedSeller.Length > 0)
                 sellerMatches = string.Equals(
                     Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(resolvedSeller),
