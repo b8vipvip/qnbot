@@ -285,12 +285,13 @@ namespace Bot.ChromeNs
                 var pages = coverage.Value<int?>("historyPages") ?? 0;
                 var turns = coverage.Value<int?>("timelineTurns") ?? 0;
                 var cards = coverage.Value<int?>("botCards") ?? 0;
+                var cardsComplete = coverage.Value<bool?>("botCardsComplete") == true;
                 var corpusComplete = coverage.Value<bool?>("knowledgeCorpusComplete") == true;
                 var mode = Convert.ToString(coverage["writeMode"]);
                 return "历史" + (complete ? "完整" : "不完整")
                     + " / 分页" + pages
                     + " / 消息" + turns
-                    + " / Bot卡片" + cards
+                    + " / Bot卡片" + cards + (cardsComplete ? "完整" : "辅助/未证全")
                     + " / V2全库" + (corpusComplete ? "完整" : "未覆盖")
                     + " / " + (mode == "dry_run" ? "dry-run" : "自动");
             }
@@ -429,7 +430,7 @@ namespace Bot.ChromeNs
                         session.ShopKey, session.Seller, session.Buyer, from, endAt);
                 }
                 if (historyCoverage != null && historyCoverage.IsComplete
-                    && turns.Count > 0 && historyCoverage.MessagesInWindow < turns.Count)
+                    && historyCoverage.MessagesInWindow != turns.Count)
                 {
                     historyCoverage.IsComplete = false;
                     historyCoverage.ErrorCode = "remote_history_turn_count_mismatch";
@@ -444,6 +445,10 @@ namespace Bot.ChromeNs
                     ["unknownTimestampCount"] = historyCoverage == null ? 0 : historyCoverage.UnknownTimestampCount,
                     ["timelineTurns"] = turns.Count,
                     ["botCards"] = cards.Count,
+                    // The global 90-day/10k-card retention policy does not expose
+                    // per-session truncation markers; cards are auxiliary evidence,
+                    // never the authoritative completeness source.
+                    ["botCardsComplete"] = false,
                     ["historyStopReason"] = historyCoverage == null ? string.Empty : historyCoverage.StopReason,
                     ["historyErrorCode"] = historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode,
                     ["knowledgeCorpusComplete"] = false,
