@@ -20,6 +20,38 @@ namespace Bot.ShopScope
             return ResolveBySellerNickCore(sellerNick);
         }
 
+        // Resolve from the exact QN instance that raised an event. Seller nick is
+        // display data and may be shared by multiple accounts; never infer identity
+        // from the nick when the source QN object is available.
+        public static ShopContext ResolveRuntimeBySeller(QN qn)
+        {
+            if (qn == null || qn.Seller == null)
+                throw new InvalidOperationException("千牛会话缺少卖家身份，无法建立店铺作用域。");
+            return Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
+        }
+
+        // Resolve a persisted session by its stable ShopKey after restart. Prefer a
+        // currently connected QN instance, but the profile registry also lets us
+        // restore the scope before that account reconnects.
+        public static ShopContext ResolveRuntimeByShopKey(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                throw new ArgumentException("ShopKey不能为空。", nameof(shopKey));
+
+            var match = SnapshotQns()
+                .Where(x => x != null && x.Seller != null)
+                .Select(x => ShopIdentityResolver.Resolve(x.Seller))
+                .FirstOrDefault(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal));
+            if (match != null) return Profiles.GetOrCreate(match).ToContext();
+
+            var profile = Profiles.GetAll().FirstOrDefault(x =>
+                string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal));
+            if (profile != null) return profile.ToContext();
+
+            throw new InvalidOperationException("未找到ShopKey对应的店铺身份，已阻止跨店回退。");
+        }
+
         public static ShopContext ResolveCurrentForUi()
         {
             var current = QN.CurQN;
