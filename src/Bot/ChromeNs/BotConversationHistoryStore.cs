@@ -988,15 +988,11 @@ namespace Bot.ChromeNs
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
+            // An entered ShopSettingsScope comes from the exact QN instance or
+            // a persisted ShopKey restoration. Its identity is stronger than the
+            // seller's display nickname, which is not a stable authorization key.
             var current = ShopSettingsScope.Current;
-            if (current != null)
-            {
-                if (string.Equals(current.DisplayName, seller, StringComparison.Ordinal)
-                    || string.Equals(current.SellerId, seller, StringComparison.Ordinal))
-                    return current.ShopKey;
-                Log.ErrorWithMaxCount("Bot问答历史拒绝使用与卖家不匹配的当前ShopKey: seller=" + seller, 5);
-                return string.Empty;
-            }
+            if (current != null) return current.ShopKey;
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
             catch (Exception ex)
             {
