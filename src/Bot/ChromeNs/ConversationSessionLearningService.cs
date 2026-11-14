@@ -639,6 +639,7 @@ namespace Bot.ChromeNs
                         "你是电商客服接待复盘与知识迭代系统。分析完整一轮聊天，对比Bot原答案与客服最终实际回复。只输出JSON："
                         + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}],\"workflow_proposals\":[{\"stage\":\"当前流程阶段\",\"trigger\":\"何种买家证据触发\",\"required_evidence\":\"必须先有的真实订单或图片证据\",\"action\":\"WAIT|ASK_EVIDENCE|REPLY|SEND_VERIFIED_GUIDE|HANDOFF\",\"next_stage\":\"下一阶段\",\"evidence\":\"本次人工操作证据\",\"reason\":\"原因\"}]}。"
                         + learningPolicy
+                        + "已通过远程历史分页及时间线条数一致性校验的聊天时间线是本轮唯一完整性依据。Bot问答卡片仅为辅助元数据，可能受本地保留上限影响而不完整；不得因卡片缺失推断Bot未回复或人工回复。"
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
@@ -652,7 +653,7 @@ namespace Bot.ChromeNs
                         + "\n回复模式：" + (localFirst ? "本地优先" : "AI优先")
                         + "\n现有表达风格：" + (string.IsNullOrWhiteSpace(styleBefore) ? "（暂无）" : styleBefore)
                         + "\n\n聊天时间线（买家/Bot/人工客服全部消息）：\n" + BuildTranscript(turns, cards)
-                        + "\n\nBot问答记录：\n" + BuildCards(cards)
+                        + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
                 }
             };
             var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
@@ -681,7 +682,8 @@ namespace Bot.ChromeNs
 
         private static string BuildCards(List<BotConversationHistoryEntity> cards)
         {
-            if (cards == null || cards.Count == 0) return "（无）";
+            if (cards == null || cards.Count == 0)
+                return "（无可用卡片；卡片存储可能不完整，不能推断本轮没有Bot回复）";
             var sb = new StringBuilder();
             foreach (var card in cards.OrderBy(x => x.CreatedAtTicks))
             {
