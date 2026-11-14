@@ -11,7 +11,8 @@ def _source() -> str:
 def test_bot_update_preserves_logged_in_qianniu_process():
     text = _source()
     assert "PostUpdateReconnectWindow = TimeSpan.FromSeconds(120)" in text
-    assert "更新后仅恢复Bot监听并等待原千牛注入重连，不自动重启千牛" in text
+    assert "仅恢复Bot监听、等待原千牛注入重连和安全延迟迁移，不自动重启千牛" in text
+    assert "AuthoritativeCdpSessionCount <= 0" in text
     assert "保持原千牛进程与登录态" in text
     assert "不重启千牛、不操作登录界面" in text
     assert "TryRestartQianniuOnceAsync" not in text

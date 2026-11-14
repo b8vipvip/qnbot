@@ -7,31 +7,60 @@ def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_duplicate_websocket_pages_are_standby_not_permanently_retired():
+def test_duplicate_websocket_pages_use_bounded_recoverable_standby_leases():
     server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
     guard = text("src/Bot/ChromeNs/WebSocketPageLifecycleGuard.cs")
     inject = text("src/Bin/inject.js")
 
-    assert "_duplicateRetireCapableSessions" in server
-    assert 'jo["duplicateRetire"]' in server
-    assert 'method = "retireDuplicate"' not in server
-    assert 'physicalClose=false' in server
-    assert '保持在线standby，不物理关闭' in server
+    assert "_recoverableStandbySessions" in server
+    assert 'jo["recoverableStandby"]' in server
+    assert 'method = "retireDuplicate"' in server
+    assert "var retryAfterMs = 300000 +" in server
+    assert "sessionId.GetHashCode() % 240000U" in server
+    assert "session.Send(command)" in server
     assert 'method = "retireDuplicate"' not in guard
     assert 'Session.Close()' not in guard
 
-    # Keep compatibility with already-loaded v10 pages. They still understand the old command,
-    # but the new server/guard never sends it, so normal Bot restarts cannot permanently retire them.
-    assert "var websocketRetired = false;" in inject
-    assert "duplicateRetire: true" in inject
+    # The v12 payload keeps legacy command compatibility but treats standby as a
+    # bounded lease; it never latches a page into a permanently retired state.
+    assert "var websocketStandbyUntil = 0;" in inject
+    assert "websocketRetired" not in inject
+    assert "duplicateRetire: false" in inject
+    assert "recoverableStandby: true" in inject
     assert 'param.method === "retireDuplicate"' in inject
-    assert "if (!websocketRetired) scheduleReconnect();" in inject
+    assert "var retryAfterMs = Number(param.retryAfterMs) || 300000;" in inject
+    assert "scheduleReconnect(retryAfterMs);" in inject
+    assert "pendingStatus = payload;" in inject
+    assert "var businessEvent = type !== \"qnbotStatus\" && !diagnosticOnly;" in inject
+    assert "scheduleReconnect();" in inject
+
+
+def test_idle_duplicate_sweeper_uses_business_activity_not_transport_heartbeats():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    message_handler = server[
+        server.index("webSocket.NewMessageReceived +="):
+        server.index("webSocket.SessionClosed +=")
+    ]
+
+    assert "private void TouchSessionBusinessActivity(WebSocketSession session)" in server
+    assert "_sessionLastActivityUtc.TryAdd(session.SessionID, DateTime.UtcNow);" in server
+    assert "_sessionLastActivityUtc[session.SessionID] = DateTime.UtcNow;" in server
+    assert 'if (string.Equals(value, "{\\"type\\":\\"hi\\"}", StringComparison.Ordinal))' in message_handler
+    assert 'if (wMsg == null || wMsg.Type == "hi") return;' in message_handler
+    assert 'wMsg.Type != "qnbotStatus"' in message_handler
+    assert 'wMsg.Type != "imsdkApiScan"' in message_handler
+    assert 'wMsg.Type != "imsdkInvokeTrace"' in message_handler
+    assert "TouchSessionBusinessActivity(session);" in message_handler
+    assert "TouchSession(session);" not in message_handler
+    assert message_handler.index("if (wMsg == null || wMsg.Type == \"hi\") return;") < message_handler.index(
+        "TouchSessionBusinessActivity(session);"
+    )
 
 
 def test_injection_marker_for_existing_payload_remains_consistent():
     inject = text("src/Bin/inject.js")
     qn_inject = text("src/Bot/Common/QNInject.cs")
-    marker = "20260906-zh-cn-ws-retire-v10"
+    marker = "20261114-ws-recoverable-reconnect-v12"
 
     assert 'window.__qnbotInjectVersion = "' + marker + '";' in inject
     assert 'private const string injectVersionMarker = "' + marker + '";' in qn_inject
@@ -45,7 +74,8 @@ def test_websocket_startup_is_idempotent_and_retries_transient_start_failures():
     assert "private const int WebSocketStartMaxAttempts = 5;" in server
     assert "private const int WebSocketStartRetryBaseDelayMs = 250;" in server
     assert "lock (_webSocketStartSync)" in server
-    assert "if (_webSocketServer != null)" in server
+    assert "if (_webSocketServer != null && IsLoopbackListenerActive())" in server
+    assert "ReleaseStaleSessions(" in server
     assert "if (!webSocket.Setup(config))" in server
     assert "for (var attempt = 1; attempt <= WebSocketStartMaxAttempts; attempt++)" in server
     assert "if (webSocket.Start())" in server

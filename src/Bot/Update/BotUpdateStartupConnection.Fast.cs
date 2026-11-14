@@ -1,4 +1,5 @@
 using Bot.UpdateNs;
+using Bot.Common;
 using BotLib;
 using System;
 using System.Linq;
@@ -11,11 +12,10 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Repairs the narrow startup case where the Bot process is healthy but the local
-    /// 127.0.0.1:41010 listener or Qianniu injected page is not yet available.
+    /// 127.0.0.1:41010 listener or Qianniu injected business channel is not yet available.
     ///
-    /// Automatic Bot updates must preserve the already logged-in Qianniu process and session.
-    /// Recovery therefore owns only the Bot listener and waiting/retry policy. It never closes,
-    /// kills, restarts, focuses, clicks, or otherwise drives Qianniu UI.
+    /// Recovery owns the Bot listener and safe resource migration only. It never closes,
+    /// kills, restarts, focuses, clicks, or otherwise drives a live Qianniu UI.
     /// </summary>
     internal static class QnStartupConnectionSelfHeal
     {
@@ -24,7 +24,12 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan PostUpdateGracePeriod = TimeSpan.FromSeconds(25);
         private static readonly TimeSpan PostUpdateHealthWait = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan PostUpdateReconnectWindow = TimeSpan.FromSeconds(120);
+        private static readonly TimeSpan HealthySnapshotMaxAge = TimeSpan.FromSeconds(90);
+        private static readonly TimeSpan DeferredRepairRetryDelay = TimeSpan.FromSeconds(30);
+        private static long _lastDeferredRepairAttemptTicks;
         private static int _started;
+        private static int _deferredRepairCompleted;
+        private static int _deferredRepairRunning;
 
         public static void Start()
         {
@@ -33,15 +38,17 @@ namespace Bot.ChromeNs
             var postUpdateLaunchAuthorized = UpdateStartupHealthService.IsPostUpdateLaunchAuthorized();
             if (postUpdateLaunchAuthorized)
             {
-                Log.Info("千牛启动连接自恢复识别到真实更新目标进程；更新后仅恢复Bot监听并等待原千牛注入重连，不自动重启千牛。");
+                Log.Info("千牛启动连接自恢复识别到真实更新目标进程；仅恢复Bot监听、等待原千牛注入重连和安全延迟迁移，不自动重启千牛。");
             }
+            // Keep a low-frequency repair watcher alive even when the business channel is
+            // already healthy. Startup can legitimately defer webui.zip migration while
+            // Qianniu is open; a healthy old page must not make that deferred repair disappear.
+            Task.Run(() => RunDeferredRepairWatcherAsync());
             Task.Run(() => RunAsync(postUpdateLaunchAuthorized));
         }
 
         private static async Task RunAsync(bool postUpdateLaunchAuthorized)
         {
-            // Keep the quick startup recovery for the common race where the new Bot process has not
-            // yet rebound 41010 or the existing Qianniu WebView needs a few seconds to reconnect.
             var delays = new[] { 2000, 3500, 5500, 8000, 11000 };
             for (var attempt = 0; attempt < delays.Length; attempt++)
             {
@@ -49,15 +56,15 @@ namespace Bot.ChromeNs
                 try
                 {
                     var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                    if (snapshot != null && snapshot.WebSocketSessionCount > 0)
+                    if (IsBusinessChannelReady(snapshot))
                     {
-                        Log.Info("千牛启动连接自恢复完成：注入WebSocket已连接，attempt=" + (attempt + 1));
+                        Log.Info("千牛启动连接自恢复完成：权威CDP业务通道已就绪，attempt=" + (attempt + 1));
                         return;
                     }
 
-                    if (!IsLoopbackListenerActive())
+                    if (!IsBotListenerActive())
                     {
-                        Log.Error("千牛启动连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务，attempt=" + (attempt + 1));
+                        Log.Error("千牛启动连接自恢复：Bot 127.0.0.1:41010监听未就绪，重建Bot WebSocket服务，attempt=" + (attempt + 1));
                         MyWebSocketServer.WSocketSvrInst.Start();
                     }
                 }
@@ -68,13 +75,18 @@ namespace Bot.ChromeNs
             }
 
             var finalSnapshot = BotConnectionDiagnostics.GetSnapshot();
-            if (finalSnapshot != null && finalSnapshot.WebSocketSessionCount > 0)
+            if (IsBusinessChannelReady(finalSnapshot))
             {
-                Log.Info("千牛启动连接自恢复完成：注入WebSocket已连接，fast-recovery-final=true");
+                Log.Info("千牛启动连接自恢复完成：权威CDP业务通道已就绪，fast-recovery-final=true");
                 return;
             }
 
-            if (postUpdateLaunchAuthorized)
+            if (!Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+            {
+                await TryRepairDeferredResourcesAsync(0).ConfigureAwait(false);
+            }
+
+            if (postUpdateLaunchAuthorized && Volatile.Read(ref _deferredRepairCompleted) == 0)
             {
                 var startupReady = await WaitForPostUpdateStartupReadyAsync().ConfigureAwait(false);
                 if (startupReady)
@@ -88,10 +100,38 @@ namespace Bot.ChromeNs
                 }
             }
 
-            Log.Error("千牛启动连接进入降级恢复：Bot进程保持运行；保护当前千牛进程与登录态，不自动重启千牛。后续每30秒低频检测并自动恢复。"
+            Log.Error("千牛启动连接进入降级恢复：Bot进程保持运行；保护当前千牛进程与登录态，不自动重启千牛。"
+                + " 每30秒检查Bot监听、权威CDP和延迟资源迁移。"
                 + " ws=" + (finalSnapshot == null ? string.Empty : finalSnapshot.WebSocketStatus)
-                + ", injection=" + (finalSnapshot == null ? string.Empty : finalSnapshot.InjectionStatus));
+                + ", injection=" + (finalSnapshot == null ? string.Empty : finalSnapshot.InjectionStatus)
+                + ", authoritativeCdp=" + (finalSnapshot == null ? 0 : finalSnapshot.AuthoritativeCdpSessionCount)
+                + ", cdpReady=" + (finalSnapshot != null && finalSnapshot.CdpReady));
             await RunDegradedRecoveryAsync().ConfigureAwait(false);
+        }
+
+        private static bool IsBusinessChannelReady(ConnectionDiagnosticsSnapshot snapshot)
+        {
+            if (snapshot == null
+                || !snapshot.WebSocketServerStarted
+                || snapshot.WebSocketSessionCount <= 0
+                || !snapshot.InjectionConnected
+                || snapshot.AuthoritativeCdpSessionCount <= 0
+                || !snapshot.CdpReady
+                || string.IsNullOrWhiteSpace(snapshot.Seller))
+            {
+                return false;
+            }
+
+            return snapshot.LastUpdateTime != DateTime.MinValue
+                && DateTime.Now - snapshot.LastUpdateTime <= HealthySnapshotMaxAge;
+        }
+
+        private static bool IsBotListenerActive()
+        {
+            var snapshot = BotConnectionDiagnostics.GetSnapshot();
+            return snapshot != null
+                && snapshot.WebSocketServerStarted
+                && IsLoopbackListenerActive();
         }
 
         private static async Task<bool> WaitForPostUpdateStartupReadyAsync()
@@ -101,48 +141,72 @@ namespace Bot.ChromeNs
             {
                 if (UpdateStartupHealthService.IsPostUpdateStartupReady()) return true;
                 var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                if (snapshot != null && snapshot.WebSocketSessionCount > 0) return false;
+                if (IsBusinessChannelReady(snapshot)) return true;
                 await Task.Delay(300).ConfigureAwait(false);
             }
-            return UpdateStartupHealthService.IsPostUpdateStartupReady();
+            return UpdateStartupHealthService.IsPostUpdateStartupReady()
+                || IsBusinessChannelReady(BotConnectionDiagnostics.GetSnapshot());
+        }
+
+        private static async Task RunDeferredRepairWatcherAsync()
+        {
+            var cycle = 0;
+            while (Volatile.Read(ref _deferredRepairCompleted) == 0)
+            {
+                await Task.Delay(DegradedRetryDelay).ConfigureAwait(false);
+                if (Volatile.Read(ref _deferredRepairCompleted) != 0) return;
+                cycle++;
+
+                try
+                {
+                    // Never write webui.zip/sign.json or clear CEF data while any Qianniu
+                    // resource-owning process is present. Keep watching until a safe window.
+                    if (Bot.LanguageStartupSafetyGate.IsQianniuRunning()) continue;
+                    await TryRepairDeferredResourcesAsync(cycle).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("千牛安全资源修复后台观察器失败，将继续低频重试: " + ex.Message, 10);
+                }
+            }
         }
 
         private static async Task<bool> RunPostUpdateRecoveryAsync()
         {
-            Log.Info("更新后连接恢复进入有限宽限期：等待原千牛注入页面自行重连 "
+            Log.Info("更新后连接恢复进入有限宽限期：等待原千牛注入页面建立权威CDP业务通道 "
                 + (int)PostUpdateGracePeriod.TotalSeconds
                 + " 秒；自动更新不会关闭或重启千牛。");
 
             if (await WaitForInjectionAsync(PostUpdateGracePeriod, "post-update-grace").ConfigureAwait(false))
             {
-                Log.Info("更新后连接恢复：宽限期内原千牛注入已自行重连；千牛进程和登录态保持不变。");
+                Log.Info("更新后连接恢复：原千牛权威CDP业务通道已就绪；千牛进程和登录态保持不变。");
                 return true;
             }
 
-            if (!IsLoopbackListenerActive())
+            if (!IsBotListenerActive())
             {
-                Log.Error("更新后连接恢复：Bot 41010监听仍未就绪，先恢复Bot WebSocket；不会把Bot端监听故障转换为千牛重启。");
+                Log.Error("更新后连接恢复：Bot 41010监听未就绪，先恢复Bot WebSocket；不会把Bot端监听故障转换为千牛重启。");
                 try { MyWebSocketServer.WSocketSvrInst.Start(); }
                 catch (Exception ex) { Log.Exception(ex); }
 
                 if (await WaitForInjectionAsync(TimeSpan.FromSeconds(10), "post-update-listener-retry").ConfigureAwait(false))
                 {
-                    Log.Info("更新后连接恢复：41010恢复后原千牛注入已重新连接；未重启千牛。");
+                    Log.Info("更新后连接恢复：41010恢复后权威CDP业务通道已就绪；未重启千牛。");
                     return true;
                 }
             }
 
-            Log.Error("更新后Bot WS已恢复但原千牛注入尚未重连；为保护已登录千牛会话，不执行千牛重启、不操作登录界面。"
+            Log.Error("更新后Bot WS已恢复但权威CDP业务通道尚未就绪；为保护已登录千牛会话，不执行千牛重启、不操作登录界面。"
                 + " 继续等待 " + (int)PostUpdateReconnectWindow.TotalSeconds + " 秒。");
 
             if (await WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session").ConfigureAwait(false))
             {
-                Log.Info("更新后连接恢复完成：原千牛注入在保护窗口内重新连接；未重启千牛。");
+                Log.Info("更新后连接恢复完成：原千牛权威CDP业务通道已恢复；未重启千牛。");
                 return true;
             }
 
-            Log.Error("更新后千牛注入在 " + (int)PostUpdateReconnectWindow.TotalSeconds
-                + " 秒内仍未重连；保持原千牛进程与登录态，转入低频等待，不重启千牛、不操作登录界面。");
+            Log.Error("更新后千牛权威CDP业务通道在 " + (int)PostUpdateReconnectWindow.TotalSeconds
+                + " 秒内仍未恢复；保持原千牛进程与登录态，转入低频等待，不重启千牛、不操作登录界面。");
             return false;
         }
 
@@ -151,10 +215,15 @@ namespace Bot.ChromeNs
             var until = DateTime.UtcNow + timeout;
             while (DateTime.UtcNow < until)
             {
-                var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                if (snapshot != null && snapshot.WebSocketSessionCount > 0) return true;
+                if (IsBusinessChannelReady(BotConnectionDiagnostics.GetSnapshot())) return true;
 
-                if (!IsLoopbackListenerActive())
+                if (Volatile.Read(ref _deferredRepairCompleted) == 0
+                    && !Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+                {
+                    await TryRepairDeferredResourcesAsync(0).ConfigureAwait(false);
+                }
+
+                if (!IsBotListenerActive())
                 {
                     try { MyWebSocketServer.WSocketSvrInst.Start(); }
                     catch (Exception ex)
@@ -169,6 +238,11 @@ namespace Bot.ChromeNs
 
         private static async Task RunDegradedRecoveryAsync()
         {
+            if (!Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+            {
+                await TryRepairDeferredResourcesAsync(0).ConfigureAwait(false);
+            }
+
             var cycle = 0;
             while (true)
             {
@@ -177,30 +251,90 @@ namespace Bot.ChromeNs
                 try
                 {
                     var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                    if (snapshot != null && snapshot.WebSocketSessionCount > 0)
+                    if (IsBusinessChannelReady(snapshot))
                     {
-                        Log.Info("千牛降级连接自恢复完成：注入WebSocket重新连接，cycle=" + cycle);
+                        Log.Info("千牛降级连接自恢复完成：权威CDP业务通道已重新建立，cycle=" + cycle);
                         return;
                     }
 
-                    if (!IsLoopbackListenerActive())
+                    if (!IsBotListenerActive())
                     {
-                        Log.ErrorWithMaxCount("千牛降级连接自恢复：127.0.0.1:41010 未监听，重新启动Bot WebSocket服务。 cycle=" + cycle, 20);
+                        Log.ErrorWithMaxCount("千牛降级连接自恢复：Bot 127.0.0.1:41010监听未就绪，重建Bot WebSocket服务。 cycle=" + cycle, 20);
                         MyWebSocketServer.WSocketSvrInst.Start();
-                        continue;
+                    }
+
+                    if (Volatile.Read(ref _deferredRepairCompleted) == 0
+                        && !Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+                    {
+                        await TryRepairDeferredResourcesAsync(cycle).ConfigureAwait(false);
                     }
 
                     if (cycle == 1 || cycle % 20 == 0)
                     {
-                        Log.Info("千牛降级连接仍在等待原注入页面：保护千牛进程与登录态，不会自动重启或操作登录界面。 cycle=" + cycle
+                        Log.Info("千牛降级连接仍未达到业务就绪：不会把standby页面误判为恢复成功；保护千牛进程与登录态。"
+                            + " cycle=" + cycle
                             + ", ws=" + (snapshot == null ? string.Empty : snapshot.WebSocketStatus)
-                            + ", injection=" + (snapshot == null ? string.Empty : snapshot.InjectionStatus));
+                            + ", injection=" + (snapshot == null ? string.Empty : snapshot.InjectionStatus)
+                            + ", authoritativeCdp=" + (snapshot == null ? 0 : snapshot.AuthoritativeCdpSessionCount)
+                            + ", cdpReady=" + (snapshot != null && snapshot.CdpReady)
+                            + ", deferredRepairCompleted=" + (Volatile.Read(ref _deferredRepairCompleted) != 0));
                     }
                 }
                 catch (Exception ex)
                 {
                     Log.ErrorWithMaxCount("千牛降级连接自恢复检查失败：" + ex.Message, 20);
                 }
+            }
+        }
+
+        private static async Task TryRepairDeferredResourcesAsync(int cycle)
+        {
+            if (Volatile.Read(ref _deferredRepairCompleted) != 0) return;
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var previousAttemptTicks = Interlocked.Read(ref _lastDeferredRepairAttemptTicks);
+            if (previousAttemptTicks > 0
+                && nowTicks - previousAttemptTicks < DeferredRepairRetryDelay.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastDeferredRepairAttemptTicks, nowTicks, previousAttemptTicks) != previousAttemptTicks) return;
+            if (Interlocked.CompareExchange(ref _deferredRepairRunning, 1, 0) != 0) return;
+
+            try
+            {
+                if (Bot.LanguageStartupSafetyGate.IsQianniuRunning()) return;
+
+                var languageResult = await Bot.LanguageStartupSafetyGate.CheckAndRepairLanguageSafely().ConfigureAwait(false);
+                BotConnectionDiagnostics.RecordLanguageStatus(
+                    languageResult.IsOk,
+                    languageResult.StatusText,
+                    languageResult.Detail);
+
+                if (Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+                {
+                    Log.Info("千牛在延迟语言修复后重新启动；停止后续资源迁移，保留当前登录态。");
+                    return;
+                }
+
+                var injectReady = await QNInject.TryRepairWhenQianniuClosedAsync().ConfigureAwait(false);
+                if (languageResult.IsOk && injectReady)
+                {
+                    Interlocked.Exchange(ref _deferredRepairCompleted, 1);
+                    Log.Info("千牛延迟资源修复已完成：v12注入与简体中文资源均已验证；等待用户启动/重新打开千牛加载新WebView。 cycle=" + cycle);
+                }
+                else
+                {
+                    Log.ErrorWithMaxCount("千牛延迟资源修复尚未完成，将在下一个安全周期重试。"
+                        + " cycle=" + cycle
+                        + ", languageOk=" + languageResult.IsOk
+                        + ", injectReady=" + injectReady
+                        + ", languageStatus=" + (languageResult.StatusText ?? string.Empty), 10);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("千牛延迟资源修复失败，将在下一个安全周期重试: " + ex.Message, 10);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _deferredRepairRunning, 0);
             }
         }
 

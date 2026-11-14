@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using ICSharpCode.SharpZipLib.Zip;
 using BotLib;
@@ -20,7 +21,9 @@ namespace Bot.Common
 
 public class QNInject
     {
-        private static readonly string[] workbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang" };
+        private static readonly string[] workbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
+        private static readonly string[] resourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
+        private static readonly SemaphoreSlim repairGate = new SemaphoreSlim(1, 1);
         private const string webuiResDir = "newWebui";
         private const string webuiFile = "webui.zip";
         private const string signFile = "sign.json";
@@ -30,7 +33,7 @@ public class QNInject
         private const string languageScriptFileName = "qnbot-language.js";
         private const string embeddedInjectResource = "Bot.Resources.inject.js";
         private const string embeddedLanguageResource = "Bot.Resources.language.js";
-        private const string injectVersionMarker = "20260906-zh-cn-ws-retire-v10";
+        private const string injectVersionMarker = "20261114-ws-recoverable-reconnect-v12";
         private const string languageVersionMarker = "20260713-hans-all-pages-v3";
         private const string injectedScriptVersionedSrc = injectedScriptSrc + "?v=" + injectVersionMarker;
         private const string languageScriptVersionedSrc = languageScriptFileName + "?v=" + languageVersionMarker;
@@ -39,53 +42,84 @@ public class QNInject
 
         public static async Task StartInject()
         {
+            var ready = await TryRepairWhenQianniuClosedAsync().ConfigureAwait(false);
+            if (!ready)
+            {
+                Log.Info("千牛注入迁移尚未执行：千牛资源进程仍在运行、安装资源暂不可用或修复未完成；保留千牛进程与登录态，等待安全时机自动重试。");
+            }
+        }
+
+        /// <summary>
+        /// Applies the embedded Qianniu payload only while every process that can own the
+        /// active WebView resources is closed. This method is safe to call repeatedly from
+        /// startup recovery; it never prompts, kills, restarts, or drives Qianniu.
+        /// </summary>
+        public static async Task<bool> TryRepairWhenQianniuClosedAsync()
+        {
+            if (!await repairGate.WaitAsync(0).ConfigureAwait(false))
+            {
+                Log.Info("千牛注入修复已在执行，本次重复请求合并。");
+                return false;
+            }
+
             try
             {
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("千牛注入迁移延后：AliWorkbench/AliRender资源进程仍在运行；不修改webui.zip/sign.json/CEF缓存。");
+                    return false;
+                }
+
+                // Require a short quiet window so a closing WebView cannot race the archive write.
+                await Task.Delay(1000).ConfigureAwait(false);
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("千牛注入迁移取消：检测到千牛资源进程重新启动，继续保护当前会话。");
+                    return false;
+                }
+
                 var installPaths = FindInstallPaths();
                 if (installPaths.Count < 1)
                 {
-                    MessageBox.Show("没有检测到安装的千牛!!");
-                    return;
+                    Log.ErrorWithMaxCount("千牛注入修复未执行：没有检测到有效的千牛安装路径。", 5);
+                    return false;
                 }
 
                 var resourcePaths = FindResourcePaths(installPaths);
                 if (resourcePaths.Count < 1)
                 {
-                    MessageBox.Show("获取千牛资源目录失败!!");
-                    return;
+                    Log.ErrorWithMaxCount("千牛注入修复未执行：没有找到可验证的Resources\\newWebui\\webui.zip。", 5);
+                    return false;
                 }
 
                 var needInjectPaths = resourcePaths.Where(p => !IsInjected(p)).ToList();
-                Log.Info("千牛注入检测: marker=" + injectVersionMarker + ", languageMarker=" + languageVersionMarker + ", resources=" + resourcePaths.Count + ", needInject=" + needInjectPaths.Count);
-                if (needInjectPaths.Count < 1)
+                Log.Info("千牛注入安全修复检测: marker=" + injectVersionMarker
+                    + ", languageMarker=" + languageVersionMarker
+                    + ", resources=" + resourcePaths.Count
+                    + ", needInject=" + needInjectPaths.Count);
+
+                if (needInjectPaths.Count == 0)
                 {
-                    Log.Info("千牛注入已是最新版本: " + injectVersionMarker);
-                    return;
+                    Log.Info("千牛注入资源已是当前版本且sign.json已清理: " + injectVersionMarker);
+                    return true;
                 }
 
-                if (IsWorkbenchRunning())
-                {
-                    if (MessageBox.Show("检测到千牛正在运行。需要先退出千牛后注入插件，是否现在关闭千牛并继续？", "提示", MessageBoxButton.YesNo)
-                        == MessageBoxResult.No)
-                    {
-                        return;
-                    }
-                    else
-                    {
-                        KillWorkbenchProcesses();
-                    }
-                    await Task.Delay(3000);
-                }
-
-                int success = 0;
+                var success = 0;
                 foreach (var resourcePath in needInjectPaths)
                 {
+                    if (IsWorkbenchRunning())
+                    {
+                        Log.Info("千牛注入迁移中止：资源写入期间检测到千牛重新启动，等待下次安全窗口。");
+                        return false;
+                    }
+
                     try
                     {
                         if (InjectScript(resourcePath))
                         {
                             success++;
-                            Log.Info("千牛插件注入成功: marker=" + injectVersionMarker + ", resourcePath=" + resourcePath);
+                            Log.Info("千牛插件安全注入成功: marker=" + injectVersionMarker
+                                + ", resourcePath=" + resourcePath);
                         }
                     }
                     catch (Exception ex)
@@ -94,31 +128,44 @@ public class QNInject
                     }
                 }
 
-                // webui.zip can be updated successfully while Chromium continues to serve the
-                // previous HTML/JS from disk. Clear only disposable web caches after a real
-                // version upgrade. Keep Local Storage/IndexedDB/cookies so the user stays signed in.
                 if (success > 0)
                 {
-                    ClearQianniuWebCaches();
+                    if (IsWorkbenchRunning())
+                    {
+                        Log.Info("千牛资源进程已重新启动，跳过CEF缓存清理以保护活动会话。");
+                    }
+                    else
+                    {
+                        ClearQianniuWebCaches();
+                    }
                 }
 
                 if (success == needInjectPaths.Count)
                 {
-                    MessageBox.Show("千牛插件注入成功，请重新启动千牛!!");
+                    Log.Info("千牛注入迁移完成：所有目标资源已写入" + injectVersionMarker
+                        + "；请启动或重新打开千牛以加载新页面脚本。");
+                    return true;
                 }
-                else if (success > 0)
-                {
-                    MessageBox.Show("千牛插件部分注入成功，请重新启动千牛后检查连接状态。");
-                }
-                else
-                {
-                    MessageBox.Show("千牛插件注入失败!!");
-                }
+
+                Log.Error("千牛注入迁移未完成: success=" + success
+                    + ", total=" + needInjectPaths.Count
+                    + ", marker=" + injectVersionMarker);
+                return false;
             }
             catch (Exception ex)
             {
-                Log.Exception(ex);
+                Log.Exception(ex, "TryRepairWhenQianniuClosed");
+                return false;
             }
+            finally
+            {
+                repairGate.Release();
+            }
+        }
+
+        internal static bool IsQianniuResourceProcessRunning()
+        {
+            return IsWorkbenchRunning();
         }
 
         private static string FindInstallPath()
@@ -304,29 +351,29 @@ public class QNInject
 
         private static bool IsWorkbenchRunning()
         {
-            return workbenchProcessNames.Any(name => Process.GetProcessesByName(name).Length > 0);
-        }
-
-        private static void KillWorkbenchProcesses()
-        {
-            foreach (var name in workbenchProcessNames)
+            foreach (var name in resourceOwnerProcessNames)
             {
-                foreach (var p in Process.GetProcessesByName(name))
+                try
                 {
-                    try
-                    {
-                        p.Kill();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Exception(ex);
-                    }
+                    if (Process.GetProcessesByName(name).Length > 0) return true;
+                }
+                catch (Exception ex)
+                {
+                    // If process ownership cannot be inspected, fail closed and do not mutate QN resources.
+                    Log.ErrorWithMaxCount("无法确认千牛资源进程状态，延后注入修复: process=" + name + ", error=" + ex.Message, 5);
+                    return true;
                 }
             }
+            return false;
         }
 
         private static void ClearQianniuWebCaches()
         {
+            if (IsWorkbenchRunning())
+            {
+                Log.Info("千牛资源进程已启动，跳过CEF缓存清理。");
+                return;
+            }
             var cacheNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "Cache",
@@ -362,6 +409,11 @@ public class QNInject
             int failed = 0;
             foreach (var path in targets.OrderByDescending(p => p.Length))
             {
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("千牛资源进程已启动，停止后续CEF缓存清理。");
+                    break;
+                }
                 try
                 {
                     if (!Directory.Exists(path)) continue;
@@ -455,7 +507,9 @@ public class QNInject
             try
             {
                 var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
+                var signPath = Path.Combine(resourcePath, webuiResDir, signFile);
                 if (!File.Exists(webuiResPath)) return false;
+                if (File.Exists(signPath) && new FileInfo(signPath).Length > 0) return false;
                 using (var zipFile = new ZipFile(webuiResPath))
                 {
                     var recentContent = ReadZipEntryText(zipFile, chatRecentHtmlFile);
@@ -532,6 +586,11 @@ public class QNInject
 
         private static bool InjectScript(string resourcePath)
         {
+            if (IsWorkbenchRunning())
+            {
+                Log.Info("千牛资源进程仍在运行，拒绝修改webui.zip: " + resourcePath);
+                return false;
+            }
             var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
             var signPath = Path.Combine(resourcePath, webuiResDir, signFile);
             var injectJsContent = ReadScriptPayload(embeddedInjectResource, "inject.js", injectVersionMarker);
@@ -563,6 +622,11 @@ public class QNInject
                     languageEntryNames.Add(GetZipDirectory(htmlEntryName) + languageScriptFileName);
                 }
 
+                if (IsWorkbenchRunning())
+                {
+                    Log.Info("webui.zip写入前检测到千牛重新启动，取消本次注入: " + webuiResPath);
+                    return false;
+                }
                 zipFile.BeginUpdate();
                 foreach (var item in patchedHtml)
                 {
@@ -576,14 +640,14 @@ public class QNInject
                 zipFile.CommitUpdate();
                 Log.Info("千牛简体中文脚本覆盖HTML入口: " + patchedHtml.Count + ", languageFiles=" + languageEntryNames.Count);
 
-                if (File.Exists(signPath))
+                if (IsWorkbenchRunning())
                 {
-                    var signFi = new FileInfo(signPath);
-                    if (signFi.Length > 0)
-                    {
-                        signFi.Delete();
-                        File.Create(signPath).Dispose();
-                    }
+                    Log.Info("webui.zip写入后检测到千牛重新启动；保留sign.json并等待下次安全修复: " + signPath);
+                    return false;
+                }
+                if (File.Exists(signPath) && new FileInfo(signPath).Length > 0)
+                {
+                    File.WriteAllText(signPath, string.Empty, Encoding.UTF8);
                 }
                 return true;
             }

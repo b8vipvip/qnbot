@@ -33,7 +33,7 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, WebSocketSession> _liveSessions = new ConcurrentDictionary<string, WebSocketSession>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, bool> _duplicateRetireCapableSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _recoverableStandbySessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _standbyLoggedSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
         private readonly object _webSocketStartSync = new object();
@@ -88,6 +88,12 @@ namespace Bot.ChromeNs
         {
             if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
             _liveSessions[session.SessionID] = session;
+            _sessionLastActivityUtc.TryAdd(session.SessionID, DateTime.UtcNow);
+        }
+
+        private void TouchSessionBusinessActivity(WebSocketSession session)
+        {
+            if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
             _sessionLastActivityUtc[session.SessionID] = DateTime.UtcNow;
         }
 
@@ -98,14 +104,36 @@ namespace Bot.ChromeNs
             if (!_liveSessions.TryGetValue(sessionId, out session) || session == null) return;
             if (!_standbyLoggedSessions.TryAdd(sessionId, true)) return;
 
-            // A duplicate page is now a recoverable standby lease, never a permanently retired
-            // WebView. Closing it used to latch websocketRetired=true in the injected page, so a
-            // later Bot restart could not recover until the user restarted Qianniu. Keep the raw
-            // socket online; full CDP ownership remains quarantined by TryClaimSellerSession.
-            Log.Info("非权威千牛WebSocket页面保持在线standby，不物理关闭: sellerRef="
-                + DiagnosticRef("seller", sellerNick)
-                + ", sessionRef=" + DiagnosticRef("session", sessionId)
-                + ", reason=" + reason + ", physicalClose=false");
+            // v12 pages advertise a recoverable standby lease. Retire excess duplicate
+            // sockets so one seller cannot retain dozens of idle WebSocket sessions.
+            // The page remains locally active and reconnects after retryAfterMs, or sooner
+            // when a real conversation/message event occurs.
+            Task.Run(() =>
+            {
+                try
+                {
+                    // Deterministic per-session jitter prevents all retired frames from
+                    // reconnecting in one 5-minute burst. Real business events wake them early.
+                    var retryAfterMs = 300000 + (int)((uint)sessionId.GetHashCode() % 240000U);
+                    var command = JsonConvert.SerializeObject(new
+                    {
+                        method = "retireDuplicate",
+                        reason = reason ?? "duplicate",
+                        retryAfterMs = retryAfterMs
+                    });
+                    session.Send(command);
+                    Log.Info("非权威千牛WebSocket页面已降级为可恢复离线standby: sellerRef="
+                        + DiagnosticRef("seller", sellerNick)
+                        + ", sessionRef=" + DiagnosticRef("session", sessionId)
+                        + ", reason=" + reason + ", retryAfterMs=" + retryAfterMs);
+                }
+                catch (Exception ex)
+                {
+                    bool ignored;
+                    _standbyLoggedSessions.TryRemove(sessionId, out ignored);
+                    Log.Exception(ex, "RetireDuplicateSession:" + DiagnosticRef("session", sessionId));
+                }
+            });
         }
 
         private void EnforceDuplicateSellerSessionCapLocked(string sellerNick)
@@ -123,11 +151,11 @@ namespace Bot.ChromeNs
             var excess = active.Count - MaxDuplicateSellerSessions;
             if (excess <= 0) return;
 
-            // The old retire capability remains useful to identify pages from the modern injection
-            // bundle, but excess pages are only demoted to lightweight standby. They stay connected
-            // so they can participate in a later authority election after a Bot restart/session loss.
+            // Only v12+ pages explicitly advertise that they understand a bounded, recoverable
+            // standby lease. Legacy pages are never sent a retirement command because older
+            // injectors permanently latched themselves out of reconnect.
             foreach (var victim in active
-                .Where(id => _duplicateRetireCapableSessions.ContainsKey(id))
+                .Where(id => _recoverableStandbySessions.ContainsKey(id))
                 .Take(excess))
             {
                 ScheduleDuplicateSessionClose(victim, sellerNick, "duplicate_cap_standby");
@@ -248,6 +276,10 @@ namespace Bot.ChromeNs
                 _duplicateSellerSessions.TryRemove(sessionId, out ignored);
                 _standbyLoggedSessions.TryRemove(sessionId, out _);
                 _sessionLastActivityUtc[sessionId] = DateTime.UtcNow;
+                // Authority promotion turns the previous owner into a duplicate. Reapply
+                // the per-seller cap here as well as on first claim, otherwise repeated
+                // foreground switches can grow the duplicate set beyond its configured bound.
+                EnforceDuplicateSellerSessionCapLocked(sellerNick);
                 BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
             }
 
@@ -444,13 +476,80 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool IsLoopbackListenerActive()
+        {
+            try
+            {
+                return System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                    .Any(endpoint => endpoint.Port == 41010
+                        && (System.Net.IPAddress.IsLoopback(endpoint.Address)
+                            || endpoint.Address.Equals(System.Net.IPAddress.Any)
+                            || endpoint.Address.Equals(System.Net.IPAddress.IPv6Any)));
+            }
+            catch { return false; }
+        }
+
+        private void ReleaseStaleSessions(string reason)
+        {
+            var sessionIds = new HashSet<string>(_connectedSessions.Keys, StringComparer.Ordinal);
+            sessionIds.UnionWith(_liveSessions.Keys);
+            sessionIds.UnionWith(_clients.Keys);
+
+            foreach (var sessionId in sessionIds)
+            {
+                WebSocketSession ignoredSession;
+                bool ignoredBool;
+                DateTime ignoredTime;
+                string ignoredString;
+                _liveSessions.TryRemove(sessionId, out ignoredSession);
+                _connectedSessions.TryRemove(sessionId, out ignoredBool);
+                _sessionLastActivityUtc.TryRemove(sessionId, out ignoredTime);
+                _closingDuplicateSessions.TryRemove(sessionId, out ignoredBool);
+                _recoverableStandbySessions.TryRemove(sessionId, out ignoredBool);
+                _standbyLoggedSessions.TryRemove(sessionId, out ignoredBool);
+                _lastStatusBindings.TryRemove(sessionId, out ignoredString);
+                _initialized.TryRemove(sessionId, out ignoredBool);
+                _initializing.TryRemove(sessionId, out ignoredBool);
+                _duplicateSellerSessions.TryRemove(sessionId, out ignoredString);
+
+                CDPClient removed;
+                _clients.TryRemove(sessionId, out removed);
+                CDPClient.ReleaseClosedSession(sessionId, reason, removed);
+                ReleaseSellerSession(sessionId);
+                BotConnectionDiagnostics.RecordWebSocketClose(sessionId);
+                WebSocketPageLifecycleGuard.ForgetClosedSession(sessionId);
+            }
+
+            lock (_sellerSessionSync)
+            {
+                _sellerSessions.Clear();
+                _sessionSellers.Clear();
+                _duplicateSellerSessions.Clear();
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(0);
+            }
+        }
+
         public void Start()
         {
             lock (_webSocketStartSync)
             {
-                if (_webSocketServer != null)
+                if (_webSocketServer != null && IsLoopbackListenerActive())
                 {
                     BotConnectionDiagnostics.RecordWebSocketServerStarted();
+                    return;
+                }
+
+                if (_webSocketServer != null)
+                {
+                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；释放失效会话并重建服务实例。");
+                    ReleaseStaleSessions("Bot WebSocket listener disappeared");
+                    _webSocketServer = null;
+                }
+                else if (IsLoopbackListenerActive())
+                {
+                    const string listenerConflict = "127.0.0.1:41010已有监听，但当前Bot没有对应的服务实例；拒绝把外部监听误报为Bot服务正常。";
+                    BotConnectionDiagnostics.RecordWebSocketServerError(listenerConflict);
+                    Log.Error(listenerConflict);
                     return;
                 }
 
@@ -479,14 +578,19 @@ namespace Bot.ChromeNs
                     {
                         try
                         {
-                            TouchSession(session);
-                            // Every injected WebView sends this fixed heartbeat every 3s.
-                            // With 68 standby sockets that is ~1,360 frames/minute;
-                            // never allocate JObject/WSocketMessage for the hot path.
+                            // Transport heartbeats and diagnostic/status snapshots are not
+                            // seller activity. They must not keep idle duplicate pages alive
+                            // forever or the idle standby sweeper can never retire them.
                             if (string.Equals(value, "{\"type\":\"hi\"}", StringComparison.Ordinal))
                                 return;
                             var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
                             if (wMsg == null || wMsg.Type == "hi") return;
+                            if (wMsg.Type != "qnbotStatus"
+                                && wMsg.Type != "imsdkApiScan"
+                                && wMsg.Type != "imsdkInvokeTrace")
+                            {
+                                TouchSessionBusinessActivity(session);
+                            }
 
                             Log.Info("收到千牛WebSocket事件: type=" + wMsg.Type);
 
@@ -500,17 +604,17 @@ namespace Bot.ChromeNs
                                     var hasImsdk = jo["hasImsdk"] != null && jo["hasImsdk"].Value<bool>();
                                     var hasQn = jo["hasQN"] != null && jo["hasQN"].Value<bool>();
                                     var hasVs = jo["hasVs"] != null && jo["hasVs"].Value<bool>();
-                                    var supportsDuplicateRetire = jo["duplicateRetire"] != null && jo["duplicateRetire"].Value<bool>();
+                                    var supportsRecoverableStandby = jo["recoverableStandby"] != null && jo["recoverableStandby"].Value<bool>();
                                     var loginNick = ReadJsonString(jo, "loginNick");
                                     var conversationNick = ReadJsonString(jo, "conversationNick");
-                                    if (supportsDuplicateRetire)
+                                    if (supportsRecoverableStandby)
                                     {
-                                        _duplicateRetireCapableSessions[session.SessionID] = true;
+                                        _recoverableStandbySessions[session.SessionID] = true;
                                     }
                                     else
                                     {
                                         bool ignoredCapability;
-                                        _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                                        _recoverableStandbySessions.TryRemove(session.SessionID, out ignoredCapability);
                                     }
                                     BotConnectionDiagnostics.RecordInjectionStatus(true, hasImsdk, hasLoginId, hasQn, hasVs, wMsg.Response);
                                     BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
@@ -635,7 +739,7 @@ namespace Bot.ChromeNs
                         _liveSessions.TryRemove(session.SessionID, out ignoredSession);
                         _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
                         _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
-                        _duplicateRetireCapableSessions.TryRemove(session.SessionID, out ignoredCapability);
+                        _recoverableStandbySessions.TryRemove(session.SessionID, out ignoredCapability);
                         _standbyLoggedSessions.TryRemove(session.SessionID, out ignoredStandbyLog);
                         ReleaseSellerSession(session.SessionID);
                         BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
@@ -728,6 +832,8 @@ namespace Bot.ChromeNs
     public class ConnectionDiagnosticsSnapshot
     {
         public bool WebSocketServerStarted { get; set; }
+        public bool InjectionConnected { get; set; }
+        public bool CdpReady { get; set; }
         public int WebSocketSessionCount { get; set; }
         public int AuthoritativeCdpSessionCount { get; set; }
         public string WebSocketStatus { get; set; }
@@ -820,6 +926,20 @@ namespace Bot.ChromeNs
                 if (!string.IsNullOrWhiteSpace(sessionId)) wsSessions.Remove(sessionId.Trim());
                 wsSessionCount = wsSessions.Count;
                 injectionConnected = wsSessionCount > 0;
+                if (wsSessionCount == 0)
+                {
+                    hasImsdk = false;
+                    hasLoginId = false;
+                    hasQn = false;
+                    hasVs = false;
+                    cdpReady = false;
+                    cdpMessage = "等待注入重连";
+                    seller = string.Empty;
+                    buyer = string.Empty;
+                    uiAccessible = false;
+                    sendButtonFound = false;
+                    inputFound = false;
+                }
                 lastUpdate = DateTime.Now;
             }
         }
@@ -854,6 +974,11 @@ namespace Bot.ChromeNs
                 cdpMessage = message ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(sellerNick)) seller = sellerNick;
                 if (!string.IsNullOrWhiteSpace(buyerNick)) buyer = buyerNick;
+                if (!ready && authoritativeCdpSessionCount == 0)
+                {
+                    seller = string.Empty;
+                    buyer = string.Empty;
+                }
                 lastUpdate = DateTime.Now;
             }
         }
@@ -936,6 +1061,8 @@ namespace Bot.ChromeNs
                 return new ConnectionDiagnosticsSnapshot
                 {
                     WebSocketServerStarted = wsStarted,
+                    InjectionConnected = injectionConnected,
+                    CdpReady = cdpReady,
                     WebSocketSessionCount = wsSessionCount,
                     AuthoritativeCdpSessionCount = authoritativeCdpSessionCount,
                     WebSocketStatus = ws,

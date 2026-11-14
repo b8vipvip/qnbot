@@ -34,7 +34,7 @@
   try { window.addEventListener("storage", repairIfChanged, true); } catch(e) {}
   setInterval(repairIfChanged, 1000);
 })();
-window.__qnbotInjectVersion = "20260906-zh-cn-ws-retire-v10";
+window.__qnbotInjectVersion = "20261114-ws-recoverable-reconnect-v12";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 
@@ -45,9 +45,12 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   var WS_URL = "ws://127.0.0.1:41010";
   var OFFICIAL_SCRIPT = "https://iseiya.taobao.com/imsupport?locale=zh-CN&lang=zh-CN";
   var pending = [];
+  var pendingStatus = null;
   var reconnectTimer = null;
   var heartbeatTimer = null;
-  var websocketRetired = false;
+  var websocketStandbyUntil = 0;
+  var reconnectDelayMs = 3000;
+  var connectTimeoutTimer = null;
   var lastStatusText = "";
   var lastStatusAt = 0;
   var lastActiveText = "";
@@ -260,19 +263,51 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   function socketOpen() { return window.chatWebsocket && window.chatWebsocket.readyState === WebSocket.OPEN; }
 
   function send(type, response) {
-    if (websocketRetired) return;
     var payload = JSON.stringify({ type: type, response: response || "" });
     if (socketOpen()) {
       try { window.chatWebsocket.send(payload); return; } catch (e) { warn("send failed", e); }
     }
-    if (pending.length < 200) pending.push(payload);
+
+    var diagnosticOnly = type === "imsdkApiScan" || type === "imsdkInvokeTrace";
+    var businessEvent = type !== "qnbotStatus" && !diagnosticOnly;
+    if (type === "qnbotStatus") {
+      // A standby page can remain disconnected for minutes. Keep only its latest
+      // capability/status snapshot instead of queueing one status every loop.
+      pendingStatus = payload;
+    } else if (websocketStandbyUntil > Date.now() && diagnosticOnly) {
+      return;
+    } else {
+      if (pending.length >= 200) pending.shift();
+      pending.push(payload);
+    }
+
+    // Real chat activity is an immediate wake signal. Periodic status and diagnostic
+    // traces must not defeat standby, but new messages/conversation changes must.
+    if (businessEvent && websocketStandbyUntil > Date.now()) {
+      websocketStandbyUntil = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
     setupWebSocket();
   }
 
   function flushPending() {
     if (!socketOpen()) return;
+    if (pendingStatus) {
+      try {
+        window.chatWebsocket.send(pendingStatus);
+        pendingStatus = null;
+      } catch (e) {
+        return;
+      }
+    }
     while (pending.length > 0) {
-      try { window.chatWebsocket.send(pending.shift()); } catch (e) { break; }
+      try {
+        window.chatWebsocket.send(pending[0]);
+        pending.shift();
+      } catch (e) { break; }
     }
   }
 
@@ -536,7 +571,8 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
       imsdkDiscoveryVersion: window.__qnbotImsdkDiscoveryVersion || "",
       imsdkDiscoveryInstalled: !!window.__qnbotImsdkInvokeTraceInstalled,
       imsdkCaptureActive: Date.now() < (window.__qnbotImsdkCaptureUntil || 0),
-      duplicateRetire: true,
+      duplicateRetire: false,
+      recoverableStandby: true,
       extra: extra || ""
     };
     try { if (login) obj.loginNick = login.nick || login.uid || ""; } catch (e) {}
@@ -554,25 +590,55 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
     send("qnbotStatus", text);
   }
 
-  function scheduleReconnect() {
-    if (websocketRetired || reconnectTimer) return;
+  function scheduleReconnect(delayMs) {
+    if (reconnectTimer) return;
+    var delay = Math.max(1000, Number(delayMs) || reconnectDelayMs || 3000);
+    if (websocketStandbyUntil > Date.now()) {
+      delay = Math.max(delay, websocketStandbyUntil - Date.now());
+    }
+    reconnectDelayMs = Math.min(30000, Math.max(3000, reconnectDelayMs * 2));
     reconnectTimer = setTimeout(function () {
       reconnectTimer = null;
       setupWebSocket();
-    }, 3000);
+    }, delay);
   }
 
   function setupWebSocket() {
-    if (websocketRetired) return;
+    if (websocketStandbyUntil > Date.now()) {
+      scheduleReconnect(websocketStandbyUntil - Date.now());
+      return;
+    }
     var old = window.chatWebsocket;
-    if (old && (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING)) return;
+    if (old && (old.readyState === WebSocket.OPEN
+        || old.readyState === WebSocket.CONNECTING
+        || old.readyState === WebSocket.CLOSING)) return;
     try {
       var socket = new WebSocket(WS_URL);
+      // Publish CONNECTING immediately so concurrent send/status calls cannot create
+      // multiple physical sockets before the first onopen callback fires.
+      window.chatWebsocket = socket;
+      if (connectTimeoutTimer) clearTimeout(connectTimeoutTimer);
+      connectTimeoutTimer = setTimeout(function () {
+        connectTimeoutTimer = null;
+        if (socket.readyState === WebSocket.CONNECTING) {
+          log("websocket connect timeout");
+          try { socket.close(); } catch (e) {}
+          scheduleReconnect(1000);
+        }
+      }, 10000);
       socket.onopen = function () {
+        if (connectTimeoutTimer) {
+          clearTimeout(connectTimeoutTimer);
+          connectTimeoutTimer = null;
+        }
+        reconnectDelayMs = 3000;
+        websocketStandbyUntil = 0;
         window.chatWebsocket = socket;
-        log("websocket connected");
-        sendStatus("websocket-open", true);
+        log("websocket connected", "recoverable-reconnect-v12");
+        // Flush queued business events first, then publish a fresh status snapshot.
+        // Otherwise a stale standby qnbotStatus could overwrite the new connection state.
         flushPending();
+        sendStatus("websocket-open", true);
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(function () {
           try {
@@ -585,14 +651,19 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
         try {
           var param = JSON.parse(event.data);
           if (param.method === "retireDuplicate") {
-            websocketRetired = true;
-            pending.length = 0;
+            // Compatibility with an older Bot server: standby is a lease, never a
+            // permanent page retirement. The page reconnects when the lease expires.
+            var retryAfterMs = Number(param.retryAfterMs) || 300000;
+            retryAfterMs = Math.max(15000, Math.min(900000, retryAfterMs));
+            websocketStandbyUntil = Date.now() + retryAfterMs;
             if (reconnectTimer) {
               clearTimeout(reconnectTimer);
               reconnectTimer = null;
             }
-            log("websocket retired by Bot", param.reason || "duplicate");
-            try { socket.close(1000, "qnbot-duplicate-retired"); } catch (e) {}
+            if (window.chatWebsocket === socket) window.chatWebsocket = null;
+            log("websocket standby requested by Bot", param.reason || "duplicate");
+            try { socket.close(1000, "qnbot-duplicate-standby"); } catch (e) {}
+            scheduleReconnect(retryAfterMs);
             return;
           }
           if (param.method === "execute") {
@@ -607,11 +678,20 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
         } catch (e) { warn("socket message failed", e); }
       };
       socket.onclose = function () {
+        if (connectTimeoutTimer) {
+          clearTimeout(connectTimeoutTimer);
+          connectTimeoutTimer = null;
+        }
         if (window.chatWebsocket === socket) window.chatWebsocket = null;
         clearInterval(heartbeatTimer);
-        if (!websocketRetired) scheduleReconnect();
+        scheduleReconnect();
       };
-      socket.onerror = function (e) { warn("websocket error", e); };
+      socket.onerror = function (e) {
+        warn("websocket error", e);
+        if (socket.readyState === WebSocket.CONNECTING) {
+          try { socket.close(); } catch (closeError) {}
+        }
+      };
     } catch (e) { warn("setupWebSocket failed", e); scheduleReconnect(); }
   }
 

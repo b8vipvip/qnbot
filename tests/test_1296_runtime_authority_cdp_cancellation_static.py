@@ -41,7 +41,10 @@ def test_duplicate_websocket_recovery_channels_are_bounded_as_lightweight_standb
     assert "StartDuplicateSessionSweeper()" in ws
     assert "duplicate_cap_standby" in ws
     assert "duplicate_idle_standby" in ws
-    assert "physicalClose=false" in ws
-    assert 'method = "retireDuplicate"' not in ws
+    assert 'method = "retireDuplicate"' in ws
+    assert "var retryAfterMs = 300000 +" in ws
+    assert "sessionId.GetHashCode() % 240000U" in ws
+    assert "session.Send(command)" in ws
+    assert "_recoverableStandbySessions" in ws
     assert "_liveSessions.TryRemove(session.SessionID" in ws
     assert "_sessionLastActivityUtc.TryRemove(session.SessionID" in ws
