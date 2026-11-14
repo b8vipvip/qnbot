@@ -72,9 +72,11 @@ namespace Bot.ShopScope
                     var normalizedNick = ShopKeyGenerator.NormalizeFallbackNickname(profile.SellerNick);
                     if (profiles.Any(x => x != null
                         && !string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
-                        && !string.IsNullOrWhiteSpace(x.SellerNick)
+                        && !string.IsNullOrWhiteSpace(
+                            string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick)
                         && string.Equals(
-                            ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                            ShopKeyGenerator.NormalizeFallbackNickname(
+                                string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick),
                             normalizedNick,
                             StringComparison.Ordinal)))
                         throw new AmbiguousShopIdentityException(
@@ -215,9 +217,11 @@ namespace Bot.ShopScope
 
             var conflictingProfiles = Profiles.GetAll().Where(x => x != null
                 && !string.Equals(x.ShopKey, context.ShopKey, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(x.SellerNick)
+                && !string.IsNullOrWhiteSpace(
+                    string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick)
                 && string.Equals(
-                    ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                    ShopKeyGenerator.NormalizeFallbackNickname(
+                        string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick),
                     normalized,
                     StringComparison.Ordinal))
                 .ToList();
