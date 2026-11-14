@@ -444,13 +444,80 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool IsLoopbackListenerActive()
+        {
+            try
+            {
+                return System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                    .Any(endpoint => endpoint.Port == 41010
+                        && (System.Net.IPAddress.IsLoopback(endpoint.Address)
+                            || endpoint.Address.Equals(System.Net.IPAddress.Any)
+                            || endpoint.Address.Equals(System.Net.IPAddress.IPv6Any)));
+            }
+            catch { return false; }
+        }
+
+        private void ReleaseStaleSessions(string reason)
+        {
+            var sessionIds = new HashSet<string>(_connectedSessions.Keys, StringComparer.Ordinal);
+            sessionIds.UnionWith(_liveSessions.Keys);
+            sessionIds.UnionWith(_clients.Keys);
+
+            foreach (var sessionId in sessionIds)
+            {
+                WebSocketSession ignoredSession;
+                bool ignoredBool;
+                DateTime ignoredTime;
+                string ignoredString;
+                _liveSessions.TryRemove(sessionId, out ignoredSession);
+                _connectedSessions.TryRemove(sessionId, out ignoredBool);
+                _sessionLastActivityUtc.TryRemove(sessionId, out ignoredTime);
+                _closingDuplicateSessions.TryRemove(sessionId, out ignoredBool);
+                _duplicateRetireCapableSessions.TryRemove(sessionId, out ignoredBool);
+                _standbyLoggedSessions.TryRemove(sessionId, out ignoredBool);
+                _lastStatusBindings.TryRemove(sessionId, out ignoredString);
+                _initialized.TryRemove(sessionId, out ignoredBool);
+                _initializing.TryRemove(sessionId, out ignoredBool);
+                _duplicateSellerSessions.TryRemove(sessionId, out ignoredString);
+
+                CDPClient removed;
+                _clients.TryRemove(sessionId, out removed);
+                CDPClient.ReleaseClosedSession(sessionId, reason, removed);
+                ReleaseSellerSession(sessionId);
+                BotConnectionDiagnostics.RecordWebSocketClose(sessionId);
+                WebSocketPageLifecycleGuard.ForgetClosedSession(sessionId);
+            }
+
+            lock (_sellerSessionSync)
+            {
+                _sellerSessions.Clear();
+                _sessionSellers.Clear();
+                _duplicateSellerSessions.Clear();
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(0);
+            }
+        }
+
         public void Start()
         {
             lock (_webSocketStartSync)
             {
-                if (_webSocketServer != null)
+                if (_webSocketServer != null && IsLoopbackListenerActive())
                 {
                     BotConnectionDiagnostics.RecordWebSocketServerStarted();
+                    return;
+                }
+
+                if (_webSocketServer != null)
+                {
+                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；释放失效会话并重建服务实例。");
+                    ReleaseStaleSessions("Bot WebSocket listener disappeared");
+                    _webSocketServer = null;
+                }
+                else if (IsLoopbackListenerActive())
+                {
+                    const string listenerConflict = "127.0.0.1:41010已有监听，但当前Bot没有对应的服务实例；拒绝把外部监听误报为Bot服务正常。";
+                    BotConnectionDiagnostics.RecordWebSocketServerError(listenerConflict);
+                    Log.Error(listenerConflict);
                     return;
                 }
 
@@ -728,6 +795,8 @@ namespace Bot.ChromeNs
     public class ConnectionDiagnosticsSnapshot
     {
         public bool WebSocketServerStarted { get; set; }
+        public bool InjectionConnected { get; set; }
+        public bool CdpReady { get; set; }
         public int WebSocketSessionCount { get; set; }
         public int AuthoritativeCdpSessionCount { get; set; }
         public string WebSocketStatus { get; set; }
@@ -820,6 +889,20 @@ namespace Bot.ChromeNs
                 if (!string.IsNullOrWhiteSpace(sessionId)) wsSessions.Remove(sessionId.Trim());
                 wsSessionCount = wsSessions.Count;
                 injectionConnected = wsSessionCount > 0;
+                if (wsSessionCount == 0)
+                {
+                    hasImsdk = false;
+                    hasLoginId = false;
+                    hasQn = false;
+                    hasVs = false;
+                    cdpReady = false;
+                    cdpMessage = "等待注入重连";
+                    seller = string.Empty;
+                    buyer = string.Empty;
+                    uiAccessible = false;
+                    sendButtonFound = false;
+                    inputFound = false;
+                }
                 lastUpdate = DateTime.Now;
             }
         }
@@ -854,6 +937,11 @@ namespace Bot.ChromeNs
                 cdpMessage = message ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(sellerNick)) seller = sellerNick;
                 if (!string.IsNullOrWhiteSpace(buyerNick)) buyer = buyerNick;
+                if (!ready && authoritativeCdpSessionCount == 0)
+                {
+                    seller = string.Empty;
+                    buyer = string.Empty;
+                }
                 lastUpdate = DateTime.Now;
             }
         }
@@ -936,6 +1024,8 @@ namespace Bot.ChromeNs
                 return new ConnectionDiagnosticsSnapshot
                 {
                     WebSocketServerStarted = wsStarted,
+                    InjectionConnected = injectionConnected,
+                    CdpReady = cdpReady,
                     WebSocketSessionCount = wsSessionCount,
                     AuthoritativeCdpSessionCount = authoritativeCdpSessionCount,
                     WebSocketStatus = ws,
