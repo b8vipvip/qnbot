@@ -58,7 +58,7 @@ namespace Bot.ChromeNs
 
         internal static bool EnsureShopBinding(ShopContext shop)
         {
-            if (shop == null || string.IsNullOrWhiteSpace(shop.DisplayName)) return false;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
             // DisplayName is presentation data and may differ from Nick or be
             // shared by several shops. Resolve the exact persisted identity instead
             // of selecting an arbitrary QN instance by a display string.
