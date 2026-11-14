@@ -391,7 +391,7 @@ def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
         coordinator.index("private static string ShopKey")
     ]
     assert "_activeSessionId = sessionId;" in activate
-    assert "string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)" in connected
+    assert "string.Equals((x.CDP.SessionId ?? string.Empty).Trim()," in connected
     assert "OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))" in connected
 
 def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
@@ -418,6 +418,11 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
     assert send.index("using (ShopSettingsScope.Enter(shop))") < send.index(
         "KnowledgeLearningService.AllowNextManualSend"
     )
+    knowledge_window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    settings_call = show[show.index("var knowledge = KnowledgeCenterWindow.ShowForSeller"):]
+    assert "ShowForSeller(this, Seller, _shop.ShopKey)" in settings_call
+    assert "ShowForSeller(\\n            Window owner, string seller, string shopKey = \\"\\")" in knowledge_window
+
 
 def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
     mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
