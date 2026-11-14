@@ -331,7 +331,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 _seller,
                 _buyer,
                 _question,
-                _answer);
+                _answer,
+                _shopKey);
         }
 
         private void RaiseResendRequested()
@@ -366,7 +367,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 _seller,
                 _buyer,
                 _question,
-                _answer);
+                _answer,
+                _shopKey);
             menu.Items.Add(view);
 
             var copy = new MenuItem { Header = "复制" };
