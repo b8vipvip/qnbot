@@ -237,12 +237,60 @@ def test_remote_history_coverage_counts_only_unique_accepted_messages():
         context.index("private static string RecordMessage"):
         context.index("private static string[] GetNativeMessageAliases")
     ]
+    refresh = context[
+        context.index("RefreshLearningHistoryCompleteAsync"):
+        context.index("private static int ReadInt")
+    ]
     assert "private static string RecordMessage" in method
     assert "return exact.MessageKey ?? string.Empty;" in method
-    assert "countedTimelineKeys.Add(canonicalTurnKey)" in context
-    assert "return isNewHistoryObservation;" in method
-    assert "if (RecordMessage(state, seller, buyer, item, text, true))" in context
-    assert "result.MessagesInWindow++;" in context
+    assert "return precisePeers[0].MessageKey ?? string.Empty;" in method
+    assert "return opposite[0].MessageKey ?? string.Empty;" in method
+    assert "countedTimelineKeys.Add(canonicalTurnKey)" in refresh
+    assert "result.MessagesInWindow++;" in refresh
+    assert "var canonicalTurnKey = RecordMessage(state, seller, buyer, item, text, true);" in refresh
+
+
+def test_legacy_shop_scoped_history_backfill_is_fail_closed():
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    assert "Profiles.GetAll()" in locator
+    assert "BackfillLegacyShopRows(string shopKey, string seller)" in history
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in history
+    assert "catch (AmbiguousShopIdentityException)" in history
+    assert "update BotConversationHistoryEntity set ShopKey = ?" in history
+    assert "update BotReplySourceStampEntity set ShopKey = ?" in history
+    assert "update BotReplyEchoLinkEntity set ShopKey = ?" in history
+
+
+def test_manual_bot_source_corrections_are_shop_scoped():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    assert "public string ShopKey { get; set; }" in history[
+        history.index("internal sealed class BotReplyManualSourceEntity"):
+        history.index("internal sealed class BotReplyEchoLinkEntity")
+    ]
+    assert "UpdateAnswerSource(\n            string shopKey, string seller, string entityId, string source)" in history
+    assert "x.EntityId == entityId && x.ShopKey == shopKey" in history
+    assert "GetManualSource(string shopKey, string seller, string entityId)" in history
+    assert "GetOriginalSourceBeforeCorrection(\n            string shopKey, string seller, string entityId)" in history
+
+
+def test_pending_session_resume_does_not_leave_ambiguous_or_duplicate_rows_pending():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    resume = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+    assert 'report.Error = "legacy_report_shop_scope_unavailable";' in resume
+    assert 'report.Error = "superseded_pending_session_duplicate";' in resume
+    assert 'report.Error = "superseded_by_active_session";' in resume
+    assert "report.CompletedAtTicks = DateTime.Now.Ticks;" in resume
+
+
+def test_bot_answer_mirror_refresh_stays_on_owning_qn_shop():
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    assert "var activeQn = _preQN ?? QN.CurQN;" in robot
+    assert "if (string.Equals(activeShopKey, shopKey, StringComparison.Ordinal))" in robot
+    assert "catch { activeShopKey = string.Empty; }" in robot
 
 
 def test_bot_echo_attribution_uses_native_marker_and_time_not_text_alone():
