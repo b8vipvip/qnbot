@@ -30,6 +30,7 @@ namespace Bot.ChromeNs
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
         public string InputCoverageJson { get; set; }
+        public string InputCoverageSummary { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -234,6 +235,31 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("读取接待自动学习记录失败：" + ex.Message, 10);
                 return new List<ConversationSessionLearningReportView>();
+            }
+        }
+
+        private static string BuildInputCoverageSummary(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "尚无覆盖记录";
+            try
+            {
+                var coverage = JObject.Parse(json);
+                var complete = coverage.Value<bool?>("historyComplete") == true;
+                var pages = coverage.Value<int?>("historyPages") ?? 0;
+                var turns = coverage.Value<int?>("timelineTurns") ?? 0;
+                var cards = coverage.Value<int?>("botCards") ?? 0;
+                var corpusComplete = coverage.Value<bool?>("knowledgeCorpusComplete") == true;
+                var mode = Convert.ToString(coverage["writeMode"]);
+                return "历史" + (complete ? "完整" : "不完整")
+                    + " / 分页" + pages
+                    + " / 消息" + turns
+                    + " / Bot卡片" + cards
+                    + " / V2全库" + (corpusComplete ? "完整" : "未覆盖")
+                    + " / " + (mode == "dry_run" ? "dry-run" : "自动");
+            }
+            catch
+            {
+                return "覆盖记录格式异常";
             }
         }
 
@@ -1024,6 +1050,7 @@ namespace Bot.ChromeNs
                 StyleAfter = entity.StyleAfter,
                 SuggestionsJson = entity.SuggestionsJson,
                 InputCoverageJson = entity.InputCoverageJson,
+                InputCoverageSummary = BuildInputCoverageSummary(entity.InputCoverageJson),
                 Error = entity.Error,
                 AppliedCount = entity.AppliedCount,
                 SkippedCount = entity.SkippedCount,
