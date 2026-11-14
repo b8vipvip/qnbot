@@ -12,7 +12,7 @@ def test_live_seller_and_remote_history_share_one_canonical_timeline():
     store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     assert "RecordMessage(state, seller, buyer, message, messageText, false);" in store
     assert "RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true);" in store
-    record = store.split("private static void RecordMessage(", 1)[1].split(
+    record = store.split("private static bool RecordMessage(", 1)[1].split(
         "private static void MarkLastSellerTurnWithdrawn(", 1
     )[0]
     assert "GetNativeMessageAliases(message)" in record
@@ -21,13 +21,13 @@ def test_live_seller_and_remote_history_share_one_canonical_timeline():
     assert "t.PreciseTimeTicks == preciseTime" in record
     assert "precisePeers.Count == 1" in record
     assert "peers.Count == 1 && opposite.Count == 1" in record
-    assert "MergeObservedIdentity(exact, aliases, preciseTime, fromHistory)" in record
-    assert "MergeObservedIdentity(opposite[0], aliases, preciseTime, fromHistory)" in record
+    assert "MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory)" in record
+    assert "MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory)" in record
 
 
 def test_true_same_text_double_sends_are_not_collapsed_by_text_alone():
     store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
-    record = store.split("private static void RecordMessage(", 1)[1].split(
+    record = store.split("private static bool RecordMessage(", 1)[1].split(
         "private static void MarkLastSellerTurnWithdrawn(", 1
     )[0]
     assert "t.Role == role" in record
