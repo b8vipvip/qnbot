@@ -59,7 +59,10 @@ namespace Bot.ChromeNs
         internal static bool EnsureShopBinding(ShopContext shop)
         {
             if (shop == null || string.IsNullOrWhiteSpace(shop.DisplayName)) return false;
-            var qn = QN.FindExistingBySellerNick(shop.DisplayName);
+            // DisplayName is presentation data and may differ from Nick or be
+            // shared by several shops. Resolve the exact persisted identity instead
+            // of selecting an arbitrary QN instance by a display string.
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
             if (qn == null || qn.Rpa == null || !ActiveShopSessionRegistry.IsActive(qn)) return false;
             var ok = qn.Rpa.EnsureSellerDeskBinding(true);
             SyncAttachedUi(qn);
