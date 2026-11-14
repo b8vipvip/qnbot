@@ -45,6 +45,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   var WS_URL = "ws://127.0.0.1:41010";
   var OFFICIAL_SCRIPT = "https://iseiya.taobao.com/imsupport?locale=zh-CN&lang=zh-CN";
   var pending = [];
+  var pendingStatus = null;
   var reconnectTimer = null;
   var heartbeatTimer = null;
   var websocketStandbyUntil = 0;
@@ -266,14 +267,47 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
     if (socketOpen()) {
       try { window.chatWebsocket.send(payload); return; } catch (e) { warn("send failed", e); }
     }
-    if (pending.length < 200) pending.push(payload);
+
+    var diagnosticOnly = type === "imsdkApiScan" || type === "imsdkInvokeTrace";
+    var businessEvent = type !== "qnbotStatus" && !diagnosticOnly;
+    if (type === "qnbotStatus") {
+      // A standby page can remain disconnected for minutes. Keep only its latest
+      // capability/status snapshot instead of queueing one status every loop.
+      pendingStatus = payload;
+    } else if (websocketStandbyUntil > Date.now() && diagnosticOnly) {
+      return;
+    } else {
+      if (pending.length >= 200) pending.shift();
+      pending.push(payload);
+    }
+
+    // Real chat activity is an immediate wake signal. Periodic status and diagnostic
+    // traces must not defeat standby, but new messages/conversation changes must.
+    if (businessEvent && websocketStandbyUntil > Date.now()) {
+      websocketStandbyUntil = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
     setupWebSocket();
   }
 
   function flushPending() {
     if (!socketOpen()) return;
+    if (pendingStatus) {
+      try {
+        window.chatWebsocket.send(pendingStatus);
+        pendingStatus = null;
+      } catch (e) {
+        return;
+      }
+    }
     while (pending.length > 0) {
-      try { window.chatWebsocket.send(pending.shift()); } catch (e) { break; }
+      try {
+        window.chatWebsocket.send(pending[0]);
+        pending.shift();
+      } catch (e) { break; }
     }
   }
 
@@ -617,7 +651,9 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
           if (param.method === "retireDuplicate") {
             // Compatibility with an older Bot server: standby is a lease, never a
             // permanent page retirement. The page reconnects when the lease expires.
-            websocketStandbyUntil = Date.now() + 15000;
+            var retryAfterMs = Number(param.retryAfterMs) || 300000;
+            retryAfterMs = Math.max(15000, Math.min(900000, retryAfterMs));
+            websocketStandbyUntil = Date.now() + retryAfterMs;
             if (reconnectTimer) {
               clearTimeout(reconnectTimer);
               reconnectTimer = null;
@@ -625,7 +661,7 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
             if (window.chatWebsocket === socket) window.chatWebsocket = null;
             log("websocket standby requested by Bot", param.reason || "duplicate");
             try { socket.close(1000, "qnbot-duplicate-standby"); } catch (e) {}
-            scheduleReconnect(15000);
+            scheduleReconnect(retryAfterMs);
             return;
           }
           if (param.method === "execute") {
