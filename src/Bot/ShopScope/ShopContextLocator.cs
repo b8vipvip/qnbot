@@ -97,7 +97,8 @@ namespace Bot.ShopScope
                 .Where(x => x != null && x.Seller != null
                     && x.CDP != null && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
                     && (sessionId.Length == 0
-                        || string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)))
+                        || string.Equals((x.CDP.SessionId ?? string.Empty).Trim(),
+                            sessionId, StringComparison.Ordinal)))
                 .Select(x => new { Qn = x, Context = TryResolveContext(x) })
                 .Where(x => x.Context != null
                     && string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
