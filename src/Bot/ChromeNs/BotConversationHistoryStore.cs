@@ -470,7 +470,7 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return new List<BotConversationHistoryEntity>();
 
-            var take = Math.Max(1, Math.Min(MaxRecordsPerConversation, maxCount <= 0 ? DefaultLoadCount : maxCount));
+            var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? DefaultLoadCount : maxCount));
             var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
             try
             {
@@ -512,7 +512,7 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return new List<BotConversationHistoryEntity>();
 
-            var take = Math.Max(1, Math.Min(MaxRecordsPerConversation, maxCount <= 0 ? 120 : maxCount));
+            var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? 120 : maxCount));
             var fromTicks = from == DateTime.MinValue ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
             var toTicks = to == DateTime.MinValue ? DateTime.Now.Ticks : to.Ticks;
             if (toTicks < fromTicks)
