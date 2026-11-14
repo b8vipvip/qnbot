@@ -391,6 +391,8 @@ def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
     ]
     assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId)" in reassert
     assert "QN.FindExistingBySellerNick(seller)" not in reassert
+    assert "if (qn == null)" in reassert
+    assert "QN.CurQN = null;" in reassert
     assert "_activeSessionId.Length == 0" in is_active
     assert "string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in is_active
     activate = coordinator[
