@@ -51,15 +51,9 @@ namespace Bot.Options
         private WndOption(string seller)
         {
             Seller = seller;
-            try
-            {
-                _shop = ShopContextLocator.ResolveBySellerNick(seller);
-            }
-            catch (Exception ex)
-            {
-                Log.Info("设置窗口暂未取得稳定店铺作用域，将保留旧全局配置兼容模式: seller="
-                    + seller + ", error=" + ex.Message);
-            }
+            // Never open a settings editor in the legacy global path when
+            // seller nickname resolution is ambiguous or unavailable.
+            _shop = ShopContextLocator.ResolveBySellerNick(seller);
             InitializeComponent();
             SettingsOperationAudit.Attach(this,
                 () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
@@ -290,22 +284,43 @@ namespace Bot.Options
         public static void MyShow(string seller, WndAssist owner = null,
             OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
         {
-            var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
-            if (!string.IsNullOrWhiteSpace(activeSeller)
-                && !string.Equals(activeSeller, seller, StringComparison.Ordinal))
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return;
+
+            try
             {
-                Log.Info("打开设置时已使用活动店铺仲裁结果替换旧CurQN参数: requestedSeller="
-                    + seller + ", activeSeller=" + activeSeller);
-                seller = activeSeller;
+                ShopContext shop = owner == null ? null : ShopScopedUiBridge.Get(owner);
+                if (shop == null)
+                {
+                    var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
+                    var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                    if (!string.IsNullOrWhiteSpace(activeSeller)
+                        && !string.IsNullOrWhiteSpace(activeShopKey))
+                    {
+                        Log.Info("打开设置时使用活动店铺的精确ShopKey: requestedSeller="
+                            + seller + ", activeSeller=" + activeSeller);
+                        shop = ShopContextLocator.ResolveRuntimeByShopKey(activeShopKey);
+                    }
+                    else
+                    {
+                        var current = QN.CurQN;
+                        if (current != null && current.Seller != null
+                            && string.Equals((current.Seller.Nick ?? string.Empty).Trim(),
+                                seller, StringComparison.Ordinal))
+                            shop = ShopContextLocator.ResolveRuntimeBySeller(current);
+                        else
+                            shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                    }
+                }
+
+                MyShow(shop, owner, showPage, uiCallback);
             }
-            Util.Assert(!string.IsNullOrEmpty(seller));
-            var lockedSeller = seller;
-            var wndOp = ShowSameNickOneInstance<WndOption>(lockedSeller, delegate
+            catch (Exception ex)
             {
-                return new WndOption(lockedSeller);
-            }, owner, true);
-            if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
-            if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
+                MessageBox.Show(owner,
+                    "无法确认设置窗口所属店铺，已阻止打开未隔离的全局设置。\n" + ex.Message,
+                    "店铺身份保护", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void ShowPage(OptionEnum showPage)
