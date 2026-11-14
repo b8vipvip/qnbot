@@ -245,7 +245,7 @@ namespace Bot.Options
                 var reports = ConversationSessionLearningService.GetReports(200);
                 _items.Clear();
                 foreach (var report in reports) _items.Add(report);
-                _summary.Text = "买家连续 " + ConversationSessionLearningService.InactivityMinutes
+                _summary.Text = "买家或客服连续 " + ConversationSessionLearningService.InactivityMinutes
                     + " 分钟无新消息后复盘整轮接待；历史覆盖不完整时不调用AI，当前默认dry-run候选，不自动写入生产知识库。"
                     + "完整Knowledge V2语料覆盖和Windows灰度验收完成前保持关闭自动写入。当前显示最近 "
                     + reports.Count + " 条。";
