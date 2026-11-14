@@ -270,6 +270,10 @@ namespace Bot.ChromeNs
                 _duplicateSellerSessions.TryRemove(sessionId, out ignored);
                 _standbyLoggedSessions.TryRemove(sessionId, out _);
                 _sessionLastActivityUtc[sessionId] = DateTime.UtcNow;
+                // Authority promotion turns the previous owner into a duplicate. Reapply
+                // the per-seller cap here as well as on first claim, otherwise repeated
+                // foreground switches can grow the duplicate set beyond its configured bound.
+                EnforceDuplicateSellerSessionCapLocked(sellerNick);
                 BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
             }
 
