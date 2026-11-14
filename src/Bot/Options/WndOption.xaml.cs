@@ -310,7 +310,7 @@ namespace Bot.Options
                             : (exactQn.Seller.Nick ?? string.Empty).Trim();
                     }
                     var sellerMatches = string.Equals(attachedSeller, seller, StringComparison.Ordinal);
-                    if (!sellerMatches && !shop.HasStableSellerId)
+                    if (!sellerMatches && !shop.HasStableSellerId && attachedSeller.Length > 0)
                         sellerMatches = string.Equals(
                             ShopKeyGenerator.NormalizeFallbackNickname(attachedSeller),
                             ShopKeyGenerator.NormalizeFallbackNickname(seller),
