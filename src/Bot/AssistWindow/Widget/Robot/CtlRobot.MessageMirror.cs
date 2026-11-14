@@ -354,7 +354,8 @@ namespace Bot.AssistWindow.Widget.Robot
                     // transport echo with the nearest answer card where possible.
                     var botEchoRecordId = BotConversationHistoryStore.RecordBotEcho(
                         seller, buyer, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
-                    var operatorCorrection = BotConversationHistoryStore.GetManualSource(seller, botEchoRecordId);
+                    var operatorCorrection = BotConversationHistoryStore.GetManualSource(
+                        ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId);
                     if (!string.IsNullOrWhiteSpace(operatorCorrection))
                     {
                         // An explicit correction is more authoritative than a
@@ -555,11 +556,12 @@ namespace Bot.AssistWindow.Widget.Robot
             // The real transport message row takes priority over a transient
             // reply card or a text-only guess. Manual corrections remain scoped
             // to this exact message ID.
+            var shopKey = ResolveShopKeyForConversation(seller, buyer);
             Func<string> currentSource = () =>
             {
-                var corrected = BotConversationHistoryStore.GetManualSource(seller, sourceRecordId);
+                var corrected = BotConversationHistoryStore.GetManualSource(
+                    shopKey, seller, sourceRecordId);
                 if (!string.IsNullOrWhiteSpace(corrected)) return corrected;
-                var shopKey = ResolveShopKeyForConversation(seller, buyer);
                 var row = string.IsNullOrWhiteSpace(shopKey)
                     ? null
                     : BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 200)
@@ -576,7 +578,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 var source = currentSource();
                 var manuallyCorrected = !string.IsNullOrWhiteSpace(
-                    BotConversationHistoryStore.GetManualSource(seller, sourceRecordId));
+                    BotConversationHistoryStore.GetManualSource(shopKey, seller, sourceRecordId));
                 KnowledgeCenterV2UiBridge.ShowBotReplyTarget(
                     Window.GetWindow(this), seller, buyer, messageText,
                     sourceRecordId, source, manuallyCorrected);
@@ -603,7 +605,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 // Use the exact observed message source. A manually corrected
                 // provenance label is never treated as verified knowledge ID.
                 var manuallyCorrected = !string.IsNullOrWhiteSpace(
-                    BotConversationHistoryStore.GetManualSource(seller, sourceRecordId));
+                    BotConversationHistoryStore.GetManualSource(shopKey, seller, sourceRecordId));
                 action.MirrorRequestEdit(currentSource(), sourceRecordId, manuallyCorrected);
             };
             menu.Items.Add(edit);
@@ -612,9 +614,10 @@ namespace Bot.AssistWindow.Widget.Robot
             provenance.Click += (s, e) =>
             {
                 var source = currentSource();
-                var correction = BotConversationHistoryStore.GetManualSource(seller, sourceRecordId);
+                var correction = BotConversationHistoryStore.GetManualSource(
+                    shopKey, seller, sourceRecordId);
                 var original = BotConversationHistoryStore.GetOriginalSourceBeforeCorrection(
-                    seller, sourceRecordId);
+                    shopKey, seller, sourceRecordId);
                 var route = BotReplySourceRouting.Resolve(source,
                     !string.IsNullOrWhiteSpace(correction));
                 var description = "来源路径：" + route.Path
@@ -647,7 +650,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 var edited = BotReplySourceEditorWindow.Edit(
                     Window.GetWindow(this), currentSource());
                 if (edited == null) return;
-                if (!BotConversationHistoryStore.UpdateAnswerSource(seller, sourceRecordId, edited))
+                if (!BotConversationHistoryStore.UpdateAnswerSource(
+                    shopKey, seller, sourceRecordId, edited))
                 {
                     MessageBox.Show(Window.GetWindow(this),
                         "来源文本未能保存到持久化记录。请打开知识中心 V2 → Bot回复管理重试。",
