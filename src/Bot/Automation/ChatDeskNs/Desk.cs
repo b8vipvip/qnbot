@@ -337,16 +337,22 @@ namespace Bot.Automation.ChatDeskNs
             get
             {
                 var scopedShop = ShopSettingsScope.Current;
-                if (scopedShop != null && !string.IsNullOrWhiteSpace(scopedShop.DisplayName))
+                if (scopedShop != null)
                 {
-                    var scopedDesk = FindExistingBySellerNick(scopedShop.DisplayName);
-                    if (scopedDesk != null) return scopedDesk;
+                    // An explicit ShopSettingsScope must never fall through to the
+                    // global/current/first Desk. DisplayName is not seller identity.
+                    var sellerNick = (scopedShop.SellerNick ?? string.Empty).Trim();
+                    var exactQn = ShopContextLocator.FindConnectedQnByShopKey(scopedShop.ShopKey);
+                    if (exactQn != null && exactQn.Seller != null)
+                        sellerNick = (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    if (sellerNick.Length == 0) return null;
+                    return DeskSellerBindingRegistry.FindSellerDesk(sellerNick);
                 }
 
                 var current = QN.CurQN;
                 if (current != null && current.Seller != null)
                 {
-                    var currentDesk = FindExistingBySellerNick(current.Seller.Nick);
+                    var currentDesk = DeskSellerBindingRegistry.FindSellerDesk(current.Seller.Nick);
                     if (currentDesk != null) return currentDesk;
                 }
 
