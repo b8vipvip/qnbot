@@ -53,19 +53,45 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             var qn = _preQN;
             if (qn == null || qn.Seller == null || qn.Buyer == null)
-            {
                 qn = QN.CurQN;
-            }
             if (qn == null || qn.Seller == null || qn.Buyer == null) return null;
 
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             var buyer = (qn.Buyer.Nick ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return null;
 
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0)
             {
-                return null;
+                string candidateShopKey;
+                try { candidateShopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
+                catch { return null; }
+                if (!string.Equals(candidateShopKey, activeShopKey, StringComparison.Ordinal))
+                {
+                    // _preQN can outlive a seller-tab switch. Rebind only to the
+                    // exact globally arbitrated ShopKey; a shared nickname is not
+                    // enough to keep rendering another account's conversation.
+                    var current = QN.CurQN;
+                    if (current == null || current.Seller == null || current.Buyer == null)
+                        return null;
+                    try
+                    {
+                        if (!string.Equals(
+                            ShopIdentityResolver.Resolve(current.Seller).ShopKey,
+                            activeShopKey,
+                            StringComparison.Ordinal))
+                            return null;
+                    }
+                    catch { return null; }
+                    qn = current;
+                    seller = (qn.Seller.Nick ?? string.Empty).Trim();
+                    buyer = (qn.Buyer.Nick ?? string.Empty).Trim();
+                    if (seller.Length == 0 || buyer.Length == 0) return null;
+                }
             }
+
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+                return null;
 
             return qn;
         }
