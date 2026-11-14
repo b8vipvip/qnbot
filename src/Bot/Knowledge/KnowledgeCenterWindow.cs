@@ -175,8 +175,11 @@ namespace Bot.Knowledge
             };
             Bot.ShopScope.ShopScopedUiBridge.Attach(wnd, shop);
             if (owner != null) wnd.Owner = owner;
-            wnd.Show();
-            wnd.NavigateToManager(seller, buyer, question, answer);
+            using (Bot.ShopScope.ShopSettingsScope.Enter(shop))
+            {
+                wnd.Show();
+                wnd.NavigateToManager(seller, buyer, question, answer);
+            }
         }
     }
 
