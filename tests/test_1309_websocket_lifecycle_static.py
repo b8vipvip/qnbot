@@ -15,7 +15,8 @@ def test_duplicate_websocket_pages_use_bounded_recoverable_standby_leases():
     assert "_recoverableStandbySessions" in server
     assert 'jo["recoverableStandby"]' in server
     assert 'method = "retireDuplicate"' in server
-    assert "retryAfterMs = 300000" in server
+    assert "var retryAfterMs = 300000 +" in server
+    assert "sessionId.GetHashCode() % 240000U" in server
     assert "session.Send(command)" in server
     assert 'method = "retireDuplicate"' not in guard
     assert 'Session.Close()' not in guard
