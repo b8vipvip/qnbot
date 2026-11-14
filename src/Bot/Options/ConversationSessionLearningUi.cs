@@ -148,6 +148,7 @@ namespace Bot.Options
             _grid.Columns.Add(Column("状态", "Status", 110));
             _grid.Columns.Add(Column("应用", "AppliedCount", 65));
             _grid.Columns.Add(Column("跳过", "SkippedCount", 65));
+            _grid.Columns.Add(Column("历史覆盖", "InputCoverageSummary", 210));
             _grid.Columns.Add(new DataGridTextColumn
             {
                 Header = "复盘摘要",
@@ -245,7 +246,8 @@ namespace Bot.Options
                 _items.Clear();
                 foreach (var report in reports) _items.Add(report);
                 _summary.Text = "买家连续 " + ConversationSessionLearningService.InactivityMinutes
-                    + " 分钟无新消息后自动复盘整轮接待；只自动应用有可靠人工证据、低风险且高置信度的知识。当前显示最近 "
+                    + " 分钟无新消息后复盘整轮接待；历史覆盖不完整时不调用AI，当前默认dry-run候选，不自动写入生产知识库。"
+                    + "完整Knowledge V2语料覆盖和Windows灰度验收完成前保持关闭自动写入。当前显示最近 "
                     + reports.Count + " 条。";
                 if (!string.IsNullOrWhiteSpace(selectedId))
                 {
