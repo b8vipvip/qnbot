@@ -5,6 +5,11 @@ using System.Linq;
 
 namespace Bot.ShopScope
 {
+    internal sealed class AmbiguousShopIdentityException : InvalidOperationException
+    {
+        public AmbiguousShopIdentityException(string message) : base(message) { }
+    }
+
     internal static class ShopContextLocator
     {
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -96,7 +101,8 @@ namespace Bot.ShopScope
             if (matches.Count == 0)
                 throw new InvalidOperationException("未找到卖家“" + sellerNick + "”对应的千牛登录身份。请先保持该店铺在线。" );
             if (matches.Count > 1)
-                throw new InvalidOperationException("同一卖家昵称匹配到多个不同店铺身份，已阻止自动绑定。" );
+                throw new AmbiguousShopIdentityException(
+                    "同一卖家昵称匹配到多个不同店铺身份，已阻止自动绑定。");
 
             return matches[0];
         }
