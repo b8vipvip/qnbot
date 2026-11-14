@@ -35,6 +35,28 @@ def test_duplicate_websocket_pages_use_bounded_recoverable_standby_leases():
     assert "scheduleReconnect();" in inject
 
 
+def test_idle_duplicate_sweeper_uses_business_activity_not_transport_heartbeats():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    message_handler = server[
+        server.index("webSocket.NewMessageReceived +="):
+        server.index("webSocket.SessionClosed +=")
+    ]
+
+    assert "private void TouchSessionBusinessActivity(WebSocketSession session)" in server
+    assert "_sessionLastActivityUtc.TryAdd(session.SessionID, DateTime.UtcNow);" in server
+    assert "_sessionLastActivityUtc[session.SessionID] = DateTime.UtcNow;" in server
+    assert 'if (string.Equals(value, "{\\"type\\":\\"hi\\"}", StringComparison.Ordinal))' in message_handler
+    assert 'if (wMsg == null || wMsg.Type == "hi") return;' in message_handler
+    assert 'wMsg.Type != "qnbotStatus"' in message_handler
+    assert 'wMsg.Type != "imsdkApiScan"' in message_handler
+    assert 'wMsg.Type != "imsdkInvokeTrace"' in message_handler
+    assert "TouchSessionBusinessActivity(session);" in message_handler
+    assert "TouchSession(session);" not in message_handler
+    assert message_handler.index("if (wMsg == null || wMsg.Type == \"hi\") return;") < message_handler.index(
+        "TouchSessionBusinessActivity(session);"
+    )
+
+
 def test_injection_marker_for_existing_payload_remains_consistent():
     inject = text("src/Bin/inject.js")
     qn_inject = text("src/Bot/Common/QNInject.cs")
