@@ -44,5 +44,6 @@ def test_language_repair_preserves_live_qianniu_and_persistent_login_storage():
     assert "Process.Kill()" not in language
     assert "ResourceOwnerProcessNames" in language
     assert "if (IsWorkbenchRunning())" in language
-    assert "Local Storage" not in cache
+    assert 'new[] { "Cache", "Code Cache", "GPUCache" }' in cache
+    assert 'cacheNames.Add("Local Storage")' not in cache
     assert "preserved=LocalStorage/Cookies/IndexedDB/Login" in cache
