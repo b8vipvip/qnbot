@@ -14,13 +14,16 @@ namespace Bot.AssistWindow.Widget.Robot
         public string Buyer { get; private set; }
         public string Question { get; private set; }
         public string Answer { get; private set; }
+        public string ShopKey { get; private set; }
 
-        public ConversationResendEventArgs(string seller, string buyer, string question, string answer)
+        public ConversationResendEventArgs(
+            string seller, string buyer, string question, string answer, string shopKey = "")
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
             Question = question ?? string.Empty;
             Answer = answer ?? string.Empty;
+            ShopKey = (shopKey ?? string.Empty).Trim();
         }
     }
 
@@ -33,12 +36,14 @@ namespace Bot.AssistWindow.Widget.Robot
         public string SourceLabel { get; private set; }
         public string MessageRecordId { get; private set; }
         public bool SourceWasManuallyCorrected { get; private set; }
+        public string ShopKey { get; private set; }
 
         public ConversationEditEventArgs(string seller, string buyer, string question, string answer)
-            : this(seller, buyer, question, answer, string.Empty, string.Empty, false) { }
+            : this(seller, buyer, question, answer, string.Empty, string.Empty, false, string.Empty) { }
 
         public ConversationEditEventArgs(string seller, string buyer, string question,
-            string answer, string sourceLabel, string messageRecordId, bool sourceWasManuallyCorrected)
+            string answer, string sourceLabel, string messageRecordId,
+            bool sourceWasManuallyCorrected, string shopKey = "")
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
@@ -47,6 +52,7 @@ namespace Bot.AssistWindow.Widget.Robot
             SourceLabel = sourceLabel ?? string.Empty;
             MessageRecordId = messageRecordId ?? string.Empty;
             SourceWasManuallyCorrected = sourceWasManuallyCorrected;
+            ShopKey = (shopKey ?? string.Empty).Trim();
         }
     }
 
@@ -281,7 +287,7 @@ namespace Bot.AssistWindow.Widget.Robot
             if (handler != null)
                 handler(this, new ConversationEditEventArgs(
                     _seller, _buyer, _question, _answer,
-                    originalSource, messageRecordId, sourceWasManuallyCorrected));
+                    originalSource, messageRecordId, sourceWasManuallyCorrected, _shopKey));
         }
 
         internal void MirrorOpenKnowledge(Window owner)
@@ -297,14 +303,15 @@ namespace Bot.AssistWindow.Widget.Robot
         private void RaiseResendRequested()
         {
             var handler = ResendRequested;
-            if (handler != null) handler(this, new ConversationResendEventArgs(_seller, _buyer, _question, _answer));
+            if (handler != null) handler(this, new ConversationResendEventArgs(
+                _seller, _buyer, _question, _answer, _shopKey));
         }
 
         private void RaiseEditRequested()
         {
             var handler = EditRequested;
             if (handler != null) handler(this, new ConversationEditEventArgs(
-                _seller, _buyer, _question, _answer, _answerSource, string.Empty, false));
+                _seller, _buyer, _question, _answer, _answerSource, string.Empty, false, _shopKey));
         }
 
         internal void UseAnswerOnlyMirrorPresentation()
