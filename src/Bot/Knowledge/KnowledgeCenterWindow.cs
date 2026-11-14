@@ -192,6 +192,28 @@ namespace Bot.Knowledge
                 return;
             }
 
+            seller = (seller ?? string.Empty).Trim();
+            var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
+            if (expectedSeller.Length == 0)
+            {
+                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                expectedSeller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            var sellerMatches = string.Equals(expectedSeller, seller, StringComparison.Ordinal)
+                || (shop.HasStableSellerId && expectedSeller.Length == 0);
+            if (!sellerMatches && !shop.HasStableSellerId && expectedSeller.Length > 0)
+                sellerMatches = string.Equals(
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                    StringComparison.Ordinal);
+            if (!sellerMatches)
+            {
+                MessageBox.Show(owner, "卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识库。",
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             var wnd = new KnowledgeCenterWindow
             {
                 RequestedSeller = seller,
