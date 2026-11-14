@@ -968,6 +968,11 @@ namespace Bot.ChromeNs
 
                     if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))
                         result.ErrorCode = "history_page_limit_reached";
+                    if (result.IsComplete && result.MessagesFetched == 0)
+                    {
+                        result.IsComplete = false;
+                        result.ErrorCode = "history_empty";
+                    }
                     if (result.UnknownTimestampCount > 0)
                     {
                         result.IsComplete = false;
