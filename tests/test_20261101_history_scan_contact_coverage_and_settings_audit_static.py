@@ -11,7 +11,7 @@ feature=read("src/Bot/Options/CtlRobotOptions.xaml.cs")
 targets=read("src/Directory.Build.targets")
 
 def test_contact_discovery_sources_and_count_logged():
-    assert "BotConversationHistoryStore.LoadRecentBySeller(seller, 5000)" in scan
+    assert "BotConversationHistoryStore.LoadRecentBySeller(shopKey, seller, 5000)" in scan
     for name in ("visible_chat_list","message_manager","contacts_api",
                  "bot_reply_history","merged_and_validated"):
         assert 'evidence.Discovery("'+name+'"' in scan
