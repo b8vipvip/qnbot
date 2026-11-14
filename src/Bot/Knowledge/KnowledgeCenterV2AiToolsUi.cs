@@ -424,7 +424,8 @@ namespace Bot.Knowledge
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
-                var sellerMatches = string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal);
+                var sellerMatches = string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal)
+                    || (shop.HasStableSellerId && string.IsNullOrWhiteSpace(shop.SellerNick));
                 if (!sellerMatches && !shop.HasStableSellerId
                     && !string.IsNullOrWhiteSpace(shop.SellerNick))
                     sellerMatches = string.Equals(
