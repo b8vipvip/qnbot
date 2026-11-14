@@ -101,7 +101,16 @@ namespace Bot.ShopScope
             if (matches.Count == 0) return null;
             if (matches.Count > 1 && matches.Any(x => !x.Context.HasStableSellerId))
                 return null;
-            var match = matches[0];
+
+            // A shop can temporarily have more than one QN wrapper while Qianniu
+            // replaces an injected WebSocket. Prefer the currently active wrapper
+            // with a live CDP session; never return the first stale wrapper merely
+            // because it happens to appear first in QNSet.
+            var match = matches
+                .Where(x => x.Qn.CDP != null && !string.IsNullOrWhiteSpace(x.Qn.CDP.SessionId))
+                .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
+                .FirstOrDefault();
+            if (match == null) return null;
             try
             {
                 EnsureUnstableIdentityIsUnique(match.Qn, match.Context);
