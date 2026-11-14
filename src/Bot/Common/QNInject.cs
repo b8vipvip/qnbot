@@ -22,7 +22,7 @@ namespace Bot.Common
 public class QNInject
     {
         private static readonly string[] workbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
-        private static readonly string[] resourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "AliApp" };
+        private static readonly string[] resourceOwnerProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang", "AliApp" };
         private static readonly SemaphoreSlim repairGate = new SemaphoreSlim(1, 1);
         private const string webuiResDir = "newWebui";
         private const string webuiFile = "webui.zip";
