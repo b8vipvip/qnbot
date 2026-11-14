@@ -25,6 +25,8 @@ def test_degraded_recovery_runs_safe_deferred_migration_after_qianniu_exits():
     qn = read("src/Bot/Common/QNInject.cs")
 
     assert "TryRepairDeferredResourcesAsync" in recovery
+    assert "RunDeferredRepairWatcherAsync" in recovery
+    assert "Task.Run(() => RunDeferredRepairWatcherAsync())" in recovery
     assert "CheckAndRepairLanguageSafely" in recovery
     assert "QNInject.TryRepairWhenQianniuClosedAsync" in recovery
     assert "IsQianniuRunning()" in recovery
