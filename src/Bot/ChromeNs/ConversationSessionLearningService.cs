@@ -29,6 +29,7 @@ namespace Bot.ChromeNs
         public string StyleBefore { get; set; }
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
+        public string InputCoverageJson { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -60,6 +61,7 @@ namespace Bot.ChromeNs
         public string StyleBefore { get; set; }
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
+        public string InputCoverageJson { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -82,6 +84,10 @@ namespace Bot.ChromeNs
         public const int InactivityMinutes = 5;
         public const int SellerQuietSeconds = 30;
         public const int MaxSuggestionsPerSession = 8;
+        // Keep candidate generation observable, but do not mutate production V2
+        // knowledge until full-corpus coverage, transactional rollback and canary
+        // acceptance are implemented and verified.
+        private const bool EnableAutomaticWrites = false;
         public const int ReportRetentionDays = 90;
         public const int MaxReports = 1000;
 
@@ -259,6 +265,13 @@ namespace Bot.ChromeNs
                 sb.AppendLine("学习后风格：");
                 sb.AppendLine(string.IsNullOrWhiteSpace(report.StyleAfter) ? "（未变化）" : report.StyleAfter);
             }
+            if (!string.IsNullOrWhiteSpace(report.InputCoverageJson))
+            {
+                sb.AppendLine();
+                sb.AppendLine("本轮输入覆盖：");
+                try { sb.AppendLine(JToken.Parse(report.InputCoverageJson).ToString(Formatting.Indented)); }
+                catch { sb.AppendLine(report.InputCoverageJson); }
+            }
             if (!string.IsNullOrWhiteSpace(report.SuggestionsJson))
             {
                 sb.AppendLine();
@@ -320,29 +333,95 @@ namespace Bot.ChromeNs
 
             try
             {
-                if (!string.IsNullOrWhiteSpace(session.CCode))
-                {
-                    await Task.Run(() => ConversationSessionLearningRuntimeBridge.RefreshRemoteHistory(
-                        session.Seller, session.Buyer, session.CCode));
-                    await Task.Delay(500);
-                }
-
                 var endAt = DateTime.Now;
                 var from = session.StartedAt.AddMinutes(-1);
+                ConversationHistoryRefreshResult historyCoverage;
+                if (string.IsNullOrWhiteSpace(session.CCode))
+                {
+                    historyCoverage = new ConversationHistoryRefreshResult
+                    {
+                        IsComplete = false,
+                        ErrorCode = "missing_conversation_code"
+                    };
+                }
+                else
+                {
+                    historyCoverage = await ConversationSessionLearningRuntimeBridge.RefreshRemoteHistoryCompleteAsync(
+                        session.Seller, session.Buyer, session.CCode, from, endAt, CancellationToken.None);
+                }
+
                 var turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
-                    session.Seller, session.Buyer, from, endAt, 120, true);
-                var cards = BotConversationHistoryStore.LoadRange(
-                    session.Seller, session.Buyer, from, endAt, 120);
+                    session.Seller, session.Buyer, from, endAt, 0, true);
+                var cards = BotConversationHistoryStore.LoadRangeComplete(
+                    session.Seller, session.Buyer, from, endAt);
+                var report = LoadReport(session.EntityId) ?? NewReport(session);
+                report.InputCoverageJson = new JObject
+                {
+                    ["historyComplete"] = historyCoverage != null && historyCoverage.IsComplete,
+                    ["historyPages"] = historyCoverage == null ? 0 : historyCoverage.PagesFetched,
+                    ["historyMessagesFetched"] = historyCoverage == null ? 0 : historyCoverage.MessagesFetched,
+                    ["historyMessagesInWindow"] = historyCoverage == null ? 0 : historyCoverage.MessagesInWindow,
+                    ["unknownTimestampCount"] = historyCoverage == null ? 0 : historyCoverage.UnknownTimestampCount,
+                    ["timelineTurns"] = turns.Count,
+                    ["botCards"] = cards.Count,
+                    ["historyStopReason"] = historyCoverage == null ? string.Empty : historyCoverage.StopReason,
+                    ["historyErrorCode"] = historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode,
+                    ["knowledgeCorpusComplete"] = false,
+                    ["knowledgeCorpusRecords"] = 0,
+                    ["writeMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
+                    ["windowStart"] = from.ToString("o"),
+                    ["windowEnd"] = endAt.ToString("o")
+                }.ToString(Formatting.None);
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+
+                if (historyCoverage == null || !historyCoverage.IsComplete)
+                {
+                    if (session.RetryCount < 3
+                        && historyCoverage != null
+                        && historyCoverage.ErrorCode != "missing_conversation_scope"
+                        && historyCoverage.ErrorCode != "invalid_session_window"
+                        && historyCoverage.ErrorCode != "missing_conversation_code")
+                    {
+                        session.RetryCount++;
+                        report.Status = "等待完整历史恢复";
+                        report.Error = "history_coverage_incomplete:" + historyCoverage.ErrorCode;
+                        SaveReport(report);
+                        NotifyChanged();
+                        Requeue(session);
+                        return;
+                    }
+
+                    report.Status = "历史覆盖不完整，已跳过";
+                    report.Summary = "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库。";
+                    report.Error = "history_coverage_incomplete:"
+                        + (historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode);
+                    report.CompletedAtTicks = DateTime.Now.Ticks;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    return;
+                }
+
                 if (turns.Count(x => x.Role == "user" && !x.Withdrawn) < 1
                     || turns.Count(x => x.Role == "assistant") < 1)
                 {
                     if (session.RetryCount < 3)
                     {
                         session.RetryCount++;
+                        report.Status = "等待完整双方聊天记录";
+                        report.Error = "session_timeline_incomplete";
+                        SaveReport(report);
+                        NotifyChanged();
                         Requeue(session);
                         return;
                     }
-                    CompleteSkipped(session, "聊天历史不足，未自动修改知识库。", "未读取到完整双方聊天记录");
+                    report.Status = "聊天历史不足，已跳过";
+                    report.Summary = "完整分页后仍未读取到双方聊天记录，未调用AI，也未写入生产知识库。";
+                    report.Error = "session_timeline_incomplete";
+                    report.CompletedAtTicks = DateTime.Now.Ticks;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
                     return;
                 }
 
@@ -364,7 +443,9 @@ namespace Bot.ChromeNs
                 }
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
-                if (CountHumanSellerTurns(turns, cards) >= 2 && !string.IsNullOrWhiteSpace(styleAfter))
+                if (EnableAutomaticWrites
+                    && CountHumanSellerTurns(turns, cards) >= 2
+                    && !string.IsNullOrWhiteSpace(styleAfter))
                 {
                     using (ShopSettingsScope.Enter(shop))
                         SaveStyleProfile(session.Seller, styleAfter);
@@ -405,6 +486,12 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
+                        if (!EnableAutomaticWrites)
+                        {
+                            suggestion.ApplyMessage = "默认dry-run：完整Knowledge V2语料覆盖、原子更新/回滚与Windows灰度验收尚未完成，未写入生产知识库";
+                            skipped++;
+                            continue;
+                        }
                         var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
                             suggestion.Question, suggestion.Answer, suggestion.Category, suggestion.Keywords,
                             localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
@@ -416,12 +503,15 @@ namespace Bot.ChromeNs
                 }
 
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
-                report.Status = "学习完成";
-                report.Summary = summary;
+                report.Status = EnableAutomaticWrites ? "学习完成" : "学习完成（dry-run）";
+                report.Summary = EnableAutomaticWrites
+                    ? summary
+                    : summary + "（当前为dry-run；完整Knowledge V2语料覆盖与生产写入门禁尚未完成）";
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
                     suggestions, analysis["workflow_proposals"] as JArray, session.Seller);
+                report.InputCoverageJson = report.InputCoverageJson ?? string.Empty;
                 report.AppliedCount = applied;
                 report.SkippedCount = skipped;
                 report.Error = string.Empty;
@@ -511,7 +601,7 @@ namespace Bot.ChromeNs
         {
             if (cards == null || cards.Count == 0) return "（无）";
             var sb = new StringBuilder();
-            foreach (var card in cards.OrderBy(x => x.CreatedAtTicks).Take(80))
+            foreach (var card in cards.OrderBy(x => x.CreatedAtTicks))
             {
                 sb.Append("[问题] ").AppendLine(Redact(card.Question));
                 sb.Append("[Bot原答案] ").AppendLine(Redact(StripAi(card.Answer)));
@@ -764,6 +854,7 @@ namespace Bot.ChromeNs
                 StyleBefore = string.Empty,
                 StyleAfter = string.Empty,
                 SuggestionsJson = string.Empty,
+                InputCoverageJson = string.Empty,
                 Error = string.Empty,
                 SessionStartedAtTicks = session.StartedAt.Ticks,
                 LastBuyerAtTicks = session.LastBuyerAt.Ticks,
@@ -905,7 +996,15 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try
+                {
+                    DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column InputCoverageJson text");
+                }
+                catch
+                {
+                    // Existing installations already have the coverage column.
+                }
                 DbHelper.Db.Execute("create index if not exists IX_ConversationSessionLearning_Updated on ConversationSessionLearningReportEntity(UpdatedAtTicks)");
                 DbHelper.Db.Execute("create table if not exists StoreReplyStyleProfileEntity (Seller text primary key not null,Profile text,LearnedSessions integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 Volatile.Write(ref _schemaReady, 1);
@@ -924,6 +1023,7 @@ namespace Bot.ChromeNs
                 StyleBefore = entity.StyleBefore,
                 StyleAfter = entity.StyleAfter,
                 SuggestionsJson = entity.SuggestionsJson,
+                InputCoverageJson = entity.InputCoverageJson,
                 Error = entity.Error,
                 AppliedCount = entity.AppliedCount,
                 SkippedCount = entity.SkippedCount,
