@@ -550,7 +550,7 @@ namespace Bot.ChromeNs
             return null;
         }
 
-        private static void RecordMessage(
+        private static bool RecordMessage(
             TimelineState state,
             string seller,
             string buyer,
@@ -558,27 +558,27 @@ namespace Bot.ChromeNs
             string text,
             bool fromHistory)
         {
-            if (message == null) return;
+            if (message == null) return false;
             var timestamp = GetMessageTime(message);
             if (IsWithdrawalNotice(message, text))
             {
                 if (IsSellerWithdrawal(message, text, seller)) MarkLastSellerTurnWithdrawn(state, timestamp);
-                return;
+                return false;
             }
-            if (IsPlatformSystemTip(message, text)) return;
+            if (IsPlatformSystemTip(message, text)) return false;
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
             string role;
             if (from == seller && to == buyer) role = "assistant";
             else if (from == buyer && to == seller) role = "user";
-            else return;
+            else return false;
 
             var cleanText = IncomingMessageSafety.GetDisplayText(message, text);
             if (string.IsNullOrWhiteSpace(cleanText)
                 || string.Equals(cleanText, "[空白或未知消息]", StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
             var messageKey = ScopeKey(seller) + "|" + IncomingMessageSafety.BuildMessageKey(message, cleanText);
             var aliases = GetNativeMessageAliases(message);
@@ -594,8 +594,9 @@ namespace Bot.ChromeNs
                         || HasSharedNativeAlias(t.NativeAliases, aliases)));
                 if (exact != null)
                 {
+                    var isNewHistoryObservation = fromHistory && !exact.SeenHistory;
                     MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
-                    return;
+                    return isNewHistoryObservation;
                 }
 
                 // Distinct native keys can still describe one message when both
@@ -610,11 +611,12 @@ namespace Bot.ChromeNs
                         .ToList();
                 if (precisePeers.Count == 1)
                 {
+                    var isNewHistoryObservation = fromHistory && !precisePeers[0].SeenHistory;
                     MergeObservedIdentity(precisePeers[0], aliases, preciseTime, timestamp, fromHistory);
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
                         + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                    return;
+                    return isNewHistoryObservation;
                 }
 
                 // If an endpoint only supplies second-resolution timestamps,
@@ -634,11 +636,12 @@ namespace Bot.ChromeNs
                     if (peers.Count == 1 && opposite.Count == 1
                         && (preciseTime == 0 || opposite[0].PreciseTimeTicks == 0))
                     {
+                        var isNewHistoryObservation = fromHistory && !opposite[0].SeenHistory;
                         MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory);
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
                             + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                        return;
+                        return isNewHistoryObservation;
                     }
                 }
 
@@ -655,6 +658,7 @@ namespace Bot.ChromeNs
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
+                return fromHistory;
             }
         }
 
@@ -921,8 +925,8 @@ namespace Bot.ChromeNs
                             }
                             if (messageTime < from || messageTime > to) continue;
 
-                            RecordMessage(state, seller, buyer, item, text, true);
-                            result.MessagesInWindow++;
+                            if (RecordMessage(state, seller, buyer, item, text, true))
+                                result.MessagesInWindow++;
                         }
 
                         var oldest = messages.Where(x => x != null).OrderBy(GetSortValue).FirstOrDefault();
