@@ -1,6 +1,7 @@
 ﻿using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using DbEntity.Response;
@@ -373,6 +374,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
@@ -394,6 +396,7 @@ namespace Bot.ChromeNs
     internal sealed class AiOptimizationRecordView
     {
         public string Id { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
@@ -460,22 +463,62 @@ namespace Bot.ChromeNs
             return TurnReservations.TryUpdate(key, until, existing);
         }
 
-        public static List<AiOptimizationRecordView> GetRecords(int maxCount)
+        public static List<AiOptimizationRecordView> GetRecords(
+            string shopKey, string seller, int maxCount)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0)
+                return new List<AiOptimizationRecordView>();
             EnsureSchema();
+            BackfillLegacyShopRows(shopKey, seller);
             var take = Math.Max(1, Math.Min(MaxRecords, maxCount <= 0 ? 300 : maxCount));
             try
             {
                 lock (DbSync)
                 {
-                    return (DbHelper.Db.Select(typeof(AiOptimizationRecordEntity), "order by UpdatedAtTicks desc limit " + take) ?? new List<object>())
-                        .OfType<AiOptimizationRecordEntity>().Where(x => x != null).Select(ToView).ToList();
+                    return (DbHelper.Db.Select(
+                        typeof(AiOptimizationRecordEntity),
+                        "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit " + take,
+                        shopKey, seller) ?? new List<object>())
+                        .OfType<AiOptimizationRecordEntity>()
+                        .Where(x => x != null
+                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Seller, seller, StringComparison.Ordinal))
+                        .Select(ToView)
+                        .ToList();
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("读取AI优化记录失败：" + ex.Message, 10);
                 return new List<AiOptimizationRecordView>();
+            }
+        }
+
+        private static void BackfillLegacyShopRows(string shopKey, string seller)
+        {
+            try
+            {
+                var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (resolved == null
+                    || !string.Equals(resolved.ShopKey, shopKey, StringComparison.Ordinal))
+                    return;
+                lock (DbSync)
+                {
+                    DbHelper.Db.Execute(
+                        "update AiOptimizationRecordEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                }
+            }
+            catch (AmbiguousShopIdentityException)
+            {
+                // Legacy records remain unassigned when nickname ownership is ambiguous.
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("迁移旧版AI优化记录店铺归属失败：" + ex.Message, 5);
             }
         }
 
@@ -688,10 +731,13 @@ namespace Bot.ChromeNs
             {
                 if (_schemaReady != 0) return;
                 DbHelper.Db.Execute("create table if not exists AiOptimizationRecordEntity ("
-                    + "EntityId text primary key not null,Seller text,Buyer text,Question text,AiAnswer text,HumanAnswer text,"
+                    + "EntityId text primary key not null,ShopKey text,Seller text,Buyer text,Question text,AiAnswer text,HumanAnswer text,"
                     + "AccuracyScore real not null default 0,AccuracyAnalysis text,HumanReplyReason text,KnowledgeStrategy text,"
                     + "SuggestionsJson text,Status text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,"
                     + "CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try { DbHelper.Db.Execute("alter table AiOptimizationRecordEntity add column ShopKey text"); }
+                catch { /* Existing installations may already have the ShopKey column. */ }
+                DbHelper.Db.Execute("create index if not exists IX_AiOptimizationRecord_Shop_Updated on AiOptimizationRecordEntity(ShopKey,Seller,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create index if not exists IX_AiOptimizationRecord_Updated on AiOptimizationRecordEntity(UpdatedAtTicks)");
                 Volatile.Write(ref _schemaReady, 1);
             }
@@ -721,7 +767,7 @@ namespace Bot.ChromeNs
         {
             return new AiOptimizationRecordView
             {
-                Id = x.EntityId, Seller = x.Seller, Buyer = x.Buyer, Question = x.Question,
+                Id = x.EntityId, ShopKey = x.ShopKey, Seller = x.Seller, Buyer = x.Buyer, Question = x.Question,
                 AiAnswer = x.AiAnswer, HumanAnswer = x.HumanAnswer, AccuracyScore = x.AccuracyScore,
                 AccuracyAnalysis = x.AccuracyAnalysis, HumanReplyReason = x.HumanReplyReason,
                 KnowledgeStrategy = x.KnowledgeStrategy, SuggestionsJson = x.SuggestionsJson,
