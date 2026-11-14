@@ -69,7 +69,7 @@ namespace Bot.ChromeNs
     {
         public const int RetentionDays = 90;
         public const int MaxTotalRecords = 10000;
-        public const int MaxRecordsPerConversation = 200;
+        public const int MaxRecentLoadCount = 200;
         public const int DefaultLoadCount = 100;
 
         private static readonly object DbSync = new object();
@@ -105,7 +105,7 @@ namespace Bot.ChromeNs
 
             Log.Info("Bot问答历史持久化已启用：保留" + RetentionDays
                 + "天，全局最多" + MaxTotalRecords
-                + "条，单买家最多" + MaxRecordsPerConversation + "条。");
+                + "条，界面最近读取上限" + MaxRecentLoadCount + "条；学习复盘使用完整时间范围查询。");
         }
 
         /// <summary>
