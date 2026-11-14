@@ -15,7 +15,7 @@ def test_session_learning_waits_five_minutes_and_keeps_audit_records():
     assert "public const int SellerQuietSeconds = 30" in source
     assert "ConversationSessionLearningReportEntity" in source
     assert "StoreReplyStyleProfileEntity" in source
-    assert 'report.Status = "学习完成"' in source
+    assert 'report.Status = EnableAutomaticWrites ? "学习完成" : "学习完成（dry-run）";' in source
     assert "ResumePending" in source
 
 
@@ -80,7 +80,8 @@ def test_five_minute_session_and_shop_safe_learning():
     assert "Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));" in s
     assert "TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt)" in s
     assert "TimeSpan.FromSeconds(SellerQuietSeconds) - (DateTime.Now - session.LastActivityAt)" not in s
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller)" in s
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in s
+    assert "Key(shop.ShopKey, seller, buyer)" in s
     assert "using (ShopSettingsScope.Enter(shop))" in s
     assert "CountHumanSellerTurns(turns, cards) == 0" in s
 
@@ -88,6 +89,7 @@ def test_five_minute_session_and_shop_safe_learning():
 def test_ai_history_exposes_existing_session_learning_reports():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
     assert "ConversationSessionLearningService.GetReports(1000)" in ui
+    assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in ui
     assert "string.Equals(x.Seller, _seller, StringComparison.Ordinal)" in ui
     assert '"会话自动学习"' in ui
     assert "x.AppliedCount" in ui and "x.SkippedCount" in ui
@@ -108,7 +110,7 @@ def test_learning_history_refresh_is_typed_and_shop_scoped():
     assert 'ConversationContextStore.RefreshLearningHistoryCompleteAsync(' in ctx
     assert 'RefreshRemoteHistoryCompleteAsync(' in bridge
     assert 'method.Invoke(null, new[] { state, seller, buyer, ccode })' not in bridge
-    assert 'ShopContextLocator.ResolveRuntimeBySellerNick(seller)' in ctx
+    assert 'ShopContextLocator.ResolveRuntimeByShopKey(shopKey)' in ctx
     assert 'LearningHistoryPageSize = 100' in ctx
     assert 'LearningHistoryMaxPages = 200' in ctx
 
@@ -116,7 +118,7 @@ def test_learning_history_refresh_is_typed_and_shop_scoped():
 def test_idle_learning_resolves_shop_before_structured_ai_call():
     source=read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     analysis=source[source.index("private static async Task FinalizeAsync"):source.index("private static async Task<JObject> AnalyzeAsync")]
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller)" in analysis
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in analysis
     assert "var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);" not in analysis
     assert "using (ShopSettingsScope.Enter(shop))" in analysis
     assert "analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);" in analysis
@@ -194,3 +196,68 @@ def test_myopenai_endpoint_discovery_is_scoped_in_learning():
     source=read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     assert "using (ShopSettingsScope.Enter(shop))" in source
     assert "localFirst = ReplyModeService.IsLocalFirst(session.Seller);" in source
+
+def test_learning_runtime_is_scoped_by_exact_qn_identity_and_shop_key():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in bridge
+    assert "using (ShopSettingsScope.Enter(shop))" in bridge
+    assert 'var scopedMessageKey = shop.ShopKey + "|" + messageKey' in bridge
+    assert "Key(shop.ShopKey, seller, buyer)" in service
+    assert "Key(session.ShopKey, session.Seller, session.Buyer)" in service
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in service
+    assert "ProfileKey(string seller)" in service
+    assert "return shop.ShopKey + \"#\" + seller;" in service
+    assert "ResolveRuntimeByShopKey(string shopKey)" in locator
+    assert "ShopKey = session.ShopKey" in service
+    assert "ShopKey text" in history
+    assert "LoadRangeComplete(session.ShopKey" in service
+    assert "LoadRecentBySeller(shopKey, seller, 5000)" in read(
+        "src/Bot/Knowledge/ChatHistoryScanService.cs"
+    )
+
+
+def test_learning_retries_never_overwrite_a_newer_same_buyer_session():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    requeue = service[
+        service.index("private static void Requeue"):
+        service.index("private static void CompleteSkipped")
+    ]
+    assert "Active.TryAdd(key, session)" in requeue
+    assert "requeue_conflict_new_session_active" in requeue
+    assert "Active[Key(" not in requeue
+
+
+def test_remote_history_coverage_counts_only_unique_accepted_messages():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("private static bool RecordMessage"):
+        context.index("private static string[] GetNativeMessageAliases")
+    ]
+    assert "private static bool RecordMessage" in method
+    assert "return isNewHistoryObservation;" in method
+    assert "if (RecordMessage(state, seller, buyer, item, text, true))" in context
+    assert "result.MessagesInWindow++;" in context
+
+
+def test_bot_echo_attribution_uses_native_marker_and_time_not_text_alone():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    classifier = service[
+        service.index("private static bool IsBotTurn"):
+        service.index("private static List<Suggestion> ParseSuggestions")
+    ]
+    assert 'value.EndsWith("[A]"' in classifier
+    assert 'value.EndsWith("[AI]"' in classifier
+    assert "AnswerReadyAtTicks" in classifier
+    assert "TimeSpan.FromMinutes(30).Ticks" in classifier
+
+
+def test_ambiguous_seller_nick_never_falls_back_to_shared_legacy_timeline():
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    assert "AmbiguousShopIdentityException" in locator
+    assert "catch (AmbiguousShopIdentityException) { throw; }" in context
+
