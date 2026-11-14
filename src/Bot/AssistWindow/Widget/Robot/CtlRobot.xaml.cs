@@ -451,13 +451,19 @@ namespace Bot.AssistWindow.Widget.Robot
 
         public void ReShowAfterQNChange()
         {
-            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null)
-            {
-                _preQN = QN.CurQN;
-                RefreshItems();
-                RefreshConversations();
-                RefreshRunStatus();
-            }
+            var current = QN.CurQN;
+            if (current == null || current.Seller == null || current.Buyer == null) return;
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0 && !ActiveShopSessionRegistry.IsActive(current))
+                return;
+            var seller = (current.Seller.Nick ?? string.Empty).Trim();
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+                return;
+
+            _preQN = current;
+            RefreshItems();
+            RefreshConversations();
+            RefreshRunStatus();
         }
 
         private void RefreshConversations()
