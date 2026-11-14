@@ -157,10 +157,22 @@ namespace Bot.AssistWindow.Widget.Robot
             buyerConversations.AddOrUpdate(key, id => conversations, (k, v) => conversations);
             PruneConversationUiCache(key);
 
-            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null
-                && QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
+            var activeQn = _preQN ?? QN.CurQN;
+            if (activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
+                && string.Equals(activeQn.Seller.Nick, seller, StringComparison.Ordinal)
+                && string.Equals(activeQn.Buyer.Nick, buyer, StringComparison.Ordinal))
             {
-                RefreshMessageMirror(false);
+                try
+                {
+                    var activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
+                    if (string.Equals(activeShopKey, shopKey, StringComparison.Ordinal))
+                        RefreshMessageMirror(false);
+                }
+                catch
+                {
+                    // The answer card remains visible, but never refresh a mirror
+                    // whose exact QN-to-ShopKey relationship cannot be verified.
+                }
             }
             return ctlConversation;
         }
@@ -181,9 +193,12 @@ namespace Bot.AssistWindow.Widget.Robot
 
             if (buyerConversations.Count <= MaxCachedBuyerPanels) return;
             var activeQn = _preQN ?? QN.CurQN;
-            var activeShopKey = activeQn == null || activeQn.Seller == null
-                ? string.Empty
-                : ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
+            var activeShopKey = string.Empty;
+            if (activeQn != null && activeQn.Seller != null)
+            {
+                try { activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey; }
+                catch { activeShopKey = string.Empty; }
+            }
             var activeKey = activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
                 && !string.IsNullOrWhiteSpace(activeShopKey)
                 ? BuildConversationKey(activeShopKey, activeQn.Seller.Nick, activeQn.Buyer.Nick)
