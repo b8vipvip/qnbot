@@ -80,7 +80,9 @@ def test_status_bar_uses_shop_control_plane_status_not_legacy_local_ai_endpoint_
     props = read("src/Bot/Directory.Build.props")
     assert 'txtStatusApi.Text = "服务端：" + status' in status
     assert "ShopTokenBindingService.GetStatusText" in status
-    assert "ShopContextLocator.ResolveBySellerNick" in status
+    assert "ShopScopedUiBridge.Get(Window.GetWindow(this))" in status
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(activeShopKey)" in status
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in status
     assert "_diagnosticsTimer.Interval = TimeSpan.FromSeconds(5)" in status
     assert "_statsTimer.Interval = TimeSpan.FromSeconds(10)" in status
     assert "AiEndpointStore.GetEnabledEndpoints" in legacy  # old data-desk metric remains compatibility-only
