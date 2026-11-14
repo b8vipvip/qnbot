@@ -88,8 +88,12 @@ def test_five_minute_session_and_shop_safe_learning():
 
 def test_ai_history_exposes_existing_session_learning_reports():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    shell = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     assert "ConversationSessionLearningService.GetReports(1000)" in ui
-    assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in ui
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(_shopKey)" in ui
+    assert "using (ShopSettingsScope.Enter(shop))" in ui
+    assert "new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller, _shopKey)" in shell
+    assert "string.Equals(x.ShopKey, _shopKey, StringComparison.Ordinal)" in ui
     assert "string.Equals(x.Seller, _seller, StringComparison.Ordinal)" in ui
     assert '"会话自动学习"' in ui
     assert "x.AppliedCount" in ui and "x.SkippedCount" in ui
