@@ -15,12 +15,14 @@ namespace Bot.ShopScope
             string platform,
             string sellerId,
             string displayName,
-            bool hasStableSellerId)
+            bool hasStableSellerId,
+            string sellerNick = null)
         {
             ShopKey = Require(shopKey, nameof(shopKey));
             Platform = Require(platform, nameof(platform)).ToLowerInvariant();
             SellerId = Require(sellerId, nameof(sellerId));
             DisplayName = (displayName ?? string.Empty).Trim();
+            SellerNick = (sellerNick ?? string.Empty).Trim();
             HasStableSellerId = hasStableSellerId;
         }
 
@@ -28,6 +30,7 @@ namespace Bot.ShopScope
         public string Platform { get; private set; }
         public string SellerId { get; private set; }
         public string DisplayName { get; private set; }
+        public string SellerNick { get; private set; }
         public bool HasStableSellerId { get; private set; }
 
         public bool Equals(ShopContext other)
