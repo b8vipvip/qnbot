@@ -302,38 +302,39 @@ namespace Bot.ShopScope
             QN qn = null;
             try
             {
-                qn = QN.FindExistingBySellerNick(seller);
+                qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
             }
             catch (Exception ex)
             {
                 return Failure(
                     "千牛真实发送失败",
-                    "阶段6/6 千牛真实发送：失败\n无法定位当前客服实例：" + Safe(ex.Message, 800));
+                    "阶段6/6 千牛真实发送：失败\n无法按ShopKey定位客服实例：" + Safe(ex.Message, 800));
             }
 
-            if (qn == null || qn.Seller == null)
+            if (qn == null || qn.Seller == null || qn.CDP == null)
             {
                 return Failure(
                     "千牛真实发送失败",
-                    "阶段6/6 千牛真实发送：失败\n当前店铺没有在线的千牛客服运行实例，请先保持接待窗口在线。" );
+                    "阶段6/6 千牛真实发送：失败\n当前ShopKey没有可用的在线千牛CDP会话，请先保持对应店铺接待窗口在线。" );
             }
 
             try
             {
-                var resolved = ShopContextLocator.ResolveBySellerNick(qn.Seller.Nick);
-                if (resolved == null
-                    || !string.Equals(resolved.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                var resolvedShopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey;
+                if (!string.Equals(resolvedShopKey, shop.ShopKey, StringComparison.Ordinal)
+                    || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
                 {
                     return Failure(
                         "千牛真实发送失败",
-                        "阶段6/6 千牛真实发送：失败\n客服与当前 ShopKey 不一致，已阻止跨店测试发送。" );
+                        "阶段6/6 千牛真实发送：失败\n客服卖家或ShopKey与测试目标不一致，已阻止跨店测试发送。" );
                 }
             }
             catch (Exception ex)
             {
                 return Failure(
                     "千牛真实发送失败",
-                    "阶段6/6 千牛真实发送：失败\n无法验证客服 ShopKey：" + Safe(ex.Message, 800));
+                    "阶段6/6 千牛真实发送：失败\n无法验证客服ShopKey：" + Safe(ex.Message, 800));
             }
 
             string buyer = string.Empty;
@@ -363,10 +364,10 @@ namespace Bot.ShopScope
             var sendText = "【Bot链路测试，可手动撤回】" + safeAnswer;
             try
             {
-                KnowledgeLearningService.AllowNextManualSend(seller, buyer, sendText);
                 bool sent;
                 using (ShopSettingsScope.Enter(shop))
                 {
+                    KnowledgeLearningService.AllowNextManualSend(seller, buyer, sendText);
                     sent = await qn.SendTextWithRetryAsync(buyer, sendText, 1);
                 }
 
