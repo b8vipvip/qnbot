@@ -14,20 +14,21 @@ def _code_only(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
 
 
-def test_v11_migration_defers_live_qianniu_resource_mutation():
-    script = (ROOT / "scripts" / "apply-recoverable-inject-v11.ps1").read_text(encoding="utf-8-sig")
+def test_v12_migration_defers_live_qianniu_resource_mutation():
+    qn = (ROOT / "src" / "Bot" / "Common" / "QNInject.cs").read_text(encoding="utf-8-sig")
+    language = (ROOT / "src" / "Bot" / "Common" / "LanguageRepairService.cs").read_text(encoding="utf-8-sig")
 
-    replacement = script.split("$runningReplacement = @'", 1)[1].split("'@", 1)[0]
-    assert "if (IsWorkbenchRunning())" in replacement
-    assert "migration deferred: AliWorkbench is running" in replacement
-    assert "return;" in replacement
-    assert "webui.zip/sign/cache mutation" in replacement
-    assert "live patch; no close/kill/restart" not in replacement
-
-    # The migration validator must keep rejecting the old destructive restart path.
-    assert "KillWorkbenchProcesses();" in script
-    assert "Legacy destructive QNInject migration remains" in script
-    assert "Unsafe live Qianniu resource patching remains" in script
+    assert "TryRepairWhenQianniuClosedAsync" in qn
+    assert "repairGate.WaitAsync(0)" in qn
+    assert "resourceOwnerProcessNames" in qn
+    assert "if (IsWorkbenchRunning())" in qn
+    assert "KillWorkbenchProcesses" not in qn
+    assert "Process.Kill()" not in qn
+    assert "File.WriteAllText(signPath, string.Empty" in qn
+    assert "ResourceOwnerProcessNames" in language
+    assert "KillWorkbenchProcesses" not in language
+    assert "Process.Kill()" not in language
+    assert "preserved=LocalStorage/Cookies/IndexedDB/Login" in language
 
 
 def test_attached_window_never_repositions_or_resizes_qianniu_host():
