@@ -164,7 +164,24 @@ namespace Bot.ChromeNs
                 BackfillLegacyShopRows(shopKey, seller);
                 var id = BuildSourceStampId(shopKey, seller, buyer, question, answer);
                 BotReplySourceStampEntity row;
-                lock (DbSync) row = DbHelper.Db.ReadOneRecord<BotReplySourceStampEntity>(x => x.StampId == id);
+                lock (DbSync)
+                {
+                    row = DbHelper.Db.ReadOneRecord<BotReplySourceStampEntity>(x => x.StampId == id);
+                    if (row == null)
+                    {
+                        // Existing stamps used the pre-ShopKey primary-key hash.
+                        // Resolve them by their migrated, fully scoped natural key.
+                        row = (DbHelper.Db.Select(
+                            typeof(BotReplySourceStampEntity),
+                            "where ShopKey = ? and Seller = ? and Buyer = ? and QuestionKey = ? and AnswerKey = ? "
+                            + "order by UpdatedAtTicks desc limit 1",
+                            shopKey, seller, buyer,
+                            NormalizeSourceValue(question), NormalizeSourceValue(answer))
+                            ?? new List<object>())
+                            .OfType<BotReplySourceStampEntity>()
+                            .FirstOrDefault();
+                    }
+                }
                 return row == null ? string.Empty : (row.AnswerSource ?? string.Empty).Trim();
             }
             catch (Exception ex)
@@ -247,9 +264,21 @@ namespace Bot.ChromeNs
                 // Re-rendering the same Qianniu echo must resolve to the original
                 // record even when that record has already been marked as sent.
                 BotReplyEchoLinkEntity existingLink;
+                var legacyEchoId = BuildLegacyBotEchoEntityId(
+                    seller, buyer, messageKey, sentAt, answer);
                 lock (DbSync)
+                {
                     existingLink = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
                         x => x.EchoId == echoId);
+                    if (existingLink == null
+                        && !string.Equals(legacyEchoId, echoId, StringComparison.Ordinal))
+                    {
+                        // Old echo links used a seller/buyer-only hash. Keep the
+                        // original record association after safe ShopKey backfill.
+                        existingLink = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
+                            x => x.EchoId == legacyEchoId);
+                    }
+                }
                 var originalId = existingLink != null
                     && string.Equals(existingLink.ShopKey, shopKey, StringComparison.Ordinal)
                     && string.Equals(existingLink.Seller, seller, StringComparison.Ordinal)
@@ -358,6 +387,18 @@ namespace Bot.ChromeNs
         {
             var identity = (shopKey ?? string.Empty).Trim() + "\n"
                 + (seller ?? string.Empty).Trim() + "\n"
+                + (buyer ?? string.Empty).Trim() + "\n"
+                + ((messageKey ?? string.Empty).Trim().Length > 0
+                    ? (messageKey ?? string.Empty).Trim()
+                    : (sentAt == DateTime.MinValue ? 0 : sentAt.Ticks).ToString())
+                + "\n" + NormalizeSourceValue(answer);
+            return "bot-echo-" + Sha256(identity);
+        }
+
+        private static string BuildLegacyBotEchoEntityId(
+            string seller, string buyer, string messageKey, DateTime sentAt, string answer)
+        {
+            var identity = (seller ?? string.Empty).Trim() + "\n"
                 + (buyer ?? string.Empty).Trim() + "\n"
                 + ((messageKey ?? string.Empty).Trim().Length > 0
                     ? (messageKey ?? string.Empty).Trim()
