@@ -21,6 +21,19 @@ def test_history_is_persisted_in_bot_sqlite_with_bounded_retention():
     assert "order by UpdatedAtTicks desc limit" in source
 
 
+def test_complete_session_card_loader_is_unbounded_while_recent_ui_reads_remain_paged():
+    source = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    complete = source[
+        source.index("public static List<BotConversationHistoryEntity> LoadRangeComplete"):
+        source.index("public static void FlushNow")
+    ]
+
+    assert "order by CreatedAtTicks asc" in complete
+    assert "limit " not in complete.lower()
+    assert "TrimConversationUnsafe" not in source
+    assert "MaxTotalRecords = 10000" in source
+
+
 def test_history_write_is_debounced_and_flushed_on_app_exit():
     source = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
     assert "ConcurrentDictionary<string, BotConversationHistoryEntity> Pending" in source
