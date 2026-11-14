@@ -756,7 +756,9 @@ namespace Bot.AssistWindow.Widget.Robot
             DateTime messageTimestamp,
             ISet<CtlConversation> usedConversations)
         {
-            var key = string.Format("{0}#{1}", seller, buyer);
+            var shopKey = ResolveShopKeyForConversation(seller, buyer);
+            if (string.IsNullOrWhiteSpace(shopKey)) return null;
+            var key = BuildConversationKey(shopKey, seller, buyer);
             List<CtlConversation> conversations;
             if (buyerConversations == null
                 || !buyerConversations.TryGetValue(key, out conversations)
