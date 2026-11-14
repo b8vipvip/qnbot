@@ -16,7 +16,7 @@ def test_echo_link_uses_transport_identity_before_answer_similarity():
     assert "internal sealed class BotReplyEchoLinkEntity" in history
     assert "EchoId text primary key not null" in history
     assert "IX_BotReplyEchoLink_Record" in history
-    assert "var echoId = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);" in method
+    assert "var echoId = BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer);" in method
     assert "x => x.EchoId == echoId" in method
     assert "string.Equals(x.EntityId, originalId, StringComparison.Ordinal)" in method
     assert method.index("var match = candidates.FirstOrDefault") < method.index(
