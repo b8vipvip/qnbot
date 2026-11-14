@@ -72,6 +72,9 @@ namespace Bot.ShopScope
             if (sellerNick.Length == 0)
                 throw new ArgumentException("卖家昵称不能为空。", nameof(sellerNick));
 
+            // Connected QN instances identify the live event source. The persisted
+            // registry also matters: an offline second shop with the same display nick
+            // still makes nickname-only resolution ambiguous and unsafe.
             var matches = SnapshotQns()
                 .Where(x => x != null
                     && x.Seller != null
@@ -80,6 +83,11 @@ namespace Bot.ShopScope
                         sellerNick,
                         StringComparison.Ordinal))
                 .Select(x => ShopIdentityResolver.Resolve(x.Seller))
+                .Concat(Profiles.GetAll()
+                    .Where(x => x != null
+                        && string.Equals((x.DisplayName ?? string.Empty).Trim(),
+                            sellerNick, StringComparison.Ordinal))
+                    .Select(x => x.ToContext()))
                 .GroupBy(x => x.ShopKey, StringComparer.Ordinal)
                 .Select(x => x.First())
                 .ToList();
