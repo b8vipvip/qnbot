@@ -424,8 +424,14 @@ namespace Bot.Knowledge
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
-                if (!string.IsNullOrWhiteSpace(shop.SellerNick)
-                    && !string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal))
+                var sellerMatches = string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal);
+                if (!sellerMatches && !shop.HasStableSellerId
+                    && !string.IsNullOrWhiteSpace(shop.SellerNick))
+                    sellerMatches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(shop.SellerNick),
+                        ShopKeyGenerator.NormalizeFallbackNickname(_seller),
+                        StringComparison.Ordinal);
+                if (!sellerMatches)
                     throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配。");
 
                 using (ShopSettingsScope.Enter(shop))
