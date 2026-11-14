@@ -296,38 +296,73 @@ namespace Bot.Knowledge
         {
             try
             {
+                var window = Window.GetWindow(this) as KnowledgeCenterWindow;
+                var seller = window == null ? string.Empty : (window.RequestedSeller ?? string.Empty).Trim();
+                if (seller.Length == 0) seller = KnowledgeCenterV2Context.ResolveSeller(window);
+                var shopKey = KnowledgeCenterV2Context.ResolveShopKey(window, seller);
+                if (seller.Length == 0 || shopKey.Length == 0)
+                {
+                    _grid.ItemsSource = null;
+                    _detail.Text = "无法确认当前店铺ShopKey，已阻止读取未隔离的AI优化记录。";
+                    _summary.Text = "店铺身份未确认";
+                    return;
+                }
+
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var sellerMatches = string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                    || (shop.HasStableSellerId && string.IsNullOrWhiteSpace(shop.SellerNick));
+                if (!sellerMatches && !shop.HasStableSellerId
+                    && !string.IsNullOrWhiteSpace(shop.SellerNick))
+                    sellerMatches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(shop.SellerNick),
+                        ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                        StringComparison.Ordinal);
+                if (!sellerMatches)
+                    throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配。");
+
                 var rows = new List<Row>();
-                rows.AddRange(AiManualReplyOptimizationService.GetRecords(500).Select(x => new Row
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    SortTime = x.CreatedAt,
-                    Time = x.CreatedAtText,
-                    Type = "人工接管即时对比",
-                    Buyer = x.Buyer,
-                    Status = x.Status,
-                    Accuracy = x.AccuracyText,
-                    Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
-                    Summary = Short(x.Question, 120),
-                    Source = x
-                }));
-                rows.AddRange(ConversationSessionLearningService.GetReports(500).Select(x => new Row
-                {
-                    SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
-                    Time = x.CompletedAtText,
-                    Type = "接待结束复盘",
-                    Buyer = x.Buyer,
-                    Status = x.Status,
-                    Accuracy = "-",
-                    Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
-                    Summary = Short(x.Summary, 120),
-                    Source = x
-                }));
+                    rows.AddRange(AiManualReplyOptimizationService.GetRecords(shopKey, seller, 500).Select(x => new Row
+                    {
+                        SortTime = x.CreatedAt,
+                        Time = x.CreatedAtText,
+                        Type = "人工接管即时对比",
+                        Buyer = x.Buyer,
+                        Status = x.Status,
+                        Accuracy = x.AccuracyText,
+                        Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
+                        Summary = Short(x.Question, 120),
+                        Source = x
+                    }));
+                    rows.AddRange(ConversationSessionLearningService.GetReports(500)
+                        .Where(x => x != null
+                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Seller, seller, StringComparison.Ordinal))
+                        .Select(x => new Row
+                        {
+                            SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
+                            Time = x.CompletedAtText,
+                            Type = "接待结束复盘",
+                            Buyer = x.Buyer,
+                            Status = x.Status,
+                            Accuracy = "-",
+                            Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
+                            Summary = Short(x.Summary, 120),
+                            Source = x
+                        }));
+                }
                 rows = rows.OrderByDescending(x => x.SortTime).Take(1000).ToList();
                 _grid.ItemsSource = rows;
-                _summary.Text = "AI优化记录：共 " + rows.Count + " 条；即时记录可查看AI对照答案、人工实际回复、准确度、人工回复原因和知识策略。";
+                _summary.Text = "当前店铺AI优化记录：共 " + rows.Count + " 条；ShopKey：" + shopKey;
                 if (rows.Count > 0) _grid.SelectedIndex = 0;
-                else _detail.Text = "暂无AI优化记录。";
+                else _detail.Text = "当前店铺暂无AI优化记录。";
             }
-            catch (Exception ex) { _detail.Text = "读取AI优化记录失败：" + ex.Message; }
+            catch (Exception ex)
+            {
+                _grid.ItemsSource = null;
+                _detail.Text = "读取AI优化记录失败：" + ex.Message;
+            }
         }
 
         private void OnRecordsChanged()
