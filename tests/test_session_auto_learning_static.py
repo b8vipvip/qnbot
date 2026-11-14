@@ -366,3 +366,25 @@ def test_pagination_flag_accepts_boolean_and_numeric_json_values():
     assert "JTokenType.Boolean" in parser
     assert "bool.TryParse(text, out boolean)" in parser
     assert "double.TryParse(text, NumberStyles.Float" in parser
+
+def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    reassert = coordinator[
+        coordinator.index("internal static void ReassertCurrent"):
+        coordinator.index("private static bool Activate")
+    ]
+    is_active = coordinator[
+        coordinator.index("internal static bool IsActive"):
+        coordinator.index("internal static void ObserveChatDialogActive")
+    ]
+    connected = locator[
+        locator.index("public static QN FindConnectedQnByShopKey"):
+        locator.index("public static ShopContext ResolveCurrentForUi")
+    ]
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId)" in reassert
+    assert "QN.FindExistingBySellerNick(seller)" not in reassert
+    assert "_activeSessionId.Length == 0" in is_active
+    assert "string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in is_active
+    assert "string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)" in connected
+    assert "OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))" in connected
