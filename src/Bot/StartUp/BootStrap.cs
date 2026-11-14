@@ -60,7 +60,7 @@ namespace Bot
         private const string WebuiRelativePath = @"Resources\newWebui\webui.zip";
         private static readonly string[] WorkbenchProcessNames =
         {
-            "AliWorkbench", "new_AliWorkbench", "AliRender"
+            "AliWorkbench", "new_AliWorkbench", "AliRender", "AliApp"
         };
 
         public static async Task<LanguageRepairResult> CheckAndRepairLanguageSafely()
@@ -102,17 +102,7 @@ namespace Bot
 
         internal static bool IsQianniuRunning()
         {
-            foreach (var name in WorkbenchProcessNames)
-            {
-                try
-                {
-                    if (Process.GetProcessesByName(name).Any()) return true;
-                }
-                catch
-                {
-                }
-            }
-            return false;
+            return QNInject.IsQianniuResourceProcessRunning();
         }
 
         internal static bool TryGetActiveResourceZip(out string zipPath, out string detail)
