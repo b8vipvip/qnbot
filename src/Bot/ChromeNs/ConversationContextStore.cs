@@ -781,20 +781,6 @@ namespace Bot.ChromeNs
             }
         }
 
-        // Legacy one-page refresh retained for non-learning context callers.
-        // Session learning must use RefreshLearningHistoryCompleteAsync instead.
-        internal static bool RefreshLearningHistory(string seller, string buyer, string ccode)
-        {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-            if (shop == null || string.IsNullOrWhiteSpace(ccode)) return false;
-            using (ShopSettingsScope.Enter(shop))
-            {
-                var state = GetState(seller, buyer);
-                RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);
-                return true;
-            }
-        }
-
         // Rebuild the complete requested session window from the remote history API.
         // A single 100-message page is not evidence of a complete conversation.
         // On restart GetState recreates the in-memory timeline before paging, so the
