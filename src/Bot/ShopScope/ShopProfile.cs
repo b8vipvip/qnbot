@@ -20,6 +20,9 @@ namespace Bot.ShopScope
         [JsonProperty("display_name")]
         public string DisplayName { get; set; }
 
+        [JsonProperty("seller_nick")]
+        public string SellerNick { get; set; }
+
         [JsonProperty("has_stable_seller_id")]
         public bool HasStableSellerId { get; set; }
 
@@ -36,7 +39,8 @@ namespace Bot.ShopScope
                 Platform,
                 SellerId,
                 DisplayName,
-                HasStableSellerId);
+                HasStableSellerId,
+                SellerNick);
         }
     }
 }
