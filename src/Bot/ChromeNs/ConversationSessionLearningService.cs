@@ -30,7 +30,6 @@ namespace Bot.ChromeNs
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
         public string InputCoverageJson { get; set; }
-        public string InputCoverageSummary { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -63,6 +62,7 @@ namespace Bot.ChromeNs
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
         public string InputCoverageJson { get; set; }
+        public string InputCoverageSummary { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
