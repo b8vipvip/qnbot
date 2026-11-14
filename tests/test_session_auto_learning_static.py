@@ -413,3 +413,26 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
     assert send.index("using (ShopSettingsScope.Enter(shop))") < send.index(
         "KnowledgeLearningService.AllowNextManualSend"
     )
+
+def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    history = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.History.cs")
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    resolver = mirror[
+        mirror.index("private QN ResolveMessageMirrorQn"):
+        mirror.index("private List<ConversationContextTurn> LoadMessageMirrorTurns")
+    ]
+    restore = history[
+        history.index("private void EnsureCurrentConversationHistoryLoaded"):
+        history.index("    }\n}")
+    ]
+    reshow = robot[
+        robot.index("public void ReShowAfterQNChange"):
+        robot.index("private void RefreshConversations")
+    ]
+    assert "ActiveShopSessionRegistry.GetActiveShopKey()" in resolver
+    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in resolver
+    assert "ShopIdentityResolver.Resolve(current.Seller).ShopKey" in resolver
+    assert "var qn = ResolveMessageMirrorQn();" in restore
+    assert "var current = ResolveMessageMirrorQn();" in restore
+    assert "ActiveShopSessionRegistry.IsActive(current)" in reshow
