@@ -866,8 +866,32 @@ namespace Bot.ChromeNs
 
         private static void Requeue(ActiveSession session)
         {
+            if (session == null) return;
+            var key = Key(session.ShopKey, session.Seller, session.Buyer);
             session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-            Active[Key(session.Seller, session.Buyer)] = session;
+            if (!Active.TryAdd(key, session))
+            {
+                ActiveSession current;
+                if (Active.TryGetValue(key, out current) && ReferenceEquals(current, session))
+                {
+                    Schedule(session, TimeSpan.FromMinutes(1));
+                    return;
+                }
+
+                // A new buyer message may have opened the next round while the
+                // previous round was fetching history. Never overwrite that newer
+                // session with the old retry; preserve both audit outcomes.
+                DisposeTimer(session);
+                var report = LoadReport(session.EntityId) ?? NewReport(session);
+                report.Status = "历史覆盖不完整，后续接待已开始，已跳过";
+                report.Error = "requeue_conflict_new_session_active";
+                report.CompletedAtTicks = DateTime.Now.Ticks;
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+                SaveReport(report);
+                NotifyChanged();
+                return;
+            }
+
             SaveSnapshot(session, "等待聊天历史恢复后再次复盘");
             Schedule(session, TimeSpan.FromMinutes(1));
         }
@@ -1018,11 +1042,36 @@ namespace Bot.ChromeNs
                         .OfType<ConversationSessionLearningReportEntity>()
                         .ToList();
                 }
-                foreach (var report in reports.GroupBy(x => Key(x.Seller, x.Buyer)).Select(x => x.First()))
+                var resumedKeys = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var report in reports)
                 {
+                    if (report == null) continue;
+                    if (string.IsNullOrWhiteSpace(report.ShopKey))
+                    {
+                        // Legacy reports did not persist ShopKey. Restore only when
+                        // the seller nickname resolves to exactly one connected shop.
+                        try
+                        {
+                            report.ShopKey = ShopContextLocator.ResolveRuntimeBySellerNick(report.Seller).ShopKey;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                        }
+                        catch
+                        {
+                            report.Status = "店铺身份无法唯一解析，待人工复核";
+                            report.Error = "legacy_report_shop_scope_unavailable";
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                            continue;
+                        }
+                    }
+
+                    var key = Key(report.ShopKey, report.Seller, report.Buyer);
+                    if (!resumedKeys.Add(key)) continue;
                     var session = new ActiveSession
                     {
                         EntityId = report.EntityId,
+                        ShopKey = report.ShopKey,
                         Seller = report.Seller,
                         Buyer = report.Buyer,
                         CCode = report.CCode,
@@ -1035,7 +1084,11 @@ namespace Bot.ChromeNs
                     if (session.LastBuyerAt == DateTime.MinValue) session.LastBuyerAt = session.StartedAt;
                     if (session.LastActivityAt == DateTime.MinValue) session.LastActivityAt = session.LastBuyerAt;
                     session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-                    Active[Key(session.Seller, session.Buyer)] = session;
+                    if (!Active.TryAdd(key, session))
+                    {
+                        DisposeTimer(session);
+                        continue;
+                    }
                     var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                     Schedule(session, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
                 }
