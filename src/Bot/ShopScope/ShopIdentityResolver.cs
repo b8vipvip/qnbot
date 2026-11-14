@@ -37,7 +37,8 @@ namespace Bot.ShopScope
                 ShopContext.QianniuPlatform,
                 sellerIdentity,
                 displayName,
-                hasStableSellerId);
+                hasStableSellerId,
+                (seller.Nick ?? string.Empty).Trim());
         }
 
         private static string FirstNonEmpty(string first, string second)
