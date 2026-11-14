@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -421,9 +422,20 @@ namespace Bot.Knowledge
                 _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
                     .Where(IsOptimizationHistory)
                     .ToList();
-                _sessions = ConversationSessionLearningService.GetReports(1000)
-                    .Where(x => x != null && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
-                    .ToList();
+                string shopKey = string.Empty;
+                try { shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(_seller).ShopKey; }
+                catch
+                {
+                    // Ambiguous display nicknames must not merge session reports
+                    // from separate ShopKeys in the V2 history panel.
+                }
+                _sessions = shopKey.Length == 0
+                    ? new List<ConversationSessionLearningReportView>()
+                    : ConversationSessionLearningService.GetReports(1000)
+                        .Where(x => x != null
+                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
+                        .ToList();
                 ApplyFilter();
             }
             catch (Exception ex)
