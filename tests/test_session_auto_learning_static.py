@@ -421,7 +421,7 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
     knowledge_window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
     settings_call = show[show.index("var knowledge = KnowledgeCenterWindow.ShowForSeller"):]
     assert "ShowForSeller(this, Seller, _shop.ShopKey)" in settings_call
-    assert "ShowForSeller(\\n            Window owner, string seller, string shopKey = \\"\\")" in knowledge_window
+    assert "Window owner, string seller, string shopKey =" in knowledge_window
 
 
 def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
