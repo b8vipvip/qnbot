@@ -584,14 +584,14 @@ namespace Bot.AssistWindow.Widget.Robot
                     BotConversationHistoryStore.GetManualSource(shopKey, seller, sourceRecordId));
                 KnowledgeCenterV2UiBridge.ShowBotReplyTarget(
                     Window.GetWindow(this), seller, buyer, messageText,
-                    sourceRecordId, source, manuallyCorrected);
+                    sourceRecordId, source, manuallyCorrected, shopKey);
             };
             menu.Items.Insert(0, view);
 
             var searchKnowledge = new MenuItem { Header = "知识库检索问题" };
             searchKnowledge.Click += (s, e) =>
                 KnowledgeCenterV2UiBridge.ShowBotReplySearch(
-                    Window.GetWindow(this), seller, buyer, question, messageText);
+                    Window.GetWindow(this), seller, buyer, question, messageText, shopKey);
             menu.Items.Add(searchKnowledge);
 
             if (action != null && action.MirrorCanResend)
