@@ -37,4 +37,5 @@ def test_post_update_waits_for_existing_injection_after_listener_recovery():
     text = _source()
     assert "PostUpdateReconnectWindow = TimeSpan.FromSeconds(120)" in text
     assert 'WaitForInjectionAsync(PostUpdateReconnectWindow, "post-update-preserve-session")' in text
-    assert "原千牛注入在保护窗口内重新连接；未重启千牛" in text
+    assert "原千牛权威CDP业务通道已恢复；未重启千牛" in text
+    assert "AuthoritativeCdpSessionCount <= 0" in text
