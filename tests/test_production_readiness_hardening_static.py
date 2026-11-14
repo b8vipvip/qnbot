@@ -36,10 +36,13 @@ def test_injection_self_heal_stays_alive_in_degraded_mode_without_qianniu_restar
     assert "DegradedRetryDelay = TimeSpan.FromSeconds(30)" in repair
     degraded = repair[repair.index("private static async Task RunDegradedRecoveryAsync"):]
     assert "while (true)" in degraded
-    assert "WebSocketSessionCount > 0" in degraded
+    assert "AuthoritativeCdpSessionCount <= 0" in repair
+    assert "snapshot.CdpReady" in repair
+    assert "snapshot.InjectionConnected" in repair
     assert "MyWebSocketServer.WSocketSvrInst.Start();" in degraded
     assert "保护千牛进程与登录态" in degraded
-    assert "不会自动重启或操作登录界面" in degraded
+    assert "保护千牛进程与登录态" in degraded
+    assert "不会把standby页面误判为恢复成功" in degraded
     assert "TryRestartQianniuOnceAsync" not in degraded
     assert "process.Kill" not in degraded
     assert "QianniuRecoveryManager.RequestRecover" not in repair
