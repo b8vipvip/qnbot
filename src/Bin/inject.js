@@ -635,8 +635,10 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
         websocketStandbyUntil = 0;
         window.chatWebsocket = socket;
         log("websocket connected", "recoverable-reconnect-v12");
-        sendStatus("websocket-open", true);
+        // Flush queued business events first, then publish a fresh status snapshot.
+        // Otherwise a stale standby qnbotStatus could overwrite the new connection state.
         flushPending();
+        sendStatus("websocket-open", true);
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(function () {
           try {
