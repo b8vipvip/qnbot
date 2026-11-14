@@ -131,14 +131,30 @@ namespace Bot.Knowledge
         /// back to another active QN account when settings belong to a different
         /// shop; preserving the ShopKey is essential for multi-seller clients.
         /// </summary>
-        internal static KnowledgeCenterWindow ShowForSeller(Window owner, string seller)
+        internal static KnowledgeCenterWindow ShowForSeller(
+            Window owner, string seller, string shopKey = "")
         {
             seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
             if (seller.Length == 0)
                 throw new InvalidOperationException("未识别当前店铺，无法打开知识中心。");
-            var shop = Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = shopKey.Length == 0
+                ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             if (shop == null)
                 throw new InvalidOperationException("当前店铺未建立有效的 ShopKey，无法打开知识中心。");
+
+            var resolvedSeller = (shop.SellerNick ?? string.Empty).Trim();
+            if (resolvedSeller.Length == 0)
+            {
+                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                resolvedSeller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty
+                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            if (!string.Equals(resolvedSeller, seller, StringComparison.Ordinal))
+                throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识中心。");
+
             var window = new KnowledgeCenterWindow
             {
                 RequestedSeller = seller,
