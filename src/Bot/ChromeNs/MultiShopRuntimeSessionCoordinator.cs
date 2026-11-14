@@ -305,12 +305,15 @@ namespace Bot.ChromeNs
             if (qn == null || qn.Seller == null) return false;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             var shopKey = ShopKey(qn);
+            var sessionId = qn.CDP == null ? string.Empty : (qn.CDP.SessionId ?? string.Empty).Trim();
             lock (Sync)
             {
                 return seller.Length > 0
                     && string.Equals(_activeSeller, seller, StringComparison.Ordinal)
                     && (_activeShopKey.Length == 0 || shopKey.Length == 0
-                        || string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal));
+                        || string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
+                    && (_activeSessionId.Length == 0
+                        || string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal));
             }
         }
 
@@ -372,17 +375,29 @@ namespace Bot.ChromeNs
         internal static void ReassertCurrent(string reason)
         {
             string seller;
-            lock (Sync) seller = _activeSeller;
-            if (seller.Length == 0) return;
-            var qn = QN.FindExistingBySellerNick(seller);
+            string shopKey;
+            string sessionId;
+            lock (Sync)
+            {
+                seller = _activeSeller;
+                shopKey = _activeShopKey;
+                sessionId = _activeSessionId;
+            }
+            // Seller nickname is not an identity key. If an old or incomplete
+            // activation has no ShopKey, fail closed instead of selecting an
+            // arbitrary QN wrapper with the same visible nickname.
+            if (seller.Length == 0 || shopKey.Length == 0) return;
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId);
             if (qn == null) return;
             if (!ReferenceEquals(QN.CurQN, qn))
             {
                 QN.CurQN = qn;
-                Log.Info("已纠正全局当前店铺，阻止后台WebView抢占: seller=" + seller + ", reason=" + (reason ?? string.Empty));
+                Log.Info("已按ShopKey/CDP会话纠正全局当前店铺，阻止后台WebView抢占: seller="
+                    + seller + ", shopKey=" + shopKey + ", reason=" + (reason ?? string.Empty));
             }
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
-            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, seller, "active-shop-reassert:" + (reason ?? string.Empty));
+            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
+                desk, seller, "active-shop-reassert:" + (reason ?? string.Empty));
         }
 
         private static bool Activate(QN qn, string sessionId, string targetId, bool focusProof, string evidence)
