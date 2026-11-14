@@ -279,47 +279,46 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 ctl.SetSendPending("手动重发中...");
-                var qn = QN.FindExistingBySellerNick(e.Seller);
+                if (string.IsNullOrWhiteSpace(e.ShopKey))
+                {
+                    ctl.SetSendResult(false, "重发失败：历史卡片缺少ShopKey，已阻止按昵称猜测店铺");
+                    return;
+                }
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(e.ShopKey);
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(e.ShopKey);
                 if (qn == null || qn.CDP == null)
                 {
-                    ctl.SetSendResult(false, "重发失败：未找到该客服账号对应的在线千牛会话");
-                    SendFailureAnomalyService.Queue(
-                        e.Seller,
-                        e.Buyer,
-                        e.Question,
-                        e.Answer,
-                        "手动重发",
-                        "点击重发时未找到与原客服账号精确匹配且CDP在线的千牛实例，已阻止回退到其他店铺或错误会话。",
-                        DateTime.Now,
-                        DateTime.Now,
-                        DateTime.Now);
+                    ctl.SetSendResult(false, "重发失败：原店铺未连接或CDP不可用");
                     return;
                 }
 
                 var resendStartedAt = DateTime.Now;
-                SendDeliveryWatchdog.ExpectDelivery(
-                    e.Seller,
-                    e.Buyer,
-                    e.Question,
-                    e.Answer,
-                    "手动重发",
-                    resendStartedAt,
-                    resendStartedAt);
-                KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
-                var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
-                ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
-                if (!ok)
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    SendFailureAnomalyService.Queue(
+                    SendDeliveryWatchdog.ExpectDelivery(
                         e.Seller,
                         e.Buyer,
                         e.Question,
                         e.Answer,
                         "手动重发",
-                        "精确匹配到客服账号后，SendTextWithRetryAsync 重试结束仍返回失败。",
                         resendStartedAt,
-                        resendStartedAt,
-                        DateTime.Now);
+                        resendStartedAt);
+                    KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
+                    var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
+                    ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
+                    if (!ok)
+                    {
+                        SendFailureAnomalyService.Queue(
+                            e.Seller,
+                            e.Buyer,
+                            e.Question,
+                            e.Answer,
+                            "手动重发",
+                            "按ShopKey精确匹配到客服账号后，SendTextWithRetryAsync 重试结束仍返回失败。",
+                            resendStartedAt,
+                            resendStartedAt,
+                            DateTime.Now);
+                    }
                 }
             }
             catch (Exception ex)
@@ -343,6 +342,19 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             var ctl = sender as CtlConversation;
             if (ctl == null) return;
+            if (string.IsNullOrWhiteSpace(e.ShopKey))
+            {
+                ctl.SetStatus("无法确认原始店铺身份，已阻止修改写入。", false);
+                return;
+            }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(e.ShopKey); }
+            catch (Exception ex)
+            {
+                ctl.SetStatus("无法恢复原始店铺身份，已阻止修改写入。", false);
+                Log.ErrorWithMaxCount("Bot回复修改拒绝未解析的ShopKey: " + ex.Message, 5);
+                return;
+            }
             var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
             if (wnd.ShowDialog() != true) return;
             // WPF controls must be read only on the UI thread, not inside Task.Run.
@@ -361,8 +373,11 @@ namespace Bot.AssistWindow.Widget.Robot
                     string message = string.Empty;
                     var savedId = route.TargetId;
                     var success = await Task.Run(() =>
-                        KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
-                            route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
+                    {
+                        using (ShopSettingsScope.Enter(shop))
+                            return KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
+                                route.TargetId, e.Answer, corrected, e.MessageRecordId, out message);
+                    });
                     // If a historical source ID is stale, do not overwrite that
                     // unrelated record. A confirmed edit may instead create an
                     // exact-question reviewed direct answer under this seller.
@@ -370,9 +385,12 @@ namespace Bot.AssistWindow.Widget.Robot
                     {
                         string reviewedStatus = string.Empty;
                         var reviewed = await Task.Run(() =>
-                            KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                                e.Seller, editedQuestion, corrected, e.MessageRecordId,
-                                out reviewedStatus, out savedId));
+                        {
+                            using (ShopSettingsScope.Enter(shop))
+                                return KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                                    e.Seller, editedQuestion, corrected, e.MessageRecordId,
+                                    out reviewedStatus, out savedId);
+                        });
                         if (reviewed)
                         {
                             success = true;
@@ -404,9 +422,12 @@ namespace Bot.AssistWindow.Widget.Robot
                 string savedId = string.Empty;
                 var correctedAnswer = wnd.EditedAnswer;
                 var saved = await Task.Run(() =>
-                    KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                        e.Seller, editedQuestion, correctedAnswer, e.MessageRecordId,
-                        out status, out savedId));
+                {
+                    using (ShopSettingsScope.Enter(shop))
+                        return KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                            e.Seller, editedQuestion, correctedAnswer, e.MessageRecordId,
+                            out status, out savedId);
+                });
                 if (saved)
                 {
                     var source = "本地知识V2（记录ID：" + savedId + "）";
