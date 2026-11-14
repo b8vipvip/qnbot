@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -17,6 +18,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly TabControl _tabs = new TabControl();
         private readonly ObservableCollection<BotReplySourceRow> _sourceView = new ObservableCollection<BotReplySourceRow>();
         private readonly ObservableCollection<BotReplyPreset> _presetView = new ObservableCollection<BotReplyPreset>();
@@ -40,10 +42,11 @@ namespace Bot.Knowledge
         private DataGrid _kbGrid;
         private TextBlock _kbStatus;
 
-        public KnowledgeV2BotReplyManagementPage(Window owner, string seller)
+        public KnowledgeV2BotReplyManagementPage(Window owner, string seller, string shopKey = "")
         {
             _owner = owner;
             _seller = (seller ?? string.Empty).Trim();
+            _shopKey = (shopKey ?? string.Empty).Trim();
             Build();
             Loaded += delegate { RefreshView(); };
         }
@@ -364,14 +367,25 @@ namespace Bot.Knowledge
         private void RefreshSources()
         {
             if (_sourcesLoading) return;
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
-                _sourceStatus.Text = "当前未识别店铺，不能读取店铺级 Bot 回复来源。";
+                _sourceStatus.Text = "无法确认当前店铺ShopKey，已阻止跨店读取 Bot 回复来源。";
+                return;
+            }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey); }
+            catch (Exception ex)
+            {
+                _sourceStatus.Text = "无法恢复当前店铺身份：" + ex.Message;
                 return;
             }
             _sourcesLoading = true;
             _sourceStatus.Text = "正在读取 Bot 回复来源…";
-            Task.Run(() => BotConversationHistoryStore.LoadRecentBySeller(_seller, 2000))
+            Task.Run(() =>
+            {
+                using (ShopSettingsScope.Enter(shop))
+                    return BotConversationHistoryStore.LoadRecentBySeller(_shopKey, _seller, 2000);
+            })
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _sourcesLoading = false;
@@ -455,7 +469,8 @@ namespace Bot.Knowledge
                 MessageBox.Show(_owner, "来源不能为空。未知来源请明确填写“来源未记录（需人工补录）”。", "Bot回复管理", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            if (!BotConversationHistoryStore.UpdateAnswerSource(_seller, _selectedSource.EntityId, source))
+            if (!BotConversationHistoryStore.UpdateAnswerSource(
+                _shopKey, _seller, _selectedSource.EntityId, source))
             {
                 MessageBox.Show(_owner, "来源保存失败，请刷新后重试。", "Bot回复管理", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
@@ -507,8 +522,20 @@ namespace Bot.Knowledge
             // Historical transport messages and their provenance remain
             // immutable evidence; only future knowledge answers are corrected.
             string outcome, id;
-            if (!KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                _seller, completeQuestion, reviewedAnswer, entity.EntityId, out outcome, out id))
+            bool saved;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                using (ShopSettingsScope.Enter(shop))
+                    saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                        _seller, completeQuestion, reviewedAnswer, entity.EntityId, out outcome, out id);
+            }
+            catch (Exception ex)
+            {
+                outcome = "无法确认本店ShopKey：" + ex.Message;
+                saved = false;
+            }
+            if (!saved)
             {
                 MessageBox.Show(_owner, outcome, "保存直答失败",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
