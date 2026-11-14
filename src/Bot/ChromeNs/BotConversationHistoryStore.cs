@@ -293,9 +293,12 @@ namespace Bot.ChromeNs
                     match.Question = string.IsNullOrWhiteSpace(match.Question) ? question : match.Question;
                     // Never erase an explicit operator correction on the next
                     // live/history refresh of the same sent message.
-                    var manual = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
-                        x => x.EntityId == match.EntityId);
+                    BotReplyManualSourceEntity manual;
+                    lock (DbSync)
+                        manual = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
+                            x => x.EntityId == match.EntityId);
                     match.AnswerSource = manual != null
+                        && string.Equals(manual.ShopKey, shopKey, StringComparison.Ordinal)
                         && string.Equals(manual.Seller, seller, StringComparison.Ordinal)
                         ? manual.CorrectedSource : source;
                     match.StatusText = "千牛回显确认已发送";
@@ -365,30 +368,52 @@ namespace Bot.ChromeNs
 
         public static bool UpdateAnswerSource(string seller, string entityId, string source)
         {
+            return UpdateAnswerSource(ResolveShopKey(seller), seller, entityId, source);
+        }
+
+        public static bool UpdateAnswerSource(
+            string shopKey, string seller, string entityId, string source)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             entityId = (entityId ?? string.Empty).Trim();
             source = (source ?? string.Empty).Trim();
-            if (seller.Length == 0 || entityId.Length == 0 || source.Length == 0) return false;
+            if (shopKey.Length == 0 || seller.Length == 0
+                || entityId.Length == 0 || source.Length == 0 || source.Length > 200)
+                return false;
             try
             {
                 FlushNow();
                 EnsureSchema();
+                BackfillLegacyShopRows(shopKey, seller);
                 lock (DbSync)
                 {
-                    var row = DbHelper.Db.ReadOneRecord<BotConversationHistoryEntity>(x => x.EntityId == entityId);
-                    if (row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)) return false;
-                    if (source.Length > 200) return false;
+                    var row = DbHelper.Db.ReadOneRecord<BotConversationHistoryEntity>(
+                        x => x.EntityId == entityId && x.ShopKey == shopKey);
+                    if (row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal))
+                        return false;
+
                     var original = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
                         x => x.EntityId == entityId);
+                    if (original != null
+                        && (!string.Equals(original.ShopKey, shopKey, StringComparison.Ordinal)
+                            || !string.Equals(original.Seller, seller, StringComparison.Ordinal)))
+                        return false;
                     if (original == null)
                     {
                         original = new BotReplyManualSourceEntity
                         {
-                            EntityId = entityId, Seller = seller,
+                            EntityId = entityId,
+                            ShopKey = shopKey,
+                            Seller = seller,
                             OriginalSource = row.AnswerSource ?? string.Empty
                         };
                     }
-                    if (!string.Equals(original.Seller, seller, StringComparison.Ordinal)) return false;
+                    else if (string.IsNullOrWhiteSpace(original.ShopKey))
+                    {
+                        original.ShopKey = shopKey;
+                    }
+
                     original.CorrectedSource = source;
                     original.CorrectedAtTicks = DateTime.Now.Ticks;
                     DbHelper.Db.SaveOneRecord(original);
@@ -407,15 +432,27 @@ namespace Bot.ChromeNs
 
         public static string GetManualSource(string seller, string entityId)
         {
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(entityId)) return string.Empty;
+            return GetManualSource(ResolveShopKey(seller), seller, entityId);
+        }
+
+        public static string GetManualSource(string shopKey, string seller, string entityId)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            entityId = (entityId ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0 || entityId.Length == 0)
+                return string.Empty;
             try
             {
                 EnsureSchema();
+                BackfillLegacyShopRows(shopKey, seller);
                 lock (DbSync)
                 {
                     var row = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
                         x => x.EntityId == entityId);
-                    return row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
+                    return row == null
+                        || !string.Equals(row.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
                         ? string.Empty : row.CorrectedSource ?? string.Empty;
                 }
             }
@@ -428,16 +465,28 @@ namespace Bot.ChromeNs
 
         public static string GetOriginalSourceBeforeCorrection(string seller, string entityId)
         {
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(entityId))
+            return GetOriginalSourceBeforeCorrection(ResolveShopKey(seller), seller, entityId);
+        }
+
+        public static string GetOriginalSourceBeforeCorrection(
+            string shopKey, string seller, string entityId)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            entityId = (entityId ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0 || entityId.Length == 0)
                 return string.Empty;
             try
             {
                 EnsureSchema();
+                BackfillLegacyShopRows(shopKey, seller);
                 lock (DbSync)
                 {
                     var row = DbHelper.Db.ReadOneRecord<BotReplyManualSourceEntity>(
                         x => x.EntityId == entityId);
-                    return row == null || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
+                    return row == null
+                        || !string.Equals(row.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals(row.Seller, seller, StringComparison.Ordinal)
                         ? string.Empty : row.OriginalSource ?? string.Empty;
                 }
             }
