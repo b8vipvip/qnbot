@@ -785,20 +785,34 @@ namespace Bot.ChromeNs
             return text.StartsWith("当前用户来自") || text.StartsWith("该用户来自") || text.StartsWith("平台提示") || text.StartsWith("系统提示");
         }
 
-        private static void ShowCompareOnlyAnswer(string seller, string buyer, string question, string answer)
+        private static void ShowCompareOnlyAnswer(
+            string seller, string buyer, string question, string answer, string shopKey)
         {
-            if (Application.Current == null) return;
+            if (Application.Current == null || string.IsNullOrWhiteSpace(shopKey)) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+            catch { return; }
             try
             {
                 Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
-                        var desk = Desk.FindExistingBySellerNick(seller);
-                        if (desk == null) return;
-                        var ctl = desk.AddConversation(seller, buyer, question,
-                            BotOutboundMessageFormatter.EnsureAiMarker(answer), false, "人工接管后的AI优化对比");
-                        if (ctl != null) ctl.SetStatus("客服已人工回复；这是后台AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
+                        using (ShopSettingsScope.Enter(shop))
+                        {
+                            var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                            if (qn == null || qn.Seller == null
+                                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                                    seller, StringComparison.Ordinal)
+                                || !ActiveShopSessionRegistry.IsActive(qn))
+                                return;
+                            var desk = Desk.Inst;
+                            if (desk == null) return;
+                            var ctl = desk.AddConversation(seller, buyer, question,
+                                BotOutboundMessageFormatter.EnsureAiMarker(answer), false, "人工接管后的AI优化对比");
+                            if (ctl != null) ctl.SetStatus(
+                                "客服已人工回复；这是后台AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
+                        }
                     }
                     catch (Exception ex) { Log.ErrorWithMaxCount("显示人工接管AI对照答案失败：" + ex.Message, 10); }
                 }));
