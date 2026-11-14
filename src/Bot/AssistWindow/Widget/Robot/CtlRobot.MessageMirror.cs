@@ -547,8 +547,11 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 var corrected = BotConversationHistoryStore.GetManualSource(seller, sourceRecordId);
                 if (!string.IsNullOrWhiteSpace(corrected)) return corrected;
-                var row = BotConversationHistoryStore.LoadRecent(seller, buyer, 200)
-                    .FirstOrDefault(x => string.Equals(x.EntityId, sourceRecordId, StringComparison.Ordinal));
+                var shopKey = ResolveShopKeyForConversation(seller, buyer);
+                var row = string.IsNullOrWhiteSpace(shopKey)
+                    ? null
+                    : BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 200)
+                        .FirstOrDefault(x => string.Equals(x.EntityId, sourceRecordId, StringComparison.Ordinal));
                 return row != null && !string.IsNullOrWhiteSpace(row.AnswerSource)
                     ? row.AnswerSource.Trim()
                     : ResolveMirrorBotSource(seller, buyer, question, action, messageText);
