@@ -38,6 +38,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string StampId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string QuestionKey { get; set; }
@@ -62,6 +63,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EchoId { get; set; }
+        public string ShopKey { get; set; }
         public string RecordId { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
@@ -125,9 +127,12 @@ namespace Bot.ChromeNs
             {
                 Initialize();
                 EnsureSchema();
+                var shopKey = ResolveShopKey(seller);
+                if (shopKey.Length == 0) return;
                 var row = new BotReplySourceStampEntity
                 {
-                    StampId = BuildSourceStampId(seller, buyer, question, answer),
+                    StampId = BuildSourceStampId(shopKey, seller, buyer, question, answer),
+                    ShopKey = shopKey,
                     Seller = seller,
                     Buyer = buyer,
                     QuestionKey = NormalizeSourceValue(question),
@@ -152,7 +157,9 @@ namespace Bot.ChromeNs
             {
                 Initialize();
                 EnsureSchema();
-                var id = BuildSourceStampId(seller, buyer, question, answer);
+                var shopKey = ResolveShopKey(seller);
+                if (shopKey.Length == 0) return string.Empty;
+                var id = BuildSourceStampId(shopKey, seller, buyer, question, answer);
                 BotReplySourceStampEntity row;
                 lock (DbSync) row = DbHelper.Db.ReadOneRecord<BotReplySourceStampEntity>(x => x.StampId == id);
                 return row == null ? string.Empty : (row.AnswerSource ?? string.Empty).Trim();
@@ -164,13 +171,22 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static List<BotConversationHistoryEntity> LoadRecentBySeller(string seller, int maxCount = 2000)
+        public static List<BotConversationHistoryEntity> LoadRecentBySeller(
+            string seller, int maxCount = 2000)
+        {
+            return LoadRecentBySeller(ResolveShopKey(seller), seller, maxCount);
+        }
+
+        public static List<BotConversationHistoryEntity> LoadRecentBySeller(
+            string shopKey, string seller, int maxCount = 2000)
         {
             Initialize();
             FlushNow();
             EnsureSchema();
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return new List<BotConversationHistoryEntity>();
+            if (shopKey.Length == 0 || seller.Length == 0)
+                return new List<BotConversationHistoryEntity>();
             var take = Math.Max(1, Math.Min(5000, maxCount <= 0 ? 2000 : maxCount));
             var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
             try
@@ -179,7 +195,8 @@ namespace Bot.ChromeNs
                 {
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
-                        "where Seller = ? and UpdatedAtTicks >= ? order by CreatedAtTicks desc limit " + take,
+                        "where ShopKey = ? and Seller = ? and UpdatedAtTicks >= ? order by CreatedAtTicks desc limit " + take,
+                        shopKey,
                         seller,
                         cutoffTicks);
                     return (rows ?? new List<object>())
@@ -212,12 +229,14 @@ namespace Bot.ChromeNs
             source = (source ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0 || answer.Length == 0) return string.Empty;
             if (sentAt == DateTime.MinValue) sentAt = DateTime.Now;
+            var shopKey = ResolveShopKey(seller);
+            if (shopKey.Length == 0) return string.Empty;
 
             try
             {
                 FlushNow();
-                var echoId = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
-                var candidates = LoadRecent(seller, buyer, 200);
+                var echoId = BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer);
+                var candidates = LoadRecent(shopKey, seller, buyer, 200);
                 var answerKey = NormalizeSourceValue(answer);
                 var targetTicks = sentAt.Ticks;
 
@@ -228,6 +247,7 @@ namespace Bot.ChromeNs
                     existingLink = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
                         x => x.EchoId == echoId);
                 var originalId = existingLink != null
+                    && string.Equals(existingLink.ShopKey, shopKey, StringComparison.Ordinal)
                     && string.Equals(existingLink.Seller, seller, StringComparison.Ordinal)
                     && string.Equals(existingLink.Buyer, buyer, StringComparison.Ordinal)
                         ? existingLink.RecordId : echoId;
@@ -257,7 +277,8 @@ namespace Bot.ChromeNs
                         BotReplyEchoLinkEntity claimed;
                         lock (DbSync)
                             claimed = DbHelper.Db.ReadOneRecord<BotReplyEchoLinkEntity>(
-                                x => x.RecordId == candidateRecordId);
+                                x => x.RecordId == candidateRecordId
+                                    && x.ShopKey == shopKey);
                         if (claimed != null) continue;
                         match = candidate.Row;
                         break;
@@ -282,6 +303,7 @@ namespace Bot.ChromeNs
                         DbHelper.Db.SaveOneRecord(new BotReplyEchoLinkEntity
                         {
                             EchoId = echoId,
+                            ShopKey = shopKey,
                             RecordId = match.EntityId,
                             Seller = seller,
                             Buyer = buyer
@@ -294,6 +316,7 @@ namespace Bot.ChromeNs
                 QueueSave(new BotConversationHistoryEntity
                 {
                     EntityId = id,
+                    ShopKey = shopKey,
                     Seller = seller,
                     Buyer = buyer,
                     Question = question ?? string.Empty,
@@ -313,14 +336,21 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("记录Bot消息来源回显失败：" + ex.Message, 10);
-                return BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);
+                return BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer);
             }
         }
 
         public static string BuildBotEchoEntityId(
             string seller, string buyer, string messageKey, DateTime sentAt, string answer)
         {
-            var identity = (seller ?? string.Empty).Trim() + "\n"
+            return BuildBotEchoEntityId(ResolveShopKey(seller), seller, buyer, messageKey, sentAt, answer);
+        }
+
+        private static string BuildBotEchoEntityId(
+            string shopKey, string seller, string buyer, string messageKey, DateTime sentAt, string answer)
+        {
+            var identity = (shopKey ?? string.Empty).Trim() + "\n"
+                + (seller ?? string.Empty).Trim() + "\n"
                 + (buyer ?? string.Empty).Trim() + "\n"
                 + ((messageKey ?? string.Empty).Trim().Length > 0
                     ? (messageKey ?? string.Empty).Trim()
@@ -414,9 +444,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string BuildSourceStampId(string seller, string buyer, string question, string answer)
+        private static string BuildSourceStampId(
+            string shopKey, string seller, string buyer, string question, string answer)
         {
-            return Sha256((seller ?? string.Empty).Trim() + "\n"
+            return Sha256((shopKey ?? string.Empty).Trim() + "\n"
+                + (seller ?? string.Empty).Trim() + "\n"
                 + (buyer ?? string.Empty).Trim() + "\n"
                 + NormalizeSourceValue(question) + "\n"
                 + NormalizeSourceValue(answer));
@@ -776,6 +808,7 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create table if not exists BotReplySourceStampEntity ("
                     + "StampId text primary key not null,"
+                    + "ShopKey text,"
                     + "Seller text not null,"
                     + "Buyer text not null,"
                     + "QuestionKey text,"
@@ -783,6 +816,17 @@ namespace Bot.ChromeNs
                     + "AnswerSource text,"
                     + "UpdatedAtTicks integer not null default 0"
                     + ")");
+                try
+                {
+                    DbHelper.Db.Execute("alter table BotReplySourceStampEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
+                DbHelper.Db.Execute(
+                    "create index if not exists IX_BotReplySourceStamp_ShopLookup "
+                    + "on BotReplySourceStampEntity(ShopKey, Seller, Buyer, UpdatedAtTicks)");
                 DbHelper.Db.Execute(
                     "create index if not exists IX_BotReplySourceStamp_Lookup "
                     + "on BotReplySourceStampEntity(Seller, Buyer, UpdatedAtTicks)");
@@ -797,10 +841,22 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create table if not exists BotReplyEchoLinkEntity ("
                     + "EchoId text primary key not null,"
+                    + "ShopKey text,"
                     + "RecordId text not null,"
                     + "Seller text not null,"
                     + "Buyer text not null"
                     + ")");
+                try
+                {
+                    DbHelper.Db.Execute("alter table BotReplyEchoLinkEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
+                DbHelper.Db.Execute(
+                    "create index if not exists IX_BotReplyEchoLink_ShopRecord "
+                    + "on BotReplyEchoLinkEntity(ShopKey, RecordId)");
                 DbHelper.Db.Execute(
                     "create index if not exists IX_BotReplyEchoLink_Record "
                     + "on BotReplyEchoLinkEntity(RecordId)");
