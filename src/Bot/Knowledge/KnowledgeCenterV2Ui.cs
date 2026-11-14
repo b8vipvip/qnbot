@@ -41,12 +41,13 @@ namespace Bot.Knowledge
             string shopKey = "")
         {
             Initialize();
+            ShopContext shop;
             try
             {
-                if (string.IsNullOrWhiteSpace(shopKey))
-                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
-                else
-                    ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shopKey = shop.ShopKey;
             }
             catch (Exception ex)
             {
@@ -59,6 +60,7 @@ namespace Bot.Knowledge
                 RequestedSeller = seller,
                 RequestedShopKey = shopKey
             };
+            ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
@@ -84,12 +86,13 @@ namespace Bot.Knowledge
             string shopKey = "")
         {
             Initialize();
+            ShopContext shop;
             try
             {
-                if (string.IsNullOrWhiteSpace(shopKey))
-                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
-                else
-                    ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shopKey = shop.ShopKey;
             }
             catch (Exception ex)
             {
@@ -111,7 +114,7 @@ namespace Bot.Knowledge
                         "店铺作用域保护", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                WndOption.MyShow(seller, null, OptionEnum.AutoReplyRules);
+                WndOption.MyShow(shop, null, OptionEnum.AutoReplyRules);
                 return;
             }
 
@@ -120,6 +123,7 @@ namespace Bot.Knowledge
                 RequestedSeller = seller,
                 RequestedShopKey = shopKey
             };
+            ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
