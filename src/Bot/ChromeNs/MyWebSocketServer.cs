@@ -106,17 +106,20 @@ namespace Bot.ChromeNs
             {
                 try
                 {
+                    // Deterministic per-session jitter prevents all retired frames from
+                    // reconnecting in one 5-minute burst. Real business events wake them early.
+                    var retryAfterMs = 300000 + (int)((uint)sessionId.GetHashCode() % 240000U);
                     var command = JsonConvert.SerializeObject(new
                     {
                         method = "retireDuplicate",
                         reason = reason ?? "duplicate",
-                        retryAfterMs = 300000
+                        retryAfterMs = retryAfterMs
                     });
                     session.Send(command);
                     Log.Info("非权威千牛WebSocket页面已降级为可恢复离线standby: sellerRef="
                         + DiagnosticRef("seller", sellerNick)
                         + ", sessionRef=" + DiagnosticRef("session", sessionId)
-                        + ", reason=" + reason + ", retryAfterMs=300000");
+                        + ", reason=" + reason + ", retryAfterMs=" + retryAfterMs);
                 }
                 catch (Exception ex)
                 {
