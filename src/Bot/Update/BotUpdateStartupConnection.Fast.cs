@@ -40,6 +40,10 @@ namespace Bot.ChromeNs
             {
                 Log.Info("千牛启动连接自恢复识别到真实更新目标进程；仅恢复Bot监听、等待原千牛注入重连和安全延迟迁移，不自动重启千牛。");
             }
+            // Keep a low-frequency repair watcher alive even when the business channel is
+            // already healthy. Startup can legitimately defer webui.zip migration while
+            // Qianniu is open; a healthy old page must not make that deferred repair disappear.
+            Task.Run(() => RunDeferredRepairWatcherAsync());
             Task.Run(() => RunAsync(postUpdateLaunchAuthorized));
         }
 
@@ -137,10 +141,34 @@ namespace Bot.ChromeNs
             {
                 if (UpdateStartupHealthService.IsPostUpdateStartupReady()) return true;
                 var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                if (IsBusinessChannelReady(snapshot)) return false;
+                if (IsBusinessChannelReady(snapshot)) return true;
                 await Task.Delay(300).ConfigureAwait(false);
             }
-            return UpdateStartupHealthService.IsPostUpdateStartupReady();
+            return UpdateStartupHealthService.IsPostUpdateStartupReady()
+                || IsBusinessChannelReady(BotConnectionDiagnostics.GetSnapshot());
+        }
+
+        private static async Task RunDeferredRepairWatcherAsync()
+        {
+            var cycle = 0;
+            while (Volatile.Read(ref _deferredRepairCompleted) == 0)
+            {
+                await Task.Delay(DegradedRetryDelay).ConfigureAwait(false);
+                if (Volatile.Read(ref _deferredRepairCompleted) != 0) return;
+                cycle++;
+
+                try
+                {
+                    // Never write webui.zip/sign.json or clear CEF data while any Qianniu
+                    // resource-owning process is present. Keep watching until a safe window.
+                    if (Bot.LanguageStartupSafetyGate.IsQianniuRunning()) continue;
+                    await TryRepairDeferredResourcesAsync(cycle).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("千牛安全资源修复后台观察器失败，将继续低频重试: " + ex.Message, 10);
+                }
+            }
         }
 
         private static async Task<bool> RunPostUpdateRecoveryAsync()
