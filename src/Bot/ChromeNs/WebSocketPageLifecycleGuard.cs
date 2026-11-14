@@ -27,9 +27,9 @@ namespace Bot.ChromeNs
     /// <summary>
     /// Field logs from 1.1.1362 proved that Qianniu can keep dozens of injected recent.html
     /// sockets alive even though only one page owns the business CDP. Some pages never acquire
-    /// _vs/imsdk/QN/login data. These pages are intentionally kept as lightweight standby sockets:
-    /// closing them used to send retireDuplicate, which permanently disabled their JS reconnect
-    /// loop until the whole Qianniu WebView was reloaded.
+    /// _vs/imsdk/QN/login data. They remain lightweight standby candidates during qualification;
+    /// excess v12-capable duplicates may later receive a bounded offline lease from the server.
+    /// The v12 client can reconnect after that lease or wake immediately on real chat activity.
     ///
     /// This guard does not choose CDP ownership and does not process buyer messages. It observes
     /// inert pages for diagnostics only. A page that later acquires business capability immediately
