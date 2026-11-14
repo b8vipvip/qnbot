@@ -951,43 +951,56 @@ namespace Bot.ChromeNs
             catch { return null; }
         }
 
-        private static string GetStyleProfile(string seller)
+        private static string ProfileKey(string seller)
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+            {
+                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+                catch { return string.Empty; }
+            }
+            return shop.ShopKey + "#" + seller;
+        }
+
+        private static string GetStyleProfile(string seller)
+        {
+            var key = ProfileKey(seller);
+            if (key.Length == 0) return string.Empty;
             StoreReplyStyleProfileEntity cached;
-            if (StyleCache.TryGetValue(seller, out cached) && cached != null) return cached.Profile ?? string.Empty;
+            if (StyleCache.TryGetValue(key, out cached) && cached != null) return cached.Profile ?? string.Empty;
             EnsureSchema();
             lock (DbSync)
             {
                 var entity = (DbHelper.Db.Select(
                     typeof(StoreReplyStyleProfileEntity),
-                    "where Seller = ? limit 1", seller) ?? new List<object>())
+                    "where Seller = ? limit 1", key) ?? new List<object>())
                     .OfType<StoreReplyStyleProfileEntity>()
                     .FirstOrDefault();
                 if (entity == null) return string.Empty;
-                StyleCache[seller] = entity;
+                StyleCache[key] = entity;
                 return entity.Profile ?? string.Empty;
             }
         }
 
         private static void SaveStyleProfile(string seller, string profile)
         {
-            seller = (seller ?? string.Empty).Trim();
+            var key = ProfileKey(seller);
             profile = Clean(profile, 800);
-            if (seller.Length == 0 || profile.Length == 0) return;
+            if (key.Length == 0 || profile.Length == 0) return;
             lock (DbSync)
             {
                 var entity = (DbHelper.Db.Select(
                     typeof(StoreReplyStyleProfileEntity),
-                    "where Seller = ? limit 1", seller) ?? new List<object>())
+                    "where Seller = ? limit 1", key) ?? new List<object>())
                     .OfType<StoreReplyStyleProfileEntity>()
-                    .FirstOrDefault() ?? new StoreReplyStyleProfileEntity { Seller = seller };
+                    .FirstOrDefault() ?? new StoreReplyStyleProfileEntity { Seller = key };
                 entity.Profile = profile;
                 entity.LearnedSessions = Math.Max(0, entity.LearnedSessions) + 1;
                 entity.UpdatedAtTicks = DateTime.Now.Ticks;
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
-                StyleCache[seller] = entity;
+                StyleCache[key] = entity;
             }
         }
 
