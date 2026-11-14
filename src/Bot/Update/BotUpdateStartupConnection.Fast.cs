@@ -25,6 +25,8 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan PostUpdateHealthWait = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan PostUpdateReconnectWindow = TimeSpan.FromSeconds(120);
         private static readonly TimeSpan HealthySnapshotMaxAge = TimeSpan.FromSeconds(90);
+        private static readonly TimeSpan DeferredRepairRetryDelay = TimeSpan.FromSeconds(30);
+        private static long _lastDeferredRepairAttemptTicks;
         private static int _started;
         private static int _deferredRepairCompleted;
         private static int _deferredRepairRunning;
@@ -75,7 +77,12 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            if (postUpdateLaunchAuthorized)
+            if (!Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+            {
+                await TryRepairDeferredResourcesAsync(0).ConfigureAwait(false);
+            }
+
+            if (postUpdateLaunchAuthorized && Volatile.Read(ref _deferredRepairCompleted) == 0)
             {
                 var startupReady = await WaitForPostUpdateStartupReadyAsync().ConfigureAwait(false);
                 if (startupReady)
@@ -182,6 +189,12 @@ namespace Bot.ChromeNs
             {
                 if (IsBusinessChannelReady(BotConnectionDiagnostics.GetSnapshot())) return true;
 
+                if (Volatile.Read(ref _deferredRepairCompleted) == 0
+                    && !Bot.LanguageStartupSafetyGate.IsQianniuRunning())
+                {
+                    await TryRepairDeferredResourcesAsync(0).ConfigureAwait(false);
+                }
+
                 if (!IsBotListenerActive())
                 {
                     try { MyWebSocketServer.WSocketSvrInst.Start(); }
@@ -249,6 +262,11 @@ namespace Bot.ChromeNs
         private static async Task TryRepairDeferredResourcesAsync(int cycle)
         {
             if (Volatile.Read(ref _deferredRepairCompleted) != 0) return;
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var previousAttemptTicks = Interlocked.Read(ref _lastDeferredRepairAttemptTicks);
+            if (previousAttemptTicks > 0
+                && nowTicks - previousAttemptTicks < DeferredRepairRetryDelay.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastDeferredRepairAttemptTicks, nowTicks, previousAttemptTicks) != previousAttemptTicks) return;
             if (Interlocked.CompareExchange(ref _deferredRepairRunning, 1, 0) != 0) return;
 
             try
