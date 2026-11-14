@@ -521,7 +521,7 @@ namespace Bot.Knowledge
             }
             // Historical transport messages and their provenance remain
             // immutable evidence; only future knowledge answers are corrected.
-            string outcome, id;
+            string outcome = string.Empty, id = string.Empty;
             bool saved;
             try
             {
