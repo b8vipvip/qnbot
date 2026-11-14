@@ -88,6 +88,12 @@ namespace Bot.ChromeNs
         {
             if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
             _liveSessions[session.SessionID] = session;
+            _sessionLastActivityUtc.TryAdd(session.SessionID, DateTime.UtcNow);
+        }
+
+        private void TouchSessionBusinessActivity(WebSocketSession session)
+        {
+            if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
             _sessionLastActivityUtc[session.SessionID] = DateTime.UtcNow;
         }
 
@@ -572,14 +578,19 @@ namespace Bot.ChromeNs
                     {
                         try
                         {
-                            TouchSession(session);
-                            // Every injected WebView sends this fixed heartbeat every 3s.
-                            // With 68 standby sockets that is ~1,360 frames/minute;
-                            // never allocate JObject/WSocketMessage for the hot path.
+                            // Transport heartbeats and diagnostic/status snapshots are not
+                            // seller activity. They must not keep idle duplicate pages alive
+                            // forever or the idle standby sweeper can never retire them.
                             if (string.Equals(value, "{\"type\":\"hi\"}", StringComparison.Ordinal))
                                 return;
                             var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
                             if (wMsg == null || wMsg.Type == "hi") return;
+                            if (wMsg.Type != "qnbotStatus"
+                                && wMsg.Type != "imsdkApiScan"
+                                && wMsg.Type != "imsdkInvokeTrace")
+                            {
+                                TouchSessionBusinessActivity(session);
+                            }
 
                             Log.Info("收到千牛WebSocket事件: type=" + wMsg.Type);
 
