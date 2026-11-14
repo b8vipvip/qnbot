@@ -40,8 +40,17 @@ namespace Bot.Options
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
             _shop = shop;
-            Seller = !string.IsNullOrWhiteSpace(shop.SellerNick)
-                ? shop.SellerNick : shop.DisplayName;
+            Seller = (shop.SellerNick ?? string.Empty).Trim();
+            if (Seller.Length == 0)
+            {
+                var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                Seller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty
+                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            if (Seller.Length == 0)
+                throw new InvalidOperationException(
+                    "该店铺资料缺少可验证的卖家昵称，且当前未连接对应千牛账号；已阻止使用显示名称代替卖家身份。");
             InitializeComponent();
             SettingsOperationAudit.Attach(this,
                 () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
@@ -290,16 +299,26 @@ namespace Bot.Options
             try
             {
                 ShopContext shop = owner == null ? null : ShopScopedUiBridge.Get(owner);
-                if (shop != null
-                    && !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
-                    && !string.Equals(shop.DisplayName, seller, StringComparison.Ordinal))
-                    shop = null;
+                if (shop != null)
+                {
+                    var attachedSeller = (shop.SellerNick ?? string.Empty).Trim();
+                    if (attachedSeller.Length == 0)
+                    {
+                        var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                        attachedSeller = exactQn == null || exactQn.Seller == null
+                            ? string.Empty
+                            : (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    }
+                    if (!string.Equals(attachedSeller, seller, StringComparison.Ordinal))
+                        shop = null;
+                }
                 if (shop == null)
                 {
                     var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
                     var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
                     if (!string.IsNullOrWhiteSpace(activeSeller)
-                        && !string.IsNullOrWhiteSpace(activeShopKey))
+                        && !string.IsNullOrWhiteSpace(activeShopKey)
+                        && string.Equals(activeSeller, seller, StringComparison.Ordinal))
                     {
                         Log.Info("打开设置时使用活动店铺的精确ShopKey: requestedSeller="
                             + seller + ", activeSeller=" + activeSeller);
@@ -307,8 +326,14 @@ namespace Bot.Options
                     }
                     else
                     {
+                        // A current QN is a valid exact source only when the active
+                        // arbitration also confirms the same seller. Otherwise a
+                        // nickname-only request may refer to a different account
+                        // sharing that nickname and must go through ambiguity checks.
                         var current = QN.CurQN;
                         if (current != null && current.Seller != null
+                            && string.Equals(ActiveShopSessionRegistry.GetActiveSellerNick(),
+                                seller, StringComparison.Ordinal)
                             && string.Equals((current.Seller.Nick ?? string.Empty).Trim(),
                                 seller, StringComparison.Ordinal))
                             shop = ShopContextLocator.ResolveRuntimeBySeller(current);
