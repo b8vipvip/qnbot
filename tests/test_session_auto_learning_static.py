@@ -293,6 +293,35 @@ def test_bot_answer_mirror_refresh_stays_on_owning_qn_shop():
     assert "catch { activeShopKey = string.Empty; }" in robot
 
 
+def test_nickname_fallback_identity_cannot_merge_multiple_unstable_qn_instances():
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    context = read("src/Bot/ShopScope/ShopContext.cs")
+    profile = read("src/Bot/ShopScope/ShopProfile.cs")
+    assert "EnsureUnstableIdentityIsUnique(qn, context);" in locator
+    assert "qnMatches.Count > 1 && qnMatches.Any(x => !x.Context.HasStableSellerId)" in locator
+    assert "FindConnectedQnByShopKey" in locator
+    assert "if (matches.Count > 1 && matches.Any(x => !x.Context.HasStableSellerId))" in locator
+    assert "SellerNick" in context
+    assert 'JsonProperty("seller_nick")' in profile
+    assert "ShopIdentityResolver.Resolve(x.Seller)" in locator
+
+
+def test_bot_resend_edit_and_knowledge_navigation_preserve_exact_shopkey():
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    card = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
+    manager = read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    assert "FindConnectedQnByShopKey(e.ShopKey)" in robot
+    assert "ResolveRuntimeByShopKey(e.ShopKey)" in robot
+    assert "using (ShopSettingsScope.Enter(shop))" in robot
+    assert "public string ShopKey { get; private set; }" in card
+    assert "_answer, _shopKey" in card
+    assert "LoadRecentBySeller(_shopKey, _seller, 2000)" in manager
+    assert "UpdateAnswerSource(\n                _shopKey, _seller, _selectedSource.EntityId, source)" in manager
+    assert "RequestedShopKey" in ui
+    assert "new KnowledgeV2BotReplyManagementPage(_owner, _seller, _shopKey)" in ui
+
+
 def test_bot_echo_attribution_uses_native_marker_and_time_not_text_alone():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     classifier = service[
