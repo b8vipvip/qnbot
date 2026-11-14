@@ -462,39 +462,41 @@ namespace Bot.ChromeNs
         public const int MaxRecords = 3000;
         public static event Action RecordsChanged;
 
-        public static void StartForManualReply(string seller, string buyer, string humanAnswer, DateTime manualAt)
+        public static void StartForManualReply(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey = "")
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             humanAnswer = StripAi(Clean(humanAnswer, 2200));
             if (seller.Length == 0 || buyer.Length == 0 || humanAnswer.Length == 0) return;
 
-            string shopKey = string.Empty;
+            shopKey = (shopKey ?? string.Empty).Trim();
             try
             {
                 var scopedShop = ShopSettingsScope.Current;
-                if (scopedShop != null)
+                var shop = shopKey.Length > 0
+                    ? ShopContextLocator.ResolveRuntimeByShopKey(shopKey)
+                    : scopedShop ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (shop == null) return;
+                if (scopedShop != null
+                    && !string.Equals(scopedShop.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    return;
+                shopKey = shop.ShopKey;
+
+                var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
+                if (expectedSeller.Length == 0)
                 {
-                    shopKey = scopedShop.ShopKey;
-                    var expectedSeller = (scopedShop.SellerNick ?? string.Empty).Trim();
-                    if (expectedSeller.Length == 0)
-                    {
-                        var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
-                        expectedSeller = exactQn == null || exactQn.Seller == null
-                            ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
-                    }
-                    var matches = string.Equals(expectedSeller, seller, StringComparison.Ordinal);
-                    if (!matches && !scopedShop.HasStableSellerId && expectedSeller.Length > 0)
-                        matches = string.Equals(
-                            ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
-                            ShopKeyGenerator.NormalizeFallbackNickname(seller),
-                            StringComparison.Ordinal);
-                    if (!matches) return;
+                    var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                    expectedSeller = exactQn == null || exactQn.Seller == null
+                        ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
                 }
-                else
-                {
-                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
-                }
+                var matches = string.Equals(expectedSeller, seller, StringComparison.Ordinal);
+                if (!matches && !shop.HasStableSellerId && expectedSeller.Length > 0)
+                    matches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
+                        ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                        StringComparison.Ordinal);
+                if (!matches) return;
             }
             catch
             {
@@ -982,17 +984,23 @@ namespace Bot.ChromeNs
             if (qn == null || e == null || string.IsNullOrWhiteSpace(e.Message) || qn.Seller == null) return;
             try
             {
-                var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
-                if (response == null || response.result == null) return;
-                var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
-                    var buyer = (message.toid.nick ?? string.Empty).Trim();
-                    if (buyer.Length == 0) continue;
-                    var variants = ExtractTexts(message);
-                    if (variants.Count == 0 || variants.Any(HasAiMarker) || MatchesRecentBotAnswer(seller, buyer, variants)) continue;
-                    AiManualReplyOptimizationService.StartForManualReply(seller, buyer, variants[0], DateTime.Now);
+                    var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
+                    if (response == null || response.result == null) return;
+                    var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+                    foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
+                    {
+                        if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
+                        var buyer = (message.toid.nick ?? string.Empty).Trim();
+                        if (buyer.Length == 0) continue;
+                        var variants = ExtractTexts(message);
+                        if (variants.Count == 0 || variants.Any(HasAiMarker)
+                            || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
+                        AiManualReplyOptimizationService.StartForManualReply(
+                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey);
+                    }
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("人工回复即时对比识别失败：" + ex.Message, 10); }
@@ -1007,10 +1015,15 @@ namespace Bot.ChromeNs
             return values.Distinct(StringComparer.Ordinal).ToList();
         }
 
-        private static bool MatchesRecentBotAnswer(string seller, string buyer, IEnumerable<string> variants)
+        private static bool MatchesRecentBotAnswer(
+            string shopKey, string seller, string buyer, IEnumerable<string> variants)
         {
             var values = new HashSet<string>(variants.Select(Normalize).Where(x => x.Length > 0), StringComparer.Ordinal);
-            try { return BotConversationHistoryStore.LoadRecent(seller, buyer, 30).Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer)))); }
+            try
+            {
+                return BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 30)
+                    .Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer))));
+            }
             catch { return false; }
         }
 
