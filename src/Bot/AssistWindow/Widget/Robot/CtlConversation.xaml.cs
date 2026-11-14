@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using Bot.ChromeNs;
 using Bot.Knowledge;
+using Bot.ShopScope;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -101,7 +102,7 @@ namespace Bot.AssistWindow.Widget.Robot
             txtQuestion.Text = _question;
             txtAnswer.Text = _answer;
             var resolvedSource = string.IsNullOrWhiteSpace(answerSource)
-                ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                ? ResolveAnswerSourceForShop()
                 : answerSource;
             SetSource(resolvedSource);
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
@@ -145,7 +146,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 txtAnswer.Text = _answer;
                 var source = string.IsNullOrWhiteSpace(answerSource)
-                    ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                    ? ResolveAnswerSourceForShop()
                     : answerSource;
                 if (!string.IsNullOrWhiteSpace(source)) SetSource(source);
                 UpdateTimingText();
@@ -163,6 +164,23 @@ namespace Bot.AssistWindow.Widget.Robot
             txtLatency.Text = _questionDetectedAt == DateTime.MinValue || _answerReadyAt == DateTime.MinValue
                 ? string.Empty
                 : "响应 " + Math.Max(0, (long)(_answerReadyAt - _questionDetectedAt).TotalMilliseconds) + "ms";
+        }
+
+        private string ResolveAnswerSourceForShop()
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey)) return string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                using (ShopSettingsScope.Enter(shop))
+                    return KnowledgeLearningService.ResolveAnswerSource(
+                        _seller, _buyer, _question, _answer);
+            }
+            catch
+            {
+                // A missing/ambiguous scope must not infer provenance from another shop.
+                return string.Empty;
+            }
         }
 
         public void SetSource(string source)
@@ -227,9 +245,25 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             Ui(() =>
             {
-                string blockedReason;
-                string manualAnswer;
-                if (!success && KnowledgeLearningService.TryTakeSendBlock(_seller, _buyer, _answer, out blockedReason, out manualAnswer))
+                string blockedReason = string.Empty;
+                string manualAnswer = string.Empty;
+                var blocked = false;
+                if (!success && !string.IsNullOrWhiteSpace(_shopKey))
+                {
+                    try
+                    {
+                        var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                        using (ShopSettingsScope.Enter(shop))
+                            blocked = KnowledgeLearningService.TryTakeSendBlock(
+                                _seller, _buyer, _answer, out blockedReason, out manualAnswer);
+                    }
+                    catch
+                    {
+                        // Do not query another shop's send-block state on identity failure.
+                    }
+                }
+
+                if (blocked)
                 {
                     txtAnswer.Text = _answer;
                     txtStatus.Text = blockedReason;
