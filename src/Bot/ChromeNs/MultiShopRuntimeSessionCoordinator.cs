@@ -388,7 +388,17 @@ namespace Bot.ChromeNs
             // arbitrary QN wrapper with the same visible nickname.
             if (seller.Length == 0 || shopKey.Length == 0) return;
             var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId);
-            if (qn == null) return;
+            if (qn == null)
+            {
+                var current = QN.CurQN;
+                if (current != null && !IsActive(current))
+                {
+                    QN.CurQN = null;
+                    Log.Info("活动ShopKey尚无匹配CDP会话，已清除过期全局QN引用: activeShopKey="
+                        + shopKey + ", reason=" + (reason ?? string.Empty));
+                }
+                return;
+            }
             if (!ReferenceEquals(QN.CurQN, qn))
             {
                 QN.CurQN = qn;
