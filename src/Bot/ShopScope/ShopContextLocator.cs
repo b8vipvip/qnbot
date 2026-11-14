@@ -48,8 +48,9 @@ namespace Bot.ShopScope
 
             var qnMatches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null)
-                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
-                .Where(x => string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
+                .Select(x => new { Qn = x, Context = TryResolveContext(x) })
+                .Where(x => x.Context != null
+                    && string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
                 .ToList();
             if (qnMatches.Count > 1 && qnMatches.Any(x => !x.Context.HasStableSellerId))
                 throw new AmbiguousShopIdentityException(
@@ -91,8 +92,9 @@ namespace Bot.ShopScope
             if (shopKey.Length == 0) return null;
             var matches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null)
-                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
-                .Where(x => string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
+                .Select(x => new { Qn = x, Context = TryResolveContext(x) })
+                .Where(x => x.Context != null
+                    && string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
                 .ToList();
             if (matches.Count == 0) return null;
             if (matches.Count > 1 && matches.Any(x => !x.Context.HasStableSellerId))
@@ -131,7 +133,8 @@ namespace Bot.ShopScope
                         (x.Seller.Nick ?? string.Empty).Trim(),
                         sellerNick,
                         StringComparison.Ordinal))
-                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
+                .Select(x => new { Qn = x, Context = TryResolveContext(x) })
+                .Where(x => x.Context != null)
                 .ToList();
             if (qnMatches.Count > 1 && qnMatches.Any(x => !x.Context.HasStableSellerId))
                 throw new AmbiguousShopIdentityException(
@@ -200,6 +203,7 @@ namespace Bot.ShopScope
                 throw new AmbiguousShopIdentityException("昵称回退身份缺少可验证的卖家昵称。");
             var normalized = ShopKeyGenerator.NormalizeFallbackNickname(nick);
             var matchingQns = SnapshotQns().Where(x => x != null && x.Seller != null
+                && !string.IsNullOrWhiteSpace(x.Seller.Nick)
                 && string.Equals(
                     ShopKeyGenerator.NormalizeFallbackNickname(x.Seller.Nick),
                     normalized,
@@ -220,6 +224,19 @@ namespace Bot.ShopScope
             if (conflictingProfiles.Count > 0)
                 throw new AmbiguousShopIdentityException(
                     "昵称回退身份与其他注册店铺冲突，已阻止自动绑定。");
+        }
+
+        private static ShopContext TryResolveContext(QN qn)
+        {
+            try
+            {
+                return qn == null || qn.Seller == null
+                    ? null : ShopIdentityResolver.Resolve(qn.Seller);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static IList<QN> SnapshotQns()
