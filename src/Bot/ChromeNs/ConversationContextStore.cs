@@ -139,11 +139,11 @@ namespace Bot.ChromeNs
             QNChatMessage message,
             string messageText)
         {
-            if (message == null) return false;
+            if (message == null) return string.Empty;
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0
-                || string.Equals(seller, buyer, StringComparison.Ordinal)) return false;
+                || string.Equals(seller, buyer, StringComparison.Ordinal)) return string.Empty;
             var from = message.fromid == null ? string.Empty
                 : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty
@@ -550,7 +550,7 @@ namespace Bot.ChromeNs
             return null;
         }
 
-        private static bool RecordMessage(
+        private static string RecordMessage(
             TimelineState state,
             string seller,
             string buyer,
@@ -596,7 +596,7 @@ namespace Bot.ChromeNs
                 {
                     var isNewHistoryObservation = fromHistory && !exact.SeenHistory;
                     MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
-                    return isNewHistoryObservation;
+                    return exact.MessageKey ?? string.Empty;
                 }
 
                 // Distinct native keys can still describe one message when both
@@ -616,7 +616,7 @@ namespace Bot.ChromeNs
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
                         + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                    return isNewHistoryObservation;
+                    return precisePeers[0].MessageKey ?? string.Empty;
                 }
 
                 // If an endpoint only supplies second-resolution timestamps,
@@ -641,7 +641,7 @@ namespace Bot.ChromeNs
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
                             + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                        return isNewHistoryObservation;
+                        return opposite[0].MessageKey ?? string.Empty;
                     }
                 }
 
@@ -658,7 +658,7 @@ namespace Bot.ChromeNs
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
-                return fromHistory;
+                return messageKey;
             }
         }
 
@@ -855,6 +855,7 @@ namespace Bot.ChromeNs
                     var cursorTime = "-1";
                     var previousCursor = string.Empty;
                     var seen = new HashSet<string>(StringComparer.Ordinal);
+                    var countedTimelineKeys = new HashSet<string>(StringComparer.Ordinal);
                     var reachedSessionStart = false;
 
                     for (var page = 0; page < LearningHistoryMaxPages; page++)
@@ -925,7 +926,9 @@ namespace Bot.ChromeNs
                             }
                             if (messageTime < from || messageTime > to) continue;
 
-                            if (RecordMessage(state, seller, buyer, item, text, true))
+                            var canonicalTurnKey = RecordMessage(state, seller, buyer, item, text, true);
+                            if (!string.IsNullOrWhiteSpace(canonicalTurnKey)
+                                && countedTimelineKeys.Add(canonicalTurnKey))
                                 result.MessagesInWindow++;
                         }
 
