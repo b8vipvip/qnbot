@@ -152,7 +152,13 @@ namespace Bot.Knowledge
                     ? string.Empty
                     : (exactQn.Seller.Nick ?? string.Empty).Trim();
             }
-            if (!string.Equals(resolvedSeller, seller, StringComparison.Ordinal))
+            var sellerMatches = string.Equals(resolvedSeller, seller, StringComparison.Ordinal);
+            if (!sellerMatches && !shop.HasStableSellerId && resolvedSeller.Length > 0)
+                sellerMatches = string.Equals(
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(resolvedSeller),
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                    StringComparison.Ordinal);
+            if (!sellerMatches)
                 throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识中心。");
 
             var window = new KnowledgeCenterWindow
