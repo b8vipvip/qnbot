@@ -468,16 +468,54 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             humanAnswer = StripAi(Clean(humanAnswer, 2200));
             if (seller.Length == 0 || buyer.Length == 0 || humanAnswer.Length == 0) return;
+
+            string shopKey = string.Empty;
+            try
+            {
+                var scopedShop = ShopSettingsScope.Current;
+                if (scopedShop != null)
+                {
+                    shopKey = scopedShop.ShopKey;
+                    var expectedSeller = (scopedShop.SellerNick ?? string.Empty).Trim();
+                    if (expectedSeller.Length == 0)
+                    {
+                        var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                        expectedSeller = exactQn == null || exactQn.Seller == null
+                            ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    }
+                    var matches = string.Equals(expectedSeller, seller, StringComparison.Ordinal);
+                    if (!matches && !scopedShop.HasStableSellerId && expectedSeller.Length > 0)
+                        matches = string.Equals(
+                            ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
+                            ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                            StringComparison.Ordinal);
+                    if (!matches) return;
+                }
+                else
+                {
+                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
+                }
+            }
+            catch
+            {
+                // Manual-reply optimization is optional; never guess an ambiguous shop.
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(shopKey)) return;
+
             Task.Run(async () =>
             {
-                try { await RunAsync(seller, buyer, humanAnswer, manualAt).ConfigureAwait(false); }
-                catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
+                try { await RunAsync(seller, buyer, humanAnswer, manualAt, shopKey).ConfigureAwait(false); }
+                catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: shopKey="
+                    + shopKey + ", seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
             });
         }
 
-        private static string BuildManualTurnKey(string seller, string buyer, string question)
+        private static string BuildManualTurnKey(
+            string shopKey, string seller, string buyer, string question)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + Normalize(question);
         }
@@ -584,7 +622,16 @@ namespace Bot.ChromeNs
             return sb.ToString().Trim();
         }
 
-        private static async Task RunAsync(string seller, string buyer, string humanAnswer, DateTime manualAt)
+        private static async Task RunAsync(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            using (ShopSettingsScope.Enter(shop))
+                await RunScopedAsync(seller, buyer, humanAnswer, manualAt, shopKey).ConfigureAwait(false);
+        }
+
+        private static async Task RunScopedAsync(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey)
         {
             if (manualAt == DateTime.MinValue) manualAt = DateTime.Now;
             await Task.Delay(120).ConfigureAwait(false);
@@ -593,7 +640,7 @@ namespace Bot.ChromeNs
             var cards = BotConversationHistoryStore.LoadRange(seller, buyer, from, manualAt.AddSeconds(1), 100);
             var question = BuildRecentBuyerQuestion(turns, cards, manualAt);
             if (string.IsNullOrWhiteSpace(question)) return;
-            var key = BuildManualTurnKey(seller, buyer, question);
+            var key = BuildManualTurnKey(shopKey, seller, buyer, question);
             if (!TryReserveManualTurn(key, DateTime.Now)) return;
             var transcript = BuildTranscriptBeforeHuman(turns, cards, humanAnswer, manualAt);
 
@@ -602,11 +649,11 @@ namespace Bot.ChromeNs
             var aiAnswer = await Task.Run(() => MyOpenAI.GetAnswer(seller, buyer, shadowQuestion, true)).ConfigureAwait(false);
             aiAnswer = StripAi(Clean(aiAnswer, 2400));
             if (string.IsNullOrWhiteSpace(aiAnswer) || aiAnswer.StartsWith("错误：", StringComparison.Ordinal)) return;
-            ShowCompareOnlyAnswer(seller, buyer, question, aiAnswer);
+            ShowCompareOnlyAnswer(seller, buyer, question, aiAnswer, shopKey);
 
             var entity = new AiOptimizationRecordEntity
             {
-                EntityId = Guid.NewGuid().ToString("N"), Seller = seller, Buyer = buyer,
+                EntityId = Guid.NewGuid().ToString("N"), ShopKey = shopKey, Seller = seller, Buyer = buyer,
                 Question = Redact(question), AiAnswer = Redact(aiAnswer), HumanAnswer = Redact(humanAnswer),
                 Status = "正在分析", CreatedAtTicks = DateTime.Now.Ticks, UpdatedAtTicks = DateTime.Now.Ticks
             };
