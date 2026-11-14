@@ -48,6 +48,11 @@ namespace Bot.Options
                     ? string.Empty
                     : (exactQn.Seller.Nick ?? string.Empty).Trim();
             }
+            // For a stable, explicitly supplied ShopKey, DisplayName is acceptable
+            // as a UI label when an offline legacy profile has no saved seller nick.
+            // It is never used to resolve or switch the shop identity.
+            if (Seller.Length == 0 && shop.HasStableSellerId)
+                Seller = (shop.DisplayName ?? string.Empty).Trim();
             if (Seller.Length == 0)
                 throw new InvalidOperationException(
                     "该店铺资料缺少可验证的卖家昵称，且当前未连接对应千牛账号；已阻止使用显示名称代替卖家身份。");
