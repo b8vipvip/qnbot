@@ -87,22 +87,19 @@ namespace Bot.ChromeNs
 
         public static bool RefreshRemoteHistory(string seller, string buyer, string ccode)
         {
-            seller = (seller ?? string.Empty).Trim();
-            buyer = (buyer ?? string.Empty).Trim();
-            ccode = (ccode ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return false;
-
+            var endAt = DateTime.Now;
             try
             {
-                // Learning must never use QN.CurQN as a cross-shop fallback.
-                var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null || qn.CDP == null) return false;
-                return ConversationContextStore.RefreshLearningHistory(seller, buyer, ccode);
+                // Compatibility wrapper now uses the same complete, exact-shop
+                // paginated reader as finalization; it never falls back to QN.CurQN.
+                var result = RefreshRemoteHistoryCompleteAsync(
+                    seller, buyer, ccode, endAt.AddDays(-7), endAt, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return result != null && result.IsComplete;
             }
             catch (Exception ex)
             {
-                Log.Info("接待学习刷新聊天历史失败: seller=" + seller
-                    + ", buyer=" + buyer + ", error=" + ex.Message);
+                Log.Info("接待学习刷新完整聊天历史失败: error=" + ex.Message);
                 return false;
             }
         }
