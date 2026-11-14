@@ -381,24 +381,33 @@ namespace Bot.ChromeNs
                 var endAt = DateTime.Now;
                 var from = session.StartedAt.AddMinutes(-1);
                 ConversationHistoryRefreshResult historyCoverage;
-                if (string.IsNullOrWhiteSpace(session.CCode))
+                List<ConversationContextTurn> turns;
+                List<BotConversationHistoryEntity> cards;
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey);
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    historyCoverage = new ConversationHistoryRefreshResult
+                    if (string.IsNullOrWhiteSpace(session.CCode))
                     {
-                        IsComplete = false,
-                        ErrorCode = "missing_conversation_code"
-                    };
-                }
-                else
-                {
-                    historyCoverage = await ConversationSessionLearningRuntimeBridge.RefreshRemoteHistoryCompleteAsync(
-                        session.Seller, session.Buyer, session.CCode, from, endAt, CancellationToken.None);
-                }
+                        historyCoverage = new ConversationHistoryRefreshResult
+                        {
+                            IsComplete = false,
+                            ErrorCode = "missing_conversation_code"
+                        };
+                    }
+                    else
+                    {
+                        historyCoverage = await ConversationSessionLearningRuntimeBridge.RefreshRemoteHistoryCompleteAsync(
+                            session.ShopKey, session.Seller, session.Buyer, session.CCode,
+                            from, endAt, CancellationToken.None);
+                    }
 
-                var turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
-                    session.Seller, session.Buyer, from, endAt, 0, true);
-                var cards = BotConversationHistoryStore.LoadRangeComplete(
-                    session.Seller, session.Buyer, from, endAt);
+                    // Timeline lookup and Bot-card lookup must use the same exact
+                    // ShopKey scope as the remote CDP request.
+                    turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
+                        session.Seller, session.Buyer, from, endAt, 0, true);
+                    cards = BotConversationHistoryStore.LoadRangeComplete(
+                        session.ShopKey, session.Seller, session.Buyer, from, endAt);
+                }
                 if (historyCoverage != null && historyCoverage.IsComplete
                     && turns.Count > 0 && historyCoverage.MessagesInWindow < turns.Count)
                 {
@@ -480,9 +489,6 @@ namespace Bot.ChromeNs
                 // context. Resolve the exact online shop BEFORE reading reply mode,
                 // per-shop AI endpoints, prompt settings or producing AI suggestions.
                 // Task.Run inside CallStructuredChat inherits this AsyncLocal scope.
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller);
-                if (shop == null)
-                    throw new InvalidOperationException("接待自动学习无法确认本轮所属店铺，已停止AI调用与知识写入");
                 bool localFirst;
                 string styleBefore;
                 JObject analysis;
