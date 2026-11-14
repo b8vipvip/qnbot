@@ -34,13 +34,21 @@ namespace Bot.ShopScope
 
         public ShopContext ToContext()
         {
+            var sellerNick = (SellerNick ?? string.Empty).Trim();
+            const string fallbackPrefix = "nick:";
+            if (sellerNick.Length == 0
+                && !HasStableSellerId
+                && (SellerId ?? string.Empty).StartsWith(
+                    fallbackPrefix, StringComparison.OrdinalIgnoreCase))
+                sellerNick = (SellerId ?? string.Empty).Substring(fallbackPrefix.Length).Trim();
+
             return new ShopContext(
                 ShopKey,
                 Platform,
                 SellerId,
                 DisplayName,
                 HasStableSellerId,
-                SellerNick);
+                sellerNick);
         }
     }
 }
