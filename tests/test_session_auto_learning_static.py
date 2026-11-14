@@ -388,3 +388,28 @@ def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
     assert "string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in is_active
     assert "string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)" in connected
     assert "OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))" in connected
+
+def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
+    settings = read("src/Bot/Options/WndOption.xaml.cs")
+    diagnostic = read("src/Bot/ShopScope/ShopApiDiagnosticsService.cs")
+    constructor = settings[
+        settings.index("private WndOption(ShopContext shop)"):
+        settings.index("private WndOption(string seller)")
+    ]
+    show = settings[
+        settings.index("public static void MyShow(string seller"):
+        settings.index("private void ShowPage")
+    ]
+    send = diagnostic[
+        diagnostic.index("private static async Task<ShopApiDiagnosticReport> SendDiagnosticAnswerAsync"):
+        diagnostic.index("private static ShopApiDiagnosticReport Failure")
+    ]
+    assert "Seller = (shop.SellerNick ?? string.Empty).Trim();" in constructor
+    assert "FindConnectedQnByShopKey(shop.ShopKey)" in constructor
+    assert "shop.DisplayName, seller" not in show
+    assert "string.Equals(activeSeller, seller, StringComparison.Ordinal)" in show
+    assert "FindConnectedQnByShopKey(shop.ShopKey)" in send
+    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in send
+    assert send.index("using (ShopSettingsScope.Enter(shop))") < send.index(
+        "KnowledgeLearningService.AllowNextManualSend"
+    )
