@@ -1001,8 +1001,21 @@ namespace Bot.ChromeNs
 
         private static int ReadInt(JToken token)
         {
+            if (token == null || token.Type == JTokenType.Null) return 0;
+            if (token.Type == JTokenType.Boolean) return token.Value<bool>() ? 1 : 0;
+
+            var text = token.ToString().Trim();
+            bool boolean;
+            if (bool.TryParse(text, out boolean)) return boolean ? 1 : 0;
+
             int value;
-            return token != null && int.TryParse(token.ToString(), out value) ? value : 0;
+            if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                return value;
+
+            double numeric;
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out numeric))
+                return numeric > 0 ? 1 : 0;
+            return 0;
         }
 
         private static TimelineState GetState(string seller, string buyer)
