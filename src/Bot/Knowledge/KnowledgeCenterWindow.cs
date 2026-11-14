@@ -154,11 +154,26 @@ namespace Bot.Knowledge
             Window owner, string seller, string buyer, string question, string answer,
             string shopKey = "")
         {
+            Bot.ShopScope.ShopContext shop;
+            try
+            {
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认该Bot消息所属店铺：" + ex.Message,
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             var wnd = new KnowledgeCenterWindow
             {
                 RequestedSeller = seller,
-                RequestedShopKey = (shopKey ?? string.Empty).Trim()
+                RequestedShopKey = shop.ShopKey
             };
+            Bot.ShopScope.ShopScopedUiBridge.Attach(wnd, shop);
             if (owner != null) wnd.Owner = owner;
             wnd.Show();
             wnd.NavigateToManager(seller, buyer, question, answer);
