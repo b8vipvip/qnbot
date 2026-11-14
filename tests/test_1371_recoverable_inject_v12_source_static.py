@@ -29,6 +29,7 @@ def test_qninject_defers_while_qianniu_runs_and_retries_without_killing_it():
     assert "TryRepairWhenQianniuClosedAsync" in start
     assert "IsWorkbenchRunning()" in qn
     assert "resourceOwnerProcessNames" in qn
+    assert '"wwcmd", "wangwang"' in qn
     assert "KillWorkbenchProcesses" not in qn
     assert "Process.Kill()" not in qn
     assert "MessageBox.Show" not in start
@@ -43,6 +44,7 @@ def test_language_repair_preserves_live_qianniu_and_persistent_login_storage():
     assert "KillWorkbenchProcesses" not in language
     assert "Process.Kill()" not in language
     assert "ResourceOwnerProcessNames" in language
+    assert '"wwcmd", "wangwang"' in language
     assert "if (IsWorkbenchRunning())" in language
     assert 'new[] { "Cache", "Code Cache", "GPUCache" }' in cache
     assert 'cacheNames.Add("Local Storage")' not in cache
