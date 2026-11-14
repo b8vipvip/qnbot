@@ -32,7 +32,9 @@ namespace Bot.ShopScope
         {
             if (qn == null || qn.Seller == null)
                 throw new InvalidOperationException("千牛会话缺少卖家身份，无法建立店铺作用域。");
-            return Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
+            var context = ShopIdentityResolver.Resolve(qn.Seller);
+            EnsureUnstableIdentityIsUnique(qn, context);
+            return Profiles.GetOrCreate(context).ToContext();
         }
 
         // Resolve a persisted session by its stable ShopKey after restart. Prefer a
@@ -44,15 +46,41 @@ namespace Bot.ShopScope
             if (shopKey.Length == 0)
                 throw new ArgumentException("ShopKey不能为空。", nameof(shopKey));
 
-            var match = SnapshotQns()
+            var qnMatches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null)
-                .Select(x => ShopIdentityResolver.Resolve(x.Seller))
-                .FirstOrDefault(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal));
-            if (match != null) return Profiles.GetOrCreate(match).ToContext();
+                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
+                .Where(x => string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
+                .ToList();
+            if (qnMatches.Count > 1 && qnMatches.Any(x => !x.Context.HasStableSellerId))
+                throw new AmbiguousShopIdentityException(
+                    "昵称回退身份对应多个在线千牛实例，已阻止按ShopKey恢复。");
+            if (qnMatches.Count > 0)
+            {
+                var match = qnMatches[0];
+                EnsureUnstableIdentityIsUnique(match.Qn, match.Context);
+                return Profiles.GetOrCreate(match.Context).ToContext();
+            }
 
-            var profile = Profiles.GetAll().FirstOrDefault(x =>
+            var profiles = Profiles.GetAll();
+            var profile = profiles.FirstOrDefault(x =>
                 string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal));
-            if (profile != null) return profile.ToContext();
+            if (profile != null)
+            {
+                if (!profile.HasStableSellerId && !string.IsNullOrWhiteSpace(profile.SellerNick))
+                {
+                    var normalizedNick = ShopKeyGenerator.NormalizeFallbackNickname(profile.SellerNick);
+                    if (profiles.Any(x => x != null
+                        && !string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(x.SellerNick)
+                        && string.Equals(
+                            ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                            normalizedNick,
+                            StringComparison.Ordinal)))
+                        throw new AmbiguousShopIdentityException(
+                            "昵称回退ShopKey已对应多个注册店铺，已阻止恢复。");
+                }
+                return profile.ToContext();
+            }
 
             throw new InvalidOperationException("未找到ShopKey对应的店铺身份，已阻止跨店回退。");
         }
@@ -61,23 +89,24 @@ namespace Bot.ShopScope
         {
             shopKey = (shopKey ?? string.Empty).Trim();
             if (shopKey.Length == 0) return null;
-            foreach (var qn in SnapshotQns())
+            var matches = SnapshotQns()
+                .Where(x => x != null && x.Seller != null)
+                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
+                .Where(x => string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count == 0) return null;
+            if (matches.Count > 1 && matches.Any(x => !x.Context.HasStableSellerId))
+                return null;
+            var match = matches[0];
+            try
             {
-                if (qn == null || qn.Seller == null) continue;
-                try
-                {
-                    if (string.Equals(
-                        ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
-                        shopKey,
-                        StringComparison.Ordinal))
-                        return qn;
-                }
-                catch
-                {
-                    // A malformed QN identity is never a match for a persisted ShopKey.
-                }
+                EnsureUnstableIdentityIsUnique(match.Qn, match.Context);
+                return match.Qn;
             }
-            return null;
+            catch
+            {
+                return null;
+            }
         }
 
         public static ShopContext ResolveCurrentForUi()
@@ -95,17 +124,20 @@ namespace Bot.ShopScope
             if (sellerNick.Length == 0)
                 throw new ArgumentException("卖家昵称不能为空。", nameof(sellerNick));
 
-            // Connected QN instances identify the live event source. The persisted
-            // registry also matters: an offline second shop with the same display nick
-            // still makes nickname-only resolution ambiguous and unsafe.
-            var matches = SnapshotQns()
+            var qnMatches = SnapshotQns()
                 .Where(x => x != null
                     && x.Seller != null
                     && string.Equals(
                         (x.Seller.Nick ?? string.Empty).Trim(),
                         sellerNick,
                         StringComparison.Ordinal))
-                .Select(x => ShopIdentityResolver.Resolve(x.Seller))
+                .Select(x => new { Qn = x, Context = ShopIdentityResolver.Resolve(x.Seller) })
+                .ToList();
+            if (qnMatches.Count > 1 && qnMatches.Any(x => !x.Context.HasStableSellerId))
+                throw new AmbiguousShopIdentityException(
+                    "多个千牛实例只有相同昵称、没有稳定TargetId，已阻止合并为同一店铺。");
+
+            var matches = qnMatches.Select(x => x.Context)
                 .Concat(Profiles.GetAll()
                     .Where(x => x != null
                         && (string.Equals((x.SellerNick ?? string.Empty).Trim(),
@@ -128,25 +160,77 @@ namespace Bot.ShopScope
                         sellerNick,
                         StringComparison.Ordinal))
                 {
-                    matches.Add(ShopIdentityResolver.Resolve(current.Seller));
+                    var currentContext = ShopIdentityResolver.Resolve(current.Seller);
+                    EnsureUnstableIdentityIsUnique(current, currentContext);
+                    matches.Add(currentContext);
                 }
             }
 
             if (matches.Count == 0)
-                throw new InvalidOperationException("未找到卖家“" + sellerNick + "”对应的千牛登录身份。请先保持该店铺在线。" );
+                throw new InvalidOperationException("未找到卖家“" + sellerNick + "”对应的千牛登录身份。请先保持该店铺在线。");
             if (matches.Count > 1)
                 throw new AmbiguousShopIdentityException(
                     "同一卖家昵称匹配到多个不同店铺身份，已阻止自动绑定。");
 
+            if (!matches[0].HasStableSellerId)
+            {
+                var normalizedNick = ShopKeyGenerator.NormalizeFallbackNickname(sellerNick);
+                var profiles = Profiles.GetAll();
+                if (profiles.Any(x => x != null
+                    && !string.Equals(x.ShopKey, matches[0].ShopKey, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(x.SellerNick)
+                    && string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                        normalizedNick,
+                        StringComparison.Ordinal)))
+                    throw new AmbiguousShopIdentityException(
+                        "昵称回退身份与其他注册店铺昵称冲突，已阻止自动绑定。");
+            }
+
             return matches[0];
+        }
+
+        private static void EnsureUnstableIdentityIsUnique(QN source, ShopContext context)
+        {
+            if (context == null || context.HasStableSellerId) return;
+            var nick = source == null || source.Seller == null
+                ? context.SellerNick
+                : (source.Seller.Nick ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(nick))
+                throw new AmbiguousShopIdentityException("昵称回退身份缺少可验证的卖家昵称。");
+            var normalized = ShopKeyGenerator.NormalizeFallbackNickname(nick);
+            var matchingQns = SnapshotQns().Where(x => x != null && x.Seller != null
+                && string.Equals(
+                    ShopKeyGenerator.NormalizeFallbackNickname(x.Seller.Nick),
+                    normalized,
+                    StringComparison.Ordinal))
+                .ToList();
+            if (matchingQns.Count > 1)
+                throw new AmbiguousShopIdentityException(
+                    "多个千牛实例只有相同昵称、没有稳定TargetId，已阻止合并为同一店铺。");
+
+            var conflictingProfiles = Profiles.GetAll().Where(x => x != null
+                && !string.Equals(x.ShopKey, context.ShopKey, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(x.SellerNick)
+                && string.Equals(
+                    ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                    normalized,
+                    StringComparison.Ordinal))
+                .ToList();
+            if (conflictingProfiles.Count > 0)
+                throw new AmbiguousShopIdentityException(
+                    "昵称回退身份与其他注册店铺冲突，已阻止自动绑定。");
         }
 
         private static IList<QN> SnapshotQns()
         {
             try
             {
-                if (QN.QNSet == null) return new List<QN>();
-                return QN.QNSet.ToArray();
+                var result = QN.QNSet == null ? new List<QN>() : QN.QNSet.ToList();
+                var current = QN.CurQN;
+                if (current != null && !result.Any(x => ReferenceEquals(x, current)))
+                    result.Add(current);
+                return result;
             }
             catch
             {
