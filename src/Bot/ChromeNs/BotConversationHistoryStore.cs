@@ -551,13 +551,26 @@ namespace Bot.ChromeNs
             DateTime to,
             int maxCount = 120)
         {
+            return LoadRange(ResolveShopKey(seller), seller, buyer, from, to, maxCount);
+        }
+
+        public static List<BotConversationHistoryEntity> LoadRange(
+            string shopKey,
+            string seller,
+            string buyer,
+            DateTime from,
+            DateTime to,
+            int maxCount = 120)
+        {
             Initialize();
             FlushNow();
             EnsureSchema();
 
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0) return new List<BotConversationHistoryEntity>();
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
+                return new List<BotConversationHistoryEntity>();
 
             var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? 120 : maxCount));
             var fromTicks = from == DateTime.MinValue ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
@@ -575,8 +588,9 @@ namespace Bot.ChromeNs
                 {
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
-                        "where Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
+                        "where ShopKey = ? and Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
                         + "order by CreatedAtTicks asc limit " + take,
+                        shopKey,
                         seller,
                         buyer,
                         fromTicks,
