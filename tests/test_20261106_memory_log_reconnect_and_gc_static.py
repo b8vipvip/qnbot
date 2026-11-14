@@ -33,7 +33,7 @@ def test_closed_websocket_cannot_leave_static_page_guard_references():
     assert "WebSocketPageLifecycleGuard.ForgetClosedSession(session.SessionID);" in server
     assert "webSocket.SessionClosed += (session, value) =>" in server
     # Keep the deliberate standby/resumption safety net for actual live pages.
-    assert "physicalClose=false" in server
+    assert "physicalClose=false" in guard
     assert "IsAuthoritativeSellerSession" in server
     assert "RequestImmediateHistoryProbe" in guard
 
