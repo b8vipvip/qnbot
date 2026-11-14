@@ -827,9 +827,7 @@ namespace Bot.ChromeNs
             }
 
             if (shop == null
-                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
-                || !string.Equals(shop.DisplayName, seller, StringComparison.Ordinal)
-                    && !string.Equals(shop.SellerId, seller, StringComparison.Ordinal))
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
             {
                 result.ErrorCode = "shop_scope_mismatch";
                 return result;
