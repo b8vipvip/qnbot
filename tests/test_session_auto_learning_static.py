@@ -386,6 +386,11 @@ def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
     assert "QN.FindExistingBySellerNick(seller)" not in reassert
     assert "_activeSessionId.Length == 0" in is_active
     assert "string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in is_active
+    activate = coordinator[
+        coordinator.index("private static bool Activate"):
+        coordinator.index("private static string ShopKey")
+    ]
+    assert "_activeSessionId = sessionId;" in activate
     assert "string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)" in connected
     assert "OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))" in connected
 
