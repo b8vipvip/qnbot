@@ -117,7 +117,9 @@ def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
     assert "Update\\BotUpdate*.Fast.cs" in props
     assert "GetActiveTcpListeners" in repair
     assert "MyWebSocketServer.WSocketSvrInst.Start();" in repair
-    assert "WebSocketSessionCount > 0" in repair
+    assert "AuthoritativeCdpSessionCount <= 0" in repair
+    assert "snapshot.CdpReady" in repair
+    assert "snapshot.InjectionConnected" in repair
     assert "UpdateStartupHealthService.IsPostUpdateLaunchAuthorized()" in repair
     assert "UpdateStartupHealthService.IsPostUpdateStartupReady()" in repair
     assert "QianniuRecoveryManager.RequestRecover" not in repair
@@ -125,7 +127,8 @@ def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
     degraded = repair[repair.index("private static async Task RunDegradedRecoveryAsync()"):]
     assert "TryRestartQianniuOnceAsync" not in degraded
     assert "保护千牛进程与登录态" in degraded
-    assert "不会自动重启或操作登录界面" in degraded
+    assert "不会把standby页面误判为恢复成功" in degraded
+    assert "保护千牛进程与登录态" in degraded
 
 
 def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker():
@@ -134,8 +137,9 @@ def test_self_heal_checks_actual_listener_instead_of_trusting_injection_marker()
 
     assert "IsLoopbackListenerActive" in repair
     assert "endpoint.Port == WebSocketPort" in repair
-    assert "127.0.0.1:41010 未监听" in repair
-    assert "WebSocketSessionCount > 0" in repair
+    assert "127.0.0.1:41010监听未就绪" in repair
+    assert "snapshot.WebSocketSessionCount <= 0" in repair
+    assert "snapshot.AuthoritativeCdpSessionCount <= 0" in repair
     assert "needInjectPaths.Count < 1" in qn_inject
     assert "千牛注入已是最新版本" in qn_inject
 
