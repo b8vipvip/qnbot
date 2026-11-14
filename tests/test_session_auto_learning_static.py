@@ -308,6 +308,9 @@ def test_nickname_fallback_identity_cannot_merge_multiple_unstable_qn_instances(
     assert "SellerNick" in context
     assert 'JsonProperty("seller_nick")' in profile
     assert "ShopIdentityResolver.Resolve(x.Seller)" in locator
+    assert "GetProfileSellerNick(ShopProfile profile)" in locator
+    assert 'const string fallbackPrefix = "nick:";' in locator
+    assert "GetProfileSellerNick(x)" in locator
 
 
 def test_bot_resend_edit_and_knowledge_navigation_preserve_exact_shopkey():
