@@ -139,7 +139,11 @@ namespace Bot.Knowledge
             var shop = Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller);
             if (shop == null)
                 throw new InvalidOperationException("当前店铺未建立有效的 ShopKey，无法打开知识中心。");
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shop.ShopKey
+            };
             Bot.ShopScope.ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Show();
