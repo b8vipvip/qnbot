@@ -105,10 +105,12 @@ def test_learning_timeline_uses_same_shop_scoped_key_as_context_store():
 def test_learning_history_refresh_is_typed_and_shop_scoped():
     ctx=read("src/Bot/ChromeNs/ConversationContextStore.cs")
     bridge=read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
-    assert 'ConversationContextStore.RefreshLearningHistory(seller, buyer, ccode)' in bridge
+    assert 'ConversationContextStore.RefreshLearningHistoryCompleteAsync(' in ctx
+    assert 'RefreshRemoteHistoryCompleteAsync(' in bridge
     assert 'method.Invoke(null, new[] { state, seller, buyer, ccode })' not in bridge
     assert 'ShopContextLocator.ResolveRuntimeBySellerNick(seller)' in ctx
-    assert 'RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);' in ctx
+    assert 'LearningHistoryPageSize = 100' in ctx
+    assert 'LearningHistoryMaxPages = 200' in ctx
 
 
 def test_idle_learning_resolves_shop_before_structured_ai_call():
