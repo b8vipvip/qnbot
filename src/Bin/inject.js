@@ -34,7 +34,7 @@
   try { window.addEventListener("storage", repairIfChanged, true); } catch(e) {}
   setInterval(repairIfChanged, 1000);
 })();
-window.__qnbotInjectVersion = "20260906-zh-cn-ws-retire-v10";
+window.__qnbotInjectVersion = "20261114-ws-recoverable-reconnect-v12";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 
@@ -47,7 +47,9 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   var pending = [];
   var reconnectTimer = null;
   var heartbeatTimer = null;
-  var websocketRetired = false;
+  var websocketStandbyUntil = 0;
+  var reconnectDelayMs = 3000;
+  var connectTimeoutTimer = null;
   var lastStatusText = "";
   var lastStatusAt = 0;
   var lastActiveText = "";
@@ -260,7 +262,6 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   function socketOpen() { return window.chatWebsocket && window.chatWebsocket.readyState === WebSocket.OPEN; }
 
   function send(type, response) {
-    if (websocketRetired) return;
     var payload = JSON.stringify({ type: type, response: response || "" });
     if (socketOpen()) {
       try { window.chatWebsocket.send(payload); return; } catch (e) { warn("send failed", e); }
@@ -536,7 +537,8 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
       imsdkDiscoveryVersion: window.__qnbotImsdkDiscoveryVersion || "",
       imsdkDiscoveryInstalled: !!window.__qnbotImsdkInvokeTraceInstalled,
       imsdkCaptureActive: Date.now() < (window.__qnbotImsdkCaptureUntil || 0),
-      duplicateRetire: true,
+      duplicateRetire: false,
+      recoverableStandby: true,
       extra: extra || ""
     };
     try { if (login) obj.loginNick = login.nick || login.uid || ""; } catch (e) {}
@@ -554,23 +556,51 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
     send("qnbotStatus", text);
   }
 
-  function scheduleReconnect() {
-    if (websocketRetired || reconnectTimer) return;
+  function scheduleReconnect(delayMs) {
+    if (reconnectTimer) return;
+    var delay = Math.max(1000, Number(delayMs) || reconnectDelayMs || 3000);
+    if (websocketStandbyUntil > Date.now()) {
+      delay = Math.max(delay, websocketStandbyUntil - Date.now());
+    }
+    reconnectDelayMs = Math.min(30000, Math.max(3000, reconnectDelayMs * 2));
     reconnectTimer = setTimeout(function () {
       reconnectTimer = null;
       setupWebSocket();
-    }, 3000);
+    }, delay);
   }
 
   function setupWebSocket() {
-    if (websocketRetired) return;
+    if (websocketStandbyUntil > Date.now()) {
+      scheduleReconnect(websocketStandbyUntil - Date.now());
+      return;
+    }
     var old = window.chatWebsocket;
-    if (old && (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING)) return;
+    if (old && (old.readyState === WebSocket.OPEN
+        || old.readyState === WebSocket.CONNECTING
+        || old.readyState === WebSocket.CLOSING)) return;
     try {
       var socket = new WebSocket(WS_URL);
+      // Publish CONNECTING immediately so concurrent send/status calls cannot create
+      // multiple physical sockets before the first onopen callback fires.
+      window.chatWebsocket = socket;
+      if (connectTimeoutTimer) clearTimeout(connectTimeoutTimer);
+      connectTimeoutTimer = setTimeout(function () {
+        connectTimeoutTimer = null;
+        if (socket.readyState === WebSocket.CONNECTING) {
+          log("websocket connect timeout");
+          try { socket.close(); } catch (e) {}
+          scheduleReconnect(1000);
+        }
+      }, 10000);
       socket.onopen = function () {
+        if (connectTimeoutTimer) {
+          clearTimeout(connectTimeoutTimer);
+          connectTimeoutTimer = null;
+        }
+        reconnectDelayMs = 3000;
+        websocketStandbyUntil = 0;
         window.chatWebsocket = socket;
-        log("websocket connected");
+        log("websocket connected", "recoverable-reconnect-v12");
         sendStatus("websocket-open", true);
         flushPending();
         clearInterval(heartbeatTimer);
@@ -585,14 +615,17 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
         try {
           var param = JSON.parse(event.data);
           if (param.method === "retireDuplicate") {
-            websocketRetired = true;
-            pending.length = 0;
+            // Compatibility with an older Bot server: standby is a lease, never a
+            // permanent page retirement. The page reconnects when the lease expires.
+            websocketStandbyUntil = Date.now() + 15000;
             if (reconnectTimer) {
               clearTimeout(reconnectTimer);
               reconnectTimer = null;
             }
-            log("websocket retired by Bot", param.reason || "duplicate");
-            try { socket.close(1000, "qnbot-duplicate-retired"); } catch (e) {}
+            if (window.chatWebsocket === socket) window.chatWebsocket = null;
+            log("websocket standby requested by Bot", param.reason || "duplicate");
+            try { socket.close(1000, "qnbot-duplicate-standby"); } catch (e) {}
+            scheduleReconnect(15000);
             return;
           }
           if (param.method === "execute") {
@@ -607,11 +640,20 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
         } catch (e) { warn("socket message failed", e); }
       };
       socket.onclose = function () {
+        if (connectTimeoutTimer) {
+          clearTimeout(connectTimeoutTimer);
+          connectTimeoutTimer = null;
+        }
         if (window.chatWebsocket === socket) window.chatWebsocket = null;
         clearInterval(heartbeatTimer);
-        if (!websocketRetired) scheduleReconnect();
+        scheduleReconnect();
       };
-      socket.onerror = function (e) { warn("websocket error", e); };
+      socket.onerror = function (e) {
+        warn("websocket error", e);
+        if (socket.readyState === WebSocket.CONNECTING) {
+          try { socket.close(); } catch (closeError) {}
+        }
+      };
     } catch (e) { warn("setupWebSocket failed", e); scheduleReconnect(); }
   }
 
