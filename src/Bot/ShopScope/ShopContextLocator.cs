@@ -67,16 +67,14 @@ namespace Bot.ShopScope
                 string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal));
             if (profile != null)
             {
-                if (!profile.HasStableSellerId && !string.IsNullOrWhiteSpace(profile.SellerNick))
+                if (!profile.HasStableSellerId)
                 {
-                    var normalizedNick = ShopKeyGenerator.NormalizeFallbackNickname(profile.SellerNick);
-                    if (profiles.Any(x => x != null
+                    var normalizedNick = ShopKeyGenerator.NormalizeFallbackNickname(
+                        GetProfileSellerNick(profile));
+                    if (normalizedNick.Length > 0 && profiles.Any(x => x != null
                         && !string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
-                        && !string.IsNullOrWhiteSpace(
-                            string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick)
                         && string.Equals(
-                            ShopKeyGenerator.NormalizeFallbackNickname(
-                                string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick),
+                            ShopKeyGenerator.NormalizeFallbackNickname(GetProfileSellerNick(x)),
                             normalizedNick,
                             StringComparison.Ordinal)))
                         throw new AmbiguousShopIdentityException(
@@ -158,11 +156,7 @@ namespace Bot.ShopScope
             var matches = qnMatches.Select(x => x.Context)
                 .Concat(Profiles.GetAll()
                     .Where(x => x != null
-                        && (string.Equals((x.SellerNick ?? string.Empty).Trim(),
-                                sellerNick, StringComparison.Ordinal)
-                            || (string.IsNullOrWhiteSpace(x.SellerNick)
-                                && string.Equals((x.DisplayName ?? string.Empty).Trim(),
-                                    sellerNick, StringComparison.Ordinal))))
+                        && string.Equals(GetProfileSellerNick(x), sellerNick, StringComparison.Ordinal))
                     .Select(x => x.ToContext()))
                 .GroupBy(x => x.ShopKey, StringComparer.Ordinal)
                 .Select(x => x.First())
@@ -196,9 +190,8 @@ namespace Bot.ShopScope
                 var profiles = Profiles.GetAll();
                 if (profiles.Any(x => x != null
                     && !string.Equals(x.ShopKey, matches[0].ShopKey, StringComparison.Ordinal)
-                    && !string.IsNullOrWhiteSpace(x.SellerNick)
                     && string.Equals(
-                        ShopKeyGenerator.NormalizeFallbackNickname(x.SellerNick),
+                        ShopKeyGenerator.NormalizeFallbackNickname(GetProfileSellerNick(x)),
                         normalizedNick,
                         StringComparison.Ordinal)))
                     throw new AmbiguousShopIdentityException(
@@ -230,17 +223,31 @@ namespace Bot.ShopScope
 
             var conflictingProfiles = Profiles.GetAll().Where(x => x != null
                 && !string.Equals(x.ShopKey, context.ShopKey, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(
-                    string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick)
                 && string.Equals(
-                    ShopKeyGenerator.NormalizeFallbackNickname(
-                        string.IsNullOrWhiteSpace(x.SellerNick) ? x.DisplayName : x.SellerNick),
+                    ShopKeyGenerator.NormalizeFallbackNickname(GetProfileSellerNick(x)),
                     normalized,
                     StringComparison.Ordinal))
                 .ToList();
             if (conflictingProfiles.Count > 0)
                 throw new AmbiguousShopIdentityException(
                     "昵称回退身份与其他注册店铺冲突，已阻止自动绑定。");
+        }
+
+        private static string GetProfileSellerNick(ShopProfile profile)
+        {
+            if (profile == null) return string.Empty;
+            var sellerNick = (profile.SellerNick ?? string.Empty).Trim();
+            if (sellerNick.Length > 0) return sellerNick;
+
+            // The fallback identity itself stores the normalized original nick.
+            // Use it when an older profile predates the dedicated seller_nick field;
+            // DisplayName is only the last-resort evidence for older stable profiles.
+            var sellerId = (profile.SellerId ?? string.Empty).Trim();
+            const string fallbackPrefix = "nick:";
+            if (!profile.HasStableSellerId
+                && sellerId.StartsWith(fallbackPrefix, StringComparison.OrdinalIgnoreCase))
+                return sellerId.Substring(fallbackPrefix.Length).Trim();
+            return (profile.DisplayName ?? string.Empty).Trim();
         }
 
         private static ShopContext TryResolveContext(QN qn)
