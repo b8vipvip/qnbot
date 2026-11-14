@@ -51,6 +51,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string OriginalSource { get; set; }
         public string CorrectedSource { get; set; }
@@ -129,6 +130,7 @@ namespace Bot.ChromeNs
                 EnsureSchema();
                 var shopKey = ResolveShopKey(seller);
                 if (shopKey.Length == 0) return;
+                BackfillLegacyShopRows(shopKey, seller);
                 var row = new BotReplySourceStampEntity
                 {
                     StampId = BuildSourceStampId(shopKey, seller, buyer, question, answer),
@@ -159,6 +161,7 @@ namespace Bot.ChromeNs
                 EnsureSchema();
                 var shopKey = ResolveShopKey(seller);
                 if (shopKey.Length == 0) return string.Empty;
+                BackfillLegacyShopRows(shopKey, seller);
                 var id = BuildSourceStampId(shopKey, seller, buyer, question, answer);
                 BotReplySourceStampEntity row;
                 lock (DbSync) row = DbHelper.Db.ReadOneRecord<BotReplySourceStampEntity>(x => x.StampId == id);
@@ -187,6 +190,7 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0)
                 return new List<BotConversationHistoryEntity>();
+            BackfillLegacyShopRows(shopKey, seller);
             var take = Math.Max(1, Math.Min(5000, maxCount <= 0 ? 2000 : maxCount));
             var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
             try
@@ -515,6 +519,7 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
                 return new List<BotConversationHistoryEntity>();
+            BackfillLegacyShopRows(shopKey, seller);
 
             var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? DefaultLoadCount : maxCount));
             var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
@@ -571,6 +576,7 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
                 return new List<BotConversationHistoryEntity>();
+            BackfillLegacyShopRows(shopKey, seller);
 
             var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? 120 : maxCount));
             var fromTicks = from == DateTime.MinValue ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
@@ -628,6 +634,7 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
                 return new List<BotConversationHistoryEntity>();
+            BackfillLegacyShopRows(shopKey, seller);
 
             var fromTicks = from == DateTime.MinValue
                 ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
@@ -847,11 +854,20 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "create table if not exists BotReplyManualSourceEntity ("
                     + "EntityId text primary key not null,"
+                    + "ShopKey text,"
                     + "Seller text not null,"
                     + "OriginalSource text,"
                     + "CorrectedSource text,"
                     + "CorrectedAtTicks integer not null default 0"
                     + ")");
+                try
+                {
+                    DbHelper.Db.Execute("alter table BotReplyManualSourceEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
                 DbHelper.Db.Execute(
                     "create table if not exists BotReplyEchoLinkEntity ("
                     + "EchoId text primary key not null,"
@@ -880,13 +896,70 @@ namespace Bot.ChromeNs
 
         private static string ResolveShopKey(string seller)
         {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return string.Empty;
             var current = ShopSettingsScope.Current;
-            if (current != null) return current.ShopKey;
+            if (current != null)
+            {
+                if (string.Equals(current.DisplayName, seller, StringComparison.Ordinal)
+                    || string.Equals(current.SellerId, seller, StringComparison.Ordinal))
+                    return current.ShopKey;
+                Log.ErrorWithMaxCount("Bot问答历史拒绝使用与卖家不匹配的当前ShopKey: seller=" + seller, 5);
+                return string.Empty;
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("Bot问答历史拒绝无法唯一解析店铺的记录: " + ex.Message, 10);
                 return string.Empty;
+            }
+        }
+
+        // Old Bot history/source rows predate ShopKey. Backfill only when the
+        // persisted registry proves that this display nickname belongs to exactly
+        // one shop (including shops that are currently offline). Ambiguous legacy
+        // rows remain unassigned rather than being guessed into the active shop.
+        private static void BackfillLegacyShopRows(string shopKey, string seller)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0) return;
+            try
+            {
+                var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (resolved == null
+                    || !string.Equals(resolved.ShopKey, shopKey, StringComparison.Ordinal))
+                    return;
+
+                lock (DbSync)
+                {
+                    DbHelper.Db.Execute(
+                        "update BotConversationHistoryEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                    DbHelper.Db.Execute(
+                        "update BotReplySourceStampEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                    DbHelper.Db.Execute(
+                        "update BotReplyEchoLinkEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                    DbHelper.Db.Execute(
+                        "update BotReplyManualSourceEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '') "
+                        + "and EntityId in (select EntityId from BotConversationHistoryEntity "
+                        + "where ShopKey = ? and Seller = ?)",
+                        shopKey, seller, shopKey, seller);
+                }
+            }
+            catch (AmbiguousShopIdentityException)
+            {
+                // Explicitly keep legacy records unassigned when nickname is ambiguous.
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("迁移旧版Bot历史店铺归属失败: " + ex.Message, 5);
             }
         }
 
