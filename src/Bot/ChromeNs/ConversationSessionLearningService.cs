@@ -675,10 +675,30 @@ namespace Bot.ChromeNs
         private static bool IsBotTurn(ConversationContextTurn turn, List<BotConversationHistoryEntity> cards)
         {
             var text = (turn == null ? string.Empty : turn.Text ?? string.Empty).Trim();
-            if (text.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) return true;
+            // Qianniu's outbound echo marker is [A]; older payloads also used [AI].
+            // A Bot turn must be identified explicitly, not by text equality alone.
+            if (HasBotEchoMarker(text)) return true;
+
             var normalized = Normalize(StripAi(text));
-            return normalized.Length > 0 && cards != null
-                && cards.Any(x => Normalize(StripAi(x.Answer)) == normalized);
+            if (normalized.Length == 0 || cards == null || turn == null
+                || turn.Timestamp == DateTime.MinValue) return false;
+
+            var targetTicks = turn.Timestamp.Ticks;
+            return cards.Any(card =>
+            {
+                if (card == null || Normalize(StripAi(card.Answer)) != normalized) return false;
+                var cardTicks = card.AnswerReadyAtTicks > 0
+                    ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
+                return cardTicks > 0
+                    && Math.Abs((double)(cardTicks - targetTicks)) <= TimeSpan.FromMinutes(30).Ticks;
+            });
+        }
+
+        private static bool HasBotEchoMarker(string value)
+        {
+            value = (value ?? string.Empty).TrimEnd();
+            return value.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase);
         }
 
         private static List<Suggestion> ParseSuggestions(JArray array)
@@ -1325,7 +1345,18 @@ namespace Bot.ChromeNs
         private static string Safe(string value) { return Redact(value).Replace("\r", " ").Replace("\n", " "); }
         private static string Clean(string value, int max) { value = (value ?? string.Empty).Trim(); return max > 0 && value.Length > max ? value.Substring(0, max).Trim() : value; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty); }
-        private static string StripAi(string value) { value = (value ?? string.Empty).Trim(); while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) value = value.Substring(0, value.Length - 4).TrimEnd(); return value; }
+        private static string StripAi(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                    ? value.Substring(0, value.Length - 4).TrimEnd()
+                    : value.Substring(0, value.Length - 3).TrimEnd();
+            }
+            return value;
+        }
         private static string Key(string shopKey, string seller, string buyer)
         {
             return (shopKey ?? string.Empty).Trim() + "#" + (seller ?? string.Empty).Trim()
