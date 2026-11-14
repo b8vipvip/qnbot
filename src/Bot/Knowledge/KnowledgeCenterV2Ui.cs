@@ -36,17 +36,29 @@ namespace Bot.Knowledge
                 new RoutedEventHandler(OnLoaded), true);
         }
 
-        public static void ShowBotReplySearch(Window owner, string seller, string buyer, string question, string answer)
+        public static void ShowBotReplySearch(
+            Window owner, string seller, string buyer, string question, string answer,
+            string shopKey = "")
         {
             Initialize();
-            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            try
+            {
+                if (string.IsNullOrWhiteSpace(shopKey))
+                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
+                else
+                    ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "无法确认 Bot 回复所属店铺：" + ex.Message,
                     "Bot 回复检索", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shopKey
+            };
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
@@ -68,10 +80,17 @@ namespace Bot.Knowledge
         /// </summary>
         public static void ShowBotReplyTarget(
             Window owner, string seller, string buyer, string answer,
-            string sourceRecordId, string source, bool manuallyCorrected)
+            string sourceRecordId, string source, bool manuallyCorrected,
+            string shopKey = "")
         {
             Initialize();
-            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            try
+            {
+                if (string.IsNullOrWhiteSpace(shopKey))
+                    shopKey = ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
+                else
+                    ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "无法确认消息所属店铺：" + ex.Message,
@@ -96,7 +115,11 @@ namespace Bot.Knowledge
                 return;
             }
 
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shopKey
+            };
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
