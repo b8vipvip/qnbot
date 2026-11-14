@@ -549,6 +549,60 @@ namespace Bot.ChromeNs
             }
         }
 
+        // Learning needs every Bot card in the session window. UI paging remains
+        // bounded through LoadRange, but this query intentionally has no 120/200 limit.
+        public static List<BotConversationHistoryEntity> LoadRangeComplete(
+            string seller,
+            string buyer,
+            DateTime from,
+            DateTime to)
+        {
+            Initialize();
+            FlushNow();
+            EnsureSchema();
+
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0)
+                return new List<BotConversationHistoryEntity>();
+
+            var fromTicks = from == DateTime.MinValue
+                ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
+            var toTicks = to == DateTime.MinValue ? DateTime.Now.Ticks : to.Ticks;
+            if (toTicks < fromTicks)
+            {
+                var swap = fromTicks;
+                fromTicks = toTicks;
+                toTicks = swap;
+            }
+
+            try
+            {
+                lock (DbSync)
+                {
+                    var rows = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "where Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
+                        + "order by CreatedAtTicks asc",
+                        seller,
+                        buyer,
+                        fromTicks,
+                        toTicks);
+                    return (rows ?? new List<object>())
+                        .OfType<BotConversationHistoryEntity>()
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
+                        .OrderBy(x => x.CreatedAtTicks)
+                        .ThenBy(x => x.UpdatedAtTicks)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取完整接待Bot问答历史失败：" + ex.Message, 10);
+                return new List<BotConversationHistoryEntity>();
+            }
+        }
+
         public static void FlushNow()
         {
             Initialize();
@@ -641,12 +695,6 @@ namespace Bot.ChromeNs
                 lock (DbSync)
                 {
                     DbHelper.Db.SaveRecordsInTransaction(batch.Cast<object>().ToList());
-                    foreach (var conversation in batch
-                        .Select(x => new { x.Seller, x.Buyer })
-                        .Distinct())
-                    {
-                        TrimConversationUnsafe(conversation.Seller, conversation.Buyer);
-                    }
                 }
 
                 if (Interlocked.Add(ref _savedSinceCleanup, batch.Count) >= 200)
@@ -663,18 +711,6 @@ namespace Bot.ChromeNs
                 }
                 throw;
             }
-        }
-
-        private static void TrimConversationUnsafe(string seller, string buyer)
-        {
-            DbHelper.Db.Execute(
-                "delete from BotConversationHistoryEntity where Seller = ? and Buyer = ? and EntityId not in "
-                + "(select EntityId from BotConversationHistoryEntity where Seller = ? and Buyer = ? "
-                + "order by UpdatedAtTicks desc limit " + MaxRecordsPerConversation + ")",
-                seller,
-                buyer,
-                seller,
-                buyer);
         }
 
         private static void EnsureSchema()
