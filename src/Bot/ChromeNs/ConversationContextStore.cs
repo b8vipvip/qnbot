@@ -139,11 +139,11 @@ namespace Bot.ChromeNs
             QNChatMessage message,
             string messageText)
         {
-            if (message == null) return string.Empty;
+            if (message == null) return false;
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0
-                || string.Equals(seller, buyer, StringComparison.Ordinal)) return string.Empty;
+                || string.Equals(seller, buyer, StringComparison.Ordinal)) return false;
             var from = message.fromid == null ? string.Empty
                 : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty
@@ -558,12 +558,12 @@ namespace Bot.ChromeNs
             string text,
             bool fromHistory)
         {
-            if (message == null) return false;
+            if (message == null) return string.Empty;
             var timestamp = GetMessageTime(message);
             if (IsWithdrawalNotice(message, text))
             {
                 if (IsSellerWithdrawal(message, text, seller)) MarkLastSellerTurnWithdrawn(state, timestamp);
-                return false;
+                return string.Empty;
             }
             if (IsPlatformSystemTip(message, text)) return false;
 
