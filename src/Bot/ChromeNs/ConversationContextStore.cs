@@ -1084,6 +1084,7 @@ namespace Bot.ChromeNs
             if (current != null) return current;
             if (string.IsNullOrWhiteSpace(seller)) return null;
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (AmbiguousShopIdentityException) { throw; }
             catch { return null; }
         }
 
