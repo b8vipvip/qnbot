@@ -85,8 +85,11 @@ namespace Bot.ShopScope
                 .Select(x => ShopIdentityResolver.Resolve(x.Seller))
                 .Concat(Profiles.GetAll()
                     .Where(x => x != null
-                        && string.Equals((x.DisplayName ?? string.Empty).Trim(),
-                            sellerNick, StringComparison.Ordinal))
+                        && (string.Equals((x.SellerNick ?? string.Empty).Trim(),
+                                sellerNick, StringComparison.Ordinal)
+                            || (string.IsNullOrWhiteSpace(x.SellerNick)
+                                && string.Equals((x.DisplayName ?? string.Empty).Trim(),
+                                    sellerNick, StringComparison.Ordinal))))
                     .Select(x => x.ToContext()))
                 .GroupBy(x => x.ShopKey, StringComparer.Ordinal)
                 .Select(x => x.First())
