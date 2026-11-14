@@ -457,3 +457,19 @@ def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
     assert "var qn = ResolveMessageMirrorQn();" in restore
     assert "var current = ResolveMessageMirrorQn();" in restore
     assert "ActiveShopSessionRegistry.IsActive(current)" in reshow
+
+def test_desk_lookup_never_falls_back_across_explicit_shop_scope():
+    desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
+    inst = desk[
+        desk.index("public static Desk Inst"):
+        desk.index("public static IList<Desk> Snapshot")
+    ]
+    scoped = inst[
+        inst.index("var scopedShop = ShopSettingsScope.Current;"):
+        inst.index("var current = QN.CurQN")
+    ]
+    assert "scopedShop.SellerNick" in scoped
+    assert "FindConnectedQnByShopKey(scopedShop.ShopKey)" in scoped
+    assert "DeskSellerBindingRegistry.FindSellerDesk(sellerNick)" in scoped
+    assert "scopedShop.DisplayName" not in scoped
+    assert "return null;" in scoped
