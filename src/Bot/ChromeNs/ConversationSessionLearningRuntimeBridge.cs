@@ -75,6 +75,7 @@ namespace Bot.ChromeNs
         }
 
         public static Task<ConversationHistoryRefreshResult> RefreshRemoteHistoryCompleteAsync(
+            string shopKey,
             string seller,
             string buyer,
             string ccode,
@@ -83,7 +84,7 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken)
         {
             return ConversationContextStore.RefreshLearningHistoryCompleteAsync(
-                seller, buyer, ccode, from, to, cancellationToken);
+                shopKey, seller, buyer, ccode, from, to, cancellationToken);
         }
 
         public static bool RefreshRemoteHistory(string seller, string buyer, string ccode)
@@ -91,10 +92,13 @@ namespace Bot.ChromeNs
             var endAt = DateTime.Now;
             try
             {
-                // Compatibility wrapper now uses the same complete, exact-shop
-                // paginated reader as finalization; it never falls back to QN.CurQN.
+                // Compatibility wrapper resolves the same explicit scope as the
+                // calling operation. Ambiguous seller nicknames fail closed.
+                var shop = ShopSettingsScope.Current
+                    ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
                 var result = RefreshRemoteHistoryCompleteAsync(
-                    seller, buyer, ccode, endAt.AddDays(-7), endAt, CancellationToken.None)
+                    shop.ShopKey, seller, buyer, ccode,
+                    endAt.AddDays(-7), endAt, CancellationToken.None)
                     .GetAwaiter().GetResult();
                 return result != null && result.IsComplete;
             }
