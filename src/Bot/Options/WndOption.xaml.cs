@@ -281,7 +281,7 @@ namespace Bot.Options
             if (_currentPage != null && _currentPage.Control != null) _currentPage.Control.NavHelp();
         }
 
-        public static void MyShow(ShopContext shop, WndAssist owner = null,
+        internal static void MyShow(ShopContext shop, WndAssist owner = null,
             OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
