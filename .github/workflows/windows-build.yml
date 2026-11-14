@@ -38,7 +38,7 @@ jobs:
           python-version: '3.10'
       - name: Install Python tool-test dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check uiautomation
+        run: python -m pip install --disable-pip-version-check uiautomation pytest
       - name: Compile Python tools
         shell: pwsh
         run: |
@@ -48,6 +48,9 @@ jobs:
             tools/qn_discovery_lab/qn_uia_message_lifecycle.py `
             tools/qn_discovery_lab/qn_uia_lifecycle_probe.py `
             tools/qn_discovery_lab/qn_uia_withdraw_exact_probe.py
+      - name: Run ShopKey and conversation-learning regression tests
+        shell: pwsh
+        run: python -m pytest -q tests/test_session_auto_learning_static.py
       - name: Run Windows-specific lifecycle tests
         shell: pwsh
         run: python -m unittest discover -s tools/qn_discovery_lab/tests
