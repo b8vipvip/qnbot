@@ -88,12 +88,16 @@ namespace Bot.ShopScope
             throw new InvalidOperationException("未找到ShopKey对应的店铺身份，已阻止跨店回退。");
         }
 
-        public static QN FindConnectedQnByShopKey(string shopKey)
+        public static QN FindConnectedQnByShopKey(string shopKey, string sessionId = null)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
             if (shopKey.Length == 0) return null;
             var matches = SnapshotQns()
-                .Where(x => x != null && x.Seller != null)
+                .Where(x => x != null && x.Seller != null
+                    && x.CDP != null && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
+                    && (sessionId.Length == 0
+                        || string.Equals(x.CDP.SessionId, sessionId, StringComparison.Ordinal)))
                 .Select(x => new { Qn = x, Context = TryResolveContext(x) })
                 .Where(x => x.Context != null
                     && string.Equals(x.Context.ShopKey, shopKey, StringComparison.Ordinal))
@@ -107,7 +111,6 @@ namespace Bot.ShopScope
             // with a live CDP session; never return the first stale wrapper merely
             // because it happens to appear first in QNSet.
             var match = matches
-                .Where(x => x.Qn.CDP != null && !string.IsNullOrWhiteSpace(x.Qn.CDP.SessionId))
                 .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
                 .FirstOrDefault();
             if (match == null) return null;
