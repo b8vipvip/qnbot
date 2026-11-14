@@ -12,7 +12,7 @@ def test_live_seller_and_remote_history_share_one_canonical_timeline():
     store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     assert "RecordMessage(state, seller, buyer, message, messageText, false);" in store
     assert "RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true);" in store
-    record = store.split("private static bool RecordMessage(", 1)[1].split(
+    record = store.split("private static string RecordMessage(", 1)[1].split(
         "private static void MarkLastSellerTurnWithdrawn(", 1
     )[0]
     assert "GetNativeMessageAliases(message)" in record
