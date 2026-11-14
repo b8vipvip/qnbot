@@ -380,6 +380,12 @@ namespace Bot.ChromeNs
                     session.Seller, session.Buyer, from, endAt, 0, true);
                 var cards = BotConversationHistoryStore.LoadRangeComplete(
                     session.Seller, session.Buyer, from, endAt);
+                if (historyCoverage != null && historyCoverage.IsComplete
+                    && turns.Count > 0 && historyCoverage.MessagesInWindow < turns.Count)
+                {
+                    historyCoverage.IsComplete = false;
+                    historyCoverage.ErrorCode = "remote_history_turn_count_mismatch";
+                }
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
                 report.InputCoverageJson = new JObject
                 {
