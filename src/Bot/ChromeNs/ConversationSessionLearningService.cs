@@ -1027,13 +1027,7 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
             var shop = ShopSettingsScope.Current;
-            if (shop != null)
-            {
-                if (!string.Equals(shop.DisplayName, seller, StringComparison.Ordinal)
-                    && !string.Equals(shop.SellerId, seller, StringComparison.Ordinal))
-                    return string.Empty;
-            }
-            else
+            if (shop == null)
             {
                 try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
                 catch { return string.Empty; }
