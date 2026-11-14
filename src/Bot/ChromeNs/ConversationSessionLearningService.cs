@@ -1027,7 +1027,13 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
             var shop = ShopSettingsScope.Current;
-            if (shop == null)
+            if (shop != null)
+            {
+                if (!string.Equals(shop.DisplayName, seller, StringComparison.Ordinal)
+                    && !string.Equals(shop.SellerId, seller, StringComparison.Ordinal))
+                    return string.Empty;
+            }
+            else
             {
                 try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
                 catch { return string.Empty; }
@@ -1049,6 +1055,39 @@ namespace Bot.ChromeNs
                     "where Seller = ? limit 1", key) ?? new List<object>())
                     .OfType<StoreReplyStyleProfileEntity>()
                     .FirstOrDefault();
+
+                if (entity == null)
+                {
+                    // Old style profiles were keyed only by display nickname.
+                    // Migrate them only if the registry proves that nickname maps
+                    // to one shop; a legacy shared profile must never be guessed
+                    // into one of several shops that happen to use the same nick.
+                    try
+                    {
+                        var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                        if (string.Equals(resolved.ShopKey + "#" + seller, key, StringComparison.Ordinal))
+                        {
+                            var legacy = (DbHelper.Db.Select(
+                                typeof(StoreReplyStyleProfileEntity),
+                                "where Seller = ? limit 1", seller) ?? new List<object>())
+                                .OfType<StoreReplyStyleProfileEntity>()
+                                .FirstOrDefault();
+                            if (legacy != null)
+                            {
+                                DbHelper.Db.Execute(
+                                    "update StoreReplyStyleProfileEntity set Seller = ? where Seller = ?",
+                                    key, seller);
+                                legacy.Seller = key;
+                                entity = legacy;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ambiguous legacy style evidence remains unassigned.
+                    }
+                }
+
                 if (entity == null) return string.Empty;
                 StyleCache[key] = entity;
                 return entity.Profile ?? string.Empty;
