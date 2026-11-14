@@ -473,3 +473,35 @@ def test_desk_lookup_never_falls_back_across_explicit_shop_scope():
     assert "DeskSellerBindingRegistry.FindSellerDesk(sellerNick)" in scoped
     assert "scopedShop.DisplayName" not in scoped
     assert "return null;" in scoped
+
+def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
+    window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    entity = window[
+        window.index("internal sealed class AiOptimizationRecordEntity"):
+        window.index("internal sealed class AiOptimizationRecordView")
+    ]
+    service = window[
+        window.index("internal static class AiManualReplyOptimizationService"):
+        window.index("internal static class ManualReplyAiComparisonBridge")
+    ]
+    bridge = window[
+        window.index("internal static class ManualReplyAiComparisonBridge"):
+        window.index("private static List<string> ExtractTexts")
+    ]
+    history_ui = window[
+        window.index("internal sealed class AiOptimizationHistoryControl"):
+        window.index("namespace Bot")
+    ]
+    assert "public string ShopKey { get; set; }" in entity
+    assert "GetRecords(\n            string shopKey, string seller, int maxCount)" in service
+    assert '"where ShopKey = ? and Seller = ?' in service
+    assert "alter table AiOptimizationRecordEntity add column ShopKey text" in service
+    assert "BuildManualTurnKey(\n            string shopKey, string seller, string buyer, string question)" in service
+    assert "BuildManualTurnKey(shopKey, seller, buyer, question)" in service
+    assert "ShopKey = shopKey" in service
+    assert "ResolveRuntimeBySeller(qn)" in bridge
+    assert "using (ShopSettingsScope.Enter(shop))" in bridge
+    assert "MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)" in bridge
+    assert "StartForManualReply(\n                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey)" in bridge
+    assert "GetRecords(shopKey, seller, 500)" in history_ui
+    assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in history_ui
