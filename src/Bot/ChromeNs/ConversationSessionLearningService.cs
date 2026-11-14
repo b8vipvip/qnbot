@@ -887,6 +887,7 @@ namespace Bot.ChromeNs
         private static void SaveSnapshot(ActiveSession session, string status)
         {
             var report = LoadReport(session.EntityId) ?? NewReport(session);
+            report.ShopKey = session.ShopKey;
             report.CCode = session.CCode;
             report.Status = status;
             report.LastBuyerAtTicks = session.LastBuyerAt.Ticks;
@@ -903,6 +904,7 @@ namespace Bot.ChromeNs
             return new ConversationSessionLearningReportEntity
             {
                 EntityId = session.EntityId,
+                ShopKey = session.ShopKey,
                 Seller = session.Seller,
                 Buyer = session.Buyer,
                 CCode = session.CCode,
@@ -1053,7 +1055,15 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try
+                {
+                    DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
                 try
                 {
                     DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column InputCoverageJson text");
@@ -1073,6 +1083,7 @@ namespace Bot.ChromeNs
             return new ConversationSessionLearningReportView
             {
                 Id = entity.EntityId,
+                ShopKey = entity.ShopKey,
                 Seller = entity.Seller,
                 Buyer = entity.Buyer,
                 Status = entity.Status,
