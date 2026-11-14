@@ -447,6 +447,8 @@ def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
     assert "ActiveShopSessionRegistry.GetActiveShopKey()" in resolver
     assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in resolver
     assert "ShopIdentityResolver.Resolve(current.Seller).ShopKey" in resolver
+    assert "ActiveShopSessionRegistry.IsActive(qn)" in resolver
+    assert "ActiveShopSessionRegistry.IsActive(current)" in resolver
     assert "var qn = ResolveMessageMirrorQn();" in restore
     assert "var current = ResolveMessageMirrorQn();" in restore
     assert "ActiveShopSessionRegistry.IsActive(current)" in reshow
