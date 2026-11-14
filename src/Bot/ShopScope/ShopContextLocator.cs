@@ -57,6 +57,29 @@ namespace Bot.ShopScope
             throw new InvalidOperationException("未找到ShopKey对应的店铺身份，已阻止跨店回退。");
         }
 
+        public static QN FindConnectedQnByShopKey(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return null;
+            foreach (var qn in SnapshotQns())
+            {
+                if (qn == null || qn.Seller == null) continue;
+                try
+                {
+                    if (string.Equals(
+                        ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
+                        shopKey,
+                        StringComparison.Ordinal))
+                        return qn;
+                }
+                catch
+                {
+                    // A malformed QN identity is never a match for a persisted ShopKey.
+                }
+            }
+            return null;
+        }
+
         public static ShopContext ResolveCurrentForUi()
         {
             var current = QN.CurQN;
