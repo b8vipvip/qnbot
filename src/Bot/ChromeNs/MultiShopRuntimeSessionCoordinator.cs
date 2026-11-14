@@ -421,7 +421,10 @@ namespace Bot.ChromeNs
                 _activeSeller = seller;
                 _activeShopKey = shopKey;
                 _activeTargetId = targetId.Length > 0 ? targetId : (qn.Seller.TargetId ?? string.Empty).Trim();
-                if (sessionId.Length > 0) _activeSessionId = sessionId;
+                // Clear a previous account's session ID when the newly activated
+                // QN has not established CDP yet. Retaining the old ID would make
+                // the new ShopKey permanently look inactive until another probe.
+                _activeSessionId = sessionId;
                 if (focusProof) _lastFocusProofUtc = DateTime.UtcNow;
             }
             QN.CurQN = qn;
