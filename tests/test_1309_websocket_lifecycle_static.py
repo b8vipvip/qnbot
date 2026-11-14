@@ -7,16 +7,16 @@ def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_duplicate_websocket_pages_are_standby_not_permanently_retired():
+def test_duplicate_websocket_pages_use_bounded_recoverable_standby_leases():
     server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
     guard = text("src/Bot/ChromeNs/WebSocketPageLifecycleGuard.cs")
     inject = text("src/Bin/inject.js")
 
-    assert "_duplicateRetireCapableSessions" in server
-    assert 'jo["duplicateRetire"]' in server
-    assert 'method = "retireDuplicate"' not in server
-    assert 'physicalClose=false' in server
-    assert '保持在线standby，不物理关闭' in server
+    assert "_recoverableStandbySessions" in server
+    assert 'jo["recoverableStandby"]' in server
+    assert 'method = "retireDuplicate"' in server
+    assert "retryAfterMs = 300000" in server
+    assert "session.Send(command)" in server
     assert 'method = "retireDuplicate"' not in guard
     assert 'Session.Close()' not in guard
 
@@ -27,8 +27,10 @@ def test_duplicate_websocket_pages_are_standby_not_permanently_retired():
     assert "duplicateRetire: false" in inject
     assert "recoverableStandby: true" in inject
     assert 'param.method === "retireDuplicate"' in inject
-    assert 'websocketStandbyUntil = Date.now() + 15000;' in inject
-    assert "scheduleReconnect(15000);" in inject
+    assert "var retryAfterMs = Number(param.retryAfterMs) || 300000;" in inject
+    assert "scheduleReconnect(retryAfterMs);" in inject
+    assert "pendingStatus = payload;" in inject
+    assert "var businessEvent = type !== \"qnbotStatus\" && !diagnosticOnly;" in inject
     assert "scheduleReconnect();" in inject
 
 
