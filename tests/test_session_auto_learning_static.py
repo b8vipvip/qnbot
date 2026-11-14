@@ -122,6 +122,68 @@ def test_idle_learning_resolves_shop_before_structured_ai_call():
     assert analysis.index("analysis = await AnalyzeAsync") < analysis.index("ReviewedKnowledgeLearningService.ApplyReviewedKnowledge")
 
 
+def test_session_learning_pages_complete_remote_history_and_recreates_state_after_restart():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+
+    assert "RefreshLearningHistoryCompleteAsync" in context
+    assert "LearningHistoryPageSize = 100" in context
+    assert "LearningHistoryMaxPages = 200" in context
+    assert 'msgid = cursorId' in context
+    assert 'msgtime = cursorTime' in context
+    assert 'resultObject["hasMore"]' in context
+    assert "history_cursor_stalled" in context
+    assert "history_page_limit_reached" in context
+    assert "var state = GetState(seller, buyer);" in context
+    assert "RefreshRemoteHistoryCompleteAsync" in bridge
+    assert "RefreshRemoteHistoryCompleteAsync(" in service
+    assert '["historyComplete"]' in service
+    assert '["historyPages"]' in service
+    assert '["historyMessagesFetched"]' in service
+    assert '["timelineTurns"]' in service
+    assert '["botCards"]' in service
+
+
+def test_session_learning_does_not_silently_truncate_turns_or_bot_cards():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+
+    cleanup = context[context.index("private static void Cleanup(TimelineState state"):
+                      context.index("// Typed access point for session learning")]
+    turns = bridge[bridge.index("public static List<ConversationContextTurn> GetTurnsBetween"):
+                   bridge.index("public static Task<ConversationHistoryRefreshResult>")]
+    cards = service[service.index("private static string BuildCards"):
+                    service.index("private static int CountHumanSellerTurns")]
+    assert "Turns.Count > 100" not in cleanup
+    assert "RemoveRange(0" not in cleanup
+    assert ".Take(take)" not in turns
+    assert "Math.Min(200" not in turns
+    assert "Timestamp != DateTime.MinValue" in turns
+    assert ".Take(80)" not in cards
+    assert "LoadRangeComplete(" in service
+    assert "public static List<BotConversationHistoryEntity> LoadRangeComplete(" in history
+    assert "TrimConversationUnsafe" not in history
+
+
+def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_run():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[service.index("private static async Task FinalizeAsync"):
+                      service.index("private static async Task<JObject> AnalyzeAsync")]
+
+    assert "if (historyCoverage == null || !historyCoverage.IsComplete)" in finalize
+    assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
+    assert "private const bool EnableAutomaticWrites = false;" in service
+    assert "knowledgeCorpusComplete" in finalize
+    assert '"dry_run"' in finalize
+    assert "默认dry-run" in finalize
+    assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
+        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
+    )
+
+
 def test_myopenai_endpoint_discovery_is_scoped_in_learning():
     myopenai=read("src/Bot/ChromeNs/MyOpenAI.cs")
     assert "var endpoints = AiEndpointStore.GetEnabledEndpoints();" in myopenai
