@@ -193,6 +193,12 @@ namespace Bot.Knowledge
             }
 
             seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0)
+            {
+                MessageBox.Show(owner, "Bot消息缺少卖家身份，已阻止打开知识库。",
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
             if (expectedSeller.Length == 0)
             {
