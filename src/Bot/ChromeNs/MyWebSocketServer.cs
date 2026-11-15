@@ -387,7 +387,9 @@ namespace Bot.ChromeNs
                 if (!knownDuplicate && !knownShopSession) return false;
 
                 _shopSessions.TryGetValue(shopKey, out previousOwner);
-                if (requireVacant && !string.IsNullOrWhiteSpace(previousOwner)
+                if (requireVacant
+                    && !string.Equals(previousOwner, sessionId, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(previousOwner)
                     && _connectedSessions.ContainsKey(previousOwner))
                     return false;
                 var alreadyOwner = string.Equals(previousOwner, sessionId, StringComparison.Ordinal);
