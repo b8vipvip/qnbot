@@ -36,30 +36,38 @@ namespace Bot.ChromeNs
         {
             try
             {
-                if (_qn == null || _qn.CDP == null || _qn.CDP.IsInvalidated
-                    || _qn.CDP.IsShopIdentityRetired) return string.Empty;
+                var client = _qn == null ? null : _qn.CDP;
+                if (client == null || client.IsInvalidated || client.IsShopIdentityRetired)
+                    return string.Empty;
                 var resolved = ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey;
-                var bound = (_qn.CDP.ShopKey ?? string.Empty).Trim();
-                return bound.Length > 0 && string.Equals(bound, resolved, StringComparison.Ordinal)
+                var bound = (client.ShopKey ?? string.Empty).Trim();
+                var server = MyWebSocketServer.WSocketSvrInst;
+                return bound.Length > 0
+                    && string.Equals(bound, resolved, StringComparison.Ordinal)
+                    && server != null
+                    && server.IsAuthoritativeShopSession(bound, client.SessionId)
                     ? bound
                     : string.Empty;
             }
             catch { return string.Empty; }
         }
 
-        private async Task<bool> VerifyShopIdentityBeforeSendAsync(string expectedShopKey)
+        internal async Task<bool> VerifyShopIdentityBeforeSendAsync(string expectedShopKey)
         {
             expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
             var client = _qn == null ? null : _qn.CDP;
-            if (expectedShopKey.Length == 0 || client == null || client.IsInvalidated
-                || client.IsShopIdentityRetired
-                || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal))
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (expectedShopKey.Length == 0 || client == null || server == null
+                || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
                 return false;
 
             try
             {
                 var current = await client.GetCurrentUser().ConfigureAwait(false);
-                if (current == null || current.Result == null) return false;
+                if (current == null || current.Result == null
+                    || !ReferenceEquals(_qn.CDP, client)) return false;
                 var actualShopKey = ShopContextLocator.ResolveRuntimeBySellerIdentity(current.Result).ShopKey;
                 if (!string.Equals(actualShopKey, expectedShopKey, StringComparison.Ordinal))
                 {
@@ -69,7 +77,10 @@ namespace Bot.ChromeNs
                         + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", actualShopKey));
                     return false;
                 }
-                return !client.IsShopIdentityRetired && !client.IsInvalidated;
+                return ReferenceEquals(_qn.CDP, client)
+                    && !client.IsShopIdentityRetired
+                    && !client.IsInvalidated
+                    && server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId);
             }
             catch (Exception ex)
             {
