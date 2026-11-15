@@ -20,7 +20,7 @@ def test_session_learning_loads_and_batches_the_entire_shop_scoped_v2_corpus():
     assert "BuildKnowledgeCorpusBatches(records)" in method
     assert "result.BatchesCompleted == result.BatchCount" in method
     assert "result.FailedBatches == 0" in method
-    assert "KnowledgeCorpusBatchSize = 8" in service
+    assert "KnowledgeCorpusBatchSize = 18" in service
 
 
 def test_corpus_batch_requires_exactly_one_decision_for_every_record_id():

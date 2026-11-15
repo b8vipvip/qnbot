@@ -89,7 +89,7 @@ namespace Bot.ChromeNs
         public const int InactivityMinutes = 5;
         public const int SellerQuietSeconds = 30;
         public const int MaxSuggestionsPerSession = 8;
-        private const int KnowledgeCorpusBatchSize = 8;
+        private const int KnowledgeCorpusBatchSize = 18;
         private const int MaxKnowledgeCorpusCandidates = 24;
         private const int KnowledgeCorpusTimeoutSeconds = 120;
         // Keep candidate generation observable, but do not mutate production V2
@@ -154,6 +154,8 @@ namespace Bot.ChromeNs
 
         private sealed class KnowledgeCorpusBatchResult
         {
+            public bool Success;
+            public string Error = string.Empty;
             public readonly List<Suggestion> Candidates = new List<Suggestion>();
             public int EvidenceRejected;
             public string EndpointName = string.Empty;
@@ -791,16 +793,16 @@ namespace Bot.ChromeNs
                     var batch = batches[batchIndex];
                     try
                     {
-                        string batchError;
                         var batchResult = await AnalyzeKnowledgeCorpusBatchAsync(
                             batch, batchIndex + 1, result.SourceFingerprint,
                             transcript, sessionSummary, styleBefore, localFirst,
-                            allMessageIds, humanMessageIds, out batchError);
-                        if (batchResult == null)
+                            allMessageIds, humanMessageIds);
+                        if (batchResult == null || !batchResult.Success)
                         {
                             result.FailedBatches++;
                             if (string.IsNullOrWhiteSpace(result.Error))
-                                result.Error = "batch_" + (batchIndex + 1) + ":" + Clean(batchError, 350);
+                                result.Error = "batch_" + (batchIndex + 1) + ":"
+                                    + Clean(batchResult == null ? "batch_result_null" : batchResult.Error, 350);
                         }
                         else
                         {
@@ -1001,10 +1003,9 @@ namespace Bot.ChromeNs
             string styleBefore,
             bool localFirst,
             HashSet<string> allMessageIds,
-            HashSet<string> humanMessageIds,
-            out string error)
+            HashSet<string> humanMessageIds)
         {
-            error = string.Empty;
+            var failed = new KnowledgeCorpusBatchResult();
             string invalidAnswer = string.Empty;
             string parseError = string.Empty;
             for (var attempt = 0; attempt < 2; attempt++)
@@ -1023,8 +1024,8 @@ namespace Bot.ChromeNs
                         await Task.Delay(1200);
                         continue;
                     }
-                    error = rawError.Length == 0 ? "ai_result_empty" : rawError;
-                    return null;
+                    failed.Error = rawError.Length == 0 ? "ai_result_empty" : rawError;
+                    return failed;
                 }
 
                 KnowledgeCorpusBatchResult parsed;
@@ -1032,6 +1033,7 @@ namespace Bot.ChromeNs
                     raw.Answer, batch, batchIndex, sourceFingerprint, localFirst,
                     allMessageIds, humanMessageIds, out parsed, out parseError))
                 {
+                    parsed.Success = true;
                     parsed.EndpointName = raw.EndpointName ?? string.Empty;
                     parsed.Model = raw.Model ?? string.Empty;
                     parsed.Protocol = raw.Protocol ?? string.Empty;
@@ -1039,8 +1041,8 @@ namespace Bot.ChromeNs
                 }
                 invalidAnswer = raw.Answer;
             }
-            error = "batch_response_invalid:" + Clean(parseError, 400);
-            return null;
+            failed.Error = "batch_response_invalid:" + Clean(parseError, 400);
+            return failed;
         }
 
         private static JArray BuildKnowledgeCorpusBatchMessages(
@@ -1180,6 +1182,7 @@ namespace Bot.ChromeNs
                     || Normalize(proposed) == Normalize(record.Answer)
                     || !record.Enabled
                     || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
                     || ContainsHighRisk((record.Title ?? string.Empty) + " " + proposed))
                 {
                     result.EvidenceRejected++;
