@@ -237,3 +237,24 @@ def test_restored_checkpoint_is_not_marked_complete_before_history_revalidation(
     reset = finalize.index('initialCoverage["knowledgeCorpusComplete"] = false;')
     save = finalize.index("report.InputCoverageJson = initialCoverage.ToString(Formatting.None)")
     assert preserve < reset < save
+
+
+
+def test_incomplete_corpus_scans_remain_pending_and_retry_from_checkpoint_up_to_three_times():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+    requeue = service[
+        service.index("private static void Requeue("):
+        service.index("private static void CompleteSkipped")
+    ]
+
+    assert "var retryCorpus = !corpusComplete && session.RetryCount < 3" in finalize
+    assert "report.CompletedAtTicks = 0" in finalize
+    assert "report.RetryCount = session.RetryCount" in finalize
+    assert "Requeue(session, \"等待Knowledge V2全库补偿重试\")" in finalize
+    assert "if (retryCorpus)" in finalize
+    assert "string waitingStatus = \"等待聊天历史恢复后再次复盘\"" in requeue
+    assert "SaveSnapshot(session, waitingStatus)" in requeue

@@ -750,10 +750,26 @@ namespace Bot.ChromeNs
                 report.SkippedCount = skipped + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted;
                 report.Error = corpusComplete ? string.Empty
                     : "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500);
-                report.CompletedAtTicks = DateTime.Now.Ticks;
+                var retryCorpus = !corpusComplete && session.RetryCount < 3;
+                if (retryCorpus)
+                {
+                    session.RetryCount++;
+                    report.RetryCount = session.RetryCount;
+                    report.Status = "V2全库覆盖不完整，等待补偿重试(" + session.RetryCount + "/3)";
+                    report.CompletedAtTicks = 0;
+                }
+                else
+                {
+                    report.CompletedAtTicks = DateTime.Now.Ticks;
+                }
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
                 SaveReport(report);
                 NotifyChanged();
+                if (retryCorpus)
+                {
+                    Requeue(session, "等待Knowledge V2全库补偿重试");
+                    return;
+                }
                 Log.Info("接待自动学习完成: seller=" + session.Seller + ", buyer=" + session.Buyer
                     + ", replyMode=" + ReplyModeService.GetDisplayName(localFirst ? BotReplyMode.LocalFirst : BotReplyMode.AiFirst)
                     + ", corpus_records=" + corpusAnalysis.RecordCount
@@ -1762,7 +1778,8 @@ namespace Bot.ChromeNs
             return array.ToString(Formatting.None);
         }
 
-        private static void Requeue(ActiveSession session)
+        private static void Requeue(
+            ActiveSession session, string waitingStatus = "等待聊天历史恢复后再次复盘")
         {
             if (session == null) return;
             var key = Key(session.ShopKey, session.Seller, session.Buyer);
@@ -1790,7 +1807,7 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            SaveSnapshot(session, "等待聊天历史恢复后再次复盘");
+            SaveSnapshot(session, waitingStatus);
             Schedule(session, TimeSpan.FromMinutes(1));
         }
 
