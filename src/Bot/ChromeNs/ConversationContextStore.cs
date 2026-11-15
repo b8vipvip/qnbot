@@ -929,8 +929,14 @@ namespace Bot.ChromeNs
                             result.StopReason = hasMoreKnown ? "server_end" : "empty_page";
                             break;
                         }
+                        if (messages.Any(x => x == null))
+                        {
+                            result.ErrorCode = "history_page_contains_null_messages";
+                            result.StopReason = "invalid_messages";
+                            break;
+                        }
 
-                        foreach (var item in messages.Where(x => x != null).OrderBy(GetSortValue))
+                        foreach (var item in messages.OrderBy(GetSortValue))
                         {
                             var text = ExtractMessageText(item);
                             var messageKey = IncomingMessageSafety.BuildMessageKey(item, text);

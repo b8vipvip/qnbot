@@ -338,3 +338,17 @@ def test_explicit_server_end_takes_precedence_over_repeated_final_cursor():
     server_end = method.index("if (hasMoreKnown && hasMore == 0)")
     cursor_stall = method.index('result.ErrorCode = "history_cursor_stalled"')
     assert server_end < cursor_stall
+
+
+
+def test_history_page_with_null_message_entries_is_not_silently_counted_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "if (messages.Any(x => x == null))" in method
+    assert 'result.ErrorCode = "history_page_contains_null_messages"' in method
+    assert 'result.StopReason = "invalid_messages"' in method
+    assert "foreach (var item in messages.OrderBy(GetSortValue))" in method
