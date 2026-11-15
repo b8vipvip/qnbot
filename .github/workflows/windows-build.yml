@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-release-build-${{ github.event.pull_request.number || github.ref }}
+  # Called CI and standalone PR builds must not cancel each other.
+  group: windows-release-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
