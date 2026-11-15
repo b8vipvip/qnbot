@@ -1361,6 +1361,11 @@ namespace Bot.ChromeNs
                 Log.Info("自动发送开始: buyer=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
+                if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                {
+                    SetSendFailure("店铺身份确认", "当前千牛CDP登录身份已变化或无法验证，已阻止写入和发送");
+                    return false;
+                }
 
                 if (_qn.Buyer == null || !IsExpectedBuyer(buyer, _qn.Buyer.Nick))
                 {
@@ -1444,6 +1449,14 @@ namespace Bot.ChromeNs
                 if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
+                    return false;
+                }
+                if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                {
+                    SetSendFailure("发送前店铺身份复核", "当前千牛CDP登录身份已变化或无法验证，已阻止发送");
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(
                         SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
