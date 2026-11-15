@@ -104,9 +104,12 @@ namespace Bot.ShopScope
             shopKey = (shopKey ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             if (shopKey.Length == 0) return null;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return null;
             var matches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null
                     && x.CDP != null && !x.CDP.IsInvalidated && !x.CDP.IsShopIdentityRetired
+                    && server.IsAuthoritativeShopSession(shopKey, x.CDP.SessionId)
                     && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
                     && (sessionId.Length == 0
                         || string.Equals((x.CDP.SessionId ?? string.Empty).Trim(),
