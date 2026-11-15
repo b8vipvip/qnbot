@@ -409,6 +409,8 @@ namespace Bot.ChromeNs
             client.IsShopIdentityRetired = false;
             client.Nick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
             qn.CDP = client;
+            string ignoredStatusBinding;
+            _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
             CDPClient.PreferRuntimeSession(
                 shopKey, client.Nick, sessionId, string.Empty, "standby_promoted");
 
