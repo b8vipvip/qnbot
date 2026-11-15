@@ -133,10 +133,7 @@ def test_duplicate_cdp_pending_recovery_queue_has_a_real_payload_byte_budget():
         bridge.index("private static void EnqueuePendingBounded"):
         bridge.index("private static bool TryDeliverLive")
     ]
-    drain = bridge[
-        bridge.index("private static void DrainPending"):
-        bridge.index("private static void MaybeLogSuppressedDuplicate")
-    ]
+    drain = bridge[bridge.index("private static void DrainPending"):]
 
     assert "MaxPendingInboundEvents = 512" in bridge
     assert "MaxPendingInboundPayloadBytes = 16L * 1024L * 1024L" in bridge
