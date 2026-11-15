@@ -290,6 +290,14 @@ namespace Bot.ChromeNs
         private static string _activeTargetId = string.Empty;
         private static string _activeSessionId = string.Empty;
         private static DateTime _lastFocusProofUtc = DateTime.MinValue;
+        private static readonly TimeSpan FocusProofMaxAge = TimeSpan.FromSeconds(5);
+
+        private static bool HasFreshFocusProofLocked()
+        {
+            if (_lastFocusProofUtc == DateTime.MinValue) return false;
+            var age = DateTime.UtcNow - _lastFocusProofUtc;
+            return age >= TimeSpan.Zero && age <= FocusProofMaxAge;
+        }
 
         internal static string GetActiveSellerNick()
         {
@@ -314,8 +322,10 @@ namespace Bot.ChromeNs
                     && shopKey.Length > 0
                     && string.Equals(_activeSeller, seller, StringComparison.Ordinal)
                     && string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
-                    && (_activeSessionId.Length == 0
-                        || string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal));
+                    && _activeSessionId.Length > 0
+                    && sessionId.Length > 0
+                    && string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)
+                    && HasFreshFocusProofLocked();
             }
         }
 
@@ -371,8 +381,10 @@ namespace Bot.ChromeNs
                 if (_activeShopKey.Length == 0 || shopKey.Length == 0
                     || !string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
                 { reason = "ShopKey缺失或不一致"; return false; }
-                if (_activeSessionId.Length > 0
-                    && !string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal))
+                if (!HasFreshFocusProofLocked())
+                { reason = "最近5秒内没有唯一聚焦WebView证明，已阻止共享千牛窗口发送"; return false; }
+                if (_activeSessionId.Length == 0 || sessionId.Length == 0
+                    || !string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal))
                 { reason = "CDP会话不一致或缺失: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
                 return true;
             }
@@ -443,6 +455,7 @@ namespace Bot.ChromeNs
                 // the new ShopKey permanently look inactive until another probe.
                 _activeSessionId = sessionId;
                 if (focusProof) _lastFocusProofUtc = DateTime.UtcNow;
+                else if (changed) _lastFocusProofUtc = DateTime.MinValue;
             }
             QN.CurQN = qn;
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
