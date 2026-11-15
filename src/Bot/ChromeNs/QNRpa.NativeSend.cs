@@ -121,6 +121,11 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("HWND发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var hwndPosted = await RunUiActionAsync(
                 TryPostSafeMainSendMouseMessage,
                 "发送按钮HWND安全消息",
@@ -147,6 +152,11 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("UIA发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var safeUiaInvoked = await RunUiActionAsync(
                 TryInvokeCachedSendButtonNow,
                 "发送按钮左侧UIA安全调用（原生前置）",
@@ -173,6 +183,11 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("兼容发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
             if (uiResult) return true;
             if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后", shopKey).ConfigureAwait(false)) return false;
