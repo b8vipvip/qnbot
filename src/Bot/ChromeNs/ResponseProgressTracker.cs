@@ -48,18 +48,26 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, DeliveryUiEntry>(StringComparer.Ordinal);
         private static readonly AsyncLocal<string> OperationTurnKey = new AsyncLocal<string>();
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string seller, string buyer, string shopKey = null)
         {
-            return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()
+            return ScopeKey(seller, shopKey) + "#" + (seller ?? string.Empty).Trim()
                 + "#" + (buyer ?? string.Empty).Trim();
         }
 
-        private static string ScopeKey(string seller)
+        private static string ScopeKey(string seller, string shopKey = null)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0) return shopKey;
             var current = ShopSettingsScope.Current;
-            if (current != null) return current.ShopKey;
+            if (current != null)
+            {
+                return string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    ? current.ShopKey
+                    : "unresolved:" + Guid.NewGuid().ToString("N");
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
-            catch { return "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant(); }
+            catch { return "unresolved:" + Guid.NewGuid().ToString("N"); }
         }
 
         private static string TurnKey(string seller, string buyer, DateTime detectedAt)
@@ -347,9 +355,9 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void Cancel(string seller, string buyer, string detail)
+        public static void Cancel(string seller, string buyer, string detail, string shopKey = null)
         {
-            var turnKey = ResolveTerminalTurnKey(seller, buyer);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer, shopKey);
             Entry entry;
             if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
             MessageProcessingTraceService.RecordCancelled(seller, buyer, detail);
@@ -507,9 +515,9 @@ namespace Bot.ChromeNs
             return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt));
         }
 
-        private static string ResolveTerminalTurnKey(string seller, string buyer)
+        private static string ResolveTerminalTurnKey(string seller, string buyer, string shopKey = null)
         {
-            var conversationKey = Key(seller, buyer);
+            var conversationKey = Key(seller, buyer, shopKey);
             var operationKey = OperationTurnKey.Value;
             if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;
             string currentKey;
