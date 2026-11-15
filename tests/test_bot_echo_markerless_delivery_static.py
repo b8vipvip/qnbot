@@ -36,7 +36,7 @@ def test_rpa_registers_pending_delivery_before_real_send_action():
 def test_human_observation_still_requires_bot_delivery_checks_to_fail_first():
     monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
 
-    confirm = monitor.index("TryConfirmBotDelivery(seller, buyer, texts)")
+    confirm = monitor.index("TryConfirmBotDelivery(seller, buyer, texts, shopKey)")
     marker = monitor.index("texts.FirstOrDefault(IsExplicitBotAuthoredReply)", confirm)
     manual = monitor.index("ResponseProgressTracker.MarkManualIntervention", marker)
 
