@@ -81,9 +81,9 @@ namespace Bot.ChromeNs
                 .ToList();
             var shopKeys = Items.Select(x => (x.ShopKey ?? string.Empty).Trim())
                 .Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
-            if (shopKeys.Count > 1)
-                throw new InvalidOperationException("一个买家消息聚合批次包含多个ShopKey，已拒绝跨店合并。");
-            ShopKey = shopKeys.Count == 1 ? shopKeys[0] : string.Empty;
+            if (shopKeys.Count != 1 || Items.Any(x => string.IsNullOrWhiteSpace(x.ShopKey)))
+                throw new InvalidOperationException("一个买家消息聚合批次缺少唯一ShopKey，已拒绝跨店合并。");
+            ShopKey = shopKeys[0];
             SessionGeneration = Items.Count < 1 ? 0 : Items.Max(x => x.SessionGeneration);
             CombinedQuestion = BuildCombinedQuestion(Items);
             var continuation = Items
@@ -576,8 +576,13 @@ namespace Bot.ChromeNs
         public void Enqueue(BuyerMessageBurstItem item)
         {
             if (item == null
+                || string.IsNullOrWhiteSpace(item.ShopKey)
                 || string.IsNullOrWhiteSpace(item.SellerNick)
-                || string.IsNullOrWhiteSpace(item.BuyerNick)) return;
+                || string.IsNullOrWhiteSpace(item.BuyerNick))
+            {
+                Log.ErrorWithMaxCount("买家消息缺少ShopKey，已拒绝进入共享generation/回复链路。", 20);
+                return;
+            }
 
             var observation = _sessionAgent.ObserveBuyerMessage(
                 item.SellerNick,
@@ -905,7 +910,7 @@ namespace Bot.ChromeNs
 
         private void EnqueueForMerge(BuyerMessageBurstItem item)
         {
-            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)) return;
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)) return;
             var key = Key(item.SellerNick, item.BuyerNick);
             BurstState state;
             if (!_states.TryGetValue(key, out state) || state == null) return;
@@ -953,7 +958,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        public void CancelBuyer(string seller, string buyer, string reason)
+        public void CancelBuyer(string seller, string buyer, string reason, string shopKey = null)
         {
             var key = Key(seller, buyer);
             BurstState state;
@@ -1032,21 +1037,14 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "买家回复未能解析店铺身份，使用旧全局 AI 配置兼容模式：" + Safe(ex.Message, 220), 20);
+                    "买家回复未能解析唯一ShopKey，已阻断全局AI配置回退: " + Safe(ex.Message, 220), 20);
             }
 
-            if (shop == null)
+            if (shop == null
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (burst.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
             {
-                await LegacyAiConfigurationGate.WaitAsync(lease.CancellationToken).ConfigureAwait(false);
-                try
-                {
-                    if (!lease.IsCurrent) return;
-                    await _handler(lease).ConfigureAwait(false);
-                }
-                finally
-                {
-                    LegacyAiConfigurationGate.Release();
-                }
+                if (lease != null) lease.MarkFailed("shop_scope_unresolved");
                 return;
             }
 
