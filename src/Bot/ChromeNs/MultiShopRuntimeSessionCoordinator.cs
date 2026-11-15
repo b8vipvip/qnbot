@@ -78,9 +78,10 @@ namespace Bot.ChromeNs
                 {
                     if (Subscribed.TryAdd(qn, 0)) Subscribe(qn);
                     var seller = Seller(qn);
-                    var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                    var shopKey = ShopKey(qn);
+                    var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
                     if (qn.Rpa != null && ActiveShopSessionRegistry.IsActive(qn)
-                        && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)))
+                        && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)))
                         qn.Rpa.EnsureSellerDeskBinding();
                     SyncAttachedUi(qn);
                 }
@@ -124,9 +125,10 @@ namespace Bot.ChromeNs
                 if (ActiveShopSessionRegistry.ActivateFromFocusedWebView(
                     probe.Qn, probe.SessionId, probe.TargetId, probe.Buyer, "document.hasFocus+visibility"))
                 {
-                    var desk = DeskSellerBindingRegistry.FindSellerDesk(probe.Seller);
+                    var shopKey = ShopKey(probe.Qn);
+                    var desk = DeskSellerBindingRegistry.FindSellerDesk(probe.Seller, shopKey);
                     if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(probe.Qn, "focused-webview");
-                    if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, probe.Seller, "focused-webview");
+                    if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, probe.Seller, "focused-webview", shopKey);
                     EnsureQn(probe.Qn, true);
                 }
             }
@@ -200,8 +202,9 @@ namespace Bot.ChromeNs
             ActiveShopSessionRegistry.ObserveChatDialogActive(qn, "onChatDlgActive");
             if (ActiveShopSessionRegistry.IsActive(qn))
             {
+                var shopKey = ShopKey(qn);
                 var desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "seller-switched-active");
-                if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, Seller(qn), "seller-switched-active");
+                if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, Seller(qn), "seller-switched-active", shopKey);
             }
             EnsureQn(qn, true);
             ActiveShopSessionRegistry.ReassertCurrent("seller-switched-complete");
@@ -214,9 +217,10 @@ namespace Bot.ChromeNs
             // buyer state, but it is not allowed to elect the global active seller.
             if (ActiveShopSessionRegistry.IsActive(qn))
             {
-                var desk = DeskSellerBindingRegistry.FindSellerDesk(Seller(qn));
+                var shopKey = ShopKey(qn);
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(Seller(qn), shopKey);
                 if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-active");
-                if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, Seller(qn), "buyer-switched-active");
+                if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, Seller(qn), "buyer-switched-active", shopKey);
             }
             EnsureQn(qn, true);
             ActiveShopSessionRegistry.ReassertCurrent("buyer-switched-complete");
@@ -234,9 +238,10 @@ namespace Bot.ChromeNs
             try
             {
                 var seller = Seller(qn);
-                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                var shopKey = ShopKey(qn);
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
                 if (qn.Rpa != null && ActiveShopSessionRegistry.IsActive(qn)
-                    && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)))
+                    && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)))
                     qn.Rpa.EnsureSellerDeskBinding(force);
                 SyncAttachedUi(qn);
             }
@@ -249,9 +254,10 @@ namespace Bot.ChromeNs
         private static void SyncAttachedUi(QN qn)
         {
             var seller = Seller(qn);
-            if (seller.Length == 0 || !ActiveShopSessionRegistry.IsActive(qn)) return;
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
-            if (desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)) return;
+            var shopKey = ShopKey(qn);
+            if (seller.Length == 0 || shopKey.Length == 0 || !ActiveShopSessionRegistry.IsActive(qn)) return;
+            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
+            if (desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)) return;
             var assist = desk.AssistWindow;
             if (assist == null || assist.Dispatcher == null) return;
             Action action = () =>
@@ -270,6 +276,12 @@ namespace Bot.ChromeNs
             if (assist.Dispatcher.CheckAccess()) action();
             else if (!assist.Dispatcher.HasShutdownStarted && !assist.Dispatcher.HasShutdownFinished)
                 assist.Dispatcher.BeginInvoke(DispatcherPriority.Background, action);
+        }
+
+        private static string ShopKey(QN qn)
+        {
+            try { return qn == null ? string.Empty : (ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey ?? string.Empty).Trim(); }
+            catch { return string.Empty; }
         }
 
         private static string Seller(QN qn)
@@ -424,9 +436,9 @@ namespace Bot.ChromeNs
                 Log.Info("已按ShopKey/CDP会话纠正全局当前店铺，阻止后台WebView抢占: seller="
                     + seller + ", shopKey=" + shopKey + ", reason=" + (reason ?? string.Empty));
             }
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
             if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
-                desk, seller, "active-shop-reassert:" + (reason ?? string.Empty));
+                desk, seller, "active-shop-reassert:" + (reason ?? string.Empty), shopKey);
         }
 
         private static bool Activate(QN qn, string sessionId, string targetId, bool focusProof, string evidence)
@@ -459,9 +471,10 @@ namespace Bot.ChromeNs
                 else if (changed) _lastFocusProofUtc = DateTime.MinValue;
             }
             QN.CurQN = qn;
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
             if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "active-shop:" + (evidence ?? string.Empty));
-            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, seller, "active-shop:" + (evidence ?? string.Empty));
+            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
+                desk, seller, "active-shop:" + (evidence ?? string.Empty), shopKey);
             if (changed)
             {
                 Log.Info("活动店铺会话已切换: previousSeller=" + previousSeller + ", previousShopKey=" + previousShopKey
