@@ -556,6 +556,17 @@ namespace Bot.ChromeNs
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
             var detectedAt = DateTime.Now;
+            string shopKey;
+            try
+            {
+                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("买家消息缺少可验证ShopKey，已阻断回复链路: seller="
+                    + sellerNick + ", error=" + ex.Message, 20);
+                return Task.CompletedTask;
+            }
 
             // This is the authoritative business claim. It is intentionally the first dedupe write
             // on the buyer path and is shared with background recovery.
@@ -577,7 +588,7 @@ namespace Bot.ChromeNs
                 out orderPlan))
             {
                 if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shop.ShopKey);
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);
@@ -605,25 +616,13 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shop.ShopKey);
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
                 BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
             }
             Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
                 + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);
-
-            string shopKey;
-            try
-            {
-                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("买家消息缺少可验证ShopKey，已阻断回复链路: seller="
-                    + sellerNick + ", error=" + ex.Message, 20);
-                return Task.CompletedTask;
-            }
 
             _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
             {
@@ -992,7 +991,7 @@ namespace Bot.ChromeNs
                 var matches = QNSet
                     .Where(q => q != null && q._seller != null)
                     .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
-                    .Where(x => string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    .Where(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal))
                     .ToList();
                 if (matches.Count > 1 && matches.Any(x =>
                     !ShopIdentityResolver.Resolve(x.Qn._seller).HasStableSellerId))
@@ -1063,7 +1062,7 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
-                return FindExistingByShopKey(shop.ShopKey);
+                return FindExistingByShopKey(shopKey);
             }
             catch
             {
