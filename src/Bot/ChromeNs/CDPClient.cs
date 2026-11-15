@@ -198,7 +198,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void PreferRuntimeSession(string shopKey, string sellerNick, string sessionId, string buyerNick, string reason)
+        internal static void PreferRuntimeSession(string shopKey, string sellerNick, string sessionId, string buyerNick, string reason)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
             sellerNick = (sellerNick ?? string.Empty).Trim();
