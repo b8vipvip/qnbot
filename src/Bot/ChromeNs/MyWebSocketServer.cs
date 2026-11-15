@@ -348,48 +348,34 @@ namespace Bot.ChromeNs
             if (session == null) return;
             loginNick = (loginNick ?? string.Empty).Trim();
             conversationNick = (conversationNick ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(loginNick) && string.IsNullOrWhiteSpace(conversationNick)) return;
 
             try
             {
+                // Never select a QN by loginNick first: this CDP session may belong
+                // to another registered shop with the same display nickname.
                 var cdp = GetOrCreateClient(session);
-                QN qn = null;
-                if (!string.IsNullOrWhiteSpace(loginNick))
-                {
-                    qn = QN.FindExistingBySellerNick(loginNick);
-                }
-
-                if (qn == null)
-                {
-                    try
-                    {
-                        var user = await cdp.GetCurrentUser();
-                        if (user != null && user.Result != null && !string.IsNullOrWhiteSpace(user.Result.Nick))
-                        {
-                            qn = QN.GetByNick(user.Result);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Info("状态绑定当前会话时获取登录用户失败: " + ex.Message);
-                    }
-                }
-
-                if (qn == null)
+                var user = await cdp.GetCurrentUser();
+                if (user == null || user.Result == null || string.IsNullOrWhiteSpace(user.Result.Nick))
                 {
                     BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
                     return;
                 }
 
-                var sellerNick = qn.Seller == null ? loginNick : qn.Seller.Nick;
-                if (!TryClaimShopSession(sellerNick, session.SessionID))
+                var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result);
+                var shopKey = shop.ShopKey;
+                var qn = QN.GetByShopIdentity(user.Result);
+                if (!TryClaimShopSession(shopKey, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: sellerRef="
-                        + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    Log.Info("已忽略同一ShopKey的重复千牛CDP状态会话: shopRef="
+                        + DiagnosticRef("shop", shopKey) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
+                var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
+                if (loginNick.Length > 0 && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
+                    Log.Info("状态事件loginNick与CDP登录身份昵称不同，已以TargetId/ShopKey为准: shopRef="
+                        + DiagnosticRef("shop", shopKey));
                 qn.CDP = cdp;
                 qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
@@ -421,15 +407,17 @@ namespace Bot.ChromeNs
                 }
 
                 var sellerNick = (user.Result.Nick ?? string.Empty).Trim();
-                if (!TryClaimShopSession(sellerNick, session.SessionID))
+                var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result);
+                var shopKey = shop.ShopKey;
+                QN qn = QN.GetByShopIdentity(user.Result);
+                if (!TryClaimShopSession(shopKey, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("重复千牛CDP会话已完成识别但不接管卖家运行通道: sellerRef="
-                        + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    Log.Info("重复千牛CDP会话已完成识别但不接管该ShopKey运行通道: shopRef="
+                        + DiagnosticRef("shop", shopKey) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
-                QN qn = QN.GetByNick(user.Result);
                 qn.QnVersion = ver != null ? ver.version : string.Empty;
                 qn.CDP = cdp;
                 _initialized[session.SessionID] = true;
@@ -612,36 +600,28 @@ namespace Bot.ChromeNs
                                     if (hasLoginId || hasImsdk)
                                     {
                                         var wasInitialized = _initialized.ContainsKey(session.SessionID);
-                                        var wasAuthoritative = !string.IsNullOrWhiteSpace(loginNick)
-                                            && IsAuthoritativeShopSession(loginNick, session.SessionID);
-                                        var authoritative = string.IsNullOrWhiteSpace(loginNick)
-                                            || TryClaimShopSession(loginNick, session.SessionID);
-                                        if (!authoritative)
+                                        string sessionShopKey;
+                                        var hasShopKey = _sessionShopKeys.TryGetValue(session.SessionID, out sessionShopKey)
+                                            && !string.IsNullOrWhiteSpace(sessionShopKey);
+                                        var wasAuthoritative = hasShopKey
+                                            && IsAuthoritativeShopSession(sessionShopKey, session.SessionID);
+                                        if (!wasInitialized)
                                         {
-                                            // This page is useful as a lightweight raw inbound source but must
-                                            // not start its own full CDP initialization/command pipeline.
-                                            _initialized[session.SessionID] = true;
-                                            Log.Info("检测到卖家重复千牛WebSocket页面，保留为可恢复standby入站补偿通道: sellerRef="
-                                                + DiagnosticRef("seller", loginNick)
-                                                + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
-                                        }
-                                        else if (!wasInitialized)
-                                        {
-                                            // First authority for this physical WebView still performs the complete
-                                            // initialization so version/tray/buyer state are populated once.
+                                            // Obtain exact TargetId/ShopKey from this CDP session;
+                                            // loginNick is display/diagnostic data, not an owner key.
                                             Task.Run(() => TryInitSession(session, "status"));
-                                            ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
                                         }
-                                        else if (!wasAuthoritative && !string.IsNullOrWhiteSpace(loginNick))
+                                        else if (!hasShopKey)
                                         {
-                                            // A standby page just won authority after the previous owner vanished.
-                                            // Rebind unconditionally even when seller/buyer text is unchanged; the old
-                                            // status cache must never block ownership recovery.
-                                            ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
-                                            Log.Info("千牛standby页面接管权威会话，强制重建客服/CDP绑定: sellerRef="
-                                                + DiagnosticRef("seller", loginNick)
-                                                + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
-                                            Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                            if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick))
+                                                Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                        }
+                                        else if (!wasAuthoritative)
+                                        {
+                                            _initialized[session.SessionID] = true;
+                                            Log.Info("检测到同一ShopKey的重复千牛WebSocket页面，保留为可恢复standby: shopRef="
+                                                + DiagnosticRef("shop", sessionShopKey)
+                                                + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
                                         }
                                         else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
                                             && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
@@ -671,30 +651,21 @@ namespace Bot.ChromeNs
                             }
                             else if (wMsg.Type == "onChatDlgActive")
                             {
-                                string duplicateSeller;
-                                if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                                string duplicateShopKey;
+                                if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
                                 {
-                                    if (TryPromoteDuplicateShopSession(duplicateSeller, session, "onChatDlgActive"))
+                                    if (TryPromoteDuplicateShopSession(duplicateShopKey, session, "onChatDlgActive"))
                                     {
-                                        var activeSeller = duplicateSeller;
                                         var activeBuyer = string.Empty;
                                         try
                                         {
                                             var activePayload = JObject.Parse(wMsg.Response ?? "{}");
-                                            var payloadSeller = ReadJsonString(activePayload, "loginNick");
-                                            if (!string.IsNullOrWhiteSpace(payloadSeller)
-                                                && !string.Equals(payloadSeller, activeSeller, StringComparison.Ordinal))
-                                            {
-                                                Log.Info("前台CDP权威切换忽略不一致的payload sellerRef="
-                                                    + DiagnosticRef("seller", payloadSeller)
-                                                    + ", expectedSellerRef=" + DiagnosticRef("seller", activeSeller));
-                                            }
                                             activeBuyer = ReadJsonString(activePayload, "conversationNick");
                                             if (string.IsNullOrWhiteSpace(activeBuyer))
                                                 activeBuyer = ReadJsonString(activePayload, "buyerNick");
                                         }
                                         catch { }
-                                        Task.Run(() => TryBindStatusConversation(session, activeSeller, activeBuyer));
+                                        Task.Run(() => TryBindStatusConversation(session, string.Empty, activeBuyer));
                                     }
                                 }
                                 else
