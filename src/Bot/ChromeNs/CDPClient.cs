@@ -18,6 +18,7 @@ using BotLib.Misc;
 using DbEntity.Response;
 using SuperWebSocket;
 using Bot.ChatRecord;
+using Bot.ShopScope;
 
 namespace Bot.ChromeNs
 {
@@ -38,7 +39,7 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, WeakReference>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, string> PreferredShopSessions =
             new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
-        private static readonly object PreferredSellerSessionSync = new object();
+        private static readonly object PreferredShopSessionSync = new object();
         private static readonly AsyncLocal<string> ForwardedInboundSourceSession = new AsyncLocal<string>();
         private static int _dispatcherInstalled;
 
@@ -152,7 +153,7 @@ namespace Bot.ChromeNs
                 client = weak.Target as CDPClient;
             }
 
-            lock (PreferredSellerSessionSync)
+            lock (PreferredShopSessionSync)
             {
                 foreach (var pair in PreferredShopSessions
                     .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
@@ -212,7 +213,7 @@ namespace Bot.ChromeNs
 
             string previous = string.Empty;
             var changed = false;
-            lock (PreferredSellerSessionSync)
+            lock (PreferredShopSessionSync)
             {
                 PreferredShopSessions.TryGetValue(shopKey, out previous);
                 if (!string.Equals(previous, sessionId, StringComparison.Ordinal))
@@ -252,7 +253,7 @@ namespace Bot.ChromeNs
             CDPClient preferred;
             if (TryGetBySessionId(preferredSession, out preferred)) return preferred;
 
-            lock (PreferredSellerSessionSync)
+            lock (PreferredShopSessionSync)
             {
                 string current;
                 if (PreferredShopSessions.TryGetValue(shopKey, out current)
@@ -459,7 +460,7 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(sessionId))
             {
                 SessionClients.TryRemove(sessionId, out ignoredClient);
-                lock (PreferredSellerSessionSync)
+                lock (PreferredShopSessionSync)
                 {
                     foreach (var pair in PreferredShopSessions
                         .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
