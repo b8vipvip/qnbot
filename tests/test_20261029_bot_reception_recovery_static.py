@@ -54,7 +54,7 @@ def test_reception_can_wait_without_upstream_call_or_error():
 
 def test_human_reply_supersedes_old_normal_ai_output_but_not_order_ledger():
     source = load("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    assert "var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer, burst.ShopKey);" in source
+    assert "var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer, shopKey);" in source
     assert "x.Kind == BuyerSessionEventKind.SellerHumanReply" in source
     assert "x.SourceTimestamp > dispatchedAt.AddMilliseconds(120)" in source
     assert "人工客服已在本轮作出实质回复或无法确认仅为接待语，禁止重复回复" in source
