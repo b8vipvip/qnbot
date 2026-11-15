@@ -215,14 +215,21 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "CancelPending(" in rpa and "shopKey" in rpa
     assert "if (shopKey.Length == 0)" in rpa
     assert "OpenAndSendText(buyer, text, shopKey)" in rpa
-    assert "_qn.CDP.IsShopIdentityRetired" in send_guard
-    assert "_qn.CDP.ShopKey" in send_guard
+    assert "client.IsShopIdentityRetired" in send_guard
+    assert "client.ShopKey" in send_guard
+    assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in send_guard
+    assert "server.IsAuthoritativeShopSession(bound, client.SessionId)" in send_guard
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in send_guard
     assert "ResolveRuntimeBySellerIdentity(current.Result)" in send_guard
     assert "TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart, string shopKey)" in native_send
     assert "WaitForTextSubmissionAcceptedAsync(" in send_guard
     assert "string method, int timeoutMs, string shopKey" in send_guard
     assert "ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey)" in send_guard
+    assert "VerifyShopIdentityBeforeSendAsync(shop.ShopKey)" in qn
+    assert "client.SendTimiMsg(buyer, text)" in qn
+    assert "IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)" in qn
+    assert "SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey)" in qn
+    assert "SendDeliveryWatchdog.MarkSubmissionAccepted(" in qn
 
 
 def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
