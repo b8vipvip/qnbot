@@ -2011,13 +2011,15 @@ namespace Bot.ChromeNs
         {
             if (session == null) return;
             var key = Key(session.ShopKey, session.Seller, session.Buyer);
+            var delay = retryDelay ?? TimeSpan.FromMinutes(1);
+            if (delay < TimeSpan.FromSeconds(5)) delay = TimeSpan.FromSeconds(5);
             session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
             if (!Active.TryAdd(key, session))
             {
                 ActiveSession current;
                 if (Active.TryGetValue(key, out current) && ReferenceEquals(current, session))
                 {
-                    Schedule(session, TimeSpan.FromMinutes(1));
+                    Schedule(session, delay);
                     return;
                 }
 
@@ -2036,8 +2038,6 @@ namespace Bot.ChromeNs
             }
 
             SaveSnapshot(session, waitingStatus);
-            var delay = retryDelay ?? TimeSpan.FromMinutes(1);
-            if (delay < TimeSpan.FromSeconds(5)) delay = TimeSpan.FromSeconds(5);
             Schedule(session, delay);
         }
 
