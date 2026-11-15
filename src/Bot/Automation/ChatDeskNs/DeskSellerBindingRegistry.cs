@@ -83,7 +83,7 @@ namespace Bot.Automation.ChatDeskNs
         {
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
-            if (desk == null || !desk.IsAlive || desk.Hwnd == null || seller.Length == 0
+            if (desk == null || !desk.IsAlive || !desk.IsForeground || desk.Hwnd == null || seller.Length == 0
                 || shopKey.Length == 0 || !IsAuthenticatedShop(seller, shopKey))
                 return false;
 
@@ -98,7 +98,8 @@ namespace Bot.Automation.ChatDeskNs
             return BindResolvedSeller(desk, seller, evidence, ResolveUniqueShopKey(seller));
         }
 
-        internal static Desk BindResolvedSeller(Desk desk, string seller, string evidence, string shopKey)
+        internal static Desk BindResolvedSeller(
+            Desk desk, string seller, string evidence, string shopKey, bool allowRebind = false)
         {
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
@@ -116,10 +117,16 @@ namespace Bot.Automation.ChatDeskNs
                     var existingDesk = Desk.FindExistingByHwnd(existingHwnd);
                     if (existingDesk != null && existingDesk.IsAlive)
                     {
-                        Log.ErrorWithMaxCount("店铺窗口绑定被拒绝：同一ShopKey不能绑定两个Desk: shopRef="
+                        if (!allowRebind || !desk.IsForeground)
+                        {
+                            Log.ErrorWithMaxCount("店铺窗口绑定被拒绝：同一ShopKey不能绑定两个Desk: shopRef="
+                                + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                                + ", existingHwnd=" + existingHwnd + ", requestedHwnd=" + hwnd, 20);
+                            return null;
+                        }
+                        Log.Info("依据唯一聚焦WebView证据迁移ShopKey窗口绑定: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", shopKey)
-                            + ", existingHwnd=" + existingHwnd + ", requestedHwnd=" + hwnd, 20);
-                        return null;
+                            + ", previousHwnd=" + existingHwnd + ", currentHwnd=" + hwnd);
                     }
                     ForgetShop(shopKey, existingHwnd);
                 }
@@ -153,10 +160,9 @@ namespace Bot.Automation.ChatDeskNs
                 || !IsAuthenticatedShop(seller, shopKey)) return null;
 
             var existing = FindSellerDesk(seller, shopKey);
-            if (existing != null)
+            if (existing != null && existing.IsForeground)
             {
-                if (existing.IsForeground)
-                    MarkActiveSeller(existing, seller, evidence, shopKey);
+                MarkActiveSeller(existing, seller, evidence, shopKey);
                 return existing;
             }
 
@@ -165,7 +171,8 @@ namespace Bot.Automation.ChatDeskNs
                 .ToList();
             if (foreground.Count != 1) return null;
 
-            var bound = BindResolvedSeller(foreground[0], seller, evidence, shopKey);
+            var bound = BindResolvedSeller(
+                foreground[0], seller, evidence, shopKey, allowRebind: existing != null);
             if (bound != null) MarkActiveSeller(bound, seller, evidence, shopKey);
             return bound;
         }
