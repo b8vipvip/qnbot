@@ -201,17 +201,22 @@ namespace Bot.ChromeNs
             string buyer,
             string candidateAnswer,
             out string question,
-            out string manualAnswer)
+            out string manualAnswer,
+            string shopKey = null)
         {
             question = string.Empty;
             manualAnswer = string.Empty;
             if (qn == null || qn.Seller == null) return false;
             var seller = qn.Seller.Nick ?? string.Empty;
-            string shopKey;
+            string resolvedShopKey;
             ShopContext shop;
             try
             {
-                shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey;
+                resolvedShopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey;
+                shopKey = string.IsNullOrWhiteSpace(shopKey) ? resolvedShopKey : shopKey.Trim();
+                if (!string.Equals(shopKey, resolvedShopKey, StringComparison.Ordinal)) return false;
+                if (qn.CDP != null && (qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired
+                    || !string.Equals(qn.CDP.ShopKey, shopKey, StringComparison.Ordinal))) return false;
                 shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             }
             catch { return false; }
