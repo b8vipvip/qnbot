@@ -58,6 +58,6 @@ def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
     ]
     assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")' in save
     assert 'Guid.NewGuid().ToString("N")' in save
-    assert "File.Copy(path, path + ".backup."" in save
+    assert 'File.Copy(path, path + ".backup."' in save
 
 
