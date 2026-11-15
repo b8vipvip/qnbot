@@ -13,16 +13,26 @@ namespace Bot.ChromeNs
         private int _sellerDeskProcessId;
         private int _sellerDeskHwnd;
         private string _sellerDeskBoundSeller = string.Empty;
+        private string _sellerDeskBoundShopKey = string.Empty;
+
+        private string ResolveShopKey()
+        {
+            try { return ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey; }
+            catch { return string.Empty; }
+        }
 
         internal Desk ResolveSellerDesk()
         {
             var seller = SellerNick;
-            if (string.IsNullOrWhiteSpace(seller)) return null;
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+            var shopKey = ResolveShopKey();
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(shopKey)) return null;
+            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
             if (desk != null) return desk;
 
             var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
-            if (desks.Count == 1 && RuntimeShopCount() <= 1) return desks[0];
+            if (desks.Count == 1 && RuntimeShopCount() <= 1)
+                return DeskSellerBindingRegistry.BindResolvedSeller(
+                    desks[0], seller, "single-shop-unique-desk", shopKey);
             return null;
         }
 
@@ -42,12 +52,14 @@ namespace Bot.ChromeNs
             var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
             if (desks.Count != 1) return null;
 
+            var shopKey = ResolveShopKey();
+            if (string.IsNullOrWhiteSpace(shopKey)) return null;
             var desk = DeskSellerBindingRegistry.BindResolvedSeller(
-                desks[0], seller, "active-session-single-desk-recovery");
+                desks[0], seller, "active-session-single-desk-recovery", shopKey);
             if (desk == null) return null;
 
             DeskSellerBindingRegistry.MarkActiveSeller(
-                desk, seller, "active-session-single-desk-recovery");
+                desk, seller, "active-session-single-desk-recovery", shopKey);
             Log.Info("多客服RPA已从活动ShopKey/CDP身份恢复共享千牛窗口绑定: seller=" + seller
                 + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
             return desk;
@@ -82,7 +94,8 @@ namespace Bot.ChromeNs
         internal bool EnsureSellerDeskBinding(bool force = false)
         {
             var seller = SellerNick;
-            if (string.IsNullOrWhiteSpace(seller)) return false;
+            var shopKey = ResolveShopKey();
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(shopKey)) return false;
 
             if (RuntimeShopCount() > 1)
             {
@@ -110,7 +123,7 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            if (RuntimeShopCount() > 1 && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
+            if (RuntimeShopCount() > 1 && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey))
             {
                 Log.ErrorWithMaxCount("多客服RPA已隔离：当前可见千牛输入框不属于目标seller，禁止跨客服写入/发送: seller="
                     + seller + ", activeSeller=" + DeskSellerBindingRegistry.GetSeller(desk)
@@ -123,7 +136,8 @@ namespace Bot.ChromeNs
                 if (automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
                     && _sellerDeskHwnd == desk.Hwnd.Handle
-                    && string.Equals(_sellerDeskBoundSeller, seller, StringComparison.Ordinal))
+                    && string.Equals(_sellerDeskBoundSeller, seller, StringComparison.Ordinal)
+                    && string.Equals(_sellerDeskBoundShopKey, shopKey, StringComparison.Ordinal))
                 {
                     return true;
                 }
@@ -138,7 +152,9 @@ namespace Bot.ChromeNs
                     _sellerDeskProcessId = desk.ProcessId;
                     _sellerDeskHwnd = desk.Hwnd.Handle;
                     _sellerDeskBoundSeller = seller;
+                    _sellerDeskBoundShopKey = shopKey;
                     Log.Info("RPA已绑定当前活动客服的千牛窗口: seller=" + seller
+                        + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
                         + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
                     return true;
                 }
@@ -147,6 +163,7 @@ namespace Bot.ChromeNs
                     _sellerDeskProcessId = 0;
                     _sellerDeskHwnd = 0;
                     _sellerDeskBoundSeller = string.Empty;
+                    _sellerDeskBoundShopKey = string.Empty;
                     _messageInputTextArea = null;
                     _sendMessageButton = null;
                     Log.ErrorWithMaxCount("RPA绑定当前活动客服千牛窗口失败: seller=" + seller + ", " + ex.Message, 20);
@@ -159,25 +176,35 @@ namespace Bot.ChromeNs
         {
             get
             {
-                var desk = DeskSellerBindingRegistry.FindSellerDesk(SellerNick);
+                var shopKey = ResolveShopKey();
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(SellerNick, shopKey);
                 if (RuntimeShopCount() > 1)
                 {
                     string isolationReason;
                     if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return false;
                 }
                 return desk != null
-                    && DeskSellerBindingRegistry.IsSellerForDesk(desk, SellerNick)
+                    && DeskSellerBindingRegistry.IsSellerForDesk(desk, SellerNick, shopKey)
                     && automationApplication != null
                     && _sellerDeskProcessId == desk.ProcessId
                     && _sellerDeskHwnd == desk.Hwnd.Handle
-                    && string.Equals(_sellerDeskBoundSeller, SellerNick, StringComparison.Ordinal);
+                    && string.Equals(_sellerDeskBoundSeller, SellerNick, StringComparison.Ordinal)
+                    && string.Equals(_sellerDeskBoundShopKey, shopKey, StringComparison.Ordinal);
             }
         }
 
         internal bool TryClearCanceledBotDraft(string buyer, string reason)
         {
             buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
-            if (string.IsNullOrWhiteSpace(buyer) || _qn == null || _qn.Buyer == null) return false;
+            var shopKey = ResolveShopKey();
+            if (string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyer)
+                || _qn == null || _qn.Buyer == null || _qn.CDP == null
+                || _qn.CDP.IsInvalidated || _qn.CDP.IsShopIdentityRetired) return false;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null || !server.IsAuthoritativeShopSession(shopKey, _qn.CDP.SessionId)) return false;
+            if (!EnsureSellerDeskBinding()) return false;
+            var desk = ResolveSellerDesk();
+            if (desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, SellerNick, shopKey)) return false;
 
             var currentBuyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
             if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
