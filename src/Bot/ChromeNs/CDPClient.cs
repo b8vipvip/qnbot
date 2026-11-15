@@ -726,6 +726,29 @@ namespace Bot.ChromeNs
             {
                 throw new Exception("GetCurrentLoginID 返回为空，可能不是千牛聊天 WebView。session=" + SessionId);
             }
+            var boundShopKey = (ShopKey ?? string.Empty).Trim();
+            if (boundShopKey.Length > 0)
+            {
+                try
+                {
+                    var resolvedShopKey = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result).ShopKey;
+                    if (!string.Equals(boundShopKey, resolvedShopKey, StringComparison.Ordinal))
+                    {
+                        IsShopIdentityRetired = true;
+                        Log.Info("CDP当前登录身份与已绑定ShopKey不一致，已立即暂停旧店铺命令发送: boundShopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", boundShopKey)
+                            + ", currentShopRef=" + MyWebSocketServer.DiagnosticRef("shop", resolvedShopKey)
+                            + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                    }
+                }
+                catch
+                {
+                    IsShopIdentityRetired = true;
+                    Log.Info("CDP当前登录身份无法验证，已立即暂停旧ShopKey命令发送: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", boundShopKey)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                }
+            }
             Nick = user.Result.Nick;
             return user;
         }
