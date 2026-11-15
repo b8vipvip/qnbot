@@ -165,11 +165,12 @@ namespace Bot.ChromeNs
                         + expectedSeller + ", actual=" + seller + ", session=" + sessionId, 20);
                     return null;
                 }
-                if (expectedTargetId.Length > 0 && targetId.Length > 0
-                    && !string.Equals(expectedTargetId, targetId, StringComparison.Ordinal))
+                if (expectedTargetId.Length > 0
+                    && (targetId.Length == 0
+                        || !string.Equals(expectedTargetId, targetId, StringComparison.Ordinal)))
                 {
-                    Log.ErrorWithMaxCount("活动店铺探测拒绝：TargetId与QN归属不一致: seller=" + seller
-                        + ", session=" + sessionId, 20);
+                    Log.ErrorWithMaxCount("活动店铺探测拒绝：物理CDP未提供匹配的TargetId，不能仅凭相同seller昵称授予活动身份: seller="
+                        + seller + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId), 20);
                     return null;
                 }
                 return new ActiveShopProbe
