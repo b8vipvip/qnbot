@@ -81,5 +81,5 @@ def test_progress_tracker_does_not_delete_newer_buyer_message_state():
     assert "ConsolidatePendingBurstEntries" in source
     assert "ShouldDeferUnsupportedMediaCard" in source
     # Terminal operations remove the AsyncLocal-bound turn, not whichever newer turn is current.
-    assert "var turnKey = ResolveTerminalTurnKey(seller, buyer);" in source
+    assert "var turnKey = ResolveTerminalTurnKey(seller, buyer, shopKey);" in source
     assert "TryRemoveTurn(turnKey" in source
