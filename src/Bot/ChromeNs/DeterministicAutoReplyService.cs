@@ -200,10 +200,10 @@ namespace Bot.ChromeNs
                 var qn = QN.FindExistingByShopKey(ShopSettingsScope.Current == null
                     ? item.ShopKey
                     : ShopSettingsScope.Current.ShopKey);
-                if (qn == null)
+                if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
                 {
                     Log.ErrorWithMaxCount(
-                        "下班独占策略找不到客服运行实例，已fail-closed阻止Knowledge/AI链路: seller="
+                        "下班独占策略找不到当前ShopKey的活动客服/CDP实例，已fail-closed阻止Knowledge/AI链路: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick,
                         20);
                     return false;
@@ -246,10 +246,10 @@ namespace Bot.ChromeNs
             var qn = QN.FindExistingByShopKey(ShopSettingsScope.Current == null
                 ? item.ShopKey
                 : ShopSettingsScope.Current.ShopKey);
-            if (qn == null)
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
             {
                 Log.ErrorWithMaxCount(
-                    "固定规则前置未发送：找不到当前ShopKey的客服运行实例，已阻断普通AI链路。seller=" + item.SellerNick
+                    "固定规则前置未发送：找不到当前ShopKey的活动客服/CDP实例，已阻断普通AI链路。seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick,
                     20);
                 return false;
@@ -349,6 +349,7 @@ namespace Bot.ChromeNs
             string answer,
             string source)
         {
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return false;
             answer = FixedAutoReplyVariantService.Select(source, answer);
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer))
