@@ -470,3 +470,6 @@ def test_open_ai_learning_circuit_cooldown_survives_application_restart():
     # The successful requeue path calls SaveSnapshot, which must preserve report.Error.
     assert "SaveSnapshot(session, waitingStatus);" in requeue
     assert "report.Error =" not in snapshot
+    assert "var delay = retryDelay ?? TimeSpan.FromMinutes(1);" in requeue
+    assert "Schedule(session, delay);" in requeue
+    assert "Schedule(session, TimeSpan.FromMinutes(1));" not in requeue
