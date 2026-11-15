@@ -45,7 +45,7 @@ def test_duplicate_cdp_pages_forward_only_safe_inbound_events_to_authoritative_s
     recoverable = bridge[bridge.index("private static bool IsRecoverableInboundType"):bridge.index("private static void ObserveStatusSeller")]
     assert 'string.Equals(type, "onChatDlgActive"' not in recoverable
     assert "target.DispatchInboundEvent(item.Type, item.Response);" in bridge
-    assert "重复千牛CDP入站消息已转交权威会话" in bridge
+    assert "重复千牛CDP入站消息已按ShopKey转交权威会话" in bridge
     assert "已补发初始化期间暂存的千牛入站消息" in bridge
     assert "Queue<PendingInboundEvent>" in bridge
     assert "PendingSync" in bridge
