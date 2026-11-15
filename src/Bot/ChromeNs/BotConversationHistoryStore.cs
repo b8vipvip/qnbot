@@ -80,6 +80,10 @@ namespace Bot.ChromeNs
         private static readonly object DbSync = new object();
         private static readonly ConcurrentDictionary<string, BotConversationHistoryEntity> Pending =
             new ConcurrentDictionary<string, BotConversationHistoryEntity>(StringComparer.Ordinal);
+        // Legacy ShopKey assignment is a one-time migration per shop/seller, not
+        // a write-on-every-read operation. Only successful attempts are cached.
+        private static readonly ConcurrentDictionary<string, bool> CompletedLegacyShopBackfills =
+            new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
 
         private static int _initialized;
         private static int _schemaReady;
@@ -1015,6 +1019,8 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             if (shopKey.Length == 0 || seller.Length == 0) return;
+            var backfillKey = shopKey + "\n" + seller;
+            if (CompletedLegacyShopBackfills.ContainsKey(backfillKey)) return;
             try
             {
                 var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
@@ -1024,6 +1030,7 @@ namespace Bot.ChromeNs
 
                 lock (DbSync)
                 {
+                    if (CompletedLegacyShopBackfills.ContainsKey(backfillKey)) return;
                     DbHelper.Db.Execute(
                         "update BotConversationHistoryEntity set ShopKey = ? "
                         + "where Seller = ? and (ShopKey is null or ShopKey = '')",
@@ -1042,6 +1049,7 @@ namespace Bot.ChromeNs
                         + "and EntityId in (select EntityId from BotConversationHistoryEntity "
                         + "where ShopKey = ? and Seller = ?)",
                         shopKey, seller, shopKey, seller);
+                    CompletedLegacyShopBackfills.TryAdd(backfillKey, true);
                 }
             }
             catch (AmbiguousShopIdentityException)
