@@ -501,7 +501,10 @@ namespace Bot.AssistWindow.Widget.Robot
             if (activeShopKey.Length > 0 && !ActiveShopSessionRegistry.IsActive(current))
                 return;
             var seller = (current.Seller.Nick ?? string.Empty).Trim();
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+            string shopKey;
+            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(current).ShopKey; }
+            catch { return; }
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey))
                 return;
 
             _preQN = current;
