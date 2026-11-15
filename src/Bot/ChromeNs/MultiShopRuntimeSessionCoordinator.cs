@@ -126,8 +126,7 @@ namespace Bot.ChromeNs
                     probe.Qn, probe.SessionId, probe.TargetId, probe.Buyer, "document.hasFocus+visibility"))
                 {
                     var shopKey = ShopKey(probe.Qn);
-                    var desk = DeskSellerBindingRegistry.FindSellerDesk(probe.Seller, shopKey);
-                    if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(probe.Qn, "focused-webview");
+                    var desk = DeskSellerBindingRegistry.BindForegroundSeller(probe.Qn, "focused-webview");
                     if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, probe.Seller, "focused-webview", shopKey);
                     EnsureQn(probe.Qn, true);
                 }
@@ -218,8 +217,7 @@ namespace Bot.ChromeNs
             if (ActiveShopSessionRegistry.IsActive(qn))
             {
                 var shopKey = ShopKey(qn);
-                var desk = DeskSellerBindingRegistry.FindSellerDesk(Seller(qn), shopKey);
-                if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-active");
+                var desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "buyer-switched-active");
                 if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, Seller(qn), "buyer-switched-active", shopKey);
             }
             EnsureQn(qn, true);
@@ -470,9 +468,9 @@ namespace Bot.ChromeNs
                 else if (changed) _lastFocusProofUtc = DateTime.MinValue;
             }
             QN.CurQN = qn;
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
-            if (focusProof && desk == null)
-                desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "active-shop:" + (evidence ?? string.Empty));
+            var desk = focusProof
+                ? DeskSellerBindingRegistry.BindForegroundSeller(qn, "active-shop:" + (evidence ?? string.Empty))
+                : DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
             if (focusProof && desk != null)
                 DeskSellerBindingRegistry.MarkActiveSeller(
                     desk, seller, "active-shop:" + (evidence ?? string.Empty), shopKey);
