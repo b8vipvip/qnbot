@@ -217,13 +217,21 @@ namespace Bot.ChromeNs
         {
             try
             {
-                return QN.GetRuntimeSafetySnapshot()
-                    .Where(qn => qn != null && qn.Seller != null && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
-                    .Select(qn => qn.Seller.Nick.Trim())
-                    .Distinct(StringComparer.Ordinal)
-                    .Count();
+                var qns = QN.GetRuntimeSafetySnapshot()
+                    .Where(qn => qn != null && qn.Seller != null)
+                    .ToList();
+                var shopKeys = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+                foreach (var qn in qns)
+                {
+                    string shopKey;
+                    try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+                    catch { return 2; } // Unknown identity must activate the multi-shop fail-closed gate.
+                    if (string.IsNullOrWhiteSpace(shopKey)) return 2;
+                    shopKeys.Add(shopKey.Trim());
+                }
+                return shopKeys.Count;
             }
-            catch { return 0; }
+            catch { return 2; }
         }
     }
 }
