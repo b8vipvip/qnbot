@@ -826,6 +826,12 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
+            var shopKey = ResolveShopKeyForDeliveryWatchdog();
+            if (shopKey.Length == 0)
+            {
+                SetSendFailure("店铺身份确认", "当前CDP未绑定有效ShopKey或身份已变化，已阻止发送");
+                return false;
+            }
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
@@ -834,7 +840,7 @@ namespace Bot.ChromeNs
                 SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
                 return false;
             }
-            return await OpenAndSendText(buyer, text).ConfigureAwait(false);
+            return await OpenAndSendText(buyer, text, shopKey).ConfigureAwait(false);
         }
 
         private string SellerNick
@@ -1345,7 +1351,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<bool> OpenAndSendText(string buyer, string text)
+        private async Task<bool> OpenAndSendText(string buyer, string text, string shopKey)
         {
             var sendResult = false;
             ResetSendFailure();
@@ -1374,21 +1380,21 @@ namespace Bot.ChromeNs
                     SetSendFailure("会话确认", "当前会话不是目标买家；target=" + buyer
                         + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认").ConfigureAwait(false))
                 {
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查"))
                 {
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
@@ -1397,7 +1403,7 @@ namespace Bot.ChromeNs
                 {
                     SetSendFailure("发送窗口", "未找到当前卖家对应千牛窗口");
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!sellerDesk.IsVisible)
@@ -1408,7 +1414,7 @@ namespace Bot.ChromeNs
                 if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
@@ -1416,7 +1422,7 @@ namespace Bot.ChromeNs
                 if (!setOk)
                 {
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
@@ -1425,26 +1431,26 @@ namespace Bot.ChromeNs
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认").ConfigureAwait(false))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
                     SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 SendDeliveryWatchdog.EnsurePending(
-                    SellerNick, buyer, text, ResolveShopKeyForDeliveryWatchdog());
+                    SellerNick, buyer, text, shopKey);
                 var sendStart = DateTime.Now;
                 sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
@@ -1468,7 +1474,7 @@ namespace Bot.ChromeNs
                 SetSendFailure("自动发送异常", ex.Message);
                 await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                 SendDeliveryWatchdog.CancelPending(
-                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                 Log.Exception(ex);
                 sendResult = false;
             }
