@@ -90,6 +90,7 @@ namespace Bot.ChromeNs
         public const int SellerQuietSeconds = 30;
         public const int MaxSuggestionsPerSession = 8;
         private const int KnowledgeCorpusBatchSize = 18;
+        private const int KnowledgeCorpusPromptVersion = 1;
         private const int MaxKnowledgeCorpusCandidates = 24;
         private const int KnowledgeCorpusTimeoutSeconds = 120;
         // Keep candidate generation observable, but do not mutate production V2
@@ -141,6 +142,7 @@ namespace Bot.ChromeNs
             public int RecordsReviewed;
             public int BatchCount;
             public int BatchesCompleted;
+            public readonly HashSet<int> CompletedBatchIndices = new HashSet<int>();
             public int FailedBatches;
             public int CandidatesOmitted;
             public int EvidenceRejected;
@@ -524,7 +526,8 @@ namespace Bot.ChromeNs
                     historyCoverage.ErrorCode = "remote_history_turn_count_mismatch";
                 }
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
-                report.InputCoverageJson = new JObject
+                var previousCoverage = ParseCoverage(report.InputCoverageJson);
+                var initialCoverage = new JObject
                 {
                     ["historyComplete"] = historyCoverage != null && historyCoverage.IsComplete,
                     ["historyPages"] = historyCoverage == null ? 0 : historyCoverage.PagesFetched,
@@ -546,6 +549,14 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusBatchesCompleted"] = 0,
                     ["knowledgeCorpusCoveragePercent"] = 0,
                     ["knowledgeCorpusSourceFingerprint"] = string.Empty,
+                    ["knowledgeCorpusTranscriptFingerprint"] = string.Empty,
+                    ["knowledgeCorpusBatchSize"] = KnowledgeCorpusBatchSize,
+                    ["knowledgeCorpusPromptVersion"] = KnowledgeCorpusPromptVersion,
+                    ["knowledgeCorpusCompletedBatchIndices"] = new JArray(),
+                    ["knowledgeCorpusCandidateSuggestions"] = new JArray(),
+                    ["knowledgeCorpusModels"] = new JArray(),
+                    ["knowledgeCorpusProtocols"] = new JArray(),
+                    ["knowledgeCorpusEndpointNames"] = new JArray(),
                     ["knowledgeCorpusRevisionBefore"] = string.Empty,
                     ["knowledgeCorpusRevisionAfter"] = string.Empty,
                     ["knowledgeCorpusRevisionStable"] = false,
@@ -560,7 +571,16 @@ namespace Bot.ChromeNs
                     ["writeMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
-                }.ToString(Formatting.None);
+                };
+                // Keep the last durable corpus checkpoint across the 5-minute
+                // recovery/finalization cycle. AnalyzeKnowledgeCorpusAsync validates
+                // both source and transcript fingerprints before reusing it.
+                foreach (var property in previousCoverage.Properties())
+                {
+                    if (property.Name.StartsWith("knowledgeCorpus", StringComparison.Ordinal))
+                        initialCoverage[property.Name] = property.Value.DeepClone();
+                }
+                report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
 
                 if (historyCoverage == null || !historyCoverage.IsComplete)
@@ -778,39 +798,130 @@ namespace Bot.ChromeNs
                 var batches = BuildKnowledgeCorpusBatches(records);
                 result.BatchCount = batches.Count;
 
-                var coverage = ParseCoverage(report.InputCoverageJson);
-                coverage["knowledgeCorpusComplete"] = false;
-                coverage["knowledgeCorpusRecords"] = result.RecordCount;
-                coverage["knowledgeCorpusRecordsReviewed"] = 0;
-                coverage["knowledgeCorpusBatches"] = result.BatchCount;
-                coverage["knowledgeCorpusBatchesCompleted"] = 0;
-                coverage["knowledgeCorpusCoveragePercent"] = result.RecordCount == 0 ? 100 : 0;
-                coverage["knowledgeCorpusSourceFingerprint"] = result.SourceFingerprint;
-                coverage["knowledgeCorpusRevisionBefore"] = result.SourceFingerprint;
-                coverage["knowledgeCorpusRevisionAfter"] = string.Empty;
-                coverage["knowledgeCorpusRevisionStable"] = false;
-                coverage["knowledgeCorpusModel"] = string.Empty;
-                coverage["knowledgeCorpusProtocol"] = string.Empty;
-                coverage["knowledgeCorpusEndpoints"] = string.Empty;
-                coverage["knowledgeCorpusCandidates"] = 0;
-                coverage["knowledgeCorpusCandidatesOmitted"] = 0;
-                coverage["knowledgeCorpusEvidenceRejected"] = 0;
-                coverage["knowledgeCorpusFailedBatches"] = 0;
-                coverage["knowledgeCorpusError"] = string.Empty;
-                coverage["knowledgeCorpusStartedAtUtc"] = startedAt.ToString("o");
-                report.InputCoverageJson = coverage.ToString(Formatting.None);
-                report.Status = result.BatchCount == 0 ? "Knowledge V2语料为空，正在校验版本" : "正在全量对照Knowledge V2语料";
-                report.UpdatedAtTicks = DateTime.Now.Ticks;
-                SaveReport(report);
-                NotifyChanged();
-
                 var transcript = BuildCorpusTranscript(turns, cards);
                 var allMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 var humanMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 CollectEvidenceMessageIds(turns, cards, allMessageIds, humanMessageIds);
+                var transcriptFingerprint = ComputeKnowledgeCorpusTranscriptFingerprint(
+                    transcript, sessionSummary, styleBefore, localFirst);
+
+                var priorCoverage = ParseCoverage(report.InputCoverageJson);
+                var priorCompleted = priorCoverage["knowledgeCorpusCompletedBatchIndices"] as JArray;
+                var priorCandidates = priorCoverage["knowledgeCorpusCandidateSuggestions"] as JArray;
+                var canResume = string.Equals(
+                        Convert.ToString(priorCoverage["knowledgeCorpusSourceFingerprint"]),
+                        result.SourceFingerprint, StringComparison.Ordinal)
+                    && string.Equals(
+                        Convert.ToString(priorCoverage["knowledgeCorpusTranscriptFingerprint"]),
+                        transcriptFingerprint, StringComparison.Ordinal)
+                    && priorCoverage.Value<int?>("knowledgeCorpusBatchSize") == KnowledgeCorpusBatchSize
+                    && priorCoverage.Value<int?>("knowledgeCorpusPromptVersion") == KnowledgeCorpusPromptVersion
+                    && priorCoverage.Value<int?>("knowledgeCorpusBatches") == result.BatchCount
+                    && priorCompleted != null
+                    && priorCandidates != null;
+
+                if (canResume)
+                {
+                    foreach (var token in priorCompleted)
+                    {
+                        int completedIndex;
+                        if (int.TryParse(Convert.ToString(token), out completedIndex)
+                            && completedIndex >= 0 && completedIndex < batches.Count)
+                            result.CompletedBatchIndices.Add(completedIndex);
+                    }
+
+                    var restoredCandidates = ParseSuggestions(priorCandidates);
+                    var knownIds = new HashSet<string>(
+                        records.Where(x => !string.IsNullOrWhiteSpace(x.Id)).Select(x => x.Id),
+                        StringComparer.Ordinal);
+                    foreach (var candidate in restoredCandidates)
+                    {
+                        if (string.IsNullOrWhiteSpace(candidate.KnowledgeId)
+                            || !knownIds.Contains(candidate.KnowledgeId)
+                            || !string.Equals(candidate.SourceFingerprint, result.SourceFingerprint, StringComparison.Ordinal)
+                            || candidate.CorpusBatchIndex < 1
+                            || candidate.CorpusBatchIndex > batches.Count
+                            || !result.CompletedBatchIndices.Contains(candidate.CorpusBatchIndex - 1)
+                            || candidate.EvidenceMessageIds == null
+                            || candidate.EvidenceMessageIds.Count == 0)
+                        {
+                            canResume = false;
+                            break;
+                        }
+                    }
+
+                    if (canResume)
+                    {
+                        result.Candidates.AddRange(restoredCandidates.Take(MaxKnowledgeCorpusCandidates));
+                        result.BatchesCompleted = result.CompletedBatchIndices.Count;
+                        result.RecordsReviewed = result.CompletedBatchIndices.Sum(i => batches[i].Count);
+                        result.CandidatesOmitted = Math.Max(0, priorCoverage.Value<int?>("knowledgeCorpusCandidatesOmitted") ?? 0);
+                        result.EvidenceRejected = Math.Max(0, priorCoverage.Value<int?>("knowledgeCorpusEvidenceRejected") ?? 0);
+                        RestoreStringSet(priorCoverage["knowledgeCorpusModels"], result.Models);
+                        RestoreStringSet(priorCoverage["knowledgeCorpusProtocols"], result.Protocols);
+                        RestoreStringSet(priorCoverage["knowledgeCorpusEndpointNames"], result.Endpoints);
+                    }
+                }
+
+                if (!canResume)
+                {
+                    result.CompletedBatchIndices.Clear();
+                    result.Candidates.Clear();
+                    result.BatchesCompleted = 0;
+                    result.RecordsReviewed = 0;
+                    result.CandidatesOmitted = 0;
+                    result.EvidenceRejected = 0;
+                    result.Models.Clear();
+                    result.Protocols.Clear();
+                    result.Endpoints.Clear();
+                }
+
+                var coverage = ParseCoverage(report.InputCoverageJson);
+                coverage["knowledgeCorpusComplete"] = false;
+                coverage["knowledgeCorpusRecords"] = result.RecordCount;
+                coverage["knowledgeCorpusRecordsReviewed"] = result.RecordsReviewed;
+                coverage["knowledgeCorpusBatches"] = result.BatchCount;
+                coverage["knowledgeCorpusBatchesCompleted"] = result.BatchesCompleted;
+                coverage["knowledgeCorpusCoveragePercent"] = result.RecordCount == 0 ? 100
+                    : Math.Round(result.RecordsReviewed * 100.0 / result.RecordCount, 2);
+                coverage["knowledgeCorpusSourceFingerprint"] = result.SourceFingerprint;
+                coverage["knowledgeCorpusTranscriptFingerprint"] = transcriptFingerprint;
+                coverage["knowledgeCorpusBatchSize"] = KnowledgeCorpusBatchSize;
+                coverage["knowledgeCorpusPromptVersion"] = KnowledgeCorpusPromptVersion;
+                coverage["knowledgeCorpusCompletedBatchIndices"] = JArray.FromObject(
+                    result.CompletedBatchIndices.OrderBy(x => x));
+                coverage["knowledgeCorpusCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.Candidates));
+                coverage["knowledgeCorpusModels"] = JArray.FromObject(result.Models.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusProtocols"] = JArray.FromObject(result.Protocols.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusEndpointNames"] = JArray.FromObject(result.Endpoints.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusRevisionBefore"] = result.SourceFingerprint;
+                coverage["knowledgeCorpusRevisionAfter"] = string.Empty;
+                coverage["knowledgeCorpusRevisionStable"] = false;
+                coverage["knowledgeCorpusModel"] = string.Join(",", result.Models.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusProtocol"] = string.Join(",", result.Protocols.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusEndpoints"] = string.Join(",", result.Endpoints.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusCandidates"] = result.Candidates.Count;
+                coverage["knowledgeCorpusCandidatesOmitted"] = result.CandidatesOmitted;
+                coverage["knowledgeCorpusEvidenceRejected"] = result.EvidenceRejected;
+                coverage["knowledgeCorpusFailedBatches"] = 0;
+                coverage["knowledgeCorpusError"] = string.Empty;
+                if (string.IsNullOrWhiteSpace(Convert.ToString(coverage["knowledgeCorpusStartedAtUtc"])) || !canResume)
+                    coverage["knowledgeCorpusStartedAtUtc"] = startedAt.ToString("o");
+                coverage["knowledgeCorpusLastResumedAtUtc"] = startedAt.ToString("o");
+                coverage["knowledgeCorpusResumeCount"] = canResume
+                    ? Math.Max(0, priorCoverage.Value<int?>("knowledgeCorpusResumeCount") ?? 0) + 1
+                    : 0;
+                report.InputCoverageJson = coverage.ToString(Formatting.None);
+                report.Status = canResume
+                    ? "从持久检查点恢复Knowledge V2全库对照 " + result.BatchesCompleted + "/" + result.BatchCount + " 批"
+                    : (result.BatchCount == 0 ? "Knowledge V2语料为空，正在校验版本" : "正在全量对照Knowledge V2语料");
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+                SaveReport(report);
+                NotifyChanged();
 
                 for (var batchIndex = 0; batchIndex < batches.Count; batchIndex++)
                 {
+                    if (result.CompletedBatchIndices.Contains(batchIndex)) continue;
                     var batch = batches[batchIndex];
                     try
                     {
@@ -827,7 +938,8 @@ namespace Bot.ChromeNs
                         }
                         else
                         {
-                            result.BatchesCompleted++;
+                            result.CompletedBatchIndices.Add(batchIndex);
+                            result.BatchesCompleted = result.CompletedBatchIndices.Count;
                             result.RecordsReviewed += batch.Count;
                             result.EvidenceRejected += batchResult.EvidenceRejected;
                             foreach (var candidate in batchResult.Candidates)
@@ -854,6 +966,12 @@ namespace Bot.ChromeNs
                     coverage["knowledgeCorpusRecordsReviewed"] = result.RecordsReviewed;
                     coverage["knowledgeCorpusCoveragePercent"] = result.RecordCount == 0 ? 100
                         : Math.Round(result.RecordsReviewed * 100.0 / result.RecordCount, 2);
+                    coverage["knowledgeCorpusCompletedBatchIndices"] = JArray.FromObject(
+                        result.CompletedBatchIndices.OrderBy(x => x));
+                    coverage["knowledgeCorpusCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.Candidates));
+                    coverage["knowledgeCorpusModels"] = JArray.FromObject(result.Models.OrderBy(x => x, StringComparer.Ordinal));
+                    coverage["knowledgeCorpusProtocols"] = JArray.FromObject(result.Protocols.OrderBy(x => x, StringComparer.Ordinal));
+                    coverage["knowledgeCorpusEndpointNames"] = JArray.FromObject(result.Endpoints.OrderBy(x => x, StringComparer.Ordinal));
                     coverage["knowledgeCorpusCandidates"] = result.Candidates.Count;
                     coverage["knowledgeCorpusCandidatesOmitted"] = result.CandidatesOmitted;
                     coverage["knowledgeCorpusEvidenceRejected"] = result.EvidenceRejected;
@@ -905,6 +1023,12 @@ namespace Bot.ChromeNs
                 coverage["knowledgeCorpusRecordsReviewed"] = result.RecordsReviewed;
                 coverage["knowledgeCorpusCoveragePercent"] = result.RecordCount == 0 ? 100
                     : Math.Round(result.RecordsReviewed * 100.0 / result.RecordCount, 2);
+                coverage["knowledgeCorpusCompletedBatchIndices"] = JArray.FromObject(
+                    result.CompletedBatchIndices.OrderBy(x => x));
+                coverage["knowledgeCorpusCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.Candidates));
+                coverage["knowledgeCorpusModels"] = JArray.FromObject(result.Models.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusProtocols"] = JArray.FromObject(result.Protocols.OrderBy(x => x, StringComparer.Ordinal));
+                coverage["knowledgeCorpusEndpointNames"] = JArray.FromObject(result.Endpoints.OrderBy(x => x, StringComparer.Ordinal));
                 coverage["knowledgeCorpusCandidates"] = result.Candidates.Count;
                 coverage["knowledgeCorpusCandidatesOmitted"] = result.CandidatesOmitted;
                 coverage["knowledgeCorpusEvidenceRejected"] = result.EvidenceRejected;
@@ -951,6 +1075,32 @@ namespace Bot.ChromeNs
             for (var offset = 0; offset < records.Count; offset += KnowledgeCorpusBatchSize)
                 result.Add(records.Skip(offset).Take(KnowledgeCorpusBatchSize).ToList());
             return result;
+        }
+
+        private static string ComputeKnowledgeCorpusTranscriptFingerprint(
+            string transcript, string sessionSummary, string styleBefore, bool localFirst)
+        {
+            var canonical = (localFirst ? "local_first" : "ai_first") + "\n"
+                + (sessionSummary ?? string.Empty) + "\n"
+                + (styleBefore ?? string.Empty) + "\n"
+                + (transcript ?? string.Empty);
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+
+        private static void RestoreStringSet(JToken token, HashSet<string> target)
+        {
+            if (target == null || token == null) return;
+            var values = token as JArray;
+            if (values == null) return;
+            foreach (var value in values.Values<string>())
+            {
+                var cleaned = Clean(value, 160);
+                if (cleaned.Length > 0) target.Add(cleaned);
+            }
         }
 
         private static string ComputeKnowledgeCorpusFingerprint(IEnumerable<KnowledgeV2Record> records)
@@ -1434,7 +1584,17 @@ namespace Bot.ChromeNs
                     EvidenceType = Clean(Convert.ToString(item["evidence_type"]), 80).ToLowerInvariant(),
                     Evidence = Redact(Clean(Convert.ToString(item["evidence"]), 1200)),
                     Reason = Redact(Clean(Convert.ToString(item["reason"]), 1200)),
-                    Confidence = Math.Max(0, Math.Min(1, confidence))
+                    Confidence = Math.Max(0, Math.Min(1, confidence)),
+                    Applied = item.Value<bool?>("applied") == true,
+                    ApplyMessage = Clean(Convert.ToString(item["apply_message"]), 500),
+                    KnowledgeId = Clean(Convert.ToString(item["knowledge_id"]), 256),
+                    SourceFingerprint = Clean(Convert.ToString(item["source_fingerprint"]), 128),
+                    CorpusBatchIndex = Math.Max(0, item.Value<int?>("corpus_batch_index") ?? 0),
+                    EvidenceMessageIds = item["evidence_message_ids"] is JArray
+                        ? ((JArray)item["evidence_message_ids"]).Values<string>()
+                            .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim())
+                            .Distinct(StringComparer.Ordinal).ToList()
+                        : new List<string>()
                 });
             }
             return result;
