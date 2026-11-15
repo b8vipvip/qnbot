@@ -424,8 +424,15 @@ namespace Bot.ChromeNs
                 if (!TryClaimShopSession(shopKey, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("已忽略同一ShopKey的重复千牛CDP状态会话: shopRef="
-                        + DiagnosticRef("shop", shopKey) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    string duplicateShopKey;
+                    if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
+                        Log.Info("已忽略同一ShopKey的重复千牛CDP状态会话: shopRef="
+                            + DiagnosticRef("shop", duplicateShopKey)
+                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    else
+                        Log.Info("千牛WebSocket登录ShopKey发生变化，旧绑定已释放，等待下一次状态事件重新绑定: shopRef="
+                            + DiagnosticRef("shop", shopKey)
+                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
@@ -473,8 +480,15 @@ namespace Bot.ChromeNs
                 if (!TryClaimShopSession(shopKey, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("重复千牛CDP会话已完成识别但不接管该ShopKey运行通道: shopRef="
-                        + DiagnosticRef("shop", shopKey) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    string duplicateShopKey;
+                    if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
+                        Log.Info("重复千牛CDP会话已完成识别但不接管该ShopKey运行通道: shopRef="
+                            + DiagnosticRef("shop", duplicateShopKey)
+                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    else
+                        Log.Info("千牛WebSocket登录ShopKey发生变化，旧绑定已释放，等待下一次状态事件重新绑定: shopRef="
+                            + DiagnosticRef("shop", shopKey)
+                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
