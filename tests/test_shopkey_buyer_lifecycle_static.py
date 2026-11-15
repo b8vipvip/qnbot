@@ -40,7 +40,7 @@ def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     assert "ConcurrentDictionary<string, string> _sessionShopKeys" in server
     assert "ConcurrentDictionary<string, string> _duplicateShopSessions" in server
     assert "TryClaimShopSession(shopKey, session.SessionID)" in server
-    claim = server[server.index("private bool TryClaimShopSession"):server.index("private bool TryPromoteDuplicateShopSession")]
+    claim = server[server.index("private bool TryClaimShopSession"):server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")]
     assert "if (!_connectedSessions.ContainsKey(sessionId)) return false;" in claim
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert "QN.GetByShopIdentity(user.Result)" in server
@@ -61,15 +61,15 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
         server.index("private bool ShouldRefreshStatusBinding")
     ]
     promotion = server[
-        server.index("private void TryPromoteAvailableStandby"):
+        server.index("private async Task TryPromoteAvailableStandbyAsync"):
         server.index("private bool ShouldRefreshStatusBinding")
     ]
     identity_change = server[
         server.index("private bool TryClaimShopSession"):
-        server.index("private bool TryPromoteDuplicateShopSession")
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
     ]
 
-    assert "TryPromoteAvailableStandby(releasedShopKey, \"authority_disconnected\", sessionId)" in release
+    assert "TryPromoteAvailableStandbyAsync(" in release
     assert "releasedAuthority && promoteStandby" in release
     assert "ReleaseShopSession(sessionId, false)" in server
     assert "_duplicateShopSessions" in promotion
@@ -77,11 +77,15 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     assert "_closingDuplicateSessions.ContainsKey(x.Key)" in promotion
     assert "OrderByDescending" in promotion
     assert "_liveSessions.TryGetValue(candidateId, out candidate)" in promotion
-    assert "TryPromoteDuplicateShopSession(shopKey, candidate, reason, requireVacant: true)" in promotion
+    assert "TryPromoteDuplicateShopSessionAsync(" in promotion
+    assert "requireVacant: true" in promotion
+    assert "await client.GetCurrentUser().ConfigureAwait(false)" in server
+    assert "ResolveRuntimeBySellerIdentity(user.Result)" in server
+    assert "verifiedShop.ShopKey, shopKey" in server
     assert "if (requireVacant && !string.IsNullOrWhiteSpace(previousOwner)" in server
     assert "releasedPreviousAuthority = true;" in identity_change
     assert "if (releasedPreviousAuthority)" in identity_change
-    assert 'TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId)' in identity_change
+    assert 'TryPromoteAvailableStandbyAsync(previousShopKey, "shop_identity_changed", sessionId)' in identity_change
 
 
 def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity():
