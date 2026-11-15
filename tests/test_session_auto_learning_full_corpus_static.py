@@ -128,3 +128,24 @@ def test_serialized_full_corpus_candidates_include_id_fingerprint_and_message_pr
     assert '["source_fingerprint"] = x.SourceFingerprint ?? string.Empty' in serializer
     assert '["corpus_batch_index"] = x.CorpusBatchIndex' in serializer
     assert '["evidence_message_ids"] = JArray.FromObject' in serializer
+
+
+
+def test_corpus_coverage_percentage_counts_records_not_batches_and_includes_provenance():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    prompt = service[
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages"):
+        service.index("private static bool TryParseKnowledgeCorpusBatch")
+    ]
+
+    assert "result.RecordsReviewed += batch.Count" in method
+    assert 'coverage["knowledgeCorpusRecordsReviewed"] = result.RecordsReviewed' in method
+    assert "result.RecordsReviewed * 100.0 / result.RecordCount" in method
+    assert '["source_type"] = Redact(record.SourceType)' in prompt
+    assert '["correction_count"] = record.CorrectionCount' in prompt
+    assert '["last_verified_at"]' in prompt
+    assert "提示注入" in prompt
