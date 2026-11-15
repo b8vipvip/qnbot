@@ -346,20 +346,21 @@ namespace Bot.Automation.ChatDeskNs
                     if (exactQn != null && exactQn.Seller != null)
                         sellerNick = (exactQn.Seller.Nick ?? string.Empty).Trim();
                     if (sellerNick.Length == 0) return null;
-                    return DeskSellerBindingRegistry.FindSellerDesk(sellerNick);
+                    return DeskSellerBindingRegistry.FindSellerDesk(sellerNick, scopedShop.ShopKey);
                 }
 
                 var current = QN.CurQN;
                 if (current != null && current.Seller != null)
                 {
-                    var currentDesk = DeskSellerBindingRegistry.FindSellerDesk(current.Seller.Nick);
+                    string shopKey;
+                    try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(current).ShopKey; }
+                    catch { return null; }
+                    var currentDesk = DeskSellerBindingRegistry.FindSellerDesk(current.Seller.Nick, shopKey);
                     if (currentDesk != null) return currentDesk;
                 }
 
                 var snapshot = Snapshot();
-                if (snapshot.Count == 1) return snapshot[0];
-                if (inst != null && snapshot.Any(x => ReferenceEquals(x, inst))) return inst;
-                return snapshot.FirstOrDefault();
+                return snapshot.Count == 1 ? snapshot[0] : null;
             }
         }
 
