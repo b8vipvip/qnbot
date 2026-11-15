@@ -9,41 +9,38 @@ using System.Linq;
 namespace Bot.Automation.ChatDeskNs
 {
     /// <summary>
-    /// Tracks seller ownership for Qianniu reception windows.
-    ///
-    /// Qianniu 9.97 can host several authenticated customer-service accounts as tabs inside
-    /// one AliWorkbench top-level HWND. Therefore seller -> HWND is many-to-one, while the
-    /// visible/native composer still has exactly one active seller at a time. Keep those two
-    /// concepts separate so shop data remains isolated without inventing a second native Desk.
+    /// Maps each authenticated ShopKey to its native Qianniu Desk. Several ShopKeys may share
+    /// one AliWorkbench HWND (seller tabs), and different ShopKeys may also use different HWNDs.
+    /// Seller nickname is display data only and is never sufficient to choose a Desk when it
+    /// resolves to more than one ShopKey.
     /// </summary>
     internal static class DeskSellerBindingRegistry
     {
         private static readonly object Sync = new object();
-        private static readonly ConcurrentDictionary<string, int> SellerToHwnd =
+        private static readonly ConcurrentDictionary<string, int> ShopToHwnd =
             new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<int, string> ActiveSellerByHwnd =
+            new ConcurrentDictionary<int, string>();
+        private static readonly ConcurrentDictionary<int, string> ActiveShopByHwnd =
             new ConcurrentDictionary<int, string>();
 
         internal static Desk FindSellerDesk(string seller)
         {
+            return FindSellerDesk(seller, ResolveUniqueShopKey(seller));
+        }
+
+        internal static Desk FindSellerDesk(string seller, string shopKey)
+        {
             seller = NormalizeSeller(seller);
-            if (seller.Length == 0 || !IsAuthenticatedSeller(seller)) return null;
+            shopKey = NormalizeSeller(shopKey);
+            if (seller.Length == 0 || shopKey.Length == 0 || !IsAuthenticatedShop(seller, shopKey))
+                return null;
 
             int hwnd;
-            if (SellerToHwnd.TryGetValue(seller, out hwnd))
-            {
-                var mapped = Desk.FindExistingByHwnd(hwnd);
-                if (mapped != null && mapped.IsAlive) return mapped;
-                ForgetSeller(seller, hwnd);
-            }
-
-            var legacy = Desk.FindExistingBySellerNick(seller);
-            if (legacy != null)
-            {
-                RememberKnown(legacy, seller);
-                if (legacy.IsForeground) MarkActiveSeller(legacy, seller, "legacy-title");
-                return legacy;
-            }
+            if (!ShopToHwnd.TryGetValue(shopKey, out hwnd)) return null;
+            var mapped = Desk.FindExistingByHwnd(hwnd);
+            if (mapped != null && mapped.IsAlive) return mapped;
+            ForgetShop(shopKey, hwnd);
             return null;
         }
 
@@ -56,80 +53,89 @@ namespace Bot.Automation.ChatDeskNs
             {
                 activeSeller = NormalizeSeller(activeSeller);
                 if (activeSeller.Length > 0 && IsAuthenticatedSeller(activeSeller)) return activeSeller;
-
                 string ignored;
                 ActiveSellerByHwnd.TryRemove(desk.Hwnd.Handle, out ignored);
             }
 
             var title = NormalizeSeller(desk.WndTitle);
-            if (title.Length > 0
+            return title.Length > 0
                 && !QnAccountFinder.IsGenericReceptionTitle(title)
-                && IsAuthenticatedSeller(title))
-            {
-                RememberKnown(desk, title);
-                MarkActiveSeller(desk, title, "desk-title");
-                return title;
-            }
-            return string.Empty;
+                && IsAuthenticatedSeller(title)
+                ? title
+                : string.Empty;
         }
 
-        /// <summary>
-        /// True only when this seller owns the currently visible composer on the Desk.
-        /// Multiple sellers may be known for the same HWND, but UIA/HWND send operations are
-        /// allowed only for the active seller so a hidden seller can never send through another
-        /// customer-service account's visible input box.
-        /// </summary>
+        internal static string GetShopKey(Desk desk)
+        {
+            if (desk == null || desk.Hwnd == null) return string.Empty;
+            string shopKey;
+            return ActiveShopByHwnd.TryGetValue(desk.Hwnd.Handle, out shopKey)
+                ? NormalizeSeller(shopKey)
+                : string.Empty;
+        }
+
         internal static bool IsSellerForDesk(Desk desk, string seller)
         {
+            return IsSellerForDesk(desk, seller, ResolveUniqueShopKey(seller));
+        }
+
+        internal static bool IsSellerForDesk(Desk desk, string seller, string shopKey)
+        {
             seller = NormalizeSeller(seller);
-            if (desk == null || seller.Length == 0) return false;
-            return string.Equals(GetSeller(desk), seller, StringComparison.Ordinal);
+            shopKey = NormalizeSeller(shopKey);
+            if (desk == null || desk.Hwnd == null || seller.Length == 0
+                || shopKey.Length == 0 || !IsAuthenticatedShop(seller, shopKey))
+                return false;
+
+            string activeShopKey;
+            return ActiveShopByHwnd.TryGetValue(desk.Hwnd.Handle, out activeShopKey)
+                && string.Equals(activeShopKey, shopKey, StringComparison.Ordinal)
+                && string.Equals(GetSeller(desk), seller, StringComparison.Ordinal);
         }
 
         internal static Desk BindResolvedSeller(Desk desk, string seller, string evidence)
         {
+            return BindResolvedSeller(desk, seller, evidence, ResolveUniqueShopKey(seller));
+        }
+
+        internal static Desk BindResolvedSeller(Desk desk, string seller, string evidence, string shopKey)
+        {
             seller = NormalizeSeller(seller);
-            if (desk == null || desk.Hwnd == null || seller.Length == 0
+            shopKey = NormalizeSeller(shopKey);
+            if (desk == null || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
                 || QnAccountFinder.IsGenericReceptionTitle(seller)
-                || !IsAuthenticatedSeller(seller)) return null;
+                || !IsAuthenticatedShop(seller, shopKey)) return null;
 
             lock (Sync)
             {
                 CleanupStaleBindings();
-
                 var hwnd = desk.Hwnd.Handle;
-                int sellerHwnd;
-                if (SellerToHwnd.TryGetValue(seller, out sellerHwnd) && sellerHwnd != hwnd)
+                int existingHwnd;
+                if (ShopToHwnd.TryGetValue(shopKey, out existingHwnd) && existingHwnd != hwnd)
                 {
-                    var existingSellerDesk = Desk.FindExistingByHwnd(sellerHwnd);
-                    if (existingSellerDesk != null && existingSellerDesk.IsAlive)
+                    var existingDesk = Desk.FindExistingByHwnd(existingHwnd);
+                    if (existingDesk != null && existingDesk.IsAlive)
                     {
-                        Log.ErrorWithMaxCount("店铺窗口绑定被拒绝：同一seller不能绑定两个Desk: seller=" + seller
-                            + ", existingHwnd=" + sellerHwnd + ", requestedHwnd=" + hwnd, 20);
+                        Log.ErrorWithMaxCount("店铺窗口绑定被拒绝：同一ShopKey不能绑定两个Desk: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                            + ", existingHwnd=" + existingHwnd + ", requestedHwnd=" + hwnd, 20);
                         return null;
                     }
-                    ForgetSeller(seller, sellerHwnd);
+                    ForgetShop(shopKey, existingHwnd);
                 }
 
-                // Do not reject another authenticated seller merely because it resolves to the
-                // same HWND. Current Qianniu intentionally renders multiple seller tabs inside one
-                // reception window. Also do not Dispose/Create the Desk here: that old identity
-                // upgrade path could disturb the attached Qt window while it is live.
-                RememberKnown(desk, seller);
+                RememberKnown(desk, seller, shopKey);
+                var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                if (desk.IsForeground
+                    && (RuntimeShopCount() <= 1
+                        || string.Equals(activeShopKey, shopKey, StringComparison.Ordinal)))
+                    MarkActiveSeller(desk, seller, evidence, shopKey);
 
-                var currentTitle = NormalizeSeller(desk.WndTitle);
-                string currentActive;
-                var hasActive = ActiveSellerByHwnd.TryGetValue(hwnd, out currentActive)
-                    && IsAuthenticatedSeller(currentActive);
-                if (!hasActive && desk.IsForeground
-                    && (string.Equals(currentTitle, seller, StringComparison.Ordinal)
-                        || RuntimeShopCount() <= 1))
-                {
-                    MarkActiveSeller(desk, seller, "initial:" + (evidence ?? string.Empty));
-                }
-
-                Log.Info("已登记卖家与千牛窗口: seller=" + seller + ", pid=" + desk.ProcessId
-                    + ", hwnd=" + hwnd + ", activeSeller=" + GetSeller(desk)
+                Log.Info("已登记ShopKey与千牛窗口: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", seller=" + seller + ", pid=" + desk.ProcessId
+                    + ", hwnd=" + hwnd + ", activeShopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", GetShopKey(desk))
                     + ", evidence=" + (evidence ?? string.Empty));
                 return desk;
             }
@@ -140,15 +146,17 @@ namespace Bot.Automation.ChatDeskNs
             var seller = qn == null || qn.Seller == null
                 ? string.Empty
                 : NormalizeSeller(qn.Seller.Nick);
-            if (seller.Length == 0 || !IsAuthenticatedSeller(seller)) return null;
+            string shopKey;
+            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+            catch { return null; }
+            if (seller.Length == 0 || string.IsNullOrWhiteSpace(shopKey)
+                || !IsAuthenticatedShop(seller, shopKey)) return null;
 
-            var existing = FindSellerDesk(seller);
+            var existing = FindSellerDesk(seller, shopKey);
             if (existing != null)
             {
                 if (existing.IsForeground)
-                {
-                    MarkActiveSeller(existing, seller, evidence);
-                }
+                    MarkActiveSeller(existing, seller, evidence, shopKey);
                 return existing;
             }
 
@@ -157,42 +165,85 @@ namespace Bot.Automation.ChatDeskNs
                 .ToList();
             if (foreground.Count != 1) return null;
 
-            var bound = BindResolvedSeller(foreground[0], seller, evidence);
-            if (bound != null)
-            {
-                MarkActiveSeller(bound, seller, evidence);
-            }
+            var bound = BindResolvedSeller(foreground[0], seller, evidence, shopKey);
+            if (bound != null) MarkActiveSeller(bound, seller, evidence, shopKey);
             return bound;
         }
 
         internal static bool MarkActiveSeller(Desk desk, string seller, string evidence)
         {
-            seller = NormalizeSeller(seller);
-            if (desk == null || desk.Hwnd == null || seller.Length == 0
-                || !IsAuthenticatedSeller(seller)) return false;
+            return MarkActiveSeller(desk, seller, evidence, ResolveUniqueShopKey(seller));
+        }
 
-            RememberKnown(desk, seller);
+        internal static bool MarkActiveSeller(Desk desk, string seller, string evidence, string shopKey)
+        {
+            seller = NormalizeSeller(seller);
+            shopKey = NormalizeSeller(shopKey);
+            if (desk == null || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
+                || !IsAuthenticatedShop(seller, shopKey)) return false;
+
+            RememberKnown(desk, seller, shopKey);
             var hwnd = desk.Hwnd.Handle;
-            string previous;
-            ActiveSellerByHwnd.TryGetValue(hwnd, out previous);
+            string previousSeller;
+            string previousShopKey;
+            ActiveSellerByHwnd.TryGetValue(hwnd, out previousSeller);
+            ActiveShopByHwnd.TryGetValue(hwnd, out previousShopKey);
             ActiveSellerByHwnd[hwnd] = seller;
-            if (!string.Equals(previous, seller, StringComparison.Ordinal))
+            ActiveShopByHwnd[hwnd] = shopKey;
+            if (!string.Equals(previousShopKey, shopKey, StringComparison.Ordinal))
             {
-                Log.Info("共享千牛窗口活动客服已切换: hwnd=" + hwnd
-                    + ", previousSeller=" + NormalizeSeller(previous)
-                    + ", currentSeller=" + seller
+                Log.Info("共享千牛窗口活动ShopKey已切换: hwnd=" + hwnd
+                    + ", previousShopRef=" + MyWebSocketServer.DiagnosticRef("shop", previousShopKey)
+                    + ", currentShopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", seller=" + seller + ", previousSeller=" + NormalizeSeller(previousSeller)
                     + ", evidence=" + (evidence ?? string.Empty));
             }
             return true;
         }
 
-        private static void RememberKnown(Desk desk, string seller)
+        private static void RememberKnown(Desk desk, string seller, string shopKey)
         {
             if (desk == null || desk.Hwnd == null) return;
             seller = NormalizeSeller(seller);
-            if (seller.Length == 0 || QnAccountFinder.IsGenericReceptionTitle(seller)
-                || !IsAuthenticatedSeller(seller)) return;
-            SellerToHwnd[seller] = desk.Hwnd.Handle;
+            shopKey = NormalizeSeller(shopKey);
+            if (seller.Length == 0 || shopKey.Length == 0
+                || QnAccountFinder.IsGenericReceptionTitle(seller)
+                || !IsAuthenticatedShop(seller, shopKey)) return;
+            ShopToHwnd[shopKey] = desk.Hwnd.Handle;
+        }
+
+        private static bool IsAuthenticatedShop(string seller, string shopKey)
+        {
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                return shop != null
+                    && string.Equals((shop.SellerNick ?? string.Empty).Trim(), NormalizeSeller(seller), StringComparison.Ordinal);
+            }
+            catch { return false; }
+        }
+
+        private static string ResolveUniqueShopKey(string seller)
+        {
+            seller = NormalizeSeller(seller);
+            if (seller.Length == 0) return string.Empty;
+            try
+            {
+                var keys = QN.GetRuntimeSafetySnapshot()
+                    .Where(qn => qn != null && qn.Seller != null
+                        && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                    .Select(qn =>
+                    {
+                        try { return ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+                        catch { return string.Empty; }
+                    })
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                return keys.Count == 1 ? keys[0] : string.Empty;
+            }
+            catch { return string.Empty; }
         }
 
         private static bool IsAuthenticatedSeller(string seller)
@@ -211,10 +262,7 @@ namespace Bot.Automation.ChatDeskNs
                     return QN.QNSet != null && QN.QNSet.Any(qn => qn != null && qn.Seller != null
                         && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal));
                 }
-                catch
-                {
-                    return false;
-                }
+                catch { return false; }
             }
         }
 
@@ -230,25 +278,22 @@ namespace Bot.Automation.ChatDeskNs
                 {
                     string shopKey;
                     try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
-                    catch { return 2; } // Ambiguous identity must never look like a single-shop runtime.
+                    catch { return 2; }
                     if (string.IsNullOrWhiteSpace(shopKey)) return 2;
                     shopKeys.Add(shopKey.Trim());
                 }
                 return shopKeys.Count;
             }
-            catch
-            {
-                return 2;
-            }
+            catch { return 2; }
         }
 
         private static void CleanupStaleBindings()
         {
-            foreach (var pair in SellerToHwnd.ToArray())
+            foreach (var pair in ShopToHwnd.ToArray())
             {
                 var desk = Desk.FindExistingByHwnd(pair.Value);
                 if (desk != null && desk.IsAlive) continue;
-                ForgetSeller(pair.Key, pair.Value);
+                ForgetShop(pair.Key, pair.Value);
             }
 
             foreach (var pair in ActiveSellerByHwnd.ToArray())
@@ -258,17 +303,33 @@ namespace Bot.Automation.ChatDeskNs
                 string ignored;
                 ActiveSellerByHwnd.TryRemove(pair.Key, out ignored);
             }
+
+            foreach (var pair in ActiveShopByHwnd.ToArray())
+            {
+                var desk = Desk.FindExistingByHwnd(pair.Key);
+                if (desk != null && desk.IsAlive) continue;
+                string ignored;
+                ActiveShopByHwnd.TryRemove(pair.Key, out ignored);
+            }
         }
 
-        private static void ForgetSeller(string seller, int hwnd)
+        private static void ForgetShop(string shopKey, int hwnd)
         {
-            int ignoredHwnd;
-            SellerToHwnd.TryRemove(seller, out ignoredHwnd);
-
-            string activeSeller;
-            if (ActiveSellerByHwnd.TryGetValue(hwnd, out activeSeller)
-                && string.Equals(NormalizeSeller(activeSeller), NormalizeSeller(seller), StringComparison.Ordinal))
+            string current;
+            if (ShopToHwnd.TryGetValue(shopKey, out current) && int.TryParse(current, out _)) { }
+            int mapped;
+            if (ShopToHwnd.TryGetValue(shopKey, out mapped) && mapped == hwnd)
             {
+                int ignored;
+                ShopToHwnd.TryRemove(shopKey, out ignored);
+            }
+
+            string activeShopKey;
+            if (ActiveShopByHwnd.TryGetValue(hwnd, out activeShopKey)
+                && string.Equals(activeShopKey, shopKey, StringComparison.Ordinal))
+            {
+                string ignored;
+                ActiveShopByHwnd.TryRemove(hwnd, out ignored);
                 string ignoredSeller;
                 ActiveSellerByHwnd.TryRemove(hwnd, out ignoredSeller);
             }
