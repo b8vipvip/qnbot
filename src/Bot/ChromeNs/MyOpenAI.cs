@@ -458,7 +458,29 @@ namespace Bot.ChromeNs
             var errors = new List<string>();
             foreach (var endpoint in endpoints)
             {
-                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature, timeoutSeconds, cancellationToken, chatProtocolOnly);
+                StructuredChatResult result;
+                var endpointTimer = Stopwatch.StartNew();
+                try
+                {
+                    result = CallRawChatCompletions(
+                        endpoint, messages, maxTokens, temperature, timeoutSeconds,
+                        cancellationToken, chatProtocolOnly);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    endpointTimer.Stop();
+                    // CallRawChatCompletions uses a linked CancelAfter deadline and
+                    // propagates OperationCanceledException. A caller cancellation must
+                    // remain terminal, but an endpoint's own timeout must not abort the
+                    // endpoint failover loop before trying the remaining configured APIs.
+                    if (cancellationToken.IsCancellationRequested) throw;
+                    result = new StructuredChatResult
+                    {
+                        Success = false,
+                        LatencyMs = endpointTimer.ElapsedMilliseconds,
+                        Error = "AI接口请求超时（HTTP deadline取消）：" + SafeError(ex.Message)
+                    };
+                }
                 BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "成功" : result.Error);
                 endpoint.LastLatencyMs = result.LatencyMs;
                 endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
