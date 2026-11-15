@@ -30,7 +30,7 @@ def test_seller_echo_is_strictly_shop_scoped_and_id_deduplicated():
     assert "ShopSettingsScope.Enter(shop)" in segment
     assert "RecordMessage(state, seller, buyer, message, messageText, false);" in segment
     assert "RequestMirrorRemoteRefresh" not in segment
-    record = store.split("private static void RecordMessage(", 1)[1].split(
+    record = store.split("private static string RecordMessage(", 1)[1].split(
         "private static void MarkLastSellerTurnWithdrawn(", 1
     )[0]
     assert "IncomingMessageSafety.BuildMessageKey(message, cleanText)" in record

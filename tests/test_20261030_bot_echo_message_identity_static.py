@@ -16,7 +16,7 @@ def test_echo_link_uses_transport_identity_before_answer_similarity():
     assert "internal sealed class BotReplyEchoLinkEntity" in history
     assert "EchoId text primary key not null" in history
     assert "IX_BotReplyEchoLink_Record" in history
-    assert "var echoId = BuildBotEchoEntityId(seller, buyer, messageKey, sentAt, answer);" in method
+    assert "var echoId = BuildBotEchoEntityId(shopKey, seller, buyer, messageKey, sentAt, answer);" in method
     assert "x => x.EchoId == echoId" in method
     assert "string.Equals(x.EntityId, originalId, StringComparison.Ordinal)" in method
     assert method.index("var match = candidates.FirstOrDefault") < method.index(
@@ -40,9 +40,11 @@ def test_manual_correction_does_not_bleed_into_other_messages():
     mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     manager = read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")
     history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
-    assert "BotConversationHistoryStore.GetManualSource(seller, botEchoRecordId)" in mirror
-    assert "BotConversationHistoryStore.UpdateAnswerSource(seller, sourceRecordId, edited)" in mirror
-    assert "BotConversationHistoryStore.UpdateAnswerSource(_seller, _selectedSource.EntityId, source)" in manager
+    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" in mirror
+    assert "GetManualSource(shopKey, seller, sourceRecordId)" in mirror
+    assert "UpdateAnswerSource(\n                    shopKey, seller, sourceRecordId, edited)" in mirror
+    assert "BotConversationHistoryStore.UpdateAnswerSource(" in manager
+    assert "_shopKey, _seller, _selectedSource.EntityId, source" in manager
     assert "KnowledgeLearningService.OverrideAnswerSource(" not in mirror
     assert "KnowledgeLearningService.OverrideAnswerSource(" not in manager
     assert "KnowledgeLearningService.RegisterAnswerSource(" not in mirror

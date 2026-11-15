@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
@@ -388,7 +389,8 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
+            using (ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeBySeller(this)))
+                await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
         }
 
         private Task ProcessRecoveredBuyerMessageAfterMissAsync(

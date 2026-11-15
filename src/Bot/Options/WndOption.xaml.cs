@@ -36,18 +36,38 @@ namespace Bot.Options
         private OptionEnum _pendingPage = OptionEnum.Unknown;
         private bool _initialized;
 
+        private WndOption(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            _shop = shop;
+            Seller = (shop.SellerNick ?? string.Empty).Trim();
+            if (Seller.Length == 0)
+            {
+                var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                Seller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty
+                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            // For a stable, explicitly supplied ShopKey, DisplayName is acceptable
+            // as a UI label when an offline legacy profile has no saved seller nick.
+            // It is never used to resolve or switch the shop identity.
+            if (Seller.Length == 0 && shop.HasStableSellerId)
+                Seller = (shop.DisplayName ?? string.Empty).Trim();
+            if (Seller.Length == 0)
+                throw new InvalidOperationException(
+                    "该店铺资料缺少可验证的卖家昵称，且当前未连接对应千牛账号；已阻止使用显示名称代替卖家身份。");
+            InitializeComponent();
+            SettingsOperationAudit.Attach(this,
+                () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
+            Loaded += WndOption_Loaded;
+        }
+
         private WndOption(string seller)
         {
             Seller = seller;
-            try
-            {
-                _shop = ShopContextLocator.ResolveBySellerNick(seller);
-            }
-            catch (Exception ex)
-            {
-                Log.Info("设置窗口暂未取得稳定店铺作用域，将保留旧全局配置兼容模式: seller="
-                    + seller + ", error=" + ex.Message);
-            }
+            // Never open a settings editor in the legacy global path when
+            // seller nickname resolution is ambiguous or unavailable.
+            _shop = ShopContextLocator.ResolveBySellerNick(seller);
             InitializeComponent();
             SettingsOperationAudit.Attach(this,
                 () => _currentPage == null ? "other" : _currentPage.Title, "bot_settings");
@@ -226,7 +246,7 @@ namespace Bot.Options
             }
             try
             {
-                var knowledge = KnowledgeCenterWindow.ShowForSeller(this, Seller);
+                var knowledge = KnowledgeCenterWindow.ShowForSeller(this, Seller, _shop.ShopKey);
                 _knowledgeCenterWindow = knowledge;
                 knowledge.Closed += delegate
                 {
@@ -261,25 +281,85 @@ namespace Bot.Options
             if (_currentPage != null && _currentPage.Control != null) _currentPage.Control.NavHelp();
         }
 
+        internal static void MyShow(ShopContext shop, WndAssist owner = null,
+            OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            var windowKey = shop.ShopKey;
+            var wndOp = ShowSameNickOneInstance<WndOption>(windowKey, delegate
+            {
+                return new WndOption(shop);
+            }, owner, true);
+            ShopScopedUiBridge.Attach(wndOp, shop);
+            if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
+            if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
+        }
+
         public static void MyShow(string seller, WndAssist owner = null,
             OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
         {
-            var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
-            if (!string.IsNullOrWhiteSpace(activeSeller)
-                && !string.Equals(activeSeller, seller, StringComparison.Ordinal))
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return;
+
+            try
             {
-                Log.Info("打开设置时已使用活动店铺仲裁结果替换旧CurQN参数: requestedSeller="
-                    + seller + ", activeSeller=" + activeSeller);
-                seller = activeSeller;
+                ShopContext shop = owner == null ? null : ShopScopedUiBridge.Get(owner);
+                if (shop != null)
+                {
+                    var attachedSeller = (shop.SellerNick ?? string.Empty).Trim();
+                    if (attachedSeller.Length == 0)
+                    {
+                        var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                        attachedSeller = exactQn == null || exactQn.Seller == null
+                            ? string.Empty
+                            : (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    }
+                    var sellerMatches = string.Equals(attachedSeller, seller, StringComparison.Ordinal);
+                    if (!sellerMatches && !shop.HasStableSellerId && attachedSeller.Length > 0)
+                        sellerMatches = string.Equals(
+                            ShopKeyGenerator.NormalizeFallbackNickname(attachedSeller),
+                            ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                            StringComparison.Ordinal);
+                    if (!sellerMatches) shop = null;
+                }
+                if (shop == null)
+                {
+                    var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
+                    var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                    if (!string.IsNullOrWhiteSpace(activeSeller)
+                        && !string.IsNullOrWhiteSpace(activeShopKey)
+                        && string.Equals(activeSeller, seller, StringComparison.Ordinal))
+                    {
+                        Log.Info("打开设置时使用活动店铺的精确ShopKey: requestedSeller="
+                            + seller + ", activeSeller=" + activeSeller);
+                        shop = ShopContextLocator.ResolveRuntimeByShopKey(activeShopKey);
+                    }
+                    else
+                    {
+                        // A current QN is a valid exact source only when the active
+                        // arbitration also confirms the same seller. Otherwise a
+                        // nickname-only request may refer to a different account
+                        // sharing that nickname and must go through ambiguity checks.
+                        var current = QN.CurQN;
+                        if (current != null && current.Seller != null
+                            && string.Equals(ActiveShopSessionRegistry.GetActiveSellerNick(),
+                                seller, StringComparison.Ordinal)
+                            && string.Equals((current.Seller.Nick ?? string.Empty).Trim(),
+                                seller, StringComparison.Ordinal))
+                            shop = ShopContextLocator.ResolveRuntimeBySeller(current);
+                        else
+                            shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                    }
+                }
+
+                MyShow(shop, owner, showPage, uiCallback);
             }
-            Util.Assert(!string.IsNullOrEmpty(seller));
-            var lockedSeller = seller;
-            var wndOp = ShowSameNickOneInstance<WndOption>(lockedSeller, delegate
+            catch (Exception ex)
             {
-                return new WndOption(lockedSeller);
-            }, owner, true);
-            if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
-            if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
+                MessageBox.Show(owner,
+                    "无法确认设置窗口所属店铺，已阻止打开未隔离的全局设置。\n" + ex.Message,
+                    "店铺身份保护", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void ShowPage(OptionEnum showPage)

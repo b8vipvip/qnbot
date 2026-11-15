@@ -41,7 +41,8 @@ def test_provenance_prepared_saved_and_confirmed_echo_never_forged():
     assert "来源未记录（千牛回显已确认，需人工补录）" in mirror
     assert "BotReplyManualSourceEntity" in history
     assert "OriginalSource" in history
-    assert "GetManualSource(seller, botEchoRecordId)" in mirror
+    assert "GetManualSource(" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" in mirror
     assert "KnowledgeLearningService.OverrideAnswerSource(" not in mirror
     assert "KnowledgeLearningService.RegisterAnswerSource(" not in mirror
 

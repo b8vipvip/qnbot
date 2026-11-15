@@ -53,6 +53,14 @@ def test_exact_record_navigation_uses_ids_not_answer_similarity():
     assert "不会自动选择相似条目" in records
 
 
+def test_shop_key_resolution_reads_requested_key_only_from_knowledge_window():
+    nav = src("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    resolver = nav.split("public static string ResolveShopKey(Window owner, string seller)", 1)[1]
+    assert "var knowledgeWindow = owner as KnowledgeCenterWindow;" in resolver
+    assert "knowledgeWindow.RequestedShopKey" in resolver
+    assert "owner.RequestedShopKey" not in resolver
+
+
 def test_v2_direct_answers_record_actual_match_id_before_ready():
     runtime = src("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'var sourceLabel = best != null && best.Record != null' in runtime

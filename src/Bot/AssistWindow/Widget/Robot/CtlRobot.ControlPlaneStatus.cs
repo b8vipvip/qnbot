@@ -1,4 +1,5 @@
 using Bot.Automation.ChatDeskNs;
+using Bot.ChromeNs;
 using Bot.ShopScope;
 using System;
 using System.Windows;
@@ -74,6 +75,10 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private ShopContext ResolveAttachedShop()
         {
+            // Prefer the exact context attached to this WPF window. The desk title
+            // and seller nickname are display identifiers and may be ambiguous.
+            var attached = ShopScopedUiBridge.Get(Window.GetWindow(this));
+            if (attached != null) return attached;
             if (_desk == null) return ShopSettingsScope.Current;
 
             var seller = DeskSellerBindingRegistry.GetSeller(_desk);
@@ -85,7 +90,13 @@ namespace Bot.AssistWindow.Widget.Robot
                 return ShopSettingsScope.Current;
             }
 
-            return ShopContextLocator.ResolveBySellerNick(seller);
+            var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0
+                && string.Equals(activeSeller, seller, StringComparison.Ordinal))
+                return ShopContextLocator.ResolveRuntimeByShopKey(activeShopKey);
+
+            return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
         }
     }
 }

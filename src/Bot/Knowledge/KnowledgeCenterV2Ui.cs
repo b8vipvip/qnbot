@@ -36,17 +36,31 @@ namespace Bot.Knowledge
                 new RoutedEventHandler(OnLoaded), true);
         }
 
-        public static void ShowBotReplySearch(Window owner, string seller, string buyer, string question, string answer)
+        public static void ShowBotReplySearch(
+            Window owner, string seller, string buyer, string question, string answer,
+            string shopKey = "")
         {
             Initialize();
-            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            ShopContext shop;
+            try
+            {
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shopKey = shop.ShopKey;
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "无法确认 Bot 回复所属店铺：" + ex.Message,
                     "Bot 回复检索", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shopKey
+            };
+            ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
@@ -68,10 +82,18 @@ namespace Bot.Knowledge
         /// </summary>
         public static void ShowBotReplyTarget(
             Window owner, string seller, string buyer, string answer,
-            string sourceRecordId, string source, bool manuallyCorrected)
+            string sourceRecordId, string source, bool manuallyCorrected,
+            string shopKey = "")
         {
             Initialize();
-            try { ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            ShopContext shop;
+            try
+            {
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                shopKey = shop.ShopKey;
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "无法确认消息所属店铺：" + ex.Message,
@@ -82,21 +104,30 @@ namespace Bot.Knowledge
             var route = BotReplySourceRouting.Resolve(source, manuallyCorrected);
             if (route.Kind == BotReplySourceRouting.RouteKind.AutoReplyRule)
             {
-                var active = ActiveShopSessionRegistry.GetActiveSellerNick();
-                if (!string.IsNullOrWhiteSpace(active)
-                    && !string.Equals(active, seller, StringComparison.Ordinal))
+                var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+                var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
+                var activeMismatch = !string.IsNullOrWhiteSpace(activeShopKey)
+                    ? !string.Equals(activeShopKey, shop.ShopKey, StringComparison.Ordinal)
+                    : !string.IsNullOrWhiteSpace(activeSeller)
+                        && !string.Equals(activeSeller, seller, StringComparison.Ordinal);
+                if (activeMismatch)
                 {
                     MessageBox.Show(owner,
-                        "当前活动客服与该消息所属客服不同。为避免跨店修改，请切换至该消息的客服账号后重试。"
-                        + "\n消息所属客服：" + seller,
+                        "当前活动店铺与该消息所属店铺不同。为避免跨店修改，请切换至该消息所属店铺后重试。"
+                        + "\n消息所属店铺：" + shop.ShopKey,
                         "店铺作用域保护", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                WndOption.MyShow(seller, null, OptionEnum.AutoReplyRules);
+                WndOption.MyShow(shop, null, OptionEnum.AutoReplyRules);
                 return;
             }
 
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shopKey
+            };
+            ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Loaded += delegate
             {
@@ -165,6 +196,7 @@ namespace Bot.Knowledge
 
         private readonly KnowledgeCenterWindow _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly ListBox _nav;
         private readonly ContentControl _content;
         private TextBox _globalSearch;
@@ -176,6 +208,7 @@ namespace Bot.Knowledge
             _owner = owner;
             _seller = !string.IsNullOrWhiteSpace(owner.RequestedSeller)
                 ? owner.RequestedSeller : KnowledgeCenterV2Context.ResolveSeller(owner);
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
 
             var root = new Grid { Background = Brushes.White };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -219,9 +252,9 @@ namespace Bot.Knowledge
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
                 Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
                 Nav("买家消息管理", () => new BuyerMessageManagementPage(_owner, _seller)),
-                Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller)),
+                Nav("Bot回复管理", () => new KnowledgeV2BotReplyManagementPage(_owner, _seller, _shopKey)),
                 Nav("短消息回复", () => new LocalShortReplyManagerControl(_seller)),
-                Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
+                Nav("优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller, _shopKey)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))
             };
             foreach (var item in items) _nav.Items.Add(item);
@@ -235,7 +268,14 @@ namespace Bot.Knowledge
                 if (!string.IsNullOrWhiteSpace(_seller))
                     System.Threading.Tasks.Task.Run(() =>
                     {
-                        try { KnowledgeEngineV2Service.Warm(_seller); } catch { }
+                        try
+                        {
+                            if (string.IsNullOrWhiteSpace(_shopKey)) return;
+                            var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                            using (ShopSettingsScope.Enter(shop))
+                                KnowledgeEngineV2Service.Warm(_seller);
+                        }
+                        catch { }
                     });
             };
         }
@@ -400,12 +440,13 @@ namespace Bot.Knowledge
         private void UpdateStatus()
         {
             if (_status == null) return;
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
-                _status.Text = "当前未识别店铺，知识页只读/不可执行检索。";
+                _status.Text = "当前未确认唯一ShopKey，知识页只读/不可执行店铺级检索或修改。";
                 return;
             }
-            _status.Text = "店铺：" + _seller + "　V2本地知识引擎（查询不触发定时全量重建）";
+            _status.Text = "店铺：" + _seller + "　ShopKey：" + _shopKey
+                + "　V2本地知识引擎（查询不触发定时全量重建）";
         }
     }
 
@@ -494,25 +535,44 @@ namespace Bot.Knowledge
             try
             {
                 var attached = ShopScopedUiBridge.Get(owner);
-                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
                 if (attached != null)
                 {
-                    foreach (var qn in qns)
-                    {
-                        if (qn == null || qn.Seller == null || string.IsNullOrWhiteSpace(qn.Seller.Nick)) continue;
-                        try
-                        {
-                            var shop = ShopContextLocator.ResolveBySellerNick(qn.Seller.Nick);
-                            if (shop != null && string.Equals(shop.ShopKey, attached.ShopKey, StringComparison.Ordinal))
-                                return qn.Seller.Nick.Trim();
-                        }
-                        catch { }
-                    }
+                    if (!string.IsNullOrWhiteSpace(attached.SellerNick))
+                        return attached.SellerNick;
+                    var exactQn = ShopContextLocator.FindConnectedQnByShopKey(attached.ShopKey);
+                    if (exactQn != null && exactQn.Seller != null)
+                        return (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    return string.Empty;
                 }
-                if (QN.CurQN != null && QN.CurQN.Seller != null && !string.IsNullOrWhiteSpace(QN.CurQN.Seller.Nick))
-                    return QN.CurQN.Seller.Nick.Trim();
-                var first = qns.FirstOrDefault(x => x != null && x.Seller != null && !string.IsNullOrWhiteSpace(x.Seller.Nick));
+
+                var current = QN.CurQN;
+                if (current != null && current.Seller != null
+                    && !string.IsNullOrWhiteSpace(current.Seller.Nick))
+                    return current.Seller.Nick.Trim();
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                var first = qns.FirstOrDefault(x => x != null && x.Seller != null
+                    && !string.IsNullOrWhiteSpace(x.Seller.Nick));
                 return first == null ? string.Empty : first.Seller.Nick.Trim();
+            }
+            catch { return string.Empty; }
+        }
+
+        public static string ResolveShopKey(Window owner, string seller)
+        {
+            try
+            {
+                var knowledgeWindow = owner as KnowledgeCenterWindow;
+                if (knowledgeWindow != null
+                    && !string.IsNullOrWhiteSpace(knowledgeWindow.RequestedShopKey))
+                    return knowledgeWindow.RequestedShopKey.Trim();
+                var attached = ShopScopedUiBridge.Get(owner);
+                if (attached != null) return attached.ShopKey;
+                var current = QN.CurQN;
+                if (current != null && current.Seller != null
+                    && string.Equals((current.Seller.Nick ?? string.Empty).Trim(),
+                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    return ShopIdentityResolver.Resolve(current.Seller).ShopKey;
+                return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey;
             }
             catch { return string.Empty; }
         }

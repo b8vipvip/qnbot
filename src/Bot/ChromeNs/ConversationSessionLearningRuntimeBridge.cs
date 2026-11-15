@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -9,15 +10,22 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
     internal static class ConversationSessionLearningRuntimeBridge
     {
         private const string StyleMessageKeyPrefix = "session-style:";
-        private static readonly ConcurrentDictionary<int, bool> Attached =
-            new ConcurrentDictionary<int, bool>();
+        // QN instances can be replaced without restarting Bot. A monotonically
+        // growing hash-code dictionary can mistake a new instance for an old one,
+        // skipping its message subscription. Weak reference-identity keys avoid
+        // both hash reuse and retaining retired QN wrappers.
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Seen =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly DateTime StartedAt = DateTime.Now;
@@ -49,16 +57,18 @@ namespace Bot.ChromeNs
 
                 lock (sync)
                 {
-                    var take = Math.Max(1, Math.Min(200, maxTurns <= 0 ? 120 : maxTurns));
+                    // maxTurns is retained for source compatibility only. A learning
+                    // round must never silently analyze just the first 120/200 turns.
                     return turns
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
                         .Where(x => x.Role == "user" || x.Role == "assistant")
                         .Where(x => includeWithdrawn || !x.Withdrawn)
-                        .Where(x => x.Timestamp == DateTime.MinValue
-                            || ((from == DateTime.MinValue || x.Timestamp >= from)
-                                && (to == DateTime.MinValue || x.Timestamp <= to)))
+                        // Unknown timestamps cannot be safely assigned to this session.
+                        // The complete-history gate reports them as incomplete instead.
+                        .Where(x => x.Timestamp != DateTime.MinValue)
+                        .Where(x => (from == DateTime.MinValue || x.Timestamp >= from)
+                            && (to == DateTime.MinValue || x.Timestamp <= to))
                         .OrderBy(x => x.Timestamp)
-                        .Take(take)
                         .Select(CloneTurn)
                         .ToList();
                 }
@@ -70,24 +80,37 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static Task<ConversationHistoryRefreshResult> RefreshRemoteHistoryCompleteAsync(
+            string shopKey,
+            string seller,
+            string buyer,
+            string ccode,
+            DateTime from,
+            DateTime to,
+            CancellationToken cancellationToken)
+        {
+            return ConversationContextStore.RefreshLearningHistoryCompleteAsync(
+                shopKey, seller, buyer, ccode, from, to, cancellationToken);
+        }
+
         public static bool RefreshRemoteHistory(string seller, string buyer, string ccode)
         {
-            seller = (seller ?? string.Empty).Trim();
-            buyer = (buyer ?? string.Empty).Trim();
-            ccode = (ccode ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return false;
-
+            var endAt = DateTime.Now;
             try
             {
-                // Learning must never use QN.CurQN as a cross-shop fallback.
-                var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null || qn.CDP == null) return false;
-                return ConversationContextStore.RefreshLearningHistory(seller, buyer, ccode);
+                // Compatibility wrapper resolves the same explicit scope as the
+                // calling operation. Ambiguous seller nicknames fail closed.
+                var shop = ShopSettingsScope.Current
+                    ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                var result = RefreshRemoteHistoryCompleteAsync(
+                    shop.ShopKey, seller, buyer, ccode,
+                    endAt.AddDays(-7), endAt, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return result != null && result.IsComplete;
             }
             catch (Exception ex)
             {
-                Log.Info("接待学习刷新聊天历史失败: seller=" + seller
-                    + ", buyer=" + buyer + ", error=" + ex.Message);
+                Log.Info("接待学习刷新完整聊天历史失败: error=" + ex.Message);
                 return false;
             }
         }
@@ -109,10 +132,14 @@ namespace Bot.ChromeNs
                 foreach (var qn in qns)
                 {
                     if (qn == null) continue;
-                    var key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(qn);
-                    if (!Attached.TryAdd(key, true)) continue;
-                    var captured = qn;
-                    captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        var captured = qn;
+                        captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                        Attached.Add(qn, new object());
+                    }
                 }
                 CleanupSeen();
             }
@@ -129,11 +156,28 @@ namespace Bot.ChromeNs
             {
                 var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (response == null || response.result == null) return;
-                foreach (var message in response.result
-                    .Where(x => x != null)
-                    .OrderBy(IncomingMessageSafety.GetSortValue))
+
+                ShopContext shop;
+                try
                 {
-                    ObserveMessage(qn, message);
+                    // The event source is the only unambiguous shop identity here.
+                    // Do not let duplicate seller nicknames collapse into a legacy key.
+                    shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("接待自动学习拒绝未绑定店铺的消息事件: " + ex.Message, 10);
+                    return;
+                }
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    foreach (var message in response.result
+                        .Where(x => x != null)
+                        .OrderBy(IncomingMessageSafety.GetSortValue))
+                    {
+                        ObserveMessage(qn, message);
+                    }
                 }
             }
             catch (Exception ex)
@@ -150,7 +194,15 @@ namespace Bot.ChromeNs
 
             var text = ExtractMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
-            if (!string.IsNullOrWhiteSpace(messageKey) && !Seen.TryAdd(messageKey, DateTime.Now)) return;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+            {
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                catch { return; }
+            }
+            var scopedMessageKey = shop.ShopKey + "|" + messageKey;
+            if (!string.IsNullOrWhiteSpace(messageKey)
+                && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
 
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)

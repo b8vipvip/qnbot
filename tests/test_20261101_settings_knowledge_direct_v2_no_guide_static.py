@@ -13,7 +13,7 @@ SHELL=read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
 def test_settings_left_knowledge_opens_real_v2_directly():
     assert 'OptionEnum.GoodsKnowledge' in WINDOW
     assert 'OpenKnowledgeCenterDirectly();' in WINDOW
-    assert 'KnowledgeCenterWindow.ShowForSeller(this, Seller)' in WINDOW
+    assert 'KnowledgeCenterWindow.ShowForSeller(this, Seller, _shop.ShopKey)' in WINDOW
     assert 'RestoreCurrentSettingsSelection();' in WINDOW
     assert 'if (_knowledgeCenterWindow != null)' in WINDOW
     assert '_knowledgeCenterWindow.Activate();' in WINDOW
@@ -21,8 +21,9 @@ def test_settings_left_knowledge_opens_real_v2_directly():
     assert 'event=open_knowledge_center_direct' in WINDOW
 
 def test_shopkey_and_seller_are_preserved_on_open():
-    assert 'internal static KnowledgeCenterWindow ShowForSeller(Window owner, string seller)' in CENTER
-    assert 'ShopContextLocator.ResolveRuntimeBySellerNick(seller)' in CENTER
+    assert 'internal static KnowledgeCenterWindow ShowForSeller(' in CENTER
+    assert 'Window owner, string seller, string shopKey =' in CENTER
+    assert 'ShopContextLocator.ResolveRuntimeByShopKey(shopKey)' in CENTER
     assert 'RequestedSeller = seller' in CENTER
     assert 'ShopScopedUiBridge.Attach(window, shop);' in CENTER
     assert 'if (owner != null) window.Owner = owner;' in CENTER

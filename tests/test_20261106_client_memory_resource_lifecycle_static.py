@@ -67,8 +67,9 @@ def test_timeline_cache_sweeps_only_after_context_window():
     assert "ReferenceEquals(current, state)" in timeline
     assert "States.TryRemove(pair.Key, out ignored)" in timeline
     assert "CachedTimelineCount" in timeline
-    # Runtime changes must not accidentally truncate the existing 100-turn mirror.
-    assert "if (state.Turns.Count > 100)" in timeline
+    # Live sessions retain their complete timeline; age-based cleanup is the retention boundary.
+    assert "Do not silently truncate a live session to 100 turns." in timeline
+    assert "state.Turns.RemoveRange" not in timeline
 
 
 def test_expired_working_memory_does_not_evict_active_buyers():

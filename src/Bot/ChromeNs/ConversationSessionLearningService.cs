@@ -21,6 +21,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string CCode { get; set; }
@@ -29,6 +30,7 @@ namespace Bot.ChromeNs
         public string StyleBefore { get; set; }
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
+        public string InputCoverageJson { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -53,6 +55,7 @@ namespace Bot.ChromeNs
     internal sealed class ConversationSessionLearningReportView
     {
         public string Id { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Status { get; set; }
@@ -60,6 +63,8 @@ namespace Bot.ChromeNs
         public string StyleBefore { get; set; }
         public string StyleAfter { get; set; }
         public string SuggestionsJson { get; set; }
+        public string InputCoverageJson { get; set; }
+        public string InputCoverageSummary { get; set; }
         public string Error { get; set; }
         public int AppliedCount { get; set; }
         public int SkippedCount { get; set; }
@@ -82,6 +87,10 @@ namespace Bot.ChromeNs
         public const int InactivityMinutes = 5;
         public const int SellerQuietSeconds = 30;
         public const int MaxSuggestionsPerSession = 8;
+        // Keep candidate generation observable, but do not mutate production V2
+        // knowledge until full-corpus coverage, transactional rollback and canary
+        // acceptance are implemented and verified.
+        private const bool EnableAutomaticWrites = false;
         public const int ReportRetentionDays = 90;
         public const int MaxReports = 1000;
 
@@ -89,6 +98,7 @@ namespace Bot.ChromeNs
         {
             public readonly object Sync = new object();
             public string EntityId;
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string CCode;
@@ -127,26 +137,37 @@ namespace Bot.ChromeNs
 
         public static void Initialize()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EnsureSchema();
-            ConversationSessionLearningRuntimeBridge.Initialize();
+            if (Interlocked.CompareExchange(ref _initialized, 1, 0) != 0) return;
             try
             {
-                if (Application.Current != null)
+                // Schema initialization must be retryable after a transient
+                // database lock; otherwise the first failed startup leaves the
+                // learning service permanently marked as initialized.
+                EnsureSchema();
+                ConversationSessionLearningRuntimeBridge.Initialize();
+                try
                 {
-                    Application.Current.Exit += (s, e) => DisposeAll();
+                    if (Application.Current != null)
+                    {
+                        Application.Current.Exit += (s, e) => DisposeAll();
+                    }
                 }
+                catch
+                {
+                }
+                Task.Run(async () =>
+                {
+                    await Task.Delay(2500);
+                    ResumePending();
+                    CleanupReports();
+                });
+                Log.Info("接待结束自动学习已启用：买家或客服连续5分钟无新消息后自动复盘；历史覆盖不完整时跳过AI与知识写入。");
             }
             catch
             {
+                Interlocked.Exchange(ref _initialized, 0);
+                throw;
             }
-            Task.Run(async () =>
-            {
-                await Task.Delay(2500);
-                ResumePending();
-                CleanupReports();
-            });
-            Log.Info("接待结束自动学习已启用：买家5分钟无新消息后自动复盘；本地优先模式会从完整买家/Bot/人工客服时间线提炼安全可复用问答并去重入库。" );
         }
 
         public static void ObserveLiveMessage(QNChatMessage message, string messageText, string seller, string buyer)
@@ -162,38 +183,72 @@ namespace Bot.ChromeNs
             var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, messageText);
             if (!isBuyer && !isSeller && !isWithdrawal) return;
 
-            var now = DateTime.Now;
-            var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
-            var key = Key(seller, buyer);
-            if (isBuyer)
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
             {
-                ActiveSession session;
-                if (!Active.TryGetValue(key, out session))
+                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+                catch (Exception ex)
                 {
-                    session = NewSession(seller, buyer, ccode, now);
-                    Active[key] = session;
+                    Log.ErrorWithMaxCount("接待自动学习拒绝无法唯一解析店铺的消息: " + ex.Message, 10);
+                    return;
                 }
-                lock (session.Sync)
-                {
-                    session.LastBuyerAt = now;
-                    session.LastActivityAt = now;
-                    session.RetryCount = 0;
-                    if (!string.IsNullOrWhiteSpace(ccode)) session.CCode = ccode;
-                    SaveSnapshot(session, "等待接待结束");
-                    Schedule(session, TimeSpan.FromMinutes(InactivityMinutes));
-                }
-                return;
             }
 
-            ActiveSession existing;
-            if (Active.TryGetValue(key, out existing))
+            var now = DateTime.Now;
+            var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
+            var key = Key(shop.ShopKey, seller, buyer);
+            if (isBuyer)
             {
+                while (true)
+                {
+                    ActiveSession session;
+                    if (!Active.TryGetValue(key, out session))
+                    {
+                        var created = NewSession(shop.ShopKey, seller, buyer, ccode, now);
+                        if (!Active.TryAdd(key, created))
+                        {
+                            DisposeTimer(created);
+                            continue;
+                        }
+                        session = created;
+                    }
+
+                    lock (session.Sync)
+                    {
+                        ActiveSession current;
+                        // FinalizeAsync removes a due session while holding the same
+                        // lock. Recheck dictionary ownership after acquiring it; if
+                        // that round was already retired, retry with a fresh session.
+                        if (!Active.TryGetValue(key, out current)
+                            || !ReferenceEquals(current, session))
+                            continue;
+
+                        session.LastBuyerAt = now;
+                        session.LastActivityAt = now;
+                        session.RetryCount = 0;
+                        if (!string.IsNullOrWhiteSpace(ccode)) session.CCode = ccode;
+                        SaveSnapshot(session, "等待接待结束");
+                        Schedule(session, TimeSpan.FromMinutes(InactivityMinutes));
+                    }
+                    return;
+                }
+            }
+
+            while (true)
+            {
+                ActiveSession existing;
+                if (!Active.TryGetValue(key, out existing)) return;
                 lock (existing.Sync)
                 {
+                    ActiveSession current;
+                    if (!Active.TryGetValue(key, out current)
+                        || !ReferenceEquals(current, existing))
+                        continue;
                     existing.LastActivityAt = now;
                     if (!string.IsNullOrWhiteSpace(ccode)) existing.CCode = ccode;
                     SaveSnapshot(existing, "等待接待结束");
                     Schedule(existing, TimeSpan.FromMinutes(InactivityMinutes));
+                    return;
                 }
             }
         }
@@ -231,6 +286,66 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static List<ConversationSessionLearningReportView> GetReportsForShop(
+            string shopKey, string seller, int maxCount)
+        {
+            Initialize();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0)
+                return new List<ConversationSessionLearningReportView>();
+
+            var take = Math.Max(1, Math.Min(MaxReports, maxCount <= 0 ? 200 : maxCount));
+            try
+            {
+                lock (DbSync)
+                {
+                    // Apply the exact ShopKey filter before LIMIT. Filtering the
+                    // latest global 1,000 rows in the UI hid older records for
+                    // quiet shops and risked leaking cross-shop result counts.
+                    return (DbHelper.Db.Select(
+                        typeof(ConversationSessionLearningReportEntity),
+                        "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit " + take,
+                        shopKey, seller) ?? new List<object>())
+                        .OfType<ConversationSessionLearningReportEntity>()
+                        .Where(x => x != null)
+                        .Select(ToView)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取本店接待学习记录失败：" + ex.Message, 10);
+                return new List<ConversationSessionLearningReportView>();
+            }
+        }
+
+        private static string BuildInputCoverageSummary(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "尚无覆盖记录";
+            try
+            {
+                var coverage = JObject.Parse(json);
+                var complete = coverage.Value<bool?>("historyComplete") == true;
+                var pages = coverage.Value<int?>("historyPages") ?? 0;
+                var turns = coverage.Value<int?>("timelineTurns") ?? 0;
+                var cards = coverage.Value<int?>("botCards") ?? 0;
+                var cardsComplete = coverage.Value<bool?>("botCardsComplete") == true;
+                var corpusComplete = coverage.Value<bool?>("knowledgeCorpusComplete") == true;
+                var mode = Convert.ToString(coverage["writeMode"]);
+                return "历史" + (complete ? "完整" : "不完整")
+                    + " / 分页" + pages
+                    + " / 消息" + turns
+                    + " / Bot卡片" + cards + (cardsComplete ? "完整" : "辅助/未证全")
+                    + " / V2全库" + (corpusComplete ? "完整" : "未覆盖")
+                    + " / " + (mode == "dry_run" ? "dry-run" : "自动");
+            }
+            catch
+            {
+                return "覆盖记录格式异常";
+            }
+        }
+
         public static string FormatReport(ConversationSessionLearningReportView report)
         {
             if (report == null) return string.Empty;
@@ -259,6 +374,13 @@ namespace Bot.ChromeNs
                 sb.AppendLine("学习后风格：");
                 sb.AppendLine(string.IsNullOrWhiteSpace(report.StyleAfter) ? "（未变化）" : report.StyleAfter);
             }
+            if (!string.IsNullOrWhiteSpace(report.InputCoverageJson))
+            {
+                sb.AppendLine();
+                sb.AppendLine("本轮输入覆盖：");
+                try { sb.AppendLine(JToken.Parse(report.InputCoverageJson).ToString(Formatting.Indented)); }
+                catch { sb.AppendLine(report.InputCoverageJson); }
+            }
             if (!string.IsNullOrWhiteSpace(report.SuggestionsJson))
             {
                 sb.AppendLine();
@@ -274,11 +396,12 @@ namespace Bot.ChromeNs
             return sb.ToString().Trim();
         }
 
-        private static ActiveSession NewSession(string seller, string buyer, string ccode, DateTime now)
+        private static ActiveSession NewSession(string shopKey, string seller, string buyer, string ccode, DateTime now)
         {
             var session = new ActiveSession
             {
                 EntityId = Guid.NewGuid().ToString("N"),
+                ShopKey = (shopKey ?? string.Empty).Trim(),
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
                 CCode = (ccode ?? string.Empty).Trim(),
@@ -287,8 +410,6 @@ namespace Bot.ChromeNs
                 LastActivityAt = now
             };
             session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-            SaveSnapshot(session, "等待接待结束");
-            Log.Info("已开始接待自动学习轮次: seller=" + session.Seller + ", buyer=" + session.Buyer);
             return session;
         }
 
@@ -300,49 +421,137 @@ namespace Bot.ChromeNs
 
         private static async Task FinalizeAsync(ActiveSession session)
         {
-            var key = Key(session.Seller, session.Buyer);
+            var key = Key(session.ShopKey, session.Seller, session.Buyer);
             lock (session.Sync)
             {
-                // A round ends five minutes after the last buyer OR seller message.
+                // Serialize the due check and dictionary removal with message
+                // observation. Otherwise a buyer message can update this session
+                // after the timer checks it but just before TryRemove, losing that
+                // message and silently closing the new round.
                 var activityRemaining = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                 if (activityRemaining > TimeSpan.Zero)
                 {
                     Schedule(session, activityRemaining);
                     return;
                 }
-            }
 
-            ActiveSession current;
-            if (!Active.TryGetValue(key, out current) || !ReferenceEquals(current, session)) return;
-            if (!Active.TryRemove(key, out current)) return;
+                ActiveSession current;
+                if (!Active.TryGetValue(key, out current) || !ReferenceEquals(current, session)) return;
+                if (!Active.TryRemove(key, out current) || !ReferenceEquals(current, session)) return;
+            }
             DisposeTimer(session);
             SaveSnapshot(session, "正在复盘");
 
             try
             {
-                if (!string.IsNullOrWhiteSpace(session.CCode))
-                {
-                    await Task.Run(() => ConversationSessionLearningRuntimeBridge.RefreshRemoteHistory(
-                        session.Seller, session.Buyer, session.CCode));
-                    await Task.Delay(500);
-                }
-
                 var endAt = DateTime.Now;
                 var from = session.StartedAt.AddMinutes(-1);
-                var turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
-                    session.Seller, session.Buyer, from, endAt, 120, true);
-                var cards = BotConversationHistoryStore.LoadRange(
-                    session.Seller, session.Buyer, from, endAt, 120);
+                ConversationHistoryRefreshResult historyCoverage;
+                List<ConversationContextTurn> turns;
+                List<BotConversationHistoryEntity> cards;
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey);
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    if (string.IsNullOrWhiteSpace(session.CCode))
+                    {
+                        historyCoverage = new ConversationHistoryRefreshResult
+                        {
+                            IsComplete = false,
+                            ErrorCode = "missing_conversation_code"
+                        };
+                    }
+                    else
+                    {
+                        historyCoverage = await ConversationSessionLearningRuntimeBridge.RefreshRemoteHistoryCompleteAsync(
+                            session.ShopKey, session.Seller, session.Buyer, session.CCode,
+                            from, endAt, CancellationToken.None);
+                    }
+
+                    // Timeline lookup and Bot-card lookup must use the same exact
+                    // ShopKey scope as the remote CDP request.
+                    turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
+                        session.Seller, session.Buyer, from, endAt, 0, true);
+                    cards = BotConversationHistoryStore.LoadRangeComplete(
+                        session.ShopKey, session.Seller, session.Buyer, from, endAt);
+                }
+                if (historyCoverage != null && historyCoverage.IsComplete
+                    && historyCoverage.MessagesInWindow != turns.Count)
+                {
+                    historyCoverage.IsComplete = false;
+                    historyCoverage.ErrorCode = "remote_history_turn_count_mismatch";
+                }
+                var report = LoadReport(session.EntityId) ?? NewReport(session);
+                report.InputCoverageJson = new JObject
+                {
+                    ["historyComplete"] = historyCoverage != null && historyCoverage.IsComplete,
+                    ["historyPages"] = historyCoverage == null ? 0 : historyCoverage.PagesFetched,
+                    ["historyMessagesFetched"] = historyCoverage == null ? 0 : historyCoverage.MessagesFetched,
+                    ["historyMessagesInWindow"] = historyCoverage == null ? 0 : historyCoverage.MessagesInWindow,
+                    ["unknownTimestampCount"] = historyCoverage == null ? 0 : historyCoverage.UnknownTimestampCount,
+                    ["timelineTurns"] = turns.Count,
+                    ["botCards"] = cards.Count,
+                    // The global 90-day/10k-card retention policy does not expose
+                    // per-session truncation markers; cards are auxiliary evidence,
+                    // never the authoritative completeness source.
+                    ["botCardsComplete"] = false,
+                    ["historyStopReason"] = historyCoverage == null ? string.Empty : historyCoverage.StopReason,
+                    ["historyErrorCode"] = historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode,
+                    ["knowledgeCorpusComplete"] = false,
+                    ["knowledgeCorpusRecords"] = 0,
+                    ["writeMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
+                    ["windowStart"] = from.ToString("o"),
+                    ["windowEnd"] = endAt.ToString("o")
+                }.ToString(Formatting.None);
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+
+                if (historyCoverage == null || !historyCoverage.IsComplete)
+                {
+                    if (session.RetryCount < 3
+                        && historyCoverage != null
+                        && historyCoverage.ErrorCode != "missing_conversation_scope"
+                        && historyCoverage.ErrorCode != "invalid_session_window"
+                        && historyCoverage.ErrorCode != "missing_conversation_code")
+                    {
+                        session.RetryCount++;
+                        report.Status = "等待完整历史恢复";
+                        report.Error = "history_coverage_incomplete:" + historyCoverage.ErrorCode;
+                        SaveReport(report);
+                        NotifyChanged();
+                        Requeue(session);
+                        return;
+                    }
+
+                    report.Status = "历史覆盖不完整，已跳过";
+                    report.Summary = "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库。";
+                    report.Error = "history_coverage_incomplete:"
+                        + (historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode);
+                    report.CompletedAtTicks = DateTime.Now.Ticks;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    return;
+                }
+
                 if (turns.Count(x => x.Role == "user" && !x.Withdrawn) < 1
                     || turns.Count(x => x.Role == "assistant") < 1)
                 {
                     if (session.RetryCount < 3)
                     {
                         session.RetryCount++;
+                        report.Status = "等待完整双方聊天记录";
+                        report.Error = "session_timeline_incomplete";
+                        SaveReport(report);
+                        NotifyChanged();
                         Requeue(session);
                         return;
                     }
-                    CompleteSkipped(session, "聊天历史不足，未自动修改知识库。", "未读取到完整双方聊天记录");
+                    report.Status = "聊天历史不足，已跳过";
+                    report.Summary = "完整分页后仍未读取到双方聊天记录，未调用AI，也未写入生产知识库。";
+                    report.Error = "session_timeline_incomplete";
+                    report.CompletedAtTicks = DateTime.Now.Ticks;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
                     return;
                 }
 
@@ -350,9 +559,6 @@ namespace Bot.ChromeNs
                 // context. Resolve the exact online shop BEFORE reading reply mode,
                 // per-shop AI endpoints, prompt settings or producing AI suggestions.
                 // Task.Run inside CallStructuredChat inherits this AsyncLocal scope.
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(session.Seller);
-                if (shop == null)
-                    throw new InvalidOperationException("接待自动学习无法确认本轮所属店铺，已停止AI调用与知识写入");
                 bool localFirst;
                 string styleBefore;
                 JObject analysis;
@@ -364,7 +570,9 @@ namespace Bot.ChromeNs
                 }
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
-                if (CountHumanSellerTurns(turns, cards) >= 2 && !string.IsNullOrWhiteSpace(styleAfter))
+                if (EnableAutomaticWrites
+                    && CountHumanSellerTurns(turns, cards) >= 2
+                    && !string.IsNullOrWhiteSpace(styleAfter))
                 {
                     using (ShopSettingsScope.Enter(shop))
                         SaveStyleProfile(session.Seller, styleAfter);
@@ -405,6 +613,12 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
+                        if (!EnableAutomaticWrites)
+                        {
+                            suggestion.ApplyMessage = "默认dry-run：完整Knowledge V2语料覆盖、原子更新/回滚与Windows灰度验收尚未完成，未写入生产知识库";
+                            skipped++;
+                            continue;
+                        }
                         var result = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
                             suggestion.Question, suggestion.Answer, suggestion.Category, suggestion.Keywords,
                             localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
@@ -415,13 +629,16 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                var report = LoadReport(session.EntityId) ?? NewReport(session);
-                report.Status = "学习完成";
-                report.Summary = summary;
+                report = LoadReport(session.EntityId) ?? NewReport(session);
+                report.Status = EnableAutomaticWrites ? "学习完成" : "学习完成（dry-run）";
+                report.Summary = EnableAutomaticWrites
+                    ? summary
+                    : summary + "（当前为dry-run；完整Knowledge V2语料覆盖与生产写入门禁尚未完成）";
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
                     suggestions, analysis["workflow_proposals"] as JArray, session.Seller);
+                report.InputCoverageJson = report.InputCoverageJson ?? string.Empty;
                 report.AppliedCount = applied;
                 report.SkippedCount = skipped;
                 report.Error = string.Empty;
@@ -467,6 +684,7 @@ namespace Bot.ChromeNs
                         "你是电商客服接待复盘与知识迭代系统。分析完整一轮聊天，对比Bot原答案与客服最终实际回复。只输出JSON："
                         + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}],\"workflow_proposals\":[{\"stage\":\"当前流程阶段\",\"trigger\":\"何种买家证据触发\",\"required_evidence\":\"必须先有的真实订单或图片证据\",\"action\":\"WAIT|ASK_EVIDENCE|REPLY|SEND_VERIFIED_GUIDE|HANDOFF\",\"next_stage\":\"下一阶段\",\"evidence\":\"本次人工操作证据\",\"reason\":\"原因\"}]}。"
                         + learningPolicy
+                        + "已通过远程历史分页及时间线条数一致性校验的聊天时间线是本轮唯一完整性依据。Bot问答卡片仅为辅助元数据，可能受本地保留上限影响而不完整；不得因卡片缺失推断Bot未回复或人工回复。"
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
@@ -480,7 +698,7 @@ namespace Bot.ChromeNs
                         + "\n回复模式：" + (localFirst ? "本地优先" : "AI优先")
                         + "\n现有表达风格：" + (string.IsNullOrWhiteSpace(styleBefore) ? "（暂无）" : styleBefore)
                         + "\n\n聊天时间线（买家/Bot/人工客服全部消息）：\n" + BuildTranscript(turns, cards)
-                        + "\n\nBot问答记录：\n" + BuildCards(cards)
+                        + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
                 }
             };
             var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
@@ -509,9 +727,10 @@ namespace Bot.ChromeNs
 
         private static string BuildCards(List<BotConversationHistoryEntity> cards)
         {
-            if (cards == null || cards.Count == 0) return "（无）";
+            if (cards == null || cards.Count == 0)
+                return "（无可用卡片；卡片存储可能不完整，不能推断本轮没有Bot回复）";
             var sb = new StringBuilder();
-            foreach (var card in cards.OrderBy(x => x.CreatedAtTicks).Take(80))
+            foreach (var card in cards.OrderBy(x => x.CreatedAtTicks))
             {
                 sb.Append("[问题] ").AppendLine(Redact(card.Question));
                 sb.Append("[Bot原答案] ").AppendLine(Redact(StripAi(card.Answer)));
@@ -528,10 +747,30 @@ namespace Bot.ChromeNs
         private static bool IsBotTurn(ConversationContextTurn turn, List<BotConversationHistoryEntity> cards)
         {
             var text = (turn == null ? string.Empty : turn.Text ?? string.Empty).Trim();
-            if (text.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) return true;
+            // Qianniu's outbound echo marker is [A]; older payloads also used [AI].
+            // A Bot turn must be identified explicitly, not by text equality alone.
+            if (HasBotEchoMarker(text)) return true;
+
             var normalized = Normalize(StripAi(text));
-            return normalized.Length > 0 && cards != null
-                && cards.Any(x => Normalize(StripAi(x.Answer)) == normalized);
+            if (normalized.Length == 0 || cards == null || turn == null
+                || turn.Timestamp == DateTime.MinValue) return false;
+
+            var targetTicks = turn.Timestamp.Ticks;
+            return cards.Any(card =>
+            {
+                if (card == null || Normalize(StripAi(card.Answer)) != normalized) return false;
+                var cardTicks = card.AnswerReadyAtTicks > 0
+                    ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
+                return cardTicks > 0
+                    && Math.Abs((double)(cardTicks - targetTicks)) <= TimeSpan.FromMinutes(30).Ticks;
+            });
+        }
+
+        private static bool HasBotEchoMarker(string value)
+        {
+            value = (value ?? string.Empty).TrimEnd();
+            return value.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase);
         }
 
         private static List<Suggestion> ParseSuggestions(JArray array)
@@ -719,8 +958,32 @@ namespace Bot.ChromeNs
 
         private static void Requeue(ActiveSession session)
         {
+            if (session == null) return;
+            var key = Key(session.ShopKey, session.Seller, session.Buyer);
             session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-            Active[Key(session.Seller, session.Buyer)] = session;
+            if (!Active.TryAdd(key, session))
+            {
+                ActiveSession current;
+                if (Active.TryGetValue(key, out current) && ReferenceEquals(current, session))
+                {
+                    Schedule(session, TimeSpan.FromMinutes(1));
+                    return;
+                }
+
+                // A new buyer message may have opened the next round while the
+                // previous round was fetching history. Never overwrite that newer
+                // session with the old retry; preserve both audit outcomes.
+                DisposeTimer(session);
+                var report = LoadReport(session.EntityId) ?? NewReport(session);
+                report.Status = "历史覆盖不完整，后续接待已开始，已跳过";
+                report.Error = "requeue_conflict_new_session_active";
+                report.CompletedAtTicks = DateTime.Now.Ticks;
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+                SaveReport(report);
+                NotifyChanged();
+                return;
+            }
+
             SaveSnapshot(session, "等待聊天历史恢复后再次复盘");
             Schedule(session, TimeSpan.FromMinutes(1));
         }
@@ -740,6 +1003,7 @@ namespace Bot.ChromeNs
         private static void SaveSnapshot(ActiveSession session, string status)
         {
             var report = LoadReport(session.EntityId) ?? NewReport(session);
+            report.ShopKey = session.ShopKey;
             report.CCode = session.CCode;
             report.Status = status;
             report.LastBuyerAtTicks = session.LastBuyerAt.Ticks;
@@ -756,6 +1020,7 @@ namespace Bot.ChromeNs
             return new ConversationSessionLearningReportEntity
             {
                 EntityId = session.EntityId,
+                ShopKey = session.ShopKey,
                 Seller = session.Seller,
                 Buyer = session.Buyer,
                 CCode = session.CCode,
@@ -764,6 +1029,7 @@ namespace Bot.ChromeNs
                 StyleBefore = string.Empty,
                 StyleAfter = string.Empty,
                 SuggestionsJson = string.Empty,
+                InputCoverageJson = string.Empty,
                 Error = string.Empty,
                 SessionStartedAtTicks = session.StartedAt.Ticks,
                 LastBuyerAtTicks = session.LastBuyerAt.Ticks,
@@ -801,43 +1067,89 @@ namespace Bot.ChromeNs
             catch { return null; }
         }
 
-        private static string GetStyleProfile(string seller)
+        private static string ProfileKey(string seller)
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+            {
+                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+                catch { return string.Empty; }
+            }
+            return shop.ShopKey + "#" + seller;
+        }
+
+        private static string GetStyleProfile(string seller)
+        {
+            var key = ProfileKey(seller);
+            if (key.Length == 0) return string.Empty;
             StoreReplyStyleProfileEntity cached;
-            if (StyleCache.TryGetValue(seller, out cached) && cached != null) return cached.Profile ?? string.Empty;
+            if (StyleCache.TryGetValue(key, out cached) && cached != null) return cached.Profile ?? string.Empty;
             EnsureSchema();
             lock (DbSync)
             {
                 var entity = (DbHelper.Db.Select(
                     typeof(StoreReplyStyleProfileEntity),
-                    "where Seller = ? limit 1", seller) ?? new List<object>())
+                    "where Seller = ? limit 1", key) ?? new List<object>())
                     .OfType<StoreReplyStyleProfileEntity>()
                     .FirstOrDefault();
+
+                if (entity == null)
+                {
+                    // Old style profiles were keyed only by display nickname.
+                    // Migrate them only if the registry proves that nickname maps
+                    // to one shop; a legacy shared profile must never be guessed
+                    // into one of several shops that happen to use the same nick.
+                    try
+                    {
+                        var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                        if (string.Equals(resolved.ShopKey + "#" + seller, key, StringComparison.Ordinal))
+                        {
+                            var legacy = (DbHelper.Db.Select(
+                                typeof(StoreReplyStyleProfileEntity),
+                                "where Seller = ? limit 1", seller) ?? new List<object>())
+                                .OfType<StoreReplyStyleProfileEntity>()
+                                .FirstOrDefault();
+                            if (legacy != null)
+                            {
+                                DbHelper.Db.Execute(
+                                    "update StoreReplyStyleProfileEntity set Seller = ? where Seller = ?",
+                                    key, seller);
+                                legacy.Seller = key;
+                                entity = legacy;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ambiguous legacy style evidence remains unassigned.
+                    }
+                }
+
                 if (entity == null) return string.Empty;
-                StyleCache[seller] = entity;
+                StyleCache[key] = entity;
                 return entity.Profile ?? string.Empty;
             }
         }
 
         private static void SaveStyleProfile(string seller, string profile)
         {
-            seller = (seller ?? string.Empty).Trim();
+            var key = ProfileKey(seller);
             profile = Clean(profile, 800);
-            if (seller.Length == 0 || profile.Length == 0) return;
+            if (key.Length == 0 || profile.Length == 0) return;
             lock (DbSync)
             {
                 var entity = (DbHelper.Db.Select(
                     typeof(StoreReplyStyleProfileEntity),
-                    "where Seller = ? limit 1", seller) ?? new List<object>())
+                    "where Seller = ? limit 1", key) ?? new List<object>())
                     .OfType<StoreReplyStyleProfileEntity>()
-                    .FirstOrDefault() ?? new StoreReplyStyleProfileEntity { Seller = seller };
+                    .FirstOrDefault() ?? new StoreReplyStyleProfileEntity { Seller = key };
                 entity.Profile = profile;
                 entity.LearnedSessions = Math.Max(0, entity.LearnedSessions) + 1;
                 entity.UpdatedAtTicks = DateTime.Now.Ticks;
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
-                StyleCache[seller] = entity;
+                StyleCache[key] = entity;
             }
         }
 
@@ -855,11 +1167,48 @@ namespace Bot.ChromeNs
                         .OfType<ConversationSessionLearningReportEntity>()
                         .ToList();
                 }
-                foreach (var report in reports.GroupBy(x => Key(x.Seller, x.Buyer)).Select(x => x.First()))
+                var resumedKeys = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var report in reports)
                 {
+                    if (report == null) continue;
+                    if (string.IsNullOrWhiteSpace(report.ShopKey))
+                    {
+                        // Legacy reports did not persist ShopKey. Restore only when
+                        // the seller nickname resolves to exactly one connected shop.
+                        try
+                        {
+                            report.ShopKey = ShopContextLocator.ResolveRuntimeBySellerNick(report.Seller).ShopKey;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                        }
+                        catch
+                        {
+                            report.Status = "店铺身份无法唯一解析，待人工复核";
+                            report.Error = "legacy_report_shop_scope_unavailable";
+                            report.CompletedAtTicks = DateTime.Now.Ticks;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                            continue;
+                        }
+                    }
+
+                    var key = Key(report.ShopKey, report.Seller, report.Buyer);
+                    if (!resumedKeys.Add(key))
+                    {
+                        // The newest pending report is processed first. Older
+                        // pending rows for the same shop/buyer must be terminally
+                        // marked instead of being silently retried on every restart.
+                        report.Status = "重复待恢复记录，已由最新轮次接管";
+                        report.Error = "superseded_pending_session_duplicate";
+                        report.CompletedAtTicks = DateTime.Now.Ticks;
+                        report.UpdatedAtTicks = DateTime.Now.Ticks;
+                        SaveReport(report);
+                        continue;
+                    }
                     var session = new ActiveSession
                     {
                         EntityId = report.EntityId,
+                        ShopKey = report.ShopKey,
                         Seller = report.Seller,
                         Buyer = report.Buyer,
                         CCode = report.CCode,
@@ -872,7 +1221,22 @@ namespace Bot.ChromeNs
                     if (session.LastBuyerAt == DateTime.MinValue) session.LastBuyerAt = session.StartedAt;
                     if (session.LastActivityAt == DateTime.MinValue) session.LastActivityAt = session.LastBuyerAt;
                     session.Timer = new Timer(OnDue, session, Timeout.Infinite, Timeout.Infinite);
-                    Active[Key(session.Seller, session.Buyer)] = session;
+                    if (!Active.TryAdd(key, session))
+                    {
+                        DisposeTimer(session);
+                        ActiveSession current;
+                        if (Active.TryGetValue(key, out current)
+                            && current != null
+                            && !string.Equals(current.EntityId, report.EntityId, StringComparison.Ordinal))
+                        {
+                            report.Status = "重复待恢复记录，已有更新轮次接管";
+                            report.Error = "superseded_by_active_session";
+                            report.CompletedAtTicks = DateTime.Now.Ticks;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                        }
+                        continue;
+                    }
                     var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                     Schedule(session, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
                 }
@@ -890,7 +1254,7 @@ namespace Bot.ChromeNs
                 lock (DbSync)
                 {
                     DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where EntityId not in (select EntityId from ConversationSessionLearningReportEntity order by UpdatedAtTicks desc limit " + MaxReports + ")");
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 order by UpdatedAtTicks desc limit " + MaxReports + ")");
                 }
             }
             catch (Exception ex)
@@ -905,7 +1269,23 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try
+                {
+                    DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column ShopKey text");
+                }
+                catch
+                {
+                    // Existing installations already have the shop-scope column.
+                }
+                try
+                {
+                    DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column InputCoverageJson text");
+                }
+                catch
+                {
+                    // Existing installations already have the coverage column.
+                }
                 DbHelper.Db.Execute("create index if not exists IX_ConversationSessionLearning_Updated on ConversationSessionLearningReportEntity(UpdatedAtTicks)");
                 DbHelper.Db.Execute("create table if not exists StoreReplyStyleProfileEntity (Seller text primary key not null,Profile text,LearnedSessions integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 Volatile.Write(ref _schemaReady, 1);
@@ -917,6 +1297,7 @@ namespace Bot.ChromeNs
             return new ConversationSessionLearningReportView
             {
                 Id = entity.EntityId,
+                ShopKey = entity.ShopKey,
                 Seller = entity.Seller,
                 Buyer = entity.Buyer,
                 Status = entity.Status,
@@ -924,6 +1305,8 @@ namespace Bot.ChromeNs
                 StyleBefore = entity.StyleBefore,
                 StyleAfter = entity.StyleAfter,
                 SuggestionsJson = entity.SuggestionsJson,
+                InputCoverageJson = entity.InputCoverageJson,
+                InputCoverageSummary = BuildInputCoverageSummary(entity.InputCoverageJson),
                 Error = entity.Error,
                 AppliedCount = entity.AppliedCount,
                 SkippedCount = entity.SkippedCount,
@@ -1090,8 +1473,23 @@ namespace Bot.ChromeNs
         private static string Safe(string value) { return Redact(value).Replace("\r", " ").Replace("\n", " "); }
         private static string Clean(string value, int max) { value = (value ?? string.Empty).Trim(); return max > 0 && value.Length > max ? value.Substring(0, max).Trim() : value; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty); }
-        private static string StripAi(string value) { value = (value ?? string.Empty).Trim(); while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) value = value.Substring(0, value.Length - 4).TrimEnd(); return value; }
-        private static string Key(string seller, string buyer) { return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim(); }
+        private static string StripAi(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith("[A]", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                    ? value.Substring(0, value.Length - 4).TrimEnd()
+                    : value.Substring(0, value.Length - 3).TrimEnd();
+            }
+            return value;
+        }
+        private static string Key(string shopKey, string seller, string buyer)
+        {
+            return (shopKey ?? string.Empty).Trim() + "#" + (seller ?? string.Empty).Trim()
+                + "#" + (buyer ?? string.Empty).Trim();
+        }
         private static DateTime FromTicks(long ticks) { try { return ticks > 0 ? new DateTime(ticks) : DateTime.MinValue; } catch { return DateTime.MinValue; } }
         private static string TimeText(DateTime value) { return value == DateTime.MinValue ? "（未知）" : value.ToString("yyyy-MM-dd HH:mm:ss"); }
 

@@ -15,6 +15,7 @@ using BotLib.Db.Sqlite;
 using BotLib.Wpf.Extensions;
 using System.Security.Cryptography;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using Bot.Knowledge;
 using Bot.AssistWindow.Widget.Robot;
 using System.Collections.Concurrent;
@@ -130,10 +131,19 @@ namespace Bot.AssistWindow.Widget.Robot
             BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
             RefreshStats();
 
-            var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply, answerSource);
+            var shopKey = ResolveShopKeyForConversation(seller, buyer);
+            var ctlConversation = CtlConversation.Create(
+                seller, buyer, question, answer, isAutoReply, answerSource, shopKey);
             ctlConversation.ResendRequested += CtlConversation_ResendRequested;
             ctlConversation.EditRequested += CtlConversation_EditRequested;
+            if (string.IsNullOrWhiteSpace(shopKey))
+            {
+                // A display nickname is not a shop identity. Do not mix cards when
+                // the active QN instance cannot prove which shop produced this reply.
+                Log.Info("Bot问答卡片未归档：无法唯一确认ShopKey，seller=" + seller);
+                return ctlConversation;
+            }
+            var key = BuildConversationKey(shopKey, seller, buyer);
             var conversations = buyerConversations.xTryGetValue(key);
             if (conversations == null || conversations.Count < 1)
             {
@@ -147,10 +157,22 @@ namespace Bot.AssistWindow.Widget.Robot
             buyerConversations.AddOrUpdate(key, id => conversations, (k, v) => conversations);
             PruneConversationUiCache(key);
 
-            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null
-                && QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
+            var activeQn = _preQN ?? QN.CurQN;
+            if (activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
+                && string.Equals(activeQn.Seller.Nick, seller, StringComparison.Ordinal)
+                && string.Equals(activeQn.Buyer.Nick, buyer, StringComparison.Ordinal))
             {
-                RefreshMessageMirror(false);
+                try
+                {
+                    var activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
+                    if (string.Equals(activeShopKey, shopKey, StringComparison.Ordinal))
+                        RefreshMessageMirror(false);
+                }
+                catch
+                {
+                    // The answer card remains visible, but never refresh a mirror
+                    // whose exact QN-to-ShopKey relationship cannot be verified.
+                }
             }
             return ctlConversation;
         }
@@ -170,9 +192,16 @@ namespace Bot.AssistWindow.Widget.Robot
             }
 
             if (buyerConversations.Count <= MaxCachedBuyerPanels) return;
-            var activeQn = QN.CurQN;
+            var activeQn = _preQN ?? QN.CurQN;
+            var activeShopKey = string.Empty;
+            if (activeQn != null && activeQn.Seller != null)
+            {
+                try { activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey; }
+                catch { activeShopKey = string.Empty; }
+            }
             var activeKey = activeQn != null && activeQn.Seller != null && activeQn.Buyer != null
-                ? string.Format("{0}#{1}", activeQn.Seller.Nick, activeQn.Buyer.Nick)
+                && !string.IsNullOrWhiteSpace(activeShopKey)
+                ? BuildConversationKey(activeShopKey, activeQn.Seller.Nick, activeQn.Buyer.Nick)
                 : string.Empty;
             // LRU applies only to transient WPF answer controls, never the persisted
             // question/answer records or the currently viewed buyer. Background
@@ -193,6 +222,37 @@ namespace Bot.AssistWindow.Widget.Robot
                 long ignoredTimestamp;
                 _buyerPanelAccessTicks.TryRemove(key, out ignoredTimestamp);
             }
+        }
+
+        private string ResolveShopKeyForConversation(string seller, string buyer)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            var qn = _preQN;
+            if (qn == null || qn.Seller == null
+                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+            {
+                var current = QN.CurQN;
+                if (current != null && current.Seller != null
+                    && string.Equals((current.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                    qn = current;
+            }
+
+            if (qn != null && qn.Seller != null
+                && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+            {
+                try { return ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
+                catch { return string.Empty; }
+            }
+
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
+            catch { return string.Empty; }
+        }
+
+        private static string BuildConversationKey(string shopKey, string seller, string buyer)
+        {
+            return (shopKey ?? string.Empty).Trim() + "#"
+                + (seller ?? string.Empty).Trim() + "#"
+                + (buyer ?? string.Empty).Trim();
         }
 
         private void ReleaseConversationUiHandlers(IEnumerable<CtlConversation> controls)
@@ -219,47 +279,46 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 ctl.SetSendPending("手动重发中...");
-                var qn = QN.FindExistingBySellerNick(e.Seller);
+                if (string.IsNullOrWhiteSpace(e.ShopKey))
+                {
+                    ctl.SetSendResult(false, "重发失败：历史卡片缺少ShopKey，已阻止按昵称猜测店铺");
+                    return;
+                }
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(e.ShopKey);
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(e.ShopKey);
                 if (qn == null || qn.CDP == null)
                 {
-                    ctl.SetSendResult(false, "重发失败：未找到该客服账号对应的在线千牛会话");
-                    SendFailureAnomalyService.Queue(
-                        e.Seller,
-                        e.Buyer,
-                        e.Question,
-                        e.Answer,
-                        "手动重发",
-                        "点击重发时未找到与原客服账号精确匹配且CDP在线的千牛实例，已阻止回退到其他店铺或错误会话。",
-                        DateTime.Now,
-                        DateTime.Now,
-                        DateTime.Now);
+                    ctl.SetSendResult(false, "重发失败：原店铺未连接或CDP不可用");
                     return;
                 }
 
                 var resendStartedAt = DateTime.Now;
-                SendDeliveryWatchdog.ExpectDelivery(
-                    e.Seller,
-                    e.Buyer,
-                    e.Question,
-                    e.Answer,
-                    "手动重发",
-                    resendStartedAt,
-                    resendStartedAt);
-                KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
-                var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
-                ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
-                if (!ok)
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    SendFailureAnomalyService.Queue(
+                    SendDeliveryWatchdog.ExpectDelivery(
                         e.Seller,
                         e.Buyer,
                         e.Question,
                         e.Answer,
                         "手动重发",
-                        "精确匹配到客服账号后，SendTextWithRetryAsync 重试结束仍返回失败。",
                         resendStartedAt,
-                        resendStartedAt,
-                        DateTime.Now);
+                        resendStartedAt);
+                    KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
+                    var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
+                    ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
+                    if (!ok)
+                    {
+                        SendFailureAnomalyService.Queue(
+                            e.Seller,
+                            e.Buyer,
+                            e.Question,
+                            e.Answer,
+                            "手动重发",
+                            "按ShopKey精确匹配到客服账号后，SendTextWithRetryAsync 重试结束仍返回失败。",
+                            resendStartedAt,
+                            resendStartedAt,
+                            DateTime.Now);
+                    }
                 }
             }
             catch (Exception ex)
@@ -283,6 +342,19 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             var ctl = sender as CtlConversation;
             if (ctl == null) return;
+            if (string.IsNullOrWhiteSpace(e.ShopKey))
+            {
+                ctl.SetStatus("无法确认原始店铺身份，已阻止修改写入。", false);
+                return;
+            }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(e.ShopKey); }
+            catch (Exception ex)
+            {
+                ctl.SetStatus("无法恢复原始店铺身份，已阻止修改写入。", false);
+                Log.ErrorWithMaxCount("Bot回复修改拒绝未解析的ShopKey: " + ex.Message, 5);
+                return;
+            }
             var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
             if (wnd.ShowDialog() != true) return;
             // WPF controls must be read only on the UI thread, not inside Task.Run.
@@ -301,8 +373,11 @@ namespace Bot.AssistWindow.Widget.Robot
                     string message = string.Empty;
                     var savedId = route.TargetId;
                     var success = await Task.Run(() =>
-                        KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
-                            route.TargetId, e.Answer, corrected, e.MessageRecordId, out message));
+                    {
+                        using (ShopSettingsScope.Enter(shop))
+                            return KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
+                                route.TargetId, e.Answer, corrected, e.MessageRecordId, out message);
+                    });
                     // If a historical source ID is stale, do not overwrite that
                     // unrelated record. A confirmed edit may instead create an
                     // exact-question reviewed direct answer under this seller.
@@ -310,9 +385,12 @@ namespace Bot.AssistWindow.Widget.Robot
                     {
                         string reviewedStatus = string.Empty;
                         var reviewed = await Task.Run(() =>
-                            KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                                e.Seller, editedQuestion, corrected, e.MessageRecordId,
-                                out reviewedStatus, out savedId));
+                        {
+                            using (ShopSettingsScope.Enter(shop))
+                                return KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                                    e.Seller, editedQuestion, corrected, e.MessageRecordId,
+                                    out reviewedStatus, out savedId);
+                        });
                         if (reviewed)
                         {
                             success = true;
@@ -344,9 +422,12 @@ namespace Bot.AssistWindow.Widget.Robot
                 string savedId = string.Empty;
                 var correctedAnswer = wnd.EditedAnswer;
                 var saved = await Task.Run(() =>
-                    KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                        e.Seller, editedQuestion, correctedAnswer, e.MessageRecordId,
-                        out status, out savedId));
+                {
+                    using (ShopSettingsScope.Enter(shop))
+                        return KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                            e.Seller, editedQuestion, correctedAnswer, e.MessageRecordId,
+                            out status, out savedId);
+                });
                 if (saved)
                 {
                     var source = "本地知识V2（记录ID：" + savedId + "）";
@@ -370,13 +451,19 @@ namespace Bot.AssistWindow.Widget.Robot
 
         public void ReShowAfterQNChange()
         {
-            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null)
-            {
-                _preQN = QN.CurQN;
-                RefreshItems();
-                RefreshConversations();
-                RefreshRunStatus();
-            }
+            var current = QN.CurQN;
+            if (current == null || current.Seller == null || current.Buyer == null) return;
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0 && !ActiveShopSessionRegistry.IsActive(current))
+                return;
+            var seller = (current.Seller.Nick ?? string.Empty).Trim();
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+                return;
+
+            _preQN = current;
+            RefreshItems();
+            RefreshConversations();
+            RefreshRunStatus();
         }
 
         private void RefreshConversations()

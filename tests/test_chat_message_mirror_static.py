@@ -83,3 +83,13 @@ def test_mirror_renderer_is_wired_into_windows_build():
     assert 'Background="#F4F6F8"' in xaml
     assert 'Text="暂无聊天消息"' in xaml
     assert 'Text="正在同步当前买家的千牛聊天记录"' in xaml
+
+def test_message_mirror_identity_and_reads_include_shop_key():
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    assert "BuildConversationKey(shopKey, seller, buyer)" in robot
+    assert "_messageMirrorShopKey" in mirror
+    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in mirror
+    assert "LoadMessageMirrorTurns(QN qn, string seller, string buyer)" in mirror
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in mirror
+    assert "using (ShopSettingsScope.Enter(shop))" in mirror

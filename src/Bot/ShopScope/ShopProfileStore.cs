@@ -60,6 +60,7 @@ namespace Bot.ShopScope
                         Platform = shop.Platform,
                         SellerId = shop.SellerId,
                         DisplayName = shop.DisplayName,
+                        SellerNick = shop.SellerNick,
                         HasStableSellerId = shop.HasStableSellerId,
                         CreatedAtUtc = now,
                         LastSeenAtUtc = now
@@ -75,6 +76,8 @@ namespace Bot.ShopScope
                             "The same seller identity is already registered with another ShopKey.");
                     }
                     if (!string.Equals(existing.DisplayName, shop.DisplayName, StringComparison.Ordinal)
+                        || (!string.IsNullOrWhiteSpace(shop.SellerNick)
+                            && !string.Equals(existing.SellerNick, shop.SellerNick, StringComparison.Ordinal))
                         || (shop.HasStableSellerId && !existing.HasStableSellerId)
                         || existing.LastSeenAtUtc == DateTime.MinValue
                         || now < existing.LastSeenAtUtc
@@ -83,6 +86,8 @@ namespace Bot.ShopScope
                         changed = true;
                     }
                     existing.DisplayName = shop.DisplayName;
+                    if (!string.IsNullOrWhiteSpace(shop.SellerNick))
+                        existing.SellerNick = shop.SellerNick;
                     existing.HasStableSellerId = existing.HasStableSellerId || shop.HasStableSellerId;
                     if (changed) existing.LastSeenAtUtc = now;
                 }
@@ -246,6 +251,7 @@ namespace Bot.ShopScope
                 Platform = source.Platform,
                 SellerId = source.SellerId,
                 DisplayName = source.DisplayName,
+                SellerNick = source.SellerNick,
                 HasStableSellerId = source.HasStableSellerId,
                 CreatedAtUtc = source.CreatedAtUtc,
                 LastSeenAtUtc = source.LastSeenAtUtc

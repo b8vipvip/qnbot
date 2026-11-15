@@ -28,6 +28,17 @@ namespace Bot.ChromeNs
         public bool SeenHistory { get; set; }
     }
 
+    internal sealed class ConversationHistoryRefreshResult
+    {
+        public bool IsComplete { get; set; }
+        public int PagesFetched { get; set; }
+        public int MessagesFetched { get; set; }
+        public int MessagesInWindow { get; set; }
+        public int UnknownTimestampCount { get; set; }
+        public string StopReason { get; set; }
+        public string ErrorCode { get; set; }
+    }
+
     internal static class ConversationContextStore
     {
         private sealed class PendingPresetReply
@@ -53,6 +64,9 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, TimelineState> States =
             new ConcurrentDictionary<string, TimelineState>(StringComparer.Ordinal);
+        private const int LearningHistoryPageSize = 100;
+        private const int LearningHistoryMaxPages = 200;
+        private const int LearningHistoryPageRetries = 3;
         // Keep full 72-hour AI context for returning buyers. Evict only inactive
         // timelines; the on-disk chat/Bot history and Knowledge V2 are untouched.
         private const int SoftTimelineStateLimit = 256;
@@ -536,7 +550,7 @@ namespace Bot.ChromeNs
             return null;
         }
 
-        private static void RecordMessage(
+        private static string RecordMessage(
             TimelineState state,
             string seller,
             string buyer,
@@ -544,27 +558,27 @@ namespace Bot.ChromeNs
             string text,
             bool fromHistory)
         {
-            if (message == null) return;
+            if (message == null) return string.Empty;
             var timestamp = GetMessageTime(message);
             if (IsWithdrawalNotice(message, text))
             {
                 if (IsSellerWithdrawal(message, text, seller)) MarkLastSellerTurnWithdrawn(state, timestamp);
-                return;
+                return string.Empty;
             }
-            if (IsPlatformSystemTip(message, text)) return;
+            if (IsPlatformSystemTip(message, text)) return string.Empty;
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
             string role;
             if (from == seller && to == buyer) role = "assistant";
             else if (from == buyer && to == seller) role = "user";
-            else return;
+            else return string.Empty;
 
             var cleanText = IncomingMessageSafety.GetDisplayText(message, text);
             if (string.IsNullOrWhiteSpace(cleanText)
                 || string.Equals(cleanText, "[空白或未知消息]", StringComparison.Ordinal))
             {
-                return;
+                return string.Empty;
             }
             var messageKey = ScopeKey(seller) + "|" + IncomingMessageSafety.BuildMessageKey(message, cleanText);
             var aliases = GetNativeMessageAliases(message);
@@ -580,8 +594,9 @@ namespace Bot.ChromeNs
                         || HasSharedNativeAlias(t.NativeAliases, aliases)));
                 if (exact != null)
                 {
-                    MergeObservedIdentity(exact, aliases, preciseTime, fromHistory);
-                    return;
+
+                    MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
+                    return exact.MessageKey ?? string.Empty;
                 }
 
                 // Distinct native keys can still describe one message when both
@@ -596,11 +611,12 @@ namespace Bot.ChromeNs
                         .ToList();
                 if (precisePeers.Count == 1)
                 {
-                    MergeObservedIdentity(precisePeers[0], aliases, preciseTime, fromHistory);
+
+                    MergeObservedIdentity(precisePeers[0], aliases, preciseTime, timestamp, fromHistory);
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
                         + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                    return;
+                    return precisePeers[0].MessageKey ?? string.Empty;
                 }
 
                 // If an endpoint only supplies second-resolution timestamps,
@@ -620,11 +636,12 @@ namespace Bot.ChromeNs
                     if (peers.Count == 1 && opposite.Count == 1
                         && (preciseTime == 0 || opposite[0].PreciseTimeTicks == 0))
                     {
-                        MergeObservedIdentity(opposite[0], aliases, preciseTime, fromHistory);
+
+                        MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory);
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
                             + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
-                        return;
+                        return opposite[0].MessageKey ?? string.Empty;
                     }
                 }
 
@@ -641,6 +658,7 @@ namespace Bot.ChromeNs
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
+                return messageKey;
             }
         }
 
@@ -687,13 +705,22 @@ namespace Bot.ChromeNs
         }
 
         private static void MergeObservedIdentity(
-            ConversationContextTurn turn, string[] aliases, long preciseTime, bool fromHistory)
+            ConversationContextTurn turn,
+            string[] aliases,
+            long preciseTime,
+            DateTime timestamp,
+            bool fromHistory)
         {
             // Keep the first canonical MessageKey stable: Bot source rows,
             // context and mirror menus use it as the identity of that turn.
             turn.NativeAliases = (turn.NativeAliases ?? new string[0])
                 .Concat(aliases ?? new string[0]).Distinct(StringComparer.Ordinal).ToArray();
             if (turn.PreciseTimeTicks == 0) turn.PreciseTimeTicks = preciseTime;
+            // Live transports occasionally omit their timestamp. A later history
+            // observation of the same native message must enrich it so the session
+            // window can include it without admitting unscoped MinValue turns.
+            if (turn.Timestamp == DateTime.MinValue && timestamp != DateTime.MinValue)
+                turn.Timestamp = timestamp;
             if (fromHistory) turn.SeenHistory = true;
             else turn.SeenLive = true;
         }
@@ -735,7 +762,8 @@ namespace Bot.ChromeNs
         {
             state.Turns.RemoveAll(t => t == null
                 || (t.Timestamp != DateTime.MinValue && t.Timestamp < now.AddDays(-7)));
-            if (state.Turns.Count > 100) state.Turns.RemoveRange(0, state.Turns.Count - 100);
+            // Do not silently truncate a live session to 100 turns. The 7-day
+            // age window and bounded inactive-state sweep provide the retention policy.
             var expired = state.WithdrawnAnswers
                 .Where(x => x.Value < now.AddDays(-7))
                 .Select(x => x.Key)
@@ -748,7 +776,11 @@ namespace Bot.ChromeNs
         // dictionary key in a consumer: keys are ShopKey#Seller#Buyer.
         internal static object GetExistingLearningState(string seller, string buyer)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            // Session finalization has already entered the exact persisted ShopKey
+            // scope. Never resolve by seller nickname again: multiple shops may
+            // legitimately share one nickname and must remain distinct.
+            var shop = ShopSettingsScope.Current
+                ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
             if (shop == null) return null;
             using (ShopSettingsScope.Enter(shop))
             {
@@ -757,20 +789,240 @@ namespace Bot.ChromeNs
             }
         }
 
-        // The underlying history refresh takes a shop and an optional count.
-        // Calling it through a 4-argument reflection invocation silently failed
-        // on every completed learning round; keep the invocation typed.
-        internal static bool RefreshLearningHistory(string seller, string buyer, string ccode)
+        // Rebuild the complete requested session window from the remote history API.
+        // A single 100-message page is not evidence of a complete conversation.
+        // On restart GetState recreates the in-memory timeline before paging, so the
+        // persisted pending-session report can safely reconstruct its transcript.
+        internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync(
+            string shopKey,
+            string seller,
+            string buyer,
+            string ccode,
+            DateTime from,
+            DateTime to,
+            CancellationToken cancellationToken)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-            if (shop == null || string.IsNullOrWhiteSpace(ccode)) return false;
-            using (ShopSettingsScope.Enter(shop))
+            var result = new ConversationHistoryRefreshResult
             {
-                TimelineState state;
-                if (!States.TryGetValue(Key(seller, buyer), out state)) return false;
-                RefreshRemoteHistory(state, shop, seller, buyer, ccode, 100);
-                return true;
+                IsComplete = false,
+                StopReason = string.Empty,
+                ErrorCode = string.Empty
+            };
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            ccode = (ccode ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0)
+            {
+                result.ErrorCode = "missing_conversation_scope";
+                return result;
             }
+            if (from == DateTime.MinValue || to == DateTime.MinValue || to < from)
+            {
+                result.ErrorCode = "invalid_session_window";
+                return result;
+            }
+
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch
+            {
+                result.ErrorCode = "shop_scope_unavailable";
+                return result;
+            }
+
+            if (shop == null
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+            {
+                result.ErrorCode = "shop_scope_mismatch";
+                return result;
+            }
+
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    // Recreate the canonical ShopKey#Seller#Buyer state after a process
+                    // restart instead of requiring an in-memory state to already exist.
+                    var state = GetState(seller, buyer);
+                    var qn = FindQn(shop, seller);
+                    if (qn == null || qn.CDP == null)
+                    {
+                        result.ErrorCode = "shop_cdp_unavailable";
+                        return result;
+                    }
+
+                    var cursorId = "-1";
+                    var cursorTime = "-1";
+                    var previousCursor = string.Empty;
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    var countedTimelineKeys = new HashSet<string>(StringComparer.Ordinal);
+                    var reachedSessionStart = false;
+
+                    for (var page = 0; page < LearningHistoryMaxPages; page++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        JObject response = null;
+                        for (var retry = 0; retry < LearningHistoryPageRetries; retry++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            try
+                            {
+                                response = await qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+                                {
+                                    cid = new { ccode = ccode, type = 1 },
+                                    count = LearningHistoryPageSize,
+                                    gohistory = 1,
+                                    msgid = cursorId,
+                                    msgtime = cursorTime
+                                }).ConfigureAwait(false);
+                                if (response != null) break;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch
+                            {
+                                if (retry == LearningHistoryPageRetries - 1)
+                                {
+                                    result.ErrorCode = "history_page_request_failed";
+                                    return result;
+                                }
+                            }
+                            await Task.Delay(300 * (retry + 1), cancellationToken).ConfigureAwait(false);
+                        }
+
+                        if (response == null)
+                        {
+                            result.ErrorCode = "history_page_unavailable";
+                            return result;
+                        }
+
+                        result.PagesFetched++;
+                        var resultToken = response["result"] ?? response;
+                        var resultObject = resultToken as JObject;
+                        var messagesToken = resultObject == null
+                            ? resultToken as JArray
+                            : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
+                        var messages = messagesToken == null
+                            ? new List<QNChatMessage>()
+                            : (messagesToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>());
+                        result.MessagesFetched += messages.Count;
+                        if (messages.Count == 0)
+                        {
+                            result.IsComplete = true;
+                            result.StopReason = "empty_page";
+                            break;
+                        }
+
+                        foreach (var item in messages.Where(x => x != null).OrderBy(GetSortValue))
+                        {
+                            var text = ExtractMessageText(item);
+                            var messageKey = IncomingMessageSafety.BuildMessageKey(item, text);
+                            if (!string.IsNullOrWhiteSpace(messageKey) && !seen.Add(messageKey)) continue;
+
+                            var messageTime = GetMessageTime(item);
+                            if (messageTime == DateTime.MinValue)
+                            {
+                                result.UnknownTimestampCount++;
+                                continue;
+                            }
+                            if (messageTime < from || messageTime > to) continue;
+
+                            var canonicalTurnKey = RecordMessage(state, seller, buyer, item, text, true);
+                            if (!string.IsNullOrWhiteSpace(canonicalTurnKey)
+                                && countedTimelineKeys.Add(canonicalTurnKey))
+                                result.MessagesInWindow++;
+                        }
+
+                        var oldest = messages.Where(x => x != null).OrderBy(GetSortValue).FirstOrDefault();
+                        if (oldest == null)
+                        {
+                            result.IsComplete = true;
+                            result.StopReason = "no_valid_messages";
+                            break;
+                        }
+
+                        var oldestTime = GetMessageTime(oldest);
+                        if (oldestTime != DateTime.MinValue && oldestTime < from)
+                        {
+                            reachedSessionStart = true;
+                            result.IsComplete = true;
+                            result.StopReason = "session_start_reached";
+                            break;
+                        }
+
+                        cursorId = oldest.mcode == null || string.IsNullOrWhiteSpace(oldest.mcode.messageId)
+                            ? (oldest.ext == null ? "-1" : oldest.ext.ww_msgid.ToString(CultureInfo.InvariantCulture))
+                            : oldest.mcode.messageId;
+                        cursorTime = !string.IsNullOrWhiteSpace(oldest.sortTimeMicrosecond)
+                            ? oldest.sortTimeMicrosecond
+                            : (!string.IsNullOrWhiteSpace(oldest.sendTime) ? oldest.sendTime : "-1");
+                        var cursor = cursorId + "|" + cursorTime;
+                        if (cursor == previousCursor)
+                        {
+                            result.ErrorCode = "history_cursor_stalled";
+                            break;
+                        }
+                        previousCursor = cursor;
+
+                        var hasMore = resultObject == null ? 0 : ReadInt(resultObject["hasMore"]);
+                        if (hasMore == 0 && messages.Count < LearningHistoryPageSize)
+                        {
+                            result.IsComplete = true;
+                            result.StopReason = "server_end";
+                            break;
+                        }
+                    }
+
+                    if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))
+                        result.ErrorCode = "history_page_limit_reached";
+                    if (result.IsComplete && result.MessagesFetched == 0)
+                    {
+                        result.IsComplete = false;
+                        result.ErrorCode = "history_empty";
+                    }
+                    if (result.UnknownTimestampCount > 0)
+                    {
+                        result.IsComplete = false;
+                        result.ErrorCode = "history_contains_unknown_timestamps";
+                    }
+                    if (result.IsComplete && !reachedSessionStart && result.StopReason.Length == 0)
+                        result.StopReason = "server_end";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                result.IsComplete = false;
+                result.ErrorCode = "history_refresh_cancelled";
+            }
+            catch (Exception ex)
+            {
+                result.IsComplete = false;
+                result.ErrorCode = "history_refresh_failed";
+                Log.ErrorWithMaxCount("接待学习完整历史分页失败: " + SafeLog(ex.Message), 10);
+            }
+            return result;
+        }
+
+        private static int ReadInt(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null) return 0;
+            if (token.Type == JTokenType.Boolean) return token.Value<bool>() ? 1 : 0;
+
+            var text = token.ToString().Trim();
+            bool boolean;
+            if (bool.TryParse(text, out boolean)) return boolean ? 1 : 0;
+
+            int value;
+            if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                return value;
+
+            double numeric;
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out numeric))
+                return numeric > 0 ? 1 : 0;
+            return 0;
         }
 
         private static TimelineState GetState(string seller, string buyer)
@@ -839,6 +1091,7 @@ namespace Bot.ChromeNs
             if (current != null) return current;
             if (string.IsNullOrWhiteSpace(seller)) return null;
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch (AmbiguousShopIdentityException) { throw; }
             catch { return null; }
         }
 
@@ -848,8 +1101,8 @@ namespace Bot.ChromeNs
             if (message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
                 return message.loginid.nick.Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null && !string.IsNullOrWhiteSpace(current.DisplayName))
-                return current.DisplayName.Trim();
+            if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
+                return current.SellerNick.Trim();
             return message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
         }
 

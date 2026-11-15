@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using Bot.ChromeNs;
 using Bot.Knowledge;
+using Bot.ShopScope;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -14,13 +15,16 @@ namespace Bot.AssistWindow.Widget.Robot
         public string Buyer { get; private set; }
         public string Question { get; private set; }
         public string Answer { get; private set; }
+        public string ShopKey { get; private set; }
 
-        public ConversationResendEventArgs(string seller, string buyer, string question, string answer)
+        public ConversationResendEventArgs(
+            string seller, string buyer, string question, string answer, string shopKey = "")
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
             Question = question ?? string.Empty;
             Answer = answer ?? string.Empty;
+            ShopKey = (shopKey ?? string.Empty).Trim();
         }
     }
 
@@ -33,12 +37,14 @@ namespace Bot.AssistWindow.Widget.Robot
         public string SourceLabel { get; private set; }
         public string MessageRecordId { get; private set; }
         public bool SourceWasManuallyCorrected { get; private set; }
+        public string ShopKey { get; private set; }
 
         public ConversationEditEventArgs(string seller, string buyer, string question, string answer)
-            : this(seller, buyer, question, answer, string.Empty, string.Empty, false) { }
+            : this(seller, buyer, question, answer, string.Empty, string.Empty, false, string.Empty) { }
 
         public ConversationEditEventArgs(string seller, string buyer, string question,
-            string answer, string sourceLabel, string messageRecordId, bool sourceWasManuallyCorrected)
+            string answer, string sourceLabel, string messageRecordId,
+            bool sourceWasManuallyCorrected, string shopKey = "")
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
@@ -47,12 +53,14 @@ namespace Bot.AssistWindow.Widget.Robot
             SourceLabel = sourceLabel ?? string.Empty;
             MessageRecordId = messageRecordId ?? string.Empty;
             SourceWasManuallyCorrected = sourceWasManuallyCorrected;
+            ShopKey = (shopKey ?? string.Empty).Trim();
         }
     }
 
     public partial class CtlConversation : UserControl
     {
         private readonly string sendedChar = "   √√";
+        private string _shopKey = string.Empty;
         private string _seller = string.Empty;
         private string _buyer = string.Empty;
         private string _question = string.Empty;
@@ -70,15 +78,20 @@ namespace Bot.AssistWindow.Widget.Robot
             InitializeComponent();
         }
 
-        public static CtlConversation Create(string seller, string buyer, string question, string answer, bool isAutoReply = false, string answerSource = "")
+        public static CtlConversation Create(
+            string seller, string buyer, string question, string answer,
+            bool isAutoReply = false, string answerSource = "", string shopKey = "")
         {
             var dlg = new CtlConversation();
-            dlg.Setup(seller, buyer, question, answer, isAutoReply, answerSource);
+            dlg.Setup(seller, buyer, question, answer, isAutoReply, answerSource, shopKey);
             return dlg;
         }
 
-        public void Setup(string seller, string buyer, string question, string answer, bool isAutoReply, string answerSource)
+        public void Setup(
+            string seller, string buyer, string question, string answer,
+            bool isAutoReply, string answerSource, string shopKey = "")
         {
+            _shopKey = (shopKey ?? string.Empty).Trim();
             _seller = seller ?? string.Empty;
             _buyer = buyer ?? string.Empty;
             _question = question ?? string.Empty;
@@ -89,7 +102,7 @@ namespace Bot.AssistWindow.Widget.Robot
             txtQuestion.Text = _question;
             txtAnswer.Text = _answer;
             var resolvedSource = string.IsNullOrWhiteSpace(answerSource)
-                ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                ? ResolveAnswerSourceForShop()
                 : answerSource;
             SetSource(resolvedSource);
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
@@ -133,7 +146,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 txtAnswer.Text = _answer;
                 var source = string.IsNullOrWhiteSpace(answerSource)
-                    ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                    ? ResolveAnswerSourceForShop()
                     : answerSource;
                 if (!string.IsNullOrWhiteSpace(source)) SetSource(source);
                 UpdateTimingText();
@@ -151,6 +164,23 @@ namespace Bot.AssistWindow.Widget.Robot
             txtLatency.Text = _questionDetectedAt == DateTime.MinValue || _answerReadyAt == DateTime.MinValue
                 ? string.Empty
                 : "响应 " + Math.Max(0, (long)(_answerReadyAt - _questionDetectedAt).TotalMilliseconds) + "ms";
+        }
+
+        private string ResolveAnswerSourceForShop()
+        {
+            if (string.IsNullOrWhiteSpace(_shopKey)) return string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                using (ShopSettingsScope.Enter(shop))
+                    return KnowledgeLearningService.ResolveAnswerSource(
+                        _seller, _buyer, _question, _answer);
+            }
+            catch
+            {
+                // A missing/ambiguous scope must not infer provenance from another shop.
+                return string.Empty;
+            }
         }
 
         public void SetSource(string source)
@@ -215,9 +245,25 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             Ui(() =>
             {
-                string blockedReason;
-                string manualAnswer;
-                if (!success && KnowledgeLearningService.TryTakeSendBlock(_seller, _buyer, _answer, out blockedReason, out manualAnswer))
+                string blockedReason = string.Empty;
+                string manualAnswer = string.Empty;
+                var blocked = false;
+                if (!success && !string.IsNullOrWhiteSpace(_shopKey))
+                {
+                    try
+                    {
+                        var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                        using (ShopSettingsScope.Enter(shop))
+                            blocked = KnowledgeLearningService.TryTakeSendBlock(
+                                _seller, _buyer, _answer, out blockedReason, out manualAnswer);
+                    }
+                    catch
+                    {
+                        // Do not query another shop's send-block state on identity failure.
+                    }
+                }
+
+                if (blocked)
                 {
                     txtAnswer.Text = _answer;
                     txtStatus.Text = blockedReason;
@@ -275,7 +321,7 @@ namespace Bot.AssistWindow.Widget.Robot
             if (handler != null)
                 handler(this, new ConversationEditEventArgs(
                     _seller, _buyer, _question, _answer,
-                    originalSource, messageRecordId, sourceWasManuallyCorrected));
+                    originalSource, messageRecordId, sourceWasManuallyCorrected, _shopKey));
         }
 
         internal void MirrorOpenKnowledge(Window owner)
@@ -285,20 +331,22 @@ namespace Bot.AssistWindow.Widget.Robot
                 _seller,
                 _buyer,
                 _question,
-                _answer);
+                _answer,
+                _shopKey);
         }
 
         private void RaiseResendRequested()
         {
             var handler = ResendRequested;
-            if (handler != null) handler(this, new ConversationResendEventArgs(_seller, _buyer, _question, _answer));
+            if (handler != null) handler(this, new ConversationResendEventArgs(
+                _seller, _buyer, _question, _answer, _shopKey));
         }
 
         private void RaiseEditRequested()
         {
             var handler = EditRequested;
             if (handler != null) handler(this, new ConversationEditEventArgs(
-                _seller, _buyer, _question, _answer, _answerSource, string.Empty, false));
+                _seller, _buyer, _question, _answer, _answerSource, string.Empty, false, _shopKey));
         }
 
         internal void UseAnswerOnlyMirrorPresentation()
@@ -319,7 +367,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 _seller,
                 _buyer,
                 _question,
-                _answer);
+                _answer,
+                _shopKey);
             menu.Items.Add(view);
 
             var copy = new MenuItem { Header = "复制" };

@@ -10,6 +10,7 @@ using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Newtonsoft.Json;
 using BotLib;
+using Bot.ShopScope;
 
 namespace Bot.ChromeNs
 {
@@ -888,8 +889,18 @@ namespace Bot.ChromeNs
         private async void Cdp_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
         {
             if (e == null || string.IsNullOrWhiteSpace(e.Message)) return;
-            await _incomingMessageGate.WaitAsync();
-            try
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("千牛消息处理因无法确认源店铺而停止: " + ex.Message, 10);
+                return;
+            }
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                await _incomingMessageGate.WaitAsync();
+                try
             {
                 if (EvRecieveNewMessage != null)
                 {
@@ -921,9 +932,10 @@ namespace Bot.ChromeNs
             {
                 Log.Exception(ex);
             }
-            finally
-            {
-                _incomingMessageGate.Release();
+                finally
+                {
+                    _incomingMessageGate.Release();
+                }
             }
         }
 

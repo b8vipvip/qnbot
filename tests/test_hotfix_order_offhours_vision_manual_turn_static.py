@@ -52,7 +52,7 @@ def test_manual_ai_optimization_is_idempotent_per_buyer_turn_for_ten_minutes():
 
     assert 'ManualTurnReservationMinutes = 10' in KNOWLEDGE
     assert 'TryReserveManualTurn' in KNOWLEDGE
-    assert 'BuildManualTurnKey(seller, buyer, question)' in run
+    assert 'BuildManualTurnKey(shopKey, seller, buyer, question)' in run
     assert 'if (!TryReserveManualTurn(key, DateTime.Now)) return;' in run
     assert 'Normalize(humanAnswer)' not in start
     assert 'TryRemove(key' not in start

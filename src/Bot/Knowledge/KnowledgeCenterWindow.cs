@@ -1,6 +1,7 @@
 ﻿using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using DbEntity.Response;
@@ -25,6 +26,7 @@ namespace Bot.Knowledge
     public class KnowledgeCenterWindow : Window
     {
         internal string RequestedSeller { get; set; }
+        internal string RequestedShopKey { get; set; }
         private readonly TabControl _tabs;
         private readonly KnowledgeImportControl _import;
         private readonly KnowledgeManagerControl _manager;
@@ -130,27 +132,106 @@ namespace Bot.Knowledge
         /// back to another active QN account when settings belong to a different
         /// shop; preserving the ShopKey is essential for multi-seller clients.
         /// </summary>
-        internal static KnowledgeCenterWindow ShowForSeller(Window owner, string seller)
+        internal static KnowledgeCenterWindow ShowForSeller(
+            Window owner, string seller, string shopKey = "")
         {
             seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
             if (seller.Length == 0)
                 throw new InvalidOperationException("未识别当前店铺，无法打开知识中心。");
-            var shop = Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = shopKey.Length == 0
+                ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             if (shop == null)
                 throw new InvalidOperationException("当前店铺未建立有效的 ShopKey，无法打开知识中心。");
-            var window = new KnowledgeCenterWindow { RequestedSeller = seller };
+
+            var resolvedSeller = (shop.SellerNick ?? string.Empty).Trim();
+            if (resolvedSeller.Length == 0)
+            {
+                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                resolvedSeller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty
+                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            var sellerMatches = string.Equals(resolvedSeller, seller, StringComparison.Ordinal)
+                || (shop.HasStableSellerId && resolvedSeller.Length == 0);
+            if (!sellerMatches && !shop.HasStableSellerId && resolvedSeller.Length > 0)
+                sellerMatches = string.Equals(
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(resolvedSeller),
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                    StringComparison.Ordinal);
+            if (!sellerMatches)
+                throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识中心。");
+
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shop.ShopKey
+            };
             Bot.ShopScope.ShopScopedUiBridge.Attach(window, shop);
             if (owner != null) window.Owner = owner;
             window.Show();
             return window;
         }
 
-        public static void ShowManagerAndLocate(Window owner, string seller, string buyer, string question, string answer)
+        public static void ShowManagerAndLocate(
+            Window owner, string seller, string buyer, string question, string answer,
+            string shopKey = "")
         {
-            var wnd = new KnowledgeCenterWindow();
+            Bot.ShopScope.ShopContext shop;
+            try
+            {
+                shop = string.IsNullOrWhiteSpace(shopKey)
+                    ? Bot.ShopScope.ShopContextLocator.ResolveRuntimeBySellerNick(seller)
+                    : Bot.ShopScope.ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认该Bot消息所属店铺：" + ex.Message,
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0)
+            {
+                MessageBox.Show(owner, "Bot消息缺少卖家身份，已阻止打开知识库。",
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
+            if (expectedSeller.Length == 0)
+            {
+                var exactQn = Bot.ShopScope.ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                expectedSeller = exactQn == null || exactQn.Seller == null
+                    ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            }
+            var sellerMatches = string.Equals(expectedSeller, seller, StringComparison.Ordinal)
+                || (shop.HasStableSellerId && expectedSeller.Length == 0);
+            if (!sellerMatches && !shop.HasStableSellerId && expectedSeller.Length > 0)
+                sellerMatches = string.Equals(
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
+                    Bot.ShopScope.ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                    StringComparison.Ordinal);
+            if (!sellerMatches)
+            {
+                MessageBox.Show(owner, "卖家昵称与目标ShopKey不匹配，已阻止跨店打开知识库。",
+                    "知识库定位", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var wnd = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shop.ShopKey
+            };
+            Bot.ShopScope.ShopScopedUiBridge.Attach(wnd, shop);
             if (owner != null) wnd.Owner = owner;
-            wnd.Show();
-            wnd.NavigateToManager(seller, buyer, question, answer);
+            using (Bot.ShopScope.ShopSettingsScope.Enter(shop))
+            {
+                wnd.Show();
+                wnd.NavigateToManager(seller, buyer, question, answer);
+            }
         }
     }
 
@@ -243,38 +324,73 @@ namespace Bot.Knowledge
         {
             try
             {
+                var window = Window.GetWindow(this) as KnowledgeCenterWindow;
+                var seller = window == null ? string.Empty : (window.RequestedSeller ?? string.Empty).Trim();
+                if (seller.Length == 0) seller = KnowledgeCenterV2Context.ResolveSeller(window);
+                var shopKey = KnowledgeCenterV2Context.ResolveShopKey(window, seller);
+                if (seller.Length == 0 || shopKey.Length == 0)
+                {
+                    _grid.ItemsSource = null;
+                    _detail.Text = "无法确认当前店铺ShopKey，已阻止读取未隔离的AI优化记录。";
+                    _summary.Text = "店铺身份未确认";
+                    return;
+                }
+
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var sellerMatches = string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                    || (shop.HasStableSellerId && string.IsNullOrWhiteSpace(shop.SellerNick));
+                if (!sellerMatches && !shop.HasStableSellerId
+                    && !string.IsNullOrWhiteSpace(shop.SellerNick))
+                    sellerMatches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(shop.SellerNick),
+                        ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                        StringComparison.Ordinal);
+                if (!sellerMatches)
+                    throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配。");
+
                 var rows = new List<Row>();
-                rows.AddRange(AiManualReplyOptimizationService.GetRecords(500).Select(x => new Row
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    SortTime = x.CreatedAt,
-                    Time = x.CreatedAtText,
-                    Type = "人工接管即时对比",
-                    Buyer = x.Buyer,
-                    Status = x.Status,
-                    Accuracy = x.AccuracyText,
-                    Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
-                    Summary = Short(x.Question, 120),
-                    Source = x
-                }));
-                rows.AddRange(ConversationSessionLearningService.GetReports(500).Select(x => new Row
-                {
-                    SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
-                    Time = x.CompletedAtText,
-                    Type = "接待结束复盘",
-                    Buyer = x.Buyer,
-                    Status = x.Status,
-                    Accuracy = "-",
-                    Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
-                    Summary = Short(x.Summary, 120),
-                    Source = x
-                }));
+                    rows.AddRange(AiManualReplyOptimizationService.GetRecords(shopKey, seller, 500).Select(x => new Row
+                    {
+                        SortTime = x.CreatedAt,
+                        Time = x.CreatedAtText,
+                        Type = "人工接管即时对比",
+                        Buyer = x.Buyer,
+                        Status = x.Status,
+                        Accuracy = x.AccuracyText,
+                        Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
+                        Summary = Short(x.Question, 120),
+                        Source = x
+                    }));
+                    rows.AddRange(ConversationSessionLearningService.GetReports(500)
+                        .Where(x => x != null
+                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Seller, seller, StringComparison.Ordinal))
+                        .Select(x => new Row
+                        {
+                            SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
+                            Time = x.CompletedAtText,
+                            Type = "接待结束复盘",
+                            Buyer = x.Buyer,
+                            Status = x.Status,
+                            Accuracy = "-",
+                            Applied = x.AppliedCount + "/" + (x.AppliedCount + x.SkippedCount),
+                            Summary = Short(x.Summary, 120),
+                            Source = x
+                        }));
+                }
                 rows = rows.OrderByDescending(x => x.SortTime).Take(1000).ToList();
                 _grid.ItemsSource = rows;
-                _summary.Text = "AI优化记录：共 " + rows.Count + " 条；即时记录可查看AI对照答案、人工实际回复、准确度、人工回复原因和知识策略。";
+                _summary.Text = "当前店铺AI优化记录：共 " + rows.Count + " 条；ShopKey：" + shopKey;
                 if (rows.Count > 0) _grid.SelectedIndex = 0;
-                else _detail.Text = "暂无AI优化记录。";
+                else _detail.Text = "当前店铺暂无AI优化记录。";
             }
-            catch (Exception ex) { _detail.Text = "读取AI优化记录失败：" + ex.Message; }
+            catch (Exception ex)
+            {
+                _grid.ItemsSource = null;
+                _detail.Text = "读取AI优化记录失败：" + ex.Message;
+            }
         }
 
         private void OnRecordsChanged()
@@ -321,6 +437,7 @@ namespace Bot.ChromeNs
     {
         [PrimaryKey]
         public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
@@ -342,6 +459,7 @@ namespace Bot.ChromeNs
     internal sealed class AiOptimizationRecordView
     {
         public string Id { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string Question { get; set; }
@@ -372,22 +490,62 @@ namespace Bot.ChromeNs
         public const int MaxRecords = 3000;
         public static event Action RecordsChanged;
 
-        public static void StartForManualReply(string seller, string buyer, string humanAnswer, DateTime manualAt)
+        public static void StartForManualReply(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey = "")
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             humanAnswer = StripAi(Clean(humanAnswer, 2200));
             if (seller.Length == 0 || buyer.Length == 0 || humanAnswer.Length == 0) return;
+
+            shopKey = (shopKey ?? string.Empty).Trim();
+            try
+            {
+                var scopedShop = ShopSettingsScope.Current;
+                var shop = shopKey.Length > 0
+                    ? ShopContextLocator.ResolveRuntimeByShopKey(shopKey)
+                    : scopedShop ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (shop == null) return;
+                if (scopedShop != null
+                    && !string.Equals(scopedShop.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    return;
+                shopKey = shop.ShopKey;
+
+                var expectedSeller = (shop.SellerNick ?? string.Empty).Trim();
+                if (expectedSeller.Length == 0)
+                {
+                    var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                    expectedSeller = exactQn == null || exactQn.Seller == null
+                        ? string.Empty : (exactQn.Seller.Nick ?? string.Empty).Trim();
+                }
+                var matches = string.Equals(expectedSeller, seller, StringComparison.Ordinal);
+                if (!matches && !shop.HasStableSellerId && expectedSeller.Length > 0)
+                    matches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(expectedSeller),
+                        ShopKeyGenerator.NormalizeFallbackNickname(seller),
+                        StringComparison.Ordinal);
+                if (!matches) return;
+            }
+            catch
+            {
+                // Manual-reply optimization is optional; never guess an ambiguous shop.
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(shopKey)) return;
+
             Task.Run(async () =>
             {
-                try { await RunAsync(seller, buyer, humanAnswer, manualAt).ConfigureAwait(false); }
-                catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
+                try { await RunAsync(seller, buyer, humanAnswer, manualAt, shopKey).ConfigureAwait(false); }
+                catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: shopKey="
+                    + shopKey + ", seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
             });
         }
 
-        private static string BuildManualTurnKey(string seller, string buyer, string question)
+        private static string BuildManualTurnKey(
+            string shopKey, string seller, string buyer, string question)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + Normalize(question);
         }
@@ -408,22 +566,62 @@ namespace Bot.ChromeNs
             return TurnReservations.TryUpdate(key, until, existing);
         }
 
-        public static List<AiOptimizationRecordView> GetRecords(int maxCount)
+        public static List<AiOptimizationRecordView> GetRecords(
+            string shopKey, string seller, int maxCount)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0)
+                return new List<AiOptimizationRecordView>();
             EnsureSchema();
+            BackfillLegacyShopRows(shopKey, seller);
             var take = Math.Max(1, Math.Min(MaxRecords, maxCount <= 0 ? 300 : maxCount));
             try
             {
                 lock (DbSync)
                 {
-                    return (DbHelper.Db.Select(typeof(AiOptimizationRecordEntity), "order by UpdatedAtTicks desc limit " + take) ?? new List<object>())
-                        .OfType<AiOptimizationRecordEntity>().Where(x => x != null).Select(ToView).ToList();
+                    return (DbHelper.Db.Select(
+                        typeof(AiOptimizationRecordEntity),
+                        "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit " + take,
+                        shopKey, seller) ?? new List<object>())
+                        .OfType<AiOptimizationRecordEntity>()
+                        .Where(x => x != null
+                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Seller, seller, StringComparison.Ordinal))
+                        .Select(ToView)
+                        .ToList();
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("读取AI优化记录失败：" + ex.Message, 10);
                 return new List<AiOptimizationRecordView>();
+            }
+        }
+
+        private static void BackfillLegacyShopRows(string shopKey, string seller)
+        {
+            try
+            {
+                var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (resolved == null
+                    || !string.Equals(resolved.ShopKey, shopKey, StringComparison.Ordinal))
+                    return;
+                lock (DbSync)
+                {
+                    DbHelper.Db.Execute(
+                        "update AiOptimizationRecordEntity set ShopKey = ? "
+                        + "where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                }
+            }
+            catch (AmbiguousShopIdentityException)
+            {
+                // Legacy records remain unassigned when nickname ownership is ambiguous.
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("迁移旧版AI优化记录店铺归属失败：" + ex.Message, 5);
             }
         }
 
@@ -454,7 +652,16 @@ namespace Bot.ChromeNs
             return sb.ToString().Trim();
         }
 
-        private static async Task RunAsync(string seller, string buyer, string humanAnswer, DateTime manualAt)
+        private static async Task RunAsync(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            using (ShopSettingsScope.Enter(shop))
+                await RunScopedAsync(seller, buyer, humanAnswer, manualAt, shopKey).ConfigureAwait(false);
+        }
+
+        private static async Task RunScopedAsync(
+            string seller, string buyer, string humanAnswer, DateTime manualAt, string shopKey)
         {
             if (manualAt == DateTime.MinValue) manualAt = DateTime.Now;
             await Task.Delay(120).ConfigureAwait(false);
@@ -463,7 +670,7 @@ namespace Bot.ChromeNs
             var cards = BotConversationHistoryStore.LoadRange(seller, buyer, from, manualAt.AddSeconds(1), 100);
             var question = BuildRecentBuyerQuestion(turns, cards, manualAt);
             if (string.IsNullOrWhiteSpace(question)) return;
-            var key = BuildManualTurnKey(seller, buyer, question);
+            var key = BuildManualTurnKey(shopKey, seller, buyer, question);
             if (!TryReserveManualTurn(key, DateTime.Now)) return;
             var transcript = BuildTranscriptBeforeHuman(turns, cards, humanAnswer, manualAt);
 
@@ -472,11 +679,11 @@ namespace Bot.ChromeNs
             var aiAnswer = await Task.Run(() => MyOpenAI.GetAnswer(seller, buyer, shadowQuestion, true)).ConfigureAwait(false);
             aiAnswer = StripAi(Clean(aiAnswer, 2400));
             if (string.IsNullOrWhiteSpace(aiAnswer) || aiAnswer.StartsWith("错误：", StringComparison.Ordinal)) return;
-            ShowCompareOnlyAnswer(seller, buyer, question, aiAnswer);
+            ShowCompareOnlyAnswer(seller, buyer, question, aiAnswer, shopKey);
 
             var entity = new AiOptimizationRecordEntity
             {
-                EntityId = Guid.NewGuid().ToString("N"), Seller = seller, Buyer = buyer,
+                EntityId = Guid.NewGuid().ToString("N"), ShopKey = shopKey, Seller = seller, Buyer = buyer,
                 Question = Redact(question), AiAnswer = Redact(aiAnswer), HumanAnswer = Redact(humanAnswer),
                 Status = "正在分析", CreatedAtTicks = DateTime.Now.Ticks, UpdatedAtTicks = DateTime.Now.Ticks
             };
@@ -608,20 +815,34 @@ namespace Bot.ChromeNs
             return text.StartsWith("当前用户来自") || text.StartsWith("该用户来自") || text.StartsWith("平台提示") || text.StartsWith("系统提示");
         }
 
-        private static void ShowCompareOnlyAnswer(string seller, string buyer, string question, string answer)
+        private static void ShowCompareOnlyAnswer(
+            string seller, string buyer, string question, string answer, string shopKey)
         {
-            if (Application.Current == null) return;
+            if (Application.Current == null || string.IsNullOrWhiteSpace(shopKey)) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+            catch { return; }
             try
             {
                 Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
-                        var desk = Desk.FindExistingBySellerNick(seller);
-                        if (desk == null) return;
-                        var ctl = desk.AddConversation(seller, buyer, question,
-                            BotOutboundMessageFormatter.EnsureAiMarker(answer), false, "人工接管后的AI优化对比");
-                        if (ctl != null) ctl.SetStatus("客服已人工回复；这是后台AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
+                        using (ShopSettingsScope.Enter(shop))
+                        {
+                            var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                            if (qn == null || qn.Seller == null
+                                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                                    seller, StringComparison.Ordinal)
+                                || !ActiveShopSessionRegistry.IsActive(qn))
+                                return;
+                            var desk = Desk.Inst;
+                            if (desk == null) return;
+                            var ctl = desk.AddConversation(seller, buyer, question,
+                                BotOutboundMessageFormatter.EnsureAiMarker(answer), false, "人工接管后的AI优化对比");
+                            if (ctl != null) ctl.SetStatus(
+                                "客服已人工回复；这是后台AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
+                        }
                     }
                     catch (Exception ex) { Log.ErrorWithMaxCount("显示人工接管AI对照答案失败：" + ex.Message, 10); }
                 }));
@@ -636,10 +857,13 @@ namespace Bot.ChromeNs
             {
                 if (_schemaReady != 0) return;
                 DbHelper.Db.Execute("create table if not exists AiOptimizationRecordEntity ("
-                    + "EntityId text primary key not null,Seller text,Buyer text,Question text,AiAnswer text,HumanAnswer text,"
+                    + "EntityId text primary key not null,ShopKey text,Seller text,Buyer text,Question text,AiAnswer text,HumanAnswer text,"
                     + "AccuracyScore real not null default 0,AccuracyAnalysis text,HumanReplyReason text,KnowledgeStrategy text,"
                     + "SuggestionsJson text,Status text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,"
                     + "CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try { DbHelper.Db.Execute("alter table AiOptimizationRecordEntity add column ShopKey text"); }
+                catch { /* Existing installations may already have the ShopKey column. */ }
+                DbHelper.Db.Execute("create index if not exists IX_AiOptimizationRecord_Shop_Updated on AiOptimizationRecordEntity(ShopKey,Seller,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create index if not exists IX_AiOptimizationRecord_Updated on AiOptimizationRecordEntity(UpdatedAtTicks)");
                 Volatile.Write(ref _schemaReady, 1);
             }
@@ -669,7 +893,7 @@ namespace Bot.ChromeNs
         {
             return new AiOptimizationRecordView
             {
-                Id = x.EntityId, Seller = x.Seller, Buyer = x.Buyer, Question = x.Question,
+                Id = x.EntityId, ShopKey = x.ShopKey, Seller = x.Seller, Buyer = x.Buyer, Question = x.Question,
                 AiAnswer = x.AiAnswer, HumanAnswer = x.HumanAnswer, AccuracyScore = x.AccuracyScore,
                 AccuracyAnalysis = x.AccuracyAnalysis, HumanReplyReason = x.HumanReplyReason,
                 KnowledgeStrategy = x.KnowledgeStrategy, SuggestionsJson = x.SuggestionsJson,
@@ -788,17 +1012,23 @@ namespace Bot.ChromeNs
             if (qn == null || e == null || string.IsNullOrWhiteSpace(e.Message) || qn.Seller == null) return;
             try
             {
-                var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
-                if (response == null || response.result == null) return;
-                var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
-                    var buyer = (message.toid.nick ?? string.Empty).Trim();
-                    if (buyer.Length == 0) continue;
-                    var variants = ExtractTexts(message);
-                    if (variants.Count == 0 || variants.Any(HasAiMarker) || MatchesRecentBotAnswer(seller, buyer, variants)) continue;
-                    AiManualReplyOptimizationService.StartForManualReply(seller, buyer, variants[0], DateTime.Now);
+                    var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
+                    if (response == null || response.result == null) return;
+                    var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+                    foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
+                    {
+                        if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
+                        var buyer = (message.toid.nick ?? string.Empty).Trim();
+                        if (buyer.Length == 0) continue;
+                        var variants = ExtractTexts(message);
+                        if (variants.Count == 0 || variants.Any(HasAiMarker)
+                            || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
+                        AiManualReplyOptimizationService.StartForManualReply(
+                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey);
+                    }
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("人工回复即时对比识别失败：" + ex.Message, 10); }
@@ -813,10 +1043,15 @@ namespace Bot.ChromeNs
             return values.Distinct(StringComparer.Ordinal).ToList();
         }
 
-        private static bool MatchesRecentBotAnswer(string seller, string buyer, IEnumerable<string> variants)
+        private static bool MatchesRecentBotAnswer(
+            string shopKey, string seller, string buyer, IEnumerable<string> variants)
         {
             var values = new HashSet<string>(variants.Select(Normalize).Where(x => x.Length > 0), StringComparer.Ordinal);
-            try { return BotConversationHistoryStore.LoadRecent(seller, buyer, 30).Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer)))); }
+            try
+            {
+                return BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 30)
+                    .Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer))));
+            }
             catch { return false; }
         }
 

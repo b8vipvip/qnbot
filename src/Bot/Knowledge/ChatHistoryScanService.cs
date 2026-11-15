@@ -2,6 +2,7 @@
 using Bot.ChatRecord;
 using Bot.ChromeNs;
 using BotLib;
+using Bot.ShopScope;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
@@ -243,7 +244,8 @@ namespace Bot.Knowledge
                 var storedContacts = new List<string>();
                 try
                 {
-                    storedContacts = BotConversationHistoryStore.LoadRecentBySeller(seller, 5000)
+                    var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey;
+                    storedContacts = BotConversationHistoryStore.LoadRecentBySeller(shopKey, seller, 5000)
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Buyer))
                         .Select(x => CleanNick(x.Buyer))
                         .Distinct(StringComparer.Ordinal).ToList();

@@ -161,3 +161,10 @@ def test_botlib_build_includes_new_scope_routers():
     props = read("src/BotLib/Directory.Build.props")
     assert "ScopedDataPathRouter.cs" in props
     assert "ScopedLogRouter.cs" in props
+
+def test_raw_qn_message_pipeline_enters_exact_source_shop_scope():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in qn
+    assert "using (ShopSettingsScope.Enter(shop))" in qn
+    assert "ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeBySeller(this))" in recovery

@@ -40,6 +40,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 ? Guid.NewGuid().ToString("N")
                 : entity.EntityId.Trim();
             ctl._historyCreatedAt = TicksToDateTime(entity.CreatedAtTicks, DateTime.Now);
+            ctl._shopKey = (entity.ShopKey ?? string.Empty).Trim();
 
             ctl.Setup(
                 entity.Seller,
@@ -47,7 +48,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 entity.Question,
                 entity.Answer,
                 false,
-                entity.AnswerSource);
+                entity.AnswerSource,
+                entity.ShopKey);
 
             ctl._question = entity.Question ?? string.Empty;
             ctl._answer = entity.Answer ?? string.Empty;
@@ -127,6 +129,7 @@ namespace Bot.AssistWindow.Widget.Robot
             BotConversationHistoryStore.QueueSave(new BotConversationHistoryEntity
             {
                 EntityId = _historyId,
+                ShopKey = _shopKey ?? string.Empty,
                 Seller = _seller ?? string.Empty,
                 Buyer = _buyer ?? string.Empty,
                 Question = _question ?? string.Empty,

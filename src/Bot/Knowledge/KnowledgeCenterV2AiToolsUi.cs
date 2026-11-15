@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -324,6 +325,7 @@ namespace Bot.Knowledge
         }
 
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly DataGrid _grid;
         private readonly ComboBox _filter;
         private readonly ComboBox _resultFilter;
@@ -332,9 +334,12 @@ namespace Bot.Knowledge
         private List<KnowledgeV2GovernanceAuditEntry> _all = new List<KnowledgeV2GovernanceAuditEntry>();
         private List<ConversationSessionLearningReportView> _sessions = new List<ConversationSessionLearningReportView>();
 
-        public KnowledgeV2AiOptimizationHistoryPage(Window owner, string seller)
+        public KnowledgeV2AiOptimizationHistoryPage(Window owner, string seller, string shopKey = "")
         {
-            _seller = seller ?? string.Empty;
+            _seller = (seller ?? string.Empty).Trim();
+            _shopKey = string.IsNullOrWhiteSpace(shopKey)
+                ? KnowledgeCenterV2Context.ResolveShopKey(owner, _seller)
+                : shopKey.Trim();
             var root = new DockPanel { Margin = new Thickness(12) };
             Content = root;
 
@@ -408,26 +413,42 @@ namespace Bot.Knowledge
 
         public void RefreshView()
         {
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
                 _all = new List<KnowledgeV2GovernanceAuditEntry>();
                 _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
-                _status.Text = "当前未识别店铺，无法读取优化记录。";
+                _status.Text = "当前未确认店铺ShopKey，无法读取优化记录。";
                 return;
             }
             try
             {
-                _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
-                    .Where(IsOptimizationHistory)
-                    .ToList();
-                _sessions = ConversationSessionLearningService.GetReports(1000)
-                    .Where(x => x != null && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
-                    .ToList();
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                var sellerMatches = string.Equals(shop.SellerNick, _seller, StringComparison.Ordinal)
+                    || (shop.HasStableSellerId && string.IsNullOrWhiteSpace(shop.SellerNick));
+                if (!sellerMatches && !shop.HasStableSellerId
+                    && !string.IsNullOrWhiteSpace(shop.SellerNick))
+                    sellerMatches = string.Equals(
+                        ShopKeyGenerator.NormalizeFallbackNickname(shop.SellerNick),
+                        ShopKeyGenerator.NormalizeFallbackNickname(_seller),
+                        StringComparison.Ordinal);
+                if (!sellerMatches)
+                    throw new InvalidOperationException("卖家昵称与目标ShopKey不匹配。");
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
+                        .Where(IsOptimizationHistory)
+                        .ToList();
+                    _sessions = ConversationSessionLearningService.GetReportsForShop(
+                        _shopKey, _seller, 1000);
+                }
                 ApplyFilter();
             }
             catch (Exception ex)
             {
+                _all = new List<KnowledgeV2GovernanceAuditEntry>();
+                _sessions = new List<ConversationSessionLearningReportView>();
                 _grid.ItemsSource = null;
                 _status.Text = "读取优化记录失败：" + ex.Message;
             }
@@ -475,7 +496,7 @@ namespace Bot.Knowledge
                     Type = "会话自动学习",
                     Target = x.Buyer ?? "-",
                     Summary = (x.Summary ?? string.Empty) + " [应用 " + x.AppliedCount
-                        + " / 跳过 " + x.SkippedCount + "] "
+                        + " / 跳过 " + x.SkippedCount + "] [覆盖：" + x.InputCoverageSummary + "] "
                         + (string.IsNullOrWhiteSpace(x.Error) ? string.Empty : "原因：" + x.Error),
                     Result = NormalizeResult(x.Status),
                 }));

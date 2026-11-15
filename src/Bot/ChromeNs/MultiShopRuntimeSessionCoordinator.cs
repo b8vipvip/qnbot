@@ -58,8 +58,11 @@ namespace Bot.ChromeNs
 
         internal static bool EnsureShopBinding(ShopContext shop)
         {
-            if (shop == null || string.IsNullOrWhiteSpace(shop.DisplayName)) return false;
-            var qn = QN.FindExistingBySellerNick(shop.DisplayName);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+            // DisplayName is presentation data and may differ from Nick or be
+            // shared by several shops. Resolve the exact persisted identity instead
+            // of selecting an arbitrary QN instance by a display string.
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
             if (qn == null || qn.Rpa == null || !ActiveShopSessionRegistry.IsActive(qn)) return false;
             var ok = qn.Rpa.EnsureSellerDeskBinding(true);
             SyncAttachedUi(qn);
@@ -292,17 +295,26 @@ namespace Bot.ChromeNs
             lock (Sync) return _activeSeller;
         }
 
+        internal static string GetActiveShopKey()
+        {
+            lock (Sync) return _activeShopKey;
+        }
+
         internal static bool IsActive(QN qn)
         {
             if (qn == null || qn.Seller == null) return false;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             var shopKey = ShopKey(qn);
+            var sessionId = qn.CDP == null ? string.Empty : (qn.CDP.SessionId ?? string.Empty).Trim();
             lock (Sync)
             {
                 return seller.Length > 0
+                    && _activeShopKey.Length > 0
+                    && shopKey.Length > 0
                     && string.Equals(_activeSeller, seller, StringComparison.Ordinal)
-                    && (_activeShopKey.Length == 0 || shopKey.Length == 0
-                        || string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal));
+                    && string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
+                    && (_activeSessionId.Length == 0
+                        || string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal));
             }
         }
 
@@ -310,18 +322,22 @@ namespace Bot.ChromeNs
         {
             if (qn == null || qn.Seller == null) return;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0) return;
+            var shopKey = ShopKey(qn);
+            if (seller.Length == 0 || shopKey.Length == 0) return;
             bool allow;
             lock (Sync)
             {
-                allow = _activeSeller.Length == 0
-                    || string.Equals(_activeSeller, seller, StringComparison.Ordinal)
-                    || (DateTime.UtcNow - _lastFocusProofUtc).TotalSeconds > 3;
+                // onChatDlgActive is a page event, not proof the WebView gained
+                // foreground focus. A background shop sharing the same nick
+                // must never replace the user-confirmed active ShopKey.
+                allow = _activeShopKey.Length == 0
+                    || (string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
+                        && string.Equals(_activeSeller, seller, StringComparison.Ordinal));
             }
             if (!allow)
             {
-                Log.Info("忽略后台/迟到的onChatDlgActive，不覆盖最近聚焦确认的店铺: candidate="
-                    + seller + ", activeSeller=" + GetActiveSellerNick());
+                Log.Info("忽略非前台证明的跨店onChatDlgActive: candidateShopKey="
+                    + shopKey + ", activeShopKey=" + GetActiveShopKey());
                 return;
             }
             Activate(qn, qn.CDP == null ? string.Empty : qn.CDP.SessionId,
@@ -351,12 +367,12 @@ namespace Bot.ChromeNs
                 if (_activeSeller.Length == 0) { reason = "尚未确认当前活动店铺"; return false; }
                 if (!string.Equals(_activeSeller, seller, StringComparison.Ordinal))
                 { reason = "活动seller不一致: active=" + _activeSeller + ", target=" + seller; return false; }
-                if (_activeShopKey.Length > 0 && shopKey.Length > 0
-                    && !string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
-                { reason = "ShopKey不一致"; return false; }
-                if (_activeSessionId.Length > 0 && sessionId.Length > 0
+                if (_activeShopKey.Length == 0 || shopKey.Length == 0
+                    || !string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
+                { reason = "ShopKey缺失或不一致"; return false; }
+                if (_activeSessionId.Length > 0
                     && !string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal))
-                { reason = "CDP会话不一致: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
+                { reason = "CDP会话不一致或缺失: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
                 return true;
             }
         }
@@ -364,17 +380,39 @@ namespace Bot.ChromeNs
         internal static void ReassertCurrent(string reason)
         {
             string seller;
-            lock (Sync) seller = _activeSeller;
-            if (seller.Length == 0) return;
-            var qn = QN.FindExistingBySellerNick(seller);
-            if (qn == null) return;
+            string shopKey;
+            string sessionId;
+            lock (Sync)
+            {
+                seller = _activeSeller;
+                shopKey = _activeShopKey;
+                sessionId = _activeSessionId;
+            }
+            // Seller nickname is not an identity key. If an old or incomplete
+            // activation has no ShopKey, fail closed instead of selecting an
+            // arbitrary QN wrapper with the same visible nickname.
+            if (seller.Length == 0 || shopKey.Length == 0) return;
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId);
+            if (qn == null)
+            {
+                var current = QN.CurQN;
+                if (current != null && !IsActive(current))
+                {
+                    QN.CurQN = null;
+                    Log.Info("活动ShopKey尚无匹配CDP会话，已清除过期全局QN引用: activeShopKey="
+                        + shopKey + ", reason=" + (reason ?? string.Empty));
+                }
+                return;
+            }
             if (!ReferenceEquals(QN.CurQN, qn))
             {
                 QN.CurQN = qn;
-                Log.Info("已纠正全局当前店铺，阻止后台WebView抢占: seller=" + seller + ", reason=" + (reason ?? string.Empty));
+                Log.Info("已按ShopKey/CDP会话纠正全局当前店铺，阻止后台WebView抢占: seller="
+                    + seller + ", shopKey=" + shopKey + ", reason=" + (reason ?? string.Empty));
             }
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
-            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(desk, seller, "active-shop-reassert:" + (reason ?? string.Empty));
+            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
+                desk, seller, "active-shop-reassert:" + (reason ?? string.Empty));
         }
 
         private static bool Activate(QN qn, string sessionId, string targetId, bool focusProof, string evidence)
@@ -382,6 +420,7 @@ namespace Bot.ChromeNs
             var seller = qn == null || qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return false;
             var shopKey = ShopKey(qn);
+            if (shopKey.Length == 0) return false;
             targetId = (targetId ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             string previousSeller;
@@ -398,7 +437,10 @@ namespace Bot.ChromeNs
                 _activeSeller = seller;
                 _activeShopKey = shopKey;
                 _activeTargetId = targetId.Length > 0 ? targetId : (qn.Seller.TargetId ?? string.Empty).Trim();
-                if (sessionId.Length > 0) _activeSessionId = sessionId;
+                // Clear a previous account's session ID when the newly activated
+                // QN has not established CDP yet. Retaining the old ID would make
+                // the new ShopKey permanently look inactive until another probe.
+                _activeSessionId = sessionId;
                 if (focusProof) _lastFocusProofUtc = DateTime.UtcNow;
             }
             QN.CurQN = qn;

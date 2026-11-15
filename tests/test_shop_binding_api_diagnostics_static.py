@@ -38,9 +38,9 @@ def test_diagnostics_use_shop_auth_and_the_real_text_default_gateway():
 
 def test_ai_chain_diagnostic_sends_to_current_buyer_through_production_path():
     service = read("src/Bot/ShopScope/ShopApiDiagnosticsService.cs")
-    assert "QN.FindExistingBySellerNick(seller)" in service
-    assert "ShopContextLocator.ResolveBySellerNick(qn.Seller.Nick)" in service
-    assert "resolved.ShopKey" in service
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey)" in service
+    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in service
+    assert "resolvedShopKey, shop.ShopKey" in service
     assert "qn.GetCurrentConversationID()" in service
     assert '"【Bot链路测试，可手动撤回】"' in service
     assert "KnowledgeLearningService.AllowNextManualSend" in service
