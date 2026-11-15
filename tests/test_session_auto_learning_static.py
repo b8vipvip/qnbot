@@ -693,3 +693,22 @@ def test_conversation_shop_resolution_prefers_exact_scope_and_active_shop_over_s
         "ResolveRuntimeBySellerNick(seller)"
     )
 
+
+
+
+def test_negative_or_non_finite_hasmore_values_are_unknown_not_explicit_server_end():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    parser = context[
+        context.index("private static bool TryReadInt"):
+        context.index("private static TimelineState GetState")
+    ]
+    refresh = context[
+        context.index("RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "if (value < 0)" in parser
+    assert "value = 0;\n                    return false;" in parser
+    assert "double.IsNaN(numeric) || double.IsInfinity(numeric) || numeric < 0" in parser
+    assert "hasMoreKnown && hasMore == 0" in refresh
+    assert "hasMoreKnown && hasMore > 0" in refresh

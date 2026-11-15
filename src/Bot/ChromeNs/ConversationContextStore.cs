@@ -1059,11 +1059,25 @@ namespace Bot.ChromeNs
             }
 
             if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            {
+                // Negative pagination flags are malformed/unknown, not an explicit
+                // server-end signal. Treating -1 as zero can truncate a non-empty page.
+                if (value < 0)
+                {
+                    value = 0;
+                    return false;
+                }
                 return true;
+            }
 
             double numeric;
             if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out numeric))
             {
+                if (double.IsNaN(numeric) || double.IsInfinity(numeric) || numeric < 0)
+                {
+                    value = 0;
+                    return false;
+                }
                 value = numeric > 0 ? 1 : 0;
                 return true;
             }
