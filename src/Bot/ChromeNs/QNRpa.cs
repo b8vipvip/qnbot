@@ -1465,7 +1465,7 @@ namespace Bot.ChromeNs
                 SendDeliveryWatchdog.EnsurePending(
                     SellerNick, buyer, text, shopKey);
                 var sendStart = DateTime.Now;
-                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
+                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "发送主按钮动作后未确认消息真实回显");
