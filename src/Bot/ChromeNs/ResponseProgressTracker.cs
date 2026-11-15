@@ -70,9 +70,9 @@ namespace Bot.ChromeNs
             catch { return "unresolved:" + Guid.NewGuid().ToString("N"); }
         }
 
-        private static string TurnKey(string seller, string buyer, DateTime detectedAt)
+        private static string TurnKey(string seller, string buyer, DateTime detectedAt, string shopKey = null)
         {
-            return Key(seller, buyer) + "#turn:" + detectedAt.Ticks;
+            return Key(seller, buyer, shopKey) + "#turn:" + detectedAt.Ticks;
         }
 
         private static string DeliveryKey(string seller, string buyer, string answer, string shopKey = null)
@@ -85,7 +85,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string question,
-            DateTime detectedAt)
+            DateTime detectedAt,
+            string shopKey = null)
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
@@ -99,8 +100,8 @@ namespace Bot.ChromeNs
             CleanupDeliveryUi();
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
 
-            var conversationKey = Key(seller, buyer);
-            var turnKey = TurnKey(seller, buyer, observedAt);
+            var conversationKey = Key(seller, buyer, shopKey);
+            var turnKey = TurnKey(seller, buyer, observedAt, shopKey);
             var entry = Entries.GetOrAdd(turnKey, _ => new Entry
             {
                 ConversationKey = conversationKey,
@@ -147,10 +148,11 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             DateTime previousDetectedAt,
-            string currentFragment)
+            string currentFragment,
+            string shopKey = null)
         {
             if (previousDetectedAt == DateTime.MinValue) return;
-            var turnKey = TurnKey(seller, buyer, NormalizeDetectedAt(previousDetectedAt));
+            var turnKey = TurnKey(seller, buyer, NormalizeDetectedAt(previousDetectedAt), shopKey);
             Entry entry;
             if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return;
 
@@ -172,12 +174,12 @@ namespace Bot.ChromeNs
         }
 
         public static CtlConversation BeginAnswer(
-            string seller, string buyer, string combinedQuestion, DateTime detectedAt)
+            string seller, string buyer, string combinedQuestion, DateTime detectedAt, string shopKey = null)
         {
             var detected = NormalizeDetectedAt(detectedAt);
-            var control = ObserveQuestion(seller, buyer, combinedQuestion, detected);
-            var turnKey = TurnKey(seller, buyer, detected);
-            ConsolidatePendingBurstEntries(seller, buyer, combinedQuestion, detected, turnKey);
+            var control = ObserveQuestion(seller, buyer, combinedQuestion, detected, shopKey);
+            var turnKey = TurnKey(seller, buyer, detected, shopKey);
+            ConsolidatePendingBurstEntries(seller, buyer, combinedQuestion, detected, turnKey, shopKey);
             OperationTurnKey.Value = turnKey;
             control = SetExactQuestionByTurn(turnKey, combinedQuestion, detected) ?? control;
             var startedAt = MarkAnswerStarted(turnKey, DateTime.Now);
@@ -197,11 +199,12 @@ namespace Bot.ChromeNs
             string answer,
             string source,
             DateTime detectedAt,
-            DateTime answerReadyAt)
+            DateTime answerReadyAt,
+            string shopKey = null)
         {
             if (answerReadyAt == DateTime.MinValue) answerReadyAt = DateTime.Now;
             var detected = detectedAt == DateTime.MinValue ? answerReadyAt : detectedAt;
-            var turnKey = ResolveOperationOrDetectedTurnKey(seller, buyer, detected);
+            var turnKey = ResolveOperationOrDetectedTurnKey(seller, buyer, detected, shopKey);
             Entry entry;
             if (string.IsNullOrWhiteSpace(turnKey)
                 || !Entries.TryGetValue(turnKey, out entry)
@@ -245,7 +248,7 @@ namespace Bot.ChromeNs
             {
                 control.SetAnswer(answer, source, answerReadyAt);
                 control.SetSendPending("答案已生成，准备发送...");
-                DeliveryUi[DeliveryKey(seller, buyer, answer)] = new DeliveryUiEntry
+                DeliveryUi[DeliveryKey(seller, buyer, answer, shopKey)] = new DeliveryUiEntry
                 {
                     Control = control,
                     Source = source ?? string.Empty,
@@ -272,7 +275,7 @@ namespace Bot.ChromeNs
             SlowResponseAnomalyService.QueueIfSlow(
                 seller, buyer, question, answer, source, detected, answerStartedAt, answerReadyAt);
             SendDeliveryWatchdog.ExpectDelivery(
-                seller, buyer, question, answer, source, detected, answerReadyAt);
+                seller, buyer, question, answer, source, detected, answerReadyAt, shopKey: shopKey);
             return control;
         }
 
@@ -305,10 +308,11 @@ namespace Bot.ChromeNs
         /// A human seller reply is observation/learning evidence only. Every active turn keeps its
         /// own card and Bot generation; no turn is removed or cancelled here.
         /// </summary>
-        public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
+        public static void MarkManualIntervention(
+            string seller, string buyer, string sellerReply, string shopKey = null)
         {
             MessageProcessingTraceService.RecordManualObservation(seller, buyer, sellerReply);
-            var conversationKey = Key(seller, buyer);
+            var conversationKey = Key(seller, buyer, shopKey);
             foreach (var entry in Entries.Values
                 .Where(x => x != null
                     && string.Equals(x.ConversationKey, conversationKey, StringComparison.Ordinal)
@@ -339,9 +343,9 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        public static void Fail(string seller, string buyer, string detail)
+        public static void Fail(string seller, string buyer, string detail, string shopKey = null)
         {
-            var turnKey = ResolveTerminalTurnKey(seller, buyer);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer, shopKey);
             Entry entry;
             if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
             MessageProcessingTraceService.RecordFailure(seller, buyer, detail);
@@ -368,9 +372,9 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void Complete(string seller, string buyer)
+        public static void Complete(string seller, string buyer, string shopKey = null)
         {
-            var turnKey = ResolveTerminalTurnKey(seller, buyer);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer, shopKey);
             Entry entry;
             if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return;
             lock (entry.Sync)
@@ -423,9 +427,10 @@ namespace Bot.ChromeNs
             string buyer,
             string combinedQuestion,
             DateTime detectedAt,
-            string selectedTurnKey)
+            string selectedTurnKey,
+            string shopKey = null)
         {
-            var conversationKey = Key(seller, buyer);
+            var conversationKey = Key(seller, buyer, shopKey);
             var removedCurrent = false;
             foreach (var pair in Entries.ToArray())
             {
@@ -507,19 +512,26 @@ namespace Bot.ChromeNs
             return null;
         }
 
-        private static string ResolveOperationOrDetectedTurnKey(string seller, string buyer, DateTime detectedAt)
+        private static string ResolveOperationOrDetectedTurnKey(
+            string seller, string buyer, DateTime detectedAt, string shopKey = null)
         {
-            var conversationKey = Key(seller, buyer);
+            var conversationKey = Key(seller, buyer, shopKey);
             var operationKey = OperationTurnKey.Value;
-            if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;
-            return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt));
+            var expectedPrefix = conversationKey + "#turn:";
+            if (!string.IsNullOrWhiteSpace(operationKey)
+                && operationKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return operationKey;
+            return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt), shopKey);
         }
 
         private static string ResolveTerminalTurnKey(string seller, string buyer, string shopKey = null)
         {
             var conversationKey = Key(seller, buyer, shopKey);
             var operationKey = OperationTurnKey.Value;
-            if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;
+            var expectedPrefix = conversationKey + "#turn:";
+            if (!string.IsNullOrWhiteSpace(operationKey)
+                && operationKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return operationKey;
             string currentKey;
             return CurrentTurns.TryGetValue(conversationKey, out currentKey)
                 ? currentKey
