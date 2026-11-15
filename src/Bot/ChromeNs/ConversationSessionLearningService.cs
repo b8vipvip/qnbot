@@ -1039,8 +1039,37 @@ namespace Bot.ChromeNs
                     batch, batchIndex, sourceFingerprint, transcript, sessionSummary,
                     styleBefore, localFirst, !string.IsNullOrWhiteSpace(invalidAnswer),
                     invalidAnswer, parseError);
-                var raw = await Task.Run(() => MyOpenAI.CallStructuredChat(
-                    messages, 4200, 0.05, KnowledgeCorpusTimeoutSeconds, CancellationToken.None));
+                StructuredChatResult raw;
+                try
+                {
+                    raw = await Task.Run(() => MyOpenAI.CallStructuredChat(
+                        messages, 4200, 0.05, KnowledgeCorpusTimeoutSeconds, CancellationToken.None));
+                }
+                catch (OperationCanceledException ex)
+                {
+                    // CallRawChatCompletions deliberately propagates its internal
+                    // CancelAfter timeout. Convert that timeout into a retryable batch
+                    // failure instead of letting it bypass this retry loop.
+                    if (attempt == 0)
+                    {
+                        await Task.Delay(1200);
+                        continue;
+                    }
+                    failed.Error = "timeout:" + Clean(ex.Message, 300);
+                    return failed;
+                }
+                catch (Exception ex)
+                {
+                    var exceptionError = Clean(ex.Message, 500);
+                    if (attempt == 0 && IsRetryableKnowledgeCorpusError(exceptionError))
+                    {
+                        await Task.Delay(1200);
+                        continue;
+                    }
+                    failed.Error = exceptionError.Length == 0 ? "ai_call_exception" : exceptionError;
+                    return failed;
+                }
+
                 if (raw == null || !raw.Success || string.IsNullOrWhiteSpace(raw.Answer))
                 {
                     var rawError = raw == null ? "ai_result_null" : Clean(raw.Error, 500);

@@ -164,3 +164,20 @@ def test_full_corpus_ai_scans_are_serialized_per_shop_to_avoid_duplicate_fanout(
     assert "await corpusGate.WaitAsync();" in finalize
     assert "finally" in finalize
     assert "corpusGate.Release();" in finalize
+
+
+
+def test_structured_chat_timeout_exception_retries_instead_of_bypassing_batch_retry():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    batch = service[
+        service.index("private static async Task<KnowledgeCorpusBatchResult> AnalyzeKnowledgeCorpusBatchAsync"):
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages")
+    ]
+
+    assert "catch (OperationCanceledException ex)" in batch
+    assert "failed.Error = \"timeout:\"" in batch
+    assert batch.index("catch (OperationCanceledException ex)") < batch.index(
+        "if (raw == null || !raw.Success"
+    )
+    assert "attempt == 0" in batch
+    assert "await Task.Delay(1200)" in batch
