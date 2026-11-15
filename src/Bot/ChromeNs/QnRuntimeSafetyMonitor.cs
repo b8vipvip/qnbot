@@ -1,6 +1,7 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -355,7 +356,12 @@ namespace Bot.ChromeNs
                 if (response == null || response.result == null) return;
                 var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
                 if (seller.Length == 0) return;
+                string shopKey;
+                try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+                catch { return; }
 
+                using (ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey)))
+                {
                 foreach (var message in response.result.Where(x => x != null))
                 {
                     if (message.fromid == null || message.toid == null) continue;
@@ -368,7 +374,7 @@ namespace Bot.ChromeNs
                     {
                         if (string.Equals(to, seller, StringComparison.Ordinal) && from.Length > 0)
                         {
-                            RecordBuyerSourceSort(seller, from, message);
+                            RecordBuyerSourceSort(seller, from, message, shopKey);
                         }
                         continue;
                     }
@@ -380,7 +386,7 @@ namespace Bot.ChromeNs
                     if (texts.Length == 0) continue;
                     var text = SelectPreferredMessageText(texts);
 
-                    if (TryConfirmBotDelivery(seller, buyer, texts))
+                    if (TryConfirmBotDelivery(seller, buyer, texts, shopKey))
                     {
                         continue;
                     }
@@ -392,7 +398,8 @@ namespace Bot.ChromeNs
                             seller,
                             buyer,
                             botAuthoredText,
-                            "通过卖家消息多字段中的[AI]署名确认这是Bot回显");
+                            "通过卖家消息多字段中的[AI]署名确认这是Bot回显",
+                            shopKey);
                         Log.Info("卖家消息多字段命中Bot署名，未判定人工回复: seller=" + seller
                             + ", buyer=" + buyer
                             + ", variants=" + texts.Length
@@ -400,7 +407,7 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    if (IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message))
+                    if (IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message, shopKey))
                     {
                         Log.Info("延迟到达的客服旧回复早于买家最新一轮消息，仅作为历史学习证据: seller="
                             + seller + ", buyer=" + buyer + ", reply=" + Short(text, 120));
@@ -411,9 +418,10 @@ namespace Bot.ChromeNs
                     // Keep the Bot generation/send path alive and record the human answer so the
                     // learning pipeline can compare both answers and decide whether knowledge needs
                     // reinforcement, correction or no change.
-                    ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
+                    ResponseProgressTracker.MarkManualIntervention(seller, buyer, text, shopKey);
                     Log.Info("人工客服回复已记录为对比学习证据，Bot任务继续: seller=" + seller
                         + ", buyer=" + buyer + ", reply=" + Short(text, 120));
+                }
                 }
             }
             catch (Exception ex)
@@ -422,7 +430,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void RecordBuyerSourceSort(string seller, string buyer, QNChatMessage message)
+        private static void RecordBuyerSourceSort(string seller, string buyer, QNChatMessage message, string shopKey)
         {
             var texts = ExtractMessageTextCandidates(message);
             var text = texts.Length == 0 ? string.Empty : SelectPreferredMessageText(texts);
@@ -434,20 +442,21 @@ namespace Bot.ChromeNs
 
             var sort = IncomingMessageSafety.GetSortValue(message);
             if (sort <= 0) return;
-            var key = BuyerOrderKey(seller, buyer);
+            var key = BuyerOrderKey(seller, buyer, shopKey);
             LatestBuyerSourceSort.AddOrUpdate(key, sort, (_, previous) => Math.Max(previous, sort));
         }
 
         private static bool IsSellerReplyOlderThanLatestBuyerTurn(
             string seller,
             string buyer,
-            QNChatMessage sellerMessage)
+            QNChatMessage sellerMessage,
+            string shopKey)
         {
             var sellerSort = IncomingMessageSafety.GetSortValue(sellerMessage);
             if (sellerSort <= 0) return false;
 
             long buyerSort;
-            if (!LatestBuyerSourceSort.TryGetValue(BuyerOrderKey(seller, buyer), out buyerSort)
+            if (!LatestBuyerSourceSort.TryGetValue(BuyerOrderKey(seller, buyer, shopKey), out buyerSort)
                 || buyerSort <= 0)
             {
                 return false;
@@ -455,11 +464,13 @@ namespace Bot.ChromeNs
             return buyerSort > sellerSort;
         }
 
-        private static string BuyerOrderKey(string seller, string buyer)
+        private static string BuyerOrderKey(string seller, string buyer, string shopKey)
         {
             seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
             buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-            return seller.ToLowerInvariant() + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+            return shopKey + "#" + seller.ToLowerInvariant() + "#"
+                + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
 
         private static string[] ExtractMessageTextCandidates(QNChatMessage message)
@@ -494,17 +505,17 @@ namespace Bot.ChromeNs
                 ?? string.Empty;
         }
 
-        private static bool TryConfirmBotDelivery(string seller, string buyer, string[] texts)
+        private static bool TryConfirmBotDelivery(string seller, string buyer, string[] texts, string shopKey)
         {
             if (texts == null) return false;
 
             foreach (var candidate in texts)
             {
-                if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, candidate)) return true;
+                if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, candidate, shopKey)) return true;
             }
             foreach (var candidate in texts)
             {
-                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, candidate)) return true;
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, candidate, shopKey)) return true;
             }
             return false;
         }

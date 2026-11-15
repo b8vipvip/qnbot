@@ -37,13 +37,13 @@ def test_cdp_foreground_chat_can_promote_connected_standby_without_disabling_gua
     server = text(CHROME / "MyWebSocketServer.cs")
     coordinator = text(CHROME / "MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "TryPromoteDuplicateSellerSession" in server
+    assert "TryPromoteDuplicateShopSession" in server
     active_index = server.index('wMsg.Type == "onChatDlgActive"')
     window = server[max(0, active_index - 3000): active_index + 5000]
-    assert "TryPromoteDuplicateSellerSession" in window, (
+    assert "TryPromoteDuplicateShopSession" in window, (
         "A real foreground onChatDlgActive from a connected standby must atomically become authority."
     )
-    assert "IsAuthoritativeSellerSession" in server, (
+    assert "IsAuthoritativeShopSession" in server, (
         "The WebSocket authority registry must remain fail-closed after foreground rebinding."
     )
     assert "ValidateNativeSend" in coordinator, (

@@ -32,7 +32,7 @@ def test_desk_registry_resolves_scope_and_never_routes_instance_ui_through_last_
     assert "QN.CurQN" in desk
     assert "DesksByHwnd[Hwnd.Handle] = this" in desk
     assert "DesksByHwnd.TryRemove" in desk
-    assert "SellerToHwnd" in binding and "ActiveSellerByHwnd" in binding
+    assert "ShopToHwnd" in binding and "ActiveSellerByHwnd" in binding
     assert "MarkActiveSeller" in binding
 
     change_area = desk[desk.index("public void ChangeBuyer"):desk.index("public void SetActiveQn")]
@@ -45,10 +45,10 @@ def test_rpa_requires_active_seller_on_shared_native_window_in_multi_shop():
     scope = read("src/Bot/ShopScope/ShopSettingsScope.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in binding
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in binding
     assert "FlaUI.Core.Application.Attach(desk.ProcessId)" in binding
-    assert "desks.Count == 1 && RuntimeSellerCount() <= 1" in binding
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in binding
+    assert "desks.Count == 1 && RuntimeShopCount() <= 1" in binding
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)" in binding
     assert "当前可见千牛输入框不属于目标seller" in binding
     assert "禁止跨客服写入/发送" in binding
     assert "MultiShopRuntimeSessionCoordinator.EnsureShopBinding(shop)" in scope
@@ -69,12 +69,12 @@ def test_each_attached_robot_is_resynchronized_from_its_active_qn():
     session = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in session
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in session
     assert "ReferenceEquals(_preQN, qn)" in session
     assert "_preQN = qn" in session
     assert "RefreshConversations();" in session
     assert "robot.SynchronizeSellerSession(qn)" in coordinator
-    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in coordinator
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in coordinator
 
 
 def test_new_multi_shop_sources_are_in_wpf_compile_graph():

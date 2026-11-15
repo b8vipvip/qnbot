@@ -91,4 +91,4 @@ def test_delivery_watchdog_keeps_echo_as_best_proof_but_never_false_fails_verifi
     anomaly = watchdog.index("SendFailureAnomalyService.Queue", failure)
     assert accepted < success < failure < anomaly
     assert "不生成发送失败异常，不触发同文本重发" in watchdog
-    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
+    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)]" in watchdog

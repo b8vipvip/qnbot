@@ -87,7 +87,7 @@ namespace Bot.ChromeNs
         /// a Qianniu submission even if the real-time seller echo is late/missing, so the same text
         /// is never re-written merely because transport evidence arrived late.
         /// </summary>
-        private async Task<bool> TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart)
+        private async Task<bool> TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart, string shopKey)
         {
             if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
             {
@@ -95,13 +95,13 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            if (await StopIfPlatformSendBlockedAsync(buyer, text, "发送前").ConfigureAwait(false)) return false;
+            if (await StopIfPlatformSendBlockedAsync(buyer, text, "发送前", shopKey).ConfigureAwait(false)) return false;
 
             var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
             if (domTriggered)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
-                    buyer, text, sendStart, "CDP页面发送按钮", 1700).ConfigureAwait(false))
+                    buyer, text, sendStart, "CDP页面发送按钮", 1700, shopKey).ConfigureAwait(false))
                 {
                     return true;
                 }
@@ -121,6 +121,11 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("HWND发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var hwndPosted = await RunUiActionAsync(
                 TryPostSafeMainSendMouseMessage,
                 "发送按钮HWND安全消息",
@@ -128,7 +133,7 @@ namespace Bot.ChromeNs
             if (hwndPosted)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
-                    buyer, text, sendStart, "发送按钮HWND安全消息", 1800).ConfigureAwait(false))
+                    buyer, text, sendStart, "发送按钮HWND安全消息", 1800, shopKey).ConfigureAwait(false))
                 {
                     return true;
                 }
@@ -147,6 +152,11 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("UIA发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var safeUiaInvoked = await RunUiActionAsync(
                 TryInvokeCachedSendButtonNow,
                 "发送按钮左侧UIA安全调用（原生前置）",
@@ -154,7 +164,7 @@ namespace Bot.ChromeNs
             if (safeUiaInvoked)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
-                    buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 1800).ConfigureAwait(false))
+                    buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 1800, shopKey).ConfigureAwait(false))
                 {
                     return true;
                 }
@@ -173,14 +183,19 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("兼容发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
             if (uiResult) return true;
-            if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后").ConfigureAwait(false)) return false;
+            if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后", shopKey).ConfigureAwait(false)) return false;
 
             if (!await HasExpectedDraftFastAsync(text, 650).ConfigureAwait(false))
             {
                 var accepted = await WaitForTextSubmissionAcceptedAsync(
-                    buyer, text, sendStart, "UIA兼容发送后提交确认", 1300).ConfigureAwait(false);
+                    buyer, text, sendStart, "UIA兼容发送后提交确认", 1300, shopKey).ConfigureAwait(false);
                 if (accepted) return true;
             }
 

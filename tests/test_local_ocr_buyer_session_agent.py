@@ -79,7 +79,7 @@ def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_on
     assert "SessionGeneration" in burst
     assert "CompleteMergedAwayGenerations" in burst
     assert "coalesced_into_generation_" in burst
-    assert "_sessionAgent.CancelAll(seller, buyer, reason)" in burst
+    assert "_sessionAgent.CancelAll(seller, buyer, reason, shopKey)" in burst
     assert "coalescing_buffer_trimmed" in burst
     assert "_sessionAgent.IsCurrent" in burst
 

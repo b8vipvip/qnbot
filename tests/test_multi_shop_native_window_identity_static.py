@@ -21,18 +21,18 @@ def test_qianniu_reception_discovery_does_not_require_one_exact_window_title():
 def test_shared_hwnd_registry_allows_multiple_sellers_but_one_active_seller():
     registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
     rpa = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
-    assert "SellerToHwnd" in registry
+    assert "ShopToHwnd" in registry
     assert "ActiveSellerByHwnd" in registry
-    assert "同一seller不能绑定两个Desk" in registry
+    assert "同一ShopKey不能绑定两个Desk" in registry
     assert "同一Desk不能绑定两个seller" not in registry
     assert "Desk.Create(new QnChatWnd(seller, hwnd, pid))" not in registry
     assert "BindForegroundSeller" in registry
     assert "MarkActiveSeller" in registry
-    assert "共享千牛窗口活动客服已切换" in registry
-    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in rpa
-    assert "desks.Count == 1 && RuntimeSellerCount() <= 1" in rpa
+    assert "共享千牛窗口活动ShopKey已切换" in registry
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in rpa
+    assert "desks.Count == 1 && RuntimeShopCount() <= 1" in rpa
     assert "ActiveShopSessionRegistry.ValidateNativeSend(_qn" in rpa
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller)" in rpa
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)" in rpa
     assert "当前可见千牛输入框不属于目标seller" in rpa
     assert "禁止跨客服写入/发送" in rpa
 
@@ -55,7 +55,7 @@ def test_focused_webview_not_background_buyer_switch_owns_shared_desk():
         "private static void EnsureQn", 1
     )[0]
     assert "ObserveChatDialogActive" in seller_handler
-    assert "ActiveShopSessionRegistry.IsActive(qn)" in buyer_handler
+    assert "BindForegroundSeller" not in buyer_handler
     assert "ActivateFromFocusedWebView" not in buyer_handler
     assert "BindForegroundSeller" not in receive_handler
 
@@ -69,6 +69,6 @@ def test_focused_webview_not_background_buyer_switch_owns_shared_desk():
 def test_attached_bot_ui_accepts_only_its_proven_seller():
     robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     props = read("src/Bot/Directory.Build.props")
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in robot
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot
     assert "AssistWindow\\WndAssist.MultiShopAttached.cs" in props
     assert "Automation\\ChatDeskNs\\DeskSellerBindingRegistry.cs" in props

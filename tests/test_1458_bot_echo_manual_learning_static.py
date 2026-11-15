@@ -16,11 +16,12 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
     method_end = source.index("public static bool TryTakeSendBlock(", method_start)
     method = source[method_start:method_end]
 
-    guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho)"
+    guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)"
     manual_source = 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")'
     comparison = "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer)"
 
     assert guard in method
+    assert "ShopSettingsScope.Enter(shop)" in method
     assert manual_source in method
     assert comparison in method
     assert method.index(guard) < method.index(manual_source)
@@ -36,7 +37,7 @@ def test_manual_learning_reuses_delivery_watchdog_bot_echo_authority():
     authority_call = "SendDeliveryWatchdog.IsKnownBotAnswer"
     assert authority_call in learning
     assert "public static bool IsKnownBotAnswer(" in watchdog
-    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
+    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)]" in watchdog
     # The runtime keeps Bot and human seller events distinct; the learning guard consumes
     # the same delivery ledger that establishes Bot ownership instead of duplicating heuristics.
     assert "SellerBotEcho" in runtime
@@ -52,7 +53,7 @@ def test_bot_echo_identity_canonicalizes_qianniu_transport_suffix_once():
     # ledger records the buyer-visible body. Keep this transport normalization inside
     # the watchdog's AnswerKey authority so learning does not add another decision layer.
     strip_transport = 'Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$", string.Empty, RegexOptions.IgnoreCase)'
-    build_key = "return ConversationKey(seller, buyer) + \"#\" + Normalize(answer);"
+    build_key = "return ConversationKey(seller, buyer, shopKey) + \"#\" + Normalize(answer);"
     assert build_key in watchdog
     assert strip_transport in method
     assert method.index(strip_transport) < method.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);')

@@ -15,7 +15,7 @@ def test_delivery_matching_uses_one_canonical_buyer_visible_identity():
     strip_marker = watchdog.index("BotOutboundMessageFormatter.StripAiMarker", normalize)
     strip_transport = watchdog.index('Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$"', strip_marker)
     whitespace = watchdog.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);', strip_transport)
-    answer_key = watchdog.index('return ConversationKey(seller, buyer) + "#" + Normalize(answer);')
+    answer_key = watchdog.index('return ConversationKey(seller, buyer, shopKey) + "#" + Normalize(answer);')
 
     # Bot ownership is decided by the watchdog ledger. Both the internal AI marker and
     # Qianniu's transport-only [A] echo suffix must disappear before the AnswerKey is built,
@@ -27,8 +27,9 @@ def test_delivery_matching_uses_one_canonical_buyer_visible_identity():
 def test_rpa_registers_pending_delivery_before_real_send_action():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
 
-    pending = rpa.index("SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text)")
-    real_send = rpa.index("TrySendTextNativeFirstAsync(buyer, text, sendStart)", pending)
+    pending = rpa.index("SendDeliveryWatchdog.EnsurePending(")
+    assert "shopKey" in rpa[pending:pending + 180]
+    real_send = rpa.index("TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey)", pending)
 
     assert pending < real_send
 
@@ -36,7 +37,7 @@ def test_rpa_registers_pending_delivery_before_real_send_action():
 def test_human_observation_still_requires_bot_delivery_checks_to_fail_first():
     monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
 
-    confirm = monitor.index("TryConfirmBotDelivery(seller, buyer, texts)")
+    confirm = monitor.index("TryConfirmBotDelivery(seller, buyer, texts, shopKey)")
     marker = monitor.index("texts.FirstOrDefault(IsExplicitBotAuthoredReply)", confirm)
     manual = monitor.index("ResponseProgressTracker.MarkManualIntervention", marker)
 

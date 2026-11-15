@@ -46,7 +46,8 @@ namespace Bot.ChromeNs
             string source,
             DateTime detectedAt,
             DateTime answerReadyAt,
-            bool force = false)
+            bool force = false,
+            string shopKey = null)
         {
             if (!Params.Robot.CanUseRobotReal) return;
             if (!force && !Params.Robot.GetIsAutoReply()) return;
@@ -56,7 +57,7 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return;
-            var shop = ResolveShop(seller);
+            var shop = ResolveShop(seller, shopKey);
             if (shop == null) return;
 
             var existing = FindPending(shop, seller, buyer, answer);
@@ -90,13 +91,13 @@ namespace Bot.ChromeNs
                 + ", watchdogId=" + pending.Id + ", force=" + force);
         }
 
-        public static string EnsurePending(string seller, string buyer, string answer)
+        public static string EnsurePending(string seller, string buyer, string answer, string shopKey = null)
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
             answer = (answer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0 || answer.Length == 0) return string.Empty;
-            var shop = ResolveShop(seller);
+            var shop = ResolveShop(seller, shopKey);
             if (shop == null) return string.Empty;
 
             var pending = FindPending(shop, seller, buyer, answer);
@@ -131,7 +132,8 @@ namespace Bot.ChromeNs
         /// the real-time seller echo is delayed/missed. That state must suppress retry/anomaly paths,
         /// but the pending watchdog remains alive so a later real echo can still upgrade the proof.
         /// </summary>
-        public static bool MarkSubmissionAccepted(string seller, string buyer, string answer, string evidence)
+        public static bool MarkSubmissionAccepted(
+            string seller, string buyer, string answer, string evidence, string shopKey = null)
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
@@ -140,7 +142,7 @@ namespace Bot.ChromeNs
             var normalized = Normalize(answer);
             if (seller.Length == 0 || buyer.Length == 0 || normalized.Length == 0) return false;
 
-            var shopKey = ScopeKey(seller);
+            shopKey = ScopeKey(seller, shopKey);
             var matches = Pending
                 .Where(pair => pair.Value != null
                     && pair.Value.Shop != null
@@ -163,7 +165,7 @@ namespace Bot.ChromeNs
 
             // Mark the outbound body as Bot-owned immediately. A late seller echo/history recovery
             // must not be mistaken for a human reply merely because its live echo event was missed.
-            KnownBotAnswers[AnswerKey(seller, buyer, answer)] = now.AddMinutes(2);
+            KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)] = now.AddMinutes(2);
             CleanupKnownAnswers();
             Log.Info("发送回显监控已记录千牛提交证据，继续等待真实卖家回显但禁止据此判失败/重发: shop="
                 + shopKey + ", seller=" + seller + ", buyer=" + buyer
@@ -171,9 +173,9 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        public static int CancelPending(string seller, string buyer, string answer, string reason)
+        public static int CancelPending(string seller, string buyer, string answer, string reason, string shopKey = null)
         {
-            var shopKey = ScopeKey(seller);
+            shopKey = ScopeKey(seller, shopKey);
             var normalized = Normalize(answer);
             var matches = Pending
                 .Where(pair => pair.Value != null
@@ -199,9 +201,9 @@ namespace Bot.ChromeNs
             return removedCount;
         }
 
-        public static int CancelConversation(string seller, string buyer, string reason)
+        public static int CancelConversation(string seller, string buyer, string reason, string shopKey = null)
         {
-            var shopKey = ScopeKey(seller);
+            shopKey = ScopeKey(seller, shopKey);
             var matches = Pending
                 .Where(pair => pair.Value != null
                     && pair.Value.Shop != null
@@ -280,7 +282,8 @@ namespace Bot.ChromeNs
                             pending.Seller,
                             pending.Buyer,
                             pending.Answer,
-                            "千牛已接收发送提交；实时卖家回显缺失，未据此判失败");
+                            "千牛已接收发送提交；实时卖家回显缺失，未据此判失败",
+                            pending.Shop.ShopKey);
                         Log.Info("[本店发送回显缺失但提交已确认] shop=" + pending.Shop.ShopKey
                             + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                             + ", watchdogId=" + pending.Id + ", submissionAcceptedAt="
@@ -300,7 +303,7 @@ namespace Bot.ChromeNs
                             + "也没有取得输入框稳定清空等千牛提交证据。"
                             + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果无法证明。";
                         ResponseProgressTracker.MarkDeliveryTimedOut(
-                            pending.Seller, pending.Buyer, pending.Answer, reason);
+                            pending.Seller, pending.Buyer, pending.Answer, reason, pending.Shop.ShopKey);
                         Log.Error("[本店发送异常] shop=" + pending.Shop.ShopKey
                             + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                             + ", watchdogId=" + pending.Id + ", reason=" + reason);
@@ -314,7 +317,8 @@ namespace Bot.ChromeNs
                         true,
                         Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
                     ResponseProgressTracker.MarkDeliveryConfirmed(
-                        pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送");
+                        pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送",
+                        pending.Shop.ShopKey);
                     Log.Info("本店发送回显监控确认成功: shop=" + pending.Shop.ShopKey
                         + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                         + ", watchdogId=" + pending.Id);
@@ -322,9 +326,9 @@ namespace Bot.ChromeNs
             });
         }
 
-        public static bool ConfirmDelivery(string seller, string buyer, string answer)
+        public static bool ConfirmDelivery(string seller, string buyer, string answer, string shopKey = null)
         {
-            var shopKey = ScopeKey(seller);
+            shopKey = ScopeKey(seller, shopKey);
             var normalized = Normalize(answer);
             if (normalized.Length == 0) return false;
 
@@ -352,13 +356,14 @@ namespace Bot.ChromeNs
                             Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
                         ResponseProgressTracker.MarkDeliveryConfirmed(
                             removed.Seller, removed.Buyer, removed.Answer,
-                            "已通过卖家消息回显确认真实发送");
+                            "已通过卖家消息回显确认真实发送",
+                            removed.Shop == null ? null : removed.Shop.ShopKey);
                     }
                 }
             }
             if (confirmed)
             {
-                KnownBotAnswers[AnswerKey(seller, buyer, answer)] = DateTime.Now.AddMinutes(2);
+                KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)] = DateTime.Now.AddMinutes(2);
                 CleanupKnownAnswers();
                 Log.Info("通过本店卖家消息回显确认Bot真实发送: shop=" + shopKey
                     + ", seller=" + seller + ", buyer=" + buyer
@@ -367,52 +372,62 @@ namespace Bot.ChromeNs
             }
 
             DateTime expiresAt;
-            return KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer), out expiresAt)
+            return KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer, shopKey), out expiresAt)
                 && expiresAt >= DateTime.Now;
         }
 
-        public static bool IsKnownBotAnswer(string seller, string buyer, string answer)
+        public static bool IsKnownBotAnswer(string seller, string buyer, string answer, string shopKey = null)
         {
             DateTime expiresAt;
-            return KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer), out expiresAt)
+            return KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer, shopKey), out expiresAt)
                 && expiresAt >= DateTime.Now;
         }
 
         private static QN FindQn(ShopContext shop, string seller)
         {
-            try
-            {
-                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
-                foreach (var qn in qns)
-                {
-                    if (qn == null || qn.Seller == null) continue;
-                    if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
-                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal)) continue;
-                    try
-                    {
-                        if (string.Equals(ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
-                            shop.ShopKey, StringComparison.Ordinal)) return qn;
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            return null;
+            if (shop == null) return null;
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+            if (qn == null || qn.Seller == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return null;
+            return string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                ? qn
+                : null;
         }
 
-        private static ShopContext ResolveShop(string seller)
+        private static ShopContext ResolveShop(string seller, string shopKey = null)
         {
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0)
+            {
+                try
+                {
+                    var exact = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    return string.Equals((exact.SellerNick ?? string.Empty).Trim(),
+                        seller, StringComparison.Ordinal) ? exact : null;
+                }
+                catch { return null; }
+            }
+
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
+            if (current != null)
+            {
+                return string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    seller, StringComparison.Ordinal)
+                    ? current
+                    : null;
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
             catch { return null; }
         }
 
-        private static string ScopeKey(string seller)
+        private static string ScopeKey(string seller, string shopKey = null)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0) return shopKey;
             var shop = ResolveShop(seller);
             return shop == null
-                ? "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant()
+                ? "unresolved:" + Guid.NewGuid().ToString("N")
                 : shop.ShopKey;
         }
 
@@ -427,15 +442,15 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string ConversationKey(string seller, string buyer)
+        private static string ConversationKey(string seller, string buyer, string shopKey = null)
         {
-            return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()
+            return ScopeKey(seller, shopKey) + "#" + (seller ?? string.Empty).Trim()
                 + "#" + (buyer ?? string.Empty).Trim();
         }
 
-        private static string AnswerKey(string seller, string buyer, string answer)
+        private static string AnswerKey(string seller, string buyer, string answer, string shopKey = null)
         {
-            return ConversationKey(seller, buyer) + "#" + Normalize(answer);
+            return ConversationKey(seller, buyer, shopKey) + "#" + Normalize(answer);
         }
 
         private static string Normalize(string value)

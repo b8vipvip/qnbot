@@ -137,7 +137,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             QNChatMessage message,
-            string messageText)
+            string messageText,
+            string shopKey = null)
         {
             if (message == null) return false;
             seller = (seller ?? string.Empty).Trim();
@@ -152,7 +153,7 @@ namespace Bot.ChromeNs
             // conversation from an unverified third-party message.
             if (!string.Equals(from, seller, StringComparison.Ordinal)
                 || !string.Equals(to, buyer, StringComparison.Ordinal)) return false;
-            var shop = ResolveShop(seller);
+            var shop = ResolveShop(seller, shopKey);
             if (shop == null) return false;
             IDisposable scope = null;
             try
@@ -1079,21 +1080,43 @@ namespace Bot.ChromeNs
                 + "#" + (buyer ?? string.Empty).Trim();
         }
 
-        private static string ScopeKey(string seller)
+        private static string ScopeKey(string seller, string shopKey = null)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0) return shopKey;
             var current = ShopSettingsScope.Current;
-            if (current != null) return current.ShopKey;
+            if (current != null)
+                return string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    ? current.ShopKey
+                    : "unresolved:" + Guid.NewGuid().ToString("N");
             var resolved = ResolveShop(seller);
             return resolved == null
                 ? "legacy-" + StableHash((seller ?? string.Empty).Trim()).ToString(CultureInfo.InvariantCulture)
                 : resolved.ShopKey;
         }
 
-        private static ShopContext ResolveShop(string seller)
+        private static ShopContext ResolveShop(string seller, string shopKey = null)
         {
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0)
+            {
+                try
+                {
+                    var exact = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    return string.Equals((exact.SellerNick ?? string.Empty).Trim(),
+                        seller, StringComparison.Ordinal) ? exact : null;
+                }
+                catch { return null; }
+            }
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
-            if (string.IsNullOrWhiteSpace(seller)) return null;
+            if (current != null)
+            {
+                return string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    seller, StringComparison.Ordinal) ? current : null;
+            }
+            if (seller.Length == 0) return null;
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
             catch (AmbiguousShopIdentityException) { throw; }
             catch { return null; }

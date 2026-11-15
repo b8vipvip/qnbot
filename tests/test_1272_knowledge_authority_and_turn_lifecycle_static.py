@@ -40,7 +40,7 @@ def test_reply_progress_cannot_resurrect_a_cancelled_turn():
     assert "ObserveQuestion(seller, buyer, question, detected);" not in ready
     assert "已丢弃失效turn的迟到答案就绪观察" in ready
     terminal = tracker[tracker.index("private static string ResolveTerminalTurnKey"):tracker.index("private static bool TryRemoveTurn")]
-    assert "if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;" in terminal
+    assert "operationKey.StartsWith(expectedPrefix, StringComparison.Ordinal)" in terminal
 
 
 def test_streaming_pipeline_uses_session_agent_as_terminal_owner():

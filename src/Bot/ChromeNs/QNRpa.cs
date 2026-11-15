@@ -826,15 +826,21 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
+            var shopKey = ResolveShopKeyForDeliveryWatchdog();
+            if (shopKey.Length == 0)
+            {
+                SetSendFailure("店铺身份确认", "当前CDP未绑定有效ShopKey或身份已变化，已阻止发送");
+                return false;
+            }
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
-            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer))
+            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer, shopKey))
             {
                 SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
                 return false;
             }
-            return await OpenAndSendText(buyer, text).ConfigureAwait(false);
+            return await OpenAndSendText(buyer, text, shopKey).ConfigureAwait(false);
         }
 
         private string SellerNick
@@ -1345,7 +1351,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<bool> OpenAndSendText(string buyer, string text)
+        private async Task<bool> OpenAndSendText(string buyer, string text, string shopKey)
         {
             var sendResult = false;
             ResetSendFailure();
@@ -1355,6 +1361,11 @@ namespace Bot.ChromeNs
                 Log.Info("自动发送开始: buyer=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
+                if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                {
+                    SetSendFailure("店铺身份确认", "当前千牛CDP登录身份已变化或无法验证，已阻止写入和发送");
+                    return false;
+                }
 
                 if (_qn.Buyer == null || !IsExpectedBuyer(buyer, _qn.Buyer.Nick))
                 {
@@ -1373,19 +1384,22 @@ namespace Bot.ChromeNs
                 {
                     SetSendFailure("会话确认", "当前会话不是目标买家；target=" + buyer
                         + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认").ConfigureAwait(false))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查"))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
@@ -1393,7 +1407,8 @@ namespace Bot.ChromeNs
                 if (sellerDesk == null || !EnsureSellerDeskBinding(false))
                 {
                     SetSendFailure("发送窗口", "未找到当前卖家对应千牛窗口");
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!sellerDesk.IsVisible)
@@ -1403,14 +1418,16 @@ namespace Bot.ChromeNs
 
                 if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
                 var setOk = await TrySetPlainTextByCdpAsync(buyer, text).ConfigureAwait(false);
                 if (!setOk)
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
@@ -1418,25 +1435,37 @@ namespace Bot.ChromeNs
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认").ConfigureAwait(false))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
                 if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
+                    return false;
+                }
+                if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                {
+                    SetSendFailure("发送前店铺身份复核", "当前千牛CDP登录身份已变化或无法验证，已阻止发送");
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                     return false;
                 }
 
-                SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text);
+                SendDeliveryWatchdog.EnsurePending(
+                    SellerNick, buyer, text, shopKey);
                 var sendStart = DateTime.Now;
-                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
+                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "发送主按钮动作后未确认消息真实回显");
@@ -1457,7 +1486,8 @@ namespace Bot.ChromeNs
             {
                 SetSendFailure("自动发送异常", ex.Message);
                 await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), shopKey);
                 Log.Exception(ex);
                 sendResult = false;
             }

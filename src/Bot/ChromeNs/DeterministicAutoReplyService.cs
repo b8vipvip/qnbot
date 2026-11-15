@@ -77,22 +77,29 @@ namespace Bot.ChromeNs
                 return true;
             }
 
-            var key = Key(item.SellerNick, item.BuyerNick);
             ShopContext shop = null;
-            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.SellerNick); }
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey); }
             catch { shop = null; }
+            if (shop == null
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                Log.ErrorWithMaxCount(
+                    "固定回复前置缺少可验证的ShopKey店铺作用域，已阻断普通Knowledge/AI链路: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
+                    + ", seller=" + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                return false;
+            }
+            var key = Key(shop.ShopKey, item.SellerNick, item.BuyerNick);
 
             // Off-hours must be decided before the ordinary deterministic-rule gate. A slow or
             // failed mandatory send must never make a later message fail-open into Knowledge/AI.
-            if (shop != null)
+            using (ShopSettingsScope.Enter(shop))
             {
-                using (ShopSettingsScope.Enter(shop))
+                string offHoursReply;
+                if (TryResolveOffHours(out offHoursReply))
                 {
-                    string offHoursReply;
-                    if (TryResolveOffHours(out offHoursReply))
-                    {
-                        return await HandleOffHoursExclusiveAsync(item, key, offHoursReply).ConfigureAwait(false);
-                    }
+                    return await HandleOffHoursExclusiveAsync(item, key, offHoursReply).ConfigureAwait(false);
                 }
             }
 
@@ -100,7 +107,7 @@ namespace Bot.ChromeNs
             var gateAcquired = false;
             var sessionAgent = new BuyerSessionAgent();
             var generationToken = item.SessionGeneration > 0
-                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration)
+                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)
                 : CancellationToken.None;
             try
             {
@@ -118,7 +125,7 @@ namespace Bot.ChromeNs
             try
             {
                 if (item.SessionGeneration > 0
-                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                 {
                     Log.Info("固定规则获得串行门时generation已失效，已消费该旧任务且不进入AI链路: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
@@ -126,19 +133,10 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                if (shop != null)
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    using (ShopSettingsScope.Enter(shop))
-                    {
-                        return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply).ConfigureAwait(false);
-                    }
+                    return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply).ConfigureAwait(false);
                 }
-
-                Log.ErrorWithMaxCount(
-                    "固定规则前置缺少店铺作用域，已停止固定规则发送并继续普通消息链路: seller="
-                    + item.SellerNick + ", buyer=" + item.BuyerNick,
-                    20);
-                return true;
             }
             catch (OperationCanceledException)
             {
@@ -199,11 +197,13 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                var qn = QN.FindExistingBySellerNick(item.SellerNick);
-                if (qn == null)
+                var qn = QN.FindExistingByShopKey(ShopSettingsScope.Current == null
+                    ? item.ShopKey
+                    : ShopSettingsScope.Current.ShopKey);
+                if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
                 {
                     Log.ErrorWithMaxCount(
-                        "下班独占策略找不到客服运行实例，已fail-closed阻止Knowledge/AI链路: seller="
+                        "下班独占策略找不到当前ShopKey的活动客服/CDP实例，已fail-closed阻止Knowledge/AI链路: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick,
                         20);
                     return false;
@@ -243,14 +243,16 @@ namespace Bot.ChromeNs
         {
             if (!Params.Robot.GetIsAutoReply()) return true;
 
-            var qn = QN.FindExistingBySellerNick(item.SellerNick);
-            if (qn == null)
+            var qn = QN.FindExistingByShopKey(ShopSettingsScope.Current == null
+                ? item.ShopKey
+                : ShopSettingsScope.Current.ShopKey);
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
             {
                 Log.ErrorWithMaxCount(
-                    "固定规则前置未发送：找不到客服运行实例。seller=" + item.SellerNick
+                    "固定规则前置未发送：找不到当前ShopKey的活动客服/CDP实例，已阻断普通AI链路。seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick,
                     20);
-                return true;
+                return false;
             }
 
             var question = (item.DisplayText ?? string.Empty).Trim();
@@ -347,6 +349,7 @@ namespace Bot.ChromeNs
             string answer,
             string source)
         {
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return false;
             answer = FixedAutoReplyVariantService.Select(source, answer);
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer))
@@ -357,10 +360,10 @@ namespace Bot.ChromeNs
 
             var sessionAgent = new BuyerSessionAgent();
             var generationToken = item.SessionGeneration > 0
-                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration)
+                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)
                 : CancellationToken.None;
             if (item.SessionGeneration > 0
-                && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
             {
                 Log.Info(source + "生成结果到达时generation已失效，禁止记录Ready和真实发送: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick
@@ -373,7 +376,8 @@ namespace Bot.ChromeNs
                 item.SellerNick,
                 item.BuyerNick,
                 item.DisplayText,
-                detectedAt);
+                detectedAt,
+                item.ShopKey);
             try
             {
                 KnowledgeLearningService.RegisterAnswerSource(
@@ -389,14 +393,15 @@ namespace Bot.ChromeNs
                     answer,
                     source,
                     detectedAt,
-                    DateTime.Now);
+                    DateTime.Now,
+                    item.ShopKey);
                 BotRuntimeStats.RecordDisplayedAnswer(true);
                 Log.Info(
                     source + "在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
                 if (item.SessionGeneration > 0
-                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                 {
                     if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
                     Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
@@ -420,7 +425,8 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         item.SessionGeneration,
                         BuyerSessionAgentState.Failed,
-                        "fixed_reply_send_failed");
+                        "fixed_reply_send_failed",
+                        item.ShopKey);
                 }
                 if (ctl != null)
                 {
@@ -452,7 +458,8 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         item.SessionGeneration,
                         BuyerSessionAgentState.Failed,
-                        "fixed_reply_send_exception");
+                        "fixed_reply_send_exception",
+                        item.ShopKey);
                 }
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(
@@ -463,7 +470,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick);
+                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
             }
         }
 
@@ -534,9 +541,10 @@ namespace Bot.ChromeNs
             return ((int)value.TotalHours).ToString("00") + ":" + value.Minutes.ToString("00");
         }
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
     }

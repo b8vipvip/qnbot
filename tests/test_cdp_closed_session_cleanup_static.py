@@ -12,7 +12,7 @@ def test_closed_websocket_releases_cdp_runtime_state():
 
     assert "ReleaseClosedSession" in cdp
     assert "SessionClients.TryRemove(sessionId" in cdp
-    assert "PreferredSellerSessions" in cdp
+    assert "PreferredShopSessions" in cdp
     assert "CancelPendingWaiters();" in cdp
     assert "_webSocketSession = null;" in cdp
 

@@ -125,7 +125,53 @@ namespace Bot.ChromeNs
             var comparison = String.Compare(QnVersion, "9.19.06N", StringComparison.OrdinalIgnoreCase);
             if (comparison < 0)
             {
-                SendTimiMsg(buyer, text);
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+                catch
+                {
+                    rpa.SetSendFailure("旧版发送店铺身份确认", "无法解析当前QN的唯一ShopKey，已阻止旧版接口发送");
+                    return false;
+                }
+                var client = CDP;
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (shop == null || client == null || server == null
+                    || !await rpa.VerifyShopIdentityBeforeSendAsync(shop.ShopKey).ConfigureAwait(false)
+                    || !ReferenceEquals(CDP, client))
+                {
+                    rpa.SetSendFailure("旧版发送店铺身份确认", "当前CDP不是该ShopKey的权威登录会话，已阻止旧版接口发送");
+                    return false;
+                }
+
+                var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+                var now = DateTime.Now;
+                SendDeliveryWatchdog.ExpectDelivery(
+                    seller, buyer, string.Empty, text, "旧版SendSmartTipMsg", now, now,
+                    force: true, shopKey: shop.ShopKey);
+                try
+                {
+                    client.SendTimiMsg(buyer, text);
+                }
+                catch (Exception ex)
+                {
+                    SendDeliveryWatchdog.CancelPending(
+                        seller, buyer, text, "旧版SendSmartTipMsg执行异常：" + ex.Message, shop.ShopKey);
+                    rpa.SetSendFailure("旧版接口发送", ex.Message);
+                    return false;
+                }
+
+                if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                    || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId))
+                {
+                    SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
+                    rpa.SetSendCancellation(
+                        "旧版接口发送结果不确定",
+                        "发送期间CDP身份或权威会话发生变化，已停止重试并等待卖家回显核验");
+                    return false;
+                }
+
+                SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
+                SendDeliveryWatchdog.MarkSubmissionAccepted(
+                    seller, buyer, text, "旧版SendSmartTipMsg执行完成且CDP权威身份保持不变", shop.ShopKey);
                 BotConnectionDiagnostics.RecordSendAttempt(true, "旧版接口发送");
                 return true;
             }
@@ -556,6 +602,17 @@ namespace Bot.ChromeNs
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
             var detectedAt = DateTime.Now;
+            string shopKey;
+            try
+            {
+                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("买家消息缺少可验证ShopKey，已阻断回复链路: seller="
+                    + sellerNick + ", error=" + ex.Message, 20);
+                return Task.CompletedTask;
+            }
 
             // This is the authoritative business claim. It is intentionally the first dedupe write
             // on the buyer path and is shared with background recovery.
@@ -577,7 +634,7 @@ namespace Bot.ChromeNs
                 out orderPlan))
             {
                 if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick);
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);
@@ -605,7 +662,7 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt);
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
                 BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
@@ -615,6 +672,7 @@ namespace Bot.ChromeNs
 
             _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
             {
+                ShopKey = shopKey,
                 SellerNick = sellerNick,
                 BuyerNick = buyerNick,
                 MessageKey = messageKey,
@@ -660,7 +718,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             var aiStartedAt = DateTime.Now;
             Log.Info("文本回复开始: buyer=" + burst.BuyerNick + ", queueMs="
                 + Math.Max(0, (long)(aiStartedAt - detectedAt).TotalMilliseconds));
@@ -725,7 +784,7 @@ namespace Bot.ChromeNs
                     conversationCtl.SetProcessing("AI未生成可用答案");
                     conversationCtl.SetStatus(failure, false);
                 }
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure, burst.ShopKey);
                 Log.Info("旧文本回复路径AI失败，保持失败态且不进入答案就绪/完成: buyer="
                     + burst.BuyerNick);
                 return;
@@ -744,7 +803,8 @@ namespace Bot.ChromeNs
                 answer,
                 answerSource,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("文本答案已生成: buyer=" + burst.BuyerNick
                 + ", aiMs=" + Math.Max(0, (long)(answerReadyAt - aiStartedAt).TotalMilliseconds)
@@ -753,7 +813,7 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -783,7 +843,7 @@ namespace Bot.ChromeNs
             }
             Log.Info("文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private async Task ProcessVisionBurstAsync(
@@ -797,7 +857,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             var task = new VisionReplyTask
             {
                 SellerNick = burst.SellerNick,
@@ -817,7 +878,7 @@ namespace Bot.ChromeNs
             if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
             {
                 var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
                 Log.Info("视觉消息跳过: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", messageId=" + visionItem.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
@@ -845,7 +906,8 @@ namespace Bot.ChromeNs
                 answer,
                 source,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("视觉答案已生成: buyer=" + burst.BuyerNick
                 + ", totalToAnswerMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds)
@@ -853,7 +915,7 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (ctl != null) ctl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (!lease.IsCurrent)
@@ -876,7 +938,7 @@ namespace Bot.ChromeNs
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
             Log.Info("视觉真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
@@ -966,28 +1028,98 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static QN GetByNick(LocalUser seller)
+        public static QN GetByShopIdentity(LocalUser seller)
         {
             if (seller == null) throw new ArgumentNullException("seller");
+            var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(seller);
             lock (QNSetLock)
             {
-                var qn = QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == seller.Nick || q._seller.Display == seller.Display));
+                var matches = QNSet
+                    .Where(q => q != null && q._seller != null)
+                    .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
+                    .Where(x => string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    .ToList();
+                if (matches.Count > 1 && matches.Any(x =>
+                    !ShopIdentityResolver.Resolve(x.Qn._seller).HasStableSellerId))
+                    throw new InvalidOperationException("昵称回退身份对应多个千牛实例，已阻止合并。");
+
+                var qn = matches
+                    .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
+                    .Select(x => x.Qn)
+                    .FirstOrDefault();
                 if (qn == null)
                 {
                     qn = new QN(seller);
                     QNSet.Add(qn);
                 }
+                else
+                {
+                    // Same stable ShopKey may receive refreshed login metadata/nickname.
+                    qn._seller = seller;
+                }
                 return qn;
+            }
+        }
+
+        // Compatibility alias. Identity is resolved by TargetId/ShopKey, not nick or display.
+        public static QN GetByNick(LocalUser seller)
+        {
+            return GetByShopIdentity(seller);
+        }
+
+        public static QN FindExistingByShopKey(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return null;
+            lock (QNSetLock)
+            {
+                return QNSet
+                    .Where(q => q != null && q._seller != null)
+                    .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
+                    .Where(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal))
+                    .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
+                    .Select(x => x.Qn)
+                    .FirstOrDefault();
             }
         }
 
         public static QN FindExistingBySellerNick(string sellerNick)
         {
-            if (string.IsNullOrWhiteSpace(sellerNick)) return null;
-            lock (QNSetLock)
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return null;
+
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null)
             {
-                return QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == sellerNick || q._seller.Display == sellerNick));
+                return string.Equals((scopedShop.SellerNick ?? string.Empty).Trim(),
+                    sellerNick, StringComparison.Ordinal)
+                    ? FindExistingByShopKey(scopedShop.ShopKey)
+                    : null;
             }
+
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0)
+            {
+                if (!string.Equals(ActiveShopSessionRegistry.GetActiveSellerNick(),
+                    sellerNick, StringComparison.Ordinal)) return null;
+                return FindExistingByShopKey(activeShopKey);
+            }
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                return FindExistingByShopKey(shop.ShopKey);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string TryGetShopKey(LocalUser seller)
+        {
+            try { return ShopIdentityResolver.Resolve(seller).ShopKey; }
+            catch { return string.Empty; }
         }
 
         public void SendTimiMsg(string userId, string smartTip)

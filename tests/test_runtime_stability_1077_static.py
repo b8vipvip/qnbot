@@ -35,7 +35,7 @@ def test_deterministic_rule_gates_follow_generation_cancellation_with_correct_fa
 def test_forwarded_duplicate_session_cannot_be_promoted_for_commands():
     s = read("src/Bot/ChromeNs/CDPClient.cs")
     assert 'PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange")' not in s
-    assert 'PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange")' in s
+    assert 'PreferRuntimeSession(shopKey, sellerNick, SessionId, buyerNick, "onConversationChange")' in s
 
 
 def test_order_retry_requires_remote_delivery_verification():

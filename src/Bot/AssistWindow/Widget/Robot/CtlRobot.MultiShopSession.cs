@@ -1,5 +1,6 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 
 namespace Bot.AssistWindow.Widget.Robot
@@ -19,7 +20,10 @@ namespace Bot.AssistWindow.Widget.Robot
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return;
 
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
+            string shopKey;
+            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+            catch { return; }
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey))
             {
                 return;
             }

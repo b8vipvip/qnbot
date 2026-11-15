@@ -498,7 +498,10 @@ namespace Bot.ChromeNs
         internal void CancelActiveBuyerGeneration(string seller, string buyer, string reason)
         {
             if (_buyerMessageBurstCoordinator == null) return;
-            _buyerMessageBurstCoordinator.CancelBuyer(seller, buyer, reason);
+            string shopKey;
+            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey; }
+            catch { shopKey = string.Empty; }
+            _buyerMessageBurstCoordinator.CancelBuyer(seller, buyer, reason, shopKey);
         }
 
         internal bool HasBuyerMessageAfter(string seller, string buyer, DateTime threshold)

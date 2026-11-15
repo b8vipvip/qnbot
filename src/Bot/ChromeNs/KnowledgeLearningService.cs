@@ -201,12 +201,27 @@ namespace Bot.ChromeNs
             string buyer,
             string candidateAnswer,
             out string question,
-            out string manualAnswer)
+            out string manualAnswer,
+            string shopKey = null)
         {
             question = string.Empty;
             manualAnswer = string.Empty;
             if (qn == null || qn.Seller == null) return false;
             var seller = qn.Seller.Nick ?? string.Empty;
+            string resolvedShopKey;
+            ShopContext shop;
+            try
+            {
+                resolvedShopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey;
+                shopKey = string.IsNullOrWhiteSpace(shopKey) ? resolvedShopKey : shopKey.Trim();
+                if (!string.Equals(shopKey, resolvedShopKey, StringComparison.Ordinal)) return false;
+                if (qn.CDP != null && (qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired
+                    || !string.Equals(qn.CDP.ShopKey, shopKey, StringComparison.Ordinal))) return false;
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch { return false; }
+            using (ShopSettingsScope.Enter(shop))
+            {
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
             if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now) return false;
@@ -234,7 +249,7 @@ namespace Bot.ChromeNs
                 // the current candidate and must not be promoted to a manual correction. Reuse the
                 // delivery watchdog's authoritative Bot-echo ledger instead of inventing a second
                 // text/timing heuristic here.
-                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho))
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey))
                 {
                     Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
                         + seller + ", buyer=" + buyer);
@@ -256,6 +271,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("检测本店客服人工回复失败，继续原发送流程：" + ex.Message);
                 return false;
+            }
             }
         }
 

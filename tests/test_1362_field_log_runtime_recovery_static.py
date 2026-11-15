@@ -37,8 +37,9 @@ def test_business_capability_cancels_pending_inert_standby_observation():
 def test_duplicate_receive_new_msg_requests_existing_history_authority_not_second_reply_pipeline():
     text = source()
     assert 'string.Equals(e.Type, "receiveNewMsg"' in text
-    assert 'IsAuthoritativeSellerSession(seller, sessionId)' in text
-    assert 'RequestImmediateHistoryProbe(seller, sessionId)' in text
+    assert 'var shopKey = server.GetShopKeyForSession(sessionId)' in text
+    assert 'IsAuthoritativeShopSession(shopKey, sessionId)' in text
+    assert 'RequestImmediateHistoryProbe(shopKey, seller, sessionId)' in text
     assert 'ProbeActiveConversationForMissedInboundAsync()' in text
     assert 'ProcessIncomingMessageAsync(' not in text
     assert 'ImmediateProbeDebounce = TimeSpan.FromMilliseconds(900)' in text

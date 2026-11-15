@@ -24,7 +24,7 @@ def test_service_attitude_prompt_is_a_hard_fail_closed_platform_signal():
 def test_native_send_uses_submission_guard_between_authoritative_actions():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
-    first = native.index('StopIfPlatformSendBlockedAsync(buyer, text, "发送前")')
+    first = native.index('StopIfPlatformSendBlockedAsync(buyer, text, "发送前", shopKey)')
     cdp = native.index("TryTriggerSendViaCdpDomAsync", first)
     cdp_confirm = native.index('buyer, text, sendStart, "CDP页面发送按钮", 1700', cdp)
     hwnd = native.index("TryPostSafeMainSendMouseMessage", cdp_confirm)
@@ -32,7 +32,7 @@ def test_native_send_uses_submission_guard_between_authoritative_actions():
     safe_uia = native.index("TryInvokeCachedSendButtonNow", hwnd_confirm)
     uia_confirm = native.index('buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 1800', safe_uia)
     legacy_uia = native.index("TrySendTextViaUiaAsync", uia_confirm)
-    after_uia = native.index('StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后")', legacy_uia)
+    after_uia = native.index('StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后", shopKey)', legacy_uia)
     assert first < cdp < cdp_confirm < hwnd < hwnd_confirm < safe_uia < uia_confirm < legacy_uia < after_uia
     stable_probe = guard.index('buyer, text, method + "稳定清空后平台确认"')
     buyer_check = guard.index('buyer, method + "提交后会话确认"', stable_probe)

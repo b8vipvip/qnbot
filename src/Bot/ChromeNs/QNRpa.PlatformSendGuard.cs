@@ -1,4 +1,5 @@
 using BotLib;
+using Bot.ShopScope;
 using FlaUI.Core.AutomationElements;
 using System;
 using System.Collections.Generic;
@@ -31,7 +32,68 @@ namespace Bot.ChromeNs
         /// “继续发送” can turn a bad/repeated answer into a buyer complaint, as observed in the
         /// 2026-09-09 field incident.
         /// </summary>
-        private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string expectedText, string stage)
+        private string ResolveShopKeyForDeliveryWatchdog()
+        {
+            try
+            {
+                var client = _qn == null ? null : _qn.CDP;
+                if (client == null || client.IsInvalidated || client.IsShopIdentityRetired)
+                    return string.Empty;
+                var resolved = ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey;
+                var bound = (client.ShopKey ?? string.Empty).Trim();
+                var server = MyWebSocketServer.WSocketSvrInst;
+                return bound.Length > 0
+                    && string.Equals(bound, resolved, StringComparison.Ordinal)
+                    && server != null
+                    && server.IsAuthoritativeShopSession(bound, client.SessionId)
+                    ? bound
+                    : string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        internal async Task<bool> VerifyShopIdentityBeforeSendAsync(string expectedShopKey)
+        {
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            var client = _qn == null ? null : _qn.CDP;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (expectedShopKey.Length == 0 || client == null || server == null
+                || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
+                return false;
+
+            try
+            {
+                var current = await client.GetCurrentUser().ConfigureAwait(false);
+                if (current == null || current.Result == null
+                    || !ReferenceEquals(_qn.CDP, client)) return false;
+                var actualShopKey = ShopContextLocator.ResolveRuntimeBySellerIdentity(current.Result).ShopKey;
+                if (!string.Equals(actualShopKey, expectedShopKey, StringComparison.Ordinal))
+                {
+                    client.IsShopIdentityRetired = true;
+                    Log.Info("发送前物理CDP登录身份与任务ShopKey不一致，已阻止发送: expectedShopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", actualShopKey));
+                    return false;
+                }
+                return ReferenceEquals(_qn.CDP, client)
+                    && !client.IsShopIdentityRetired
+                    && !client.IsInvalidated
+                    && server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId);
+            }
+            catch (Exception ex)
+            {
+                client.IsShopIdentityRetired = true;
+                Log.Info("发送前无法验证物理CDP登录身份，已fail-closed: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", reason=" + ex.Message);
+                return false;
+            }
+        }
+
+        private async Task<bool> StopIfPlatformSendBlockedAsync(
+            string buyer, string expectedText, string stage, string shopKey)
         {
             var detected = await GetBoundedServiceAttitudeReadProbeAsync(buyer, stage).ConfigureAwait(false);
             if (detected == null || !detected.Detected) return false;
@@ -56,7 +118,8 @@ namespace Bot.ChromeNs
             var cancelledWatchdogs = SendDeliveryWatchdog.CancelConversation(
                 SellerNick,
                 buyer,
-                "platform_send_blocked:" + (stage ?? string.Empty));
+                "platform_send_blocked:" + (stage ?? string.Empty),
+                shopKey);
             if (cancelledWatchdogs > 0)
             {
                 Log.Info("平台发送拦截已同步取消发送回显监控，禁止把明确取消误报为发送异常: seller="
@@ -158,7 +221,8 @@ namespace Bot.ChromeNs
         /// Qianniu accepted this exact Bot-owned draft. Live seller echo is still preferred, but a
         /// missing/delayed echo must never cause the same text to be written and sent a second time.
         /// </summary>
-        private async Task<bool> WaitForTextSubmissionAcceptedAsync(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
+        private async Task<bool> WaitForTextSubmissionAcceptedAsync(
+            string buyer, string text, DateTime sendStart, string method, int timeoutMs, string shopKey)
         {
             var end = DateTime.Now.AddMilliseconds(Math.Max(900, timeoutMs));
             var emptyObserved = false;
@@ -198,15 +262,23 @@ namespace Bot.ChromeNs
                             if (!stablePlatformProbeDone)
                             {
                                 stablePlatformProbeDone = true;
-                                if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认").ConfigureAwait(false)) return false;
+                                if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认", shopKey).ConfigureAwait(false)) return false;
+                            }
+                            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                            {
+                                SetSendFailure("提交后店铺身份确认", "CDP登录身份已变化，未将提交证据归属到其他店铺");
+                                SendDeliveryWatchdog.CancelPending(
+                                    SellerNick, buyer, text, GetSendFailureReason(), shopKey);
+                                return false;
                             }
                             if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
                             ResetSendFailure();
                             var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
-                            SendDeliveryWatchdog.MarkSubmissionAccepted(SellerNick, buyer, text, submissionEvidence);
+                            SendDeliveryWatchdog.MarkSubmissionAccepted(
+                                SellerNick, buyer, text, submissionEvidence, shopKey);
                             BotConnectionDiagnostics.RecordSendAttempt(true, method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
                             Log.Info(method + "发送提交确认成功：本次精确草稿在发送动作后稳定清空；禁止因实时回显缺失重新写入同一文本。buyer=" + buyer);
-                            ArmLateServiceAttitudeContinuationWatch(buyer, text, method);
+                            ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey);
                             return true;
                         }
                     }
@@ -214,17 +286,17 @@ namespace Bot.ChromeNs
                 else if (probe.Completed && !probe.IsEmpty && !earlyPlatformProbeDone && (DateTime.Now - sendStart).TotalMilliseconds >= 350)
                 {
                     earlyPlatformProbeDone = true;
-                    if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "发送动作后平台确认").ConfigureAwait(false)) return false;
+                    if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "发送动作后平台确认", shopKey).ConfigureAwait(false)) return false;
                 }
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
-            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, text, method + "超时前平台确认").ConfigureAwait(false)) return false;
+            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, text, method + "超时前平台确认", shopKey).ConfigureAwait(false)) return false;
             SetSendFailure("发送确认", method + "后既未检测到卖家回显，也未观察到发送动作后的稳定输入框清空；emptyObserved=" + emptyObserved);
             return false;
         }
 
-        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string text, string method)
+        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string text, string method, string shopKey)
         {
             if (Interlocked.CompareExchange(ref _lateServiceAttitudeWatchArmed, 1, 0) != 0) return;
             var startedAt = DateTime.Now;
@@ -234,7 +306,7 @@ namespace Bot.ChromeNs
                 {
                     await Task.Delay(650).ConfigureAwait(false);
                     if (_lastServiceAttitudeContinueAt >= startedAt) return;
-                    await StopIfPlatformSendBlockedAsync(buyer, text, method + "迟到服务态度提醒单次监控").ConfigureAwait(false);
+                    await StopIfPlatformSendBlockedAsync(buyer, text, method + "迟到服务态度提醒单次监控", shopKey).ConfigureAwait(false);
                 }
                 catch (Exception ex) { Log.Info("迟到服务态度提醒单次监控异常: " + ex.Message); }
                 finally { Interlocked.Exchange(ref _lateServiceAttitudeWatchArmed, 0); }

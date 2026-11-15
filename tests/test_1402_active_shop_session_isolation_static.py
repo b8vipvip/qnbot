@@ -29,7 +29,7 @@ def test_background_buyer_switch_cannot_elect_active_seller():
     block = source[start:end]
     assert "ActivateFromFocusedWebView" not in block
     assert "ObserveChatDialogActive" not in block
-    assert "ActiveShopSessionRegistry.IsActive(qn)" in block
+    assert "BindForegroundSeller" not in block
     assert "ReassertCurrent" in block
 
 

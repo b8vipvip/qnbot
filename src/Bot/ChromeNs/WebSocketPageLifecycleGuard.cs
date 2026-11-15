@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -25,27 +26,9 @@ namespace Bot
 namespace Bot.ChromeNs
 {
     /// <summary>
-    /// Field logs from 1.1.1362 proved that Qianniu can keep dozens of injected recent.html
-    /// sockets alive even though only one page owns the business CDP. Some pages never acquire
-    /// _vs/imsdk/QN/login data. They remain lightweight standby candidates during qualification;
-    /// excess v12-capable duplicates may later receive a bounded offline lease from the server.
-    /// The v12 client can reconnect after that lease or wake immediately on real chat activity.
-    ///
-    /// This guard does not choose CDP ownership and does not process buyer messages. It observes
-    /// inert pages for diagnostics only. A page that later acquires business capability immediately
-    /// leaves standby state and remains eligible for normal authority election.
-    ///
-    /// A second field-log failure mode is a real receiveNewMsg arriving first on a non-authoritative
-    /// page while the 12-second liveness timer is still asleep. In that case we request a debounced
-    /// run of the existing remote-history reconciliation authority. The normal message ledger and
-    /// ProcessIncomingMessageAsync remain the only side-effect/reply owners.
-    ///
-    /// 1.1.1406 field logs then proved that 40+ standby pages can mirror the exact same payload and
-    /// drive thousands of duplicate observations. Seller-level debounce alone is not enough because
-    /// a long-running probe releases the gate and the same mirrored payload can immediately arm the
-    /// next probe. Therefore the reconciliation trigger is also coalesced by a privacy-safe payload
-    /// fingerprint. This never suppresses the real inbound event; it only suppresses redundant
-    /// expensive CDP/history probes for an already-observed duplicate payload.
+    /// Keeps inert Qianniu pages recoverable and uses duplicate-page receive events only as
+    /// evidence for a bounded history probe. All probe ownership, throttling and payload
+    /// fingerprints are scoped by ShopKey; seller nicknames are diagnostic data only.
     /// </summary>
     internal static class WebSocketPageLifecycleGuard
     {
@@ -75,9 +58,6 @@ namespace Bot.ChromeNs
         private static long _duplicateProbePayloadsSuppressed;
         private static int _initialized;
 
-        // The server must forget every transport-identity key when the physical
-        // socket closes. Long-running field logs observed thousands of different
-        // reconnect session IDs in a single process lifetime.
         internal static void ForgetClosedSession(string sessionId)
         {
             if (string.IsNullOrWhiteSpace(sessionId)) return;
@@ -99,7 +79,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
-                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面保持可恢复standby；重复页实时入站按payload指纹合并后触发现有历史权威快速核对。");
+                Log.Info("千牛WebSocket页面生命周期守卫已启动：无业务能力页面保持可恢复standby；重复页实时入站按ShopKey与payload指纹合并后触发现有历史权威快速核对。");
             }
             return new object();
         }
@@ -118,20 +98,19 @@ namespace Bot.ChromeNs
             }
 
             if (!string.Equals(e.Type, "receiveNewMsg", StringComparison.Ordinal)) return;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return;
+            var shopKey = server.GetShopKeyForSession(sessionId);
+            if (string.IsNullOrWhiteSpace(shopKey)) return;
+
+            // The authoritative CDP receives the normal event directly. A duplicate page
+            // is only allowed to request a ShopKey-scoped reconciliation probe.
+            if (server.IsAuthoritativeShopSession(shopKey, sessionId)) return;
             var seller = ResolveSeller(sessionId, e.Value);
-            if (seller.Length == 0) return;
-            SessionSellers[sessionId] = seller;
+            if (seller.Length > 0) SessionSellers[sessionId] = seller;
 
-            // The authoritative CDP receives the normal event directly. Only a physical duplicate
-            // page is evidence that a prompt history reconciliation may be needed.
-            if (MyWebSocketServer.WSocketSvrInst.IsAuthoritativeSellerSession(seller, sessionId)) return;
-
-            // IMPORTANT: this is only a reconciliation-probe gate. The actual receiveNewMsg has
-            // already continued through the normal server/duplicate-forwarding path and remains
-            // protected by the authoritative business ledger. Never use this fingerprint map as a
-            // buyer-message delivery deduplicator.
-            if (!TryClaimDuplicateProbePayload(seller, e.Type, e.Value)) return;
-            RequestImmediateHistoryProbe(seller, sessionId);
+            if (!TryClaimDuplicateProbePayload(shopKey, seller, e.Type, e.Value)) return;
+            RequestImmediateHistoryProbe(shopKey, seller, sessionId);
         }
 
         private static void ObserveStatus(WebSocketSession session, string sessionId, string response)
@@ -143,9 +122,6 @@ namespace Bot.ChromeNs
             var seller = Convert.ToString(status["loginNick"] ?? string.Empty).Trim();
             if (seller.Length > 0) SessionSellers[sessionId] = seller;
 
-            // duplicateRetire remains readable for rolling-upgrade diagnostics, but it no longer
-            // grants permission to physically close a page. A server restart must always be able
-            // to reuse an already loaded WebView without requiring a Qianniu restart.
             var legacyRetireCapable = ReadBool(status, "duplicateRetire");
             var businessCapable = ReadBool(status, "hasImsdk")
                 || ReadBool(status, "hasQN")
@@ -168,16 +144,11 @@ namespace Bot.ChromeNs
             });
             candidate.Session = session;
             if (DateTime.UtcNow - candidate.StartedAtUtc < InertPageGrace)
-            {
                 ScheduleStandbyObservation(sessionId, candidate, legacyRetireCapable);
-            }
         }
 
         private static void ScheduleStandbyObservation(string sessionId, InertCandidate candidate, bool legacyRetireCapable)
         {
-            // A page can send multiple status messages during the 20-second
-            // qualification window. Schedule exactly one observer per candidate
-            // rather than one delayed Task per status event.
             if (Interlocked.CompareExchange(ref candidate.ObservationScheduled, 1, 0) != 0)
                 return;
             Task.Run(async () =>
@@ -188,10 +159,7 @@ namespace Bot.ChromeNs
                 InertCandidate current;
                 if (!InertCandidates.TryGetValue(sessionId, out current)
                     || !ReferenceEquals(current, candidate)
-                    || current.Session == null)
-                {
-                    return;
-                }
+                    || current.Session == null) return;
 
                 InertCandidate removed;
                 if (!InertCandidates.TryRemove(sessionId, out removed)) return;
@@ -244,16 +212,13 @@ namespace Bot.ChromeNs
                     .ToList();
                 return sellers.Count == 1 ? sellers[0] : string.Empty;
             }
-            catch
-            {
-                return string.Empty;
-            }
+            catch { return string.Empty; }
         }
 
-        private static bool TryClaimDuplicateProbePayload(string seller, string type, string response)
+        private static bool TryClaimDuplicateProbePayload(string shopKey, string seller, string type, string response)
         {
             var now = DateTime.UtcNow;
-            var fingerprint = BuildDuplicateProbeFingerprint(seller, type, response);
+            var fingerprint = BuildDuplicateProbeFingerprint(shopKey, type, response);
             if (fingerprint.Length == 0) return true;
 
             DateTime seenAt;
@@ -262,11 +227,10 @@ namespace Bot.ChromeNs
             {
                 var suppressed = Interlocked.Increment(ref _duplicateProbePayloadsSuppressed);
                 if (suppressed <= 5 || suppressed % 100 == 0)
-                {
-                    Log.Info("重复千牛standby实时入站已按payload指纹合并，不重复触发CDP历史核对: sellerRef="
-                        + MyWebSocketServer.DiagnosticRef("seller", seller)
+                    Log.Info("重复千牛standby实时入站已按ShopKey+payload指纹合并，不重复触发CDP历史核对: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                        + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", seller)
                         + ", suppressedTotal=" + suppressed);
-                }
                 return false;
             }
 
@@ -284,11 +248,11 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static string BuildDuplicateProbeFingerprint(string seller, string type, string response)
+        private static string BuildDuplicateProbeFingerprint(string shopKey, string type, string response)
         {
             try
             {
-                var input = (seller ?? string.Empty).Trim() + "\n"
+                var input = (shopKey ?? string.Empty).Trim() + "\n"
                     + (type ?? string.Empty).Trim() + "\n" + (response ?? string.Empty);
                 using (var sha = SHA256.Create())
                 {
@@ -296,31 +260,33 @@ namespace Bot.ChromeNs
                     return Convert.ToBase64String(digest);
                 }
             }
-            catch
-            {
-                return string.Empty;
-            }
+            catch { return string.Empty; }
         }
 
-        private static void RequestImmediateHistoryProbe(string seller, string sourceSession)
+        private static void RequestImmediateHistoryProbe(string shopKey, string seller, string sourceSession)
         {
-            seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return;
             var now = DateTime.UtcNow;
             DateTime next;
-            if (NextImmediateProbeAt.TryGetValue(seller, out next) && next > now) return;
-            NextImmediateProbeAt[seller] = now.Add(ImmediateProbeDebounce);
-            if (!ImmediateProbeRunning.TryAdd(seller, 0)) return;
+            if (NextImmediateProbeAt.TryGetValue(shopKey, out next) && next > now) return;
+            NextImmediateProbeAt[shopKey] = now.Add(ImmediateProbeDebounce);
+            if (!ImmediateProbeRunning.TryAdd(shopKey, 0)) return;
 
             Task.Run(async () =>
             {
                 try
                 {
                     await Task.Delay(120).ConfigureAwait(false);
-                    var qn = QN.FindExistingBySellerNick(seller);
-                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated) return;
-                    Log.Info("重复千牛页面实时入站触发业务历史快速核对: sellerRef="
-                        + MyWebSocketServer.DiagnosticRef("seller", seller)
+                    var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                    var server = MyWebSocketServer.WSocketSvrInst;
+                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated
+                        || qn.CDP.IsShopIdentityRetired || server == null
+                        || !server.IsAuthoritativeShopSession(shopKey, qn.CDP.SessionId)) return;
+
+                    Log.Info("重复千牛页面实时入站触发当前ShopKey权威会话历史快速核对: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                        + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", seller)
                         + ", sourceSessionRef=" + MyWebSocketServer.DiagnosticRef("session", sourceSession));
                     await qn.ProbeActiveConversationForMissedInboundAsync().ConfigureAwait(false);
                 }
@@ -330,8 +296,9 @@ namespace Bot.ChromeNs
                 }
                 finally
                 {
+                    NextImmediateProbeAt[shopKey] = DateTime.UtcNow.AddSeconds(3);
                     byte ignored;
-                    ImmediateProbeRunning.TryRemove(seller, out ignored);
+                    ImmediateProbeRunning.TryRemove(shopKey, out ignored);
                 }
             });
         }

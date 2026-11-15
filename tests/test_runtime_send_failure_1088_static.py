@@ -82,10 +82,11 @@ def test_failed_generation_is_terminal_after_canonical_premerge_and_ai_paths():
 def test_duplicate_conversation_change_cannot_take_outbound_cdp_route():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     client = read("src/Bot/ChromeNs/CDPClient.cs")
-    assert "internal bool IsAuthoritativeSellerSession" in server
+    assert "internal bool IsAuthoritativeShopSession" in server
     switched = client.split("private void BuyerSwitched(string response)", 1)[1].split(
         "private void SellerSwitched", 1
     )[0]
-    assert "server.IsAuthoritativeSellerSession(sellerNick, SessionId)" in switched
-    assert "PreferRuntimeSession" in switched
+    assert "server.IsAuthoritativeShopSession(shopKey, SessionId)" in switched
+    assert "ResolveRuntimeBySellerIdentity(localUser.LoginID)" in switched
+    assert "PreferRuntimeSession(shopKey, sellerNick, SessionId, buyerNick" in switched
     assert "不接管CDP命令路由" in switched

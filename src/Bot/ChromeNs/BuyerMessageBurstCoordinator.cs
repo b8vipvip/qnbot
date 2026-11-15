@@ -13,6 +13,7 @@ namespace Bot.ChromeNs
 {
     internal sealed class BuyerMessageBurstItem
     {
+        public string ShopKey { get; set; }
         public string SellerNick { get; set; }
         public string BuyerNick { get; set; }
         public string MessageKey { get; set; }
@@ -33,6 +34,7 @@ namespace Bot.ChromeNs
 
     internal sealed class BuyerMessageBurst
     {
+        public string ShopKey { get; private set; }
         public string SellerNick { get; private set; }
         public string BuyerNick { get; private set; }
         public IList<BuyerMessageBurstItem> Items { get; private set; }
@@ -77,6 +79,11 @@ namespace Bot.ChromeNs
                 .OrderBy(x => x.SortValue <= 0 ? x.ReceivedAt.Ticks : x.SortValue)
                 .ThenBy(x => x.ReceivedAt)
                 .ToList();
+            var shopKeys = Items.Select(x => (x.ShopKey ?? string.Empty).Trim())
+                .Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+            if (shopKeys.Count != 1 || Items.Any(x => string.IsNullOrWhiteSpace(x.ShopKey)))
+                throw new InvalidOperationException("一个买家消息聚合批次缺少唯一ShopKey，已拒绝跨店合并。");
+            ShopKey = shopKeys[0];
             SessionGeneration = Items.Count < 1 ? 0 : Items.Max(x => x.SessionGeneration);
             CombinedQuestion = BuildCombinedQuestion(Items);
             var continuation = Items
@@ -162,7 +169,7 @@ namespace Bot.ChromeNs
                 return _isCurrent != null
                     && _isCurrent()
                     && (_sessionAgent == null
-                        || _sessionAgent.IsCurrent(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration));
+                        || _sessionAgent.IsCurrent(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration, Burst.ShopKey));
             }
         }
 
@@ -172,7 +179,7 @@ namespace Bot.ChromeNs
             {
                 return _sessionAgent == null
                     ? CancellationToken.None
-                    : _sessionAgent.GetCancellationToken(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration);
+                    : _sessionAgent.GetCancellationToken(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration, Burst.ShopKey);
             }
         }
 
@@ -215,7 +222,8 @@ namespace Bot.ChromeNs
                     Burst.BuyerNick,
                     Burst.SessionGeneration,
                     state,
-                    reason);
+                    reason,
+                    Burst.ShopKey);
         }
     }
 
@@ -259,14 +267,17 @@ namespace Bot.ChromeNs
 
             cancellationToken.ThrowIfCancellationRequested();
             ShopContext shop = null;
-            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.SellerNick); }
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey); }
             catch { shop = null; }
-            if (shop == null)
+            if (shop == null
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
             {
                 Log.ErrorWithMaxCount(
-                    "统一买家生命周期缺少店铺作用域，固定规则跳过并继续普通消息链路: seller="
-                    + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
-                return CanonicalPreMergeOutcome.Continue;
+                    "统一买家生命周期缺少可验证的ShopKey店铺作用域，已阻断普通AI链路: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
+                    + ", seller=" + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                return CanonicalPreMergeOutcome.Failed;
             }
 
             using (ShopSettingsScope.Enter(shop))
@@ -282,13 +293,13 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken)
         {
             if (!Params.Robot.GetIsAutoReply()) return CanonicalPreMergeOutcome.Continue;
-            var qn = QN.FindExistingBySellerNick(item.SellerNick);
-            if (qn == null)
+            var qn = QN.FindExistingByShopKey(item.ShopKey);
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
             {
                 Log.ErrorWithMaxCount(
-                    "统一买家生命周期固定规则未发送：找不到客服运行实例。seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick, 20);
-                return CanonicalPreMergeOutcome.Continue;
+                    "统一买家生命周期固定规则未发送：找不到当前ShopKey的活动客服/CDP实例，已阻断普通AI链路。seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                return CanonicalPreMergeOutcome.Failed;
             }
 
             var question = (item.DisplayText ?? string.Empty).Trim();
@@ -311,7 +322,7 @@ namespace Bot.ChromeNs
                 return CanonicalPreMergeOutcome.Consumed;
             }
 
-            var buyerKey = Key(item.SellerNick, item.BuyerNick);
+            var buyerKey = Key(item.ShopKey, item.SellerNick, item.BuyerNick);
             string offHoursReply;
             if (TryResolveOffHours(out offHoursReply))
             {
@@ -413,13 +424,14 @@ namespace Bot.ChromeNs
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var ctl = ResponseProgressTracker.BeginAnswer(
-                item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt);
+                item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
             {
                 KnowledgeLearningService.RegisterAnswerSource(
                     item.SellerNick, item.BuyerNick, item.DisplayText, answer, source);
                 ctl = ResponseProgressTracker.SetAnswerReady(
-                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source, detectedAt, DateTime.Now);
+                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source,
+                    detectedAt, DateTime.Now, item.ShopKey);
                 BotRuntimeStats.RecordDisplayedAnswer(true);
                 Log.Info(source + "由统一买家生命周期在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
@@ -450,7 +462,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick);
+                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
             }
         }
 
@@ -503,9 +515,10 @@ namespace Bot.ChromeNs
             return ((int)value.TotalHours).ToString("00") + ":" + value.Minutes.ToString("00");
         }
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
     }
@@ -543,7 +556,6 @@ namespace Bot.ChromeNs
         private const int SoftRecentBuyerTextLimit = 512;
         private static readonly TimeSpan RecentBuyerTextMaxIdle = TimeSpan.FromMinutes(30);
         private static readonly TimeSpan RecentBuyerTextSweepInterval = TimeSpan.FromMinutes(10);
-        private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, RecentBuyerText> _recentBuyerTexts =
@@ -564,15 +576,21 @@ namespace Bot.ChromeNs
         public void Enqueue(BuyerMessageBurstItem item)
         {
             if (item == null
+                || string.IsNullOrWhiteSpace(item.ShopKey)
                 || string.IsNullOrWhiteSpace(item.SellerNick)
-                || string.IsNullOrWhiteSpace(item.BuyerNick)) return;
+                || string.IsNullOrWhiteSpace(item.BuyerNick))
+            {
+                Log.ErrorWithMaxCount("买家消息缺少ShopKey，已拒绝进入共享generation/回复链路。", 20);
+                return;
+            }
 
             var observation = _sessionAgent.ObserveBuyerMessage(
                 item.SellerNick,
                 item.BuyerNick,
                 item.MessageKey,
                 item.SortValue,
-                item.ReceivedAt);
+                item.ReceivedAt,
+                item.ShopKey);
             if (observation.Duplicate)
             {
                 Log.Info("BuyerSessionAgent已跨入口去重，本条消息不再进入规则/合并/AI链路: seller="
@@ -588,7 +606,8 @@ namespace Bot.ChromeNs
                 item.BuyerNick,
                 item.SessionGeneration,
                 BuyerSessionAgentState.Coalescing,
-                "single_owner_lane");
+                "single_owner_lane",
+                item.ShopKey);
 
             var key = Key(item.SellerNick, item.BuyerNick);
             while (true)
@@ -683,7 +702,7 @@ namespace Bot.ChromeNs
                     }
 
                     CompleteMergedAwayGenerations(burst);
-                    if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration))
+                    if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration, burst.ShopKey))
                     {
                         Log.Info("统一买家生命周期派发前最终generation已失效，跳过本轮回复: seller="
                             + burst.SellerNick + ", buyer=" + burst.BuyerNick
@@ -720,7 +739,8 @@ namespace Bot.ChromeNs
                                 pending.BuyerNick,
                                 pending.SessionGeneration,
                                 BuyerSessionAgentState.Failed,
-                                "single_owner_worker_exception");
+                                "single_owner_worker_exception",
+                                pending.ShopKey);
                     }
                     state.PendingRules.Clear();
                     state.Items.Clear();
@@ -824,10 +844,10 @@ namespace Bot.ChromeNs
         private async Task ProcessPreMergeAsync(string key, BurstState state, BuyerMessageBurstItem item)
         {
             if (item == null || item.SessionGeneration <= 0) return;
-            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)) return;
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)) return;
 
             var token = _sessionAgent.GetCancellationToken(
-                item.SellerNick, item.BuyerNick, item.SessionGeneration);
+                item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey);
             bool allowLocalShortReply;
             lock (state.Sync)
             {
@@ -856,7 +876,7 @@ namespace Bot.ChromeNs
 
             if (outcome == CanonicalPreMergeOutcome.Continue)
             {
-                if (_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                if (_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                     EnqueueForMerge(item);
                 return;
             }
@@ -865,14 +885,14 @@ namespace Bot.ChromeNs
             {
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
-                    BuyerSessionAgentState.Failed, "canonical_pre_merge_failed");
+                    BuyerSessionAgentState.Failed, "canonical_pre_merge_failed", item.ShopKey);
                 return;
             }
             if (outcome == CanonicalPreMergeOutcome.Consumed)
             {
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
-                    BuyerSessionAgentState.Completed, "canonical_pre_merge_consumed");
+                    BuyerSessionAgentState.Completed, "canonical_pre_merge_consumed", item.ShopKey);
             }
         }
 
@@ -890,7 +910,7 @@ namespace Bot.ChromeNs
 
         private void EnqueueForMerge(BuyerMessageBurstItem item)
         {
-            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)) return;
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)) return;
             var key = Key(item.SellerNick, item.BuyerNick);
             BurstState state;
             if (!_states.TryGetValue(key, out state) || state == null) return;
@@ -934,11 +954,11 @@ namespace Bot.ChromeNs
             {
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, generation,
-                    BuyerSessionAgentState.Completed, "coalescing_buffer_trimmed");
+                    BuyerSessionAgentState.Completed, "coalescing_buffer_trimmed", item.ShopKey);
             }
         }
 
-        public void CancelBuyer(string seller, string buyer, string reason)
+        public void CancelBuyer(string seller, string buyer, string reason, string shopKey = null)
         {
             var key = Key(seller, buyer);
             BurstState state;
@@ -957,7 +977,7 @@ namespace Bot.ChromeNs
                     DisposeActivity(state);
                 }
             }
-            _sessionAgent.CancelAll(seller, buyer, reason);
+            _sessionAgent.CancelAll(seller, buyer, reason, shopKey);
             Log.Info("买家自动回复任务已因显式硬失效全部取消: seller=" + seller
                 + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
         }
@@ -967,7 +987,7 @@ namespace Bot.ChromeNs
             if (burst == null || lease == null || !lease.IsCurrent) return;
             BuyerSessionAgentState generationState;
             var hasState = _sessionAgent.TryGetGenerationState(
-                burst.SellerNick, burst.BuyerNick, burst.SessionGeneration, out generationState);
+                burst.SellerNick, burst.BuyerNick, burst.SessionGeneration, out generationState, burst.ShopKey);
             var failed = hasState && generationState == BuyerSessionAgentState.Failed;
             var returnedWithoutReady = hasState && generationState == BuyerSessionAgentState.Generating;
             if (failed)
@@ -1002,7 +1022,8 @@ namespace Bot.ChromeNs
                 _sessionAgent.TryTransition(
                     burst.SellerNick, burst.BuyerNick, generation,
                     BuyerSessionAgentState.Completed,
-                    "coalesced_into_generation_" + burst.SessionGeneration);
+                    "coalesced_into_generation_" + burst.SessionGeneration,
+                    burst.ShopKey);
             }
         }
 
@@ -1011,27 +1032,19 @@ namespace Bot.ChromeNs
             ShopContext shop = null;
             try
             {
-                shop = ShopContextLocator.ResolveRuntimeBySellerNick(
-                    burst == null ? string.Empty : burst.SellerNick);
+                shop = burst == null ? null : ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "买家回复未能解析店铺身份，使用旧全局 AI 配置兼容模式：" + Safe(ex.Message, 220), 20);
+                    "买家回复未能解析唯一ShopKey，已阻断全局AI配置回退: " + Safe(ex.Message, 220), 20);
             }
 
-            if (shop == null)
+            if (shop == null
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (burst.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
             {
-                await LegacyAiConfigurationGate.WaitAsync(lease.CancellationToken).ConfigureAwait(false);
-                try
-                {
-                    if (!lease.IsCurrent) return;
-                    await _handler(lease).ConfigureAwait(false);
-                }
-                finally
-                {
-                    LegacyAiConfigurationGate.Release();
-                }
+                if (lease != null) lease.MarkFailed("shop_scope_unresolved");
                 return;
             }
 
@@ -1065,12 +1078,12 @@ namespace Bot.ChromeNs
             {
                 _sessionAgent.Cancel(
                     item.SellerNick, item.BuyerNick, supersededGeneration,
-                    "semantic_continuation_superseded");
+                    "semantic_continuation_superseded", item.ShopKey);
             }
             if (previous.LatestReceivedAt != DateTime.MinValue)
             {
                 ResponseProgressTracker.MarkContextualContinuationMerged(
-                    item.SellerNick, item.BuyerNick, previous.LatestReceivedAt, currentText);
+                    item.SellerNick, item.BuyerNick, previous.LatestReceivedAt, currentText, item.ShopKey);
             }
             Log.Info("买家省略/催问续句已关联未解决主问题: seller=" + item.SellerNick
                 + ", buyer=" + item.BuyerNick

@@ -8,24 +8,26 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_websocket_server_keeps_one_authoritative_cdp_session_per_seller():
+def test_websocket_server_keeps_one_authoritative_cdp_session_per_shopkey():
     source = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
-    assert "_sellerSessions" in source
-    assert "_sessionSellers" in source
+    assert "_shopSessions" in source
+    assert "_sessionShopKeys" in source
     assert "_connectedSessions" in source
-    assert "TryClaimSellerSession" in source
-    assert "ReleaseSellerSession" in source
+    assert "TryClaimShopSession" in source
+    assert "ReleaseShopSession" in source
     assert "重复千牛CDP" in source or "重复千牛WebSocket" in source
     assert "ShouldRefreshStatusBinding" in source
     assert "var wasAuthoritative" in source
-    assert "千牛standby页面接管权威会话，强制重建客服/CDP绑定" in source
+    assert "已验证当前CDP登录身份并提升ShopKey standby为权威会话" in source
+    assert "TryPromoteDuplicateShopSessionAsync" in source
+    assert "await client.GetCurrentUser().ConfigureAwait(false)" in source
 
     # Both assignment points must be protected by the authoritative-session claim.
     assert source.count("qn.CDP = cdp;") == 2
     bind_pos = source.index("qn.CDP = cdp;")
     init_pos = source.index("qn.CDP = cdp;", bind_pos + 1)
-    assert source.rfind("TryClaimSellerSession", 0, bind_pos) > source.rfind("if (qn == null)", 0, bind_pos)
-    assert source.rfind("TryClaimSellerSession", 0, init_pos) > source.rfind("var sellerNick", 0, init_pos)
+    assert source.rfind("TryClaimShopSession", 0, bind_pos) > source.rfind("QN.GetByShopIdentity", 0, bind_pos)
+    assert source.rfind("TryClaimShopSession", 0, init_pos) > source.rfind("QN.GetByShopIdentity", 0, init_pos)
 
 
 def test_knowledge_cloud_hash_matches_server_sorted_json_and_avoids_repeat_apply():
@@ -46,5 +48,5 @@ def test_restart_recovery_does_not_reinitialize_same_authority_forever_but_rebin
     assert "ShouldRefreshStatusBinding" in source
     assert "var wasInitialized = _initialized.ContainsKey(session.SessionID);" in source
     assert "Task.Run(() => TryInitSession(session, \"status\"))" in source
-    assert "else if (!wasAuthoritative && !string.IsNullOrWhiteSpace(loginNick))" in source
+    assert "else if (!wasAuthoritative)" in source
     assert "Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick))" in source

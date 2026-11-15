@@ -88,7 +88,7 @@ def test_cancellation_keeps_real_send_and_buyer_integrity_checks():
     qn = read("src/Bot/ChromeNs/QN.cs")
     assert 'VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查")' in rpa
     assert "await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason())" in rpa
-    assert "SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text" in rpa
+    assert "SendDeliveryWatchdog.CancelPending(\n                        SellerNick, buyer, text" in rpa
     assert "if (!ok && rpa.LastSendWasCancelled)" in qn
     assert "禁止重试" in qn
 

@@ -25,6 +25,19 @@ namespace Bot.ShopScope
             return ResolveBySellerNickCore(sellerNick);
         }
 
+        // Resolve the exact login payload obtained from a specific CDP session.
+        // Stable TargetId identities may share a nickname; only legacy identities
+        // without TargetId are allowed to fall back to the unique-nickname resolver.
+        public static ShopContext ResolveRuntimeBySellerIdentity(DbEntity.LocalUser seller)
+        {
+            if (seller == null || string.IsNullOrWhiteSpace(seller.Nick))
+                throw new InvalidOperationException("千牛登录身份缺少卖家昵称。");
+            var context = ShopIdentityResolver.Resolve(seller);
+            if (!context.HasStableSellerId)
+                return ResolveRuntimeBySellerNick(seller.Nick);
+            return Profiles.GetOrCreate(context).ToContext();
+        }
+
         // Resolve from the exact QN instance that raised an event. Seller nick is
         // display data and may be shared by multiple accounts; never infer identity
         // from the nick when the source QN object is available.
@@ -91,9 +104,13 @@ namespace Bot.ShopScope
             shopKey = (shopKey ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             if (shopKey.Length == 0) return null;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return null;
             var matches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null
-                    && x.CDP != null && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
+                    && x.CDP != null && !x.CDP.IsInvalidated && !x.CDP.IsShopIdentityRetired
+                    && server.IsAuthoritativeShopSession(shopKey, x.CDP.SessionId)
+                    && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
                     && (sessionId.Length == 0
                         || string.Equals((x.CDP.SessionId ?? string.Empty).Trim(),
                             sessionId, StringComparison.Ordinal)))

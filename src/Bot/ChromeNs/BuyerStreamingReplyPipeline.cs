@@ -122,11 +122,12 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             if (!lease.MarkGenerating("streaming_answer_started"))
             {
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick,
-                    "generation已失效，未进入答案生成");
+                    "generation已失效，未进入答案生成", burst.ShopKey);
                 return;
             }
             var aiStartedAt = DateTime.Now;
@@ -169,7 +170,7 @@ namespace Bot.ChromeNs
                         conversationCtl.SetStatus(timeout, false);
                     }
                     lease.MarkFailed("streaming_ai_budget_exhausted");
-                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout);
+                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout, burst.ShopKey);
                     Log.Info("文本AI流总预算超时: buyer=" + burst.BuyerNick
                         + ", budgetSeconds=" + TotalAiBudgetSeconds);
                 }
@@ -181,7 +182,7 @@ namespace Bot.ChromeNs
                         conversationCtl.SetProcessing(cancelled);
                         conversationCtl.SetStatus(cancelled, false);
                     }
-                    ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelled);
+                    ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelled, burst.ShopKey);
                     Log.Info("文本AI流已取消: buyer=" + burst.BuyerNick + ", hardInvalidated=True");
                 }
                 return;
@@ -204,7 +205,7 @@ namespace Bot.ChromeNs
                     conversationCtl.SetProcessing(stale);
                     conversationCtl.SetStatus(stale, false);
                 }
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, stale);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, stale, burst.ShopKey);
                 return;
             }
 
@@ -216,7 +217,7 @@ namespace Bot.ChromeNs
                 var why = answer.Substring(ReceptionFlowPolicy.SilentMarker.Length);
                 lease.MarkCompleted("reception_wait_for_evidence");
                 if (conversationCtl != null) conversationCtl.SetSkipped(why);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 Log.Info("接待流程决定暂不回复: seller=" + burst.SellerNick
                     + ", buyer=" + burst.BuyerNick + ", reason=" + why);
                 return;
@@ -246,7 +247,8 @@ namespace Bot.ChromeNs
                 ResponseProgressTracker.Fail(
                     burst.SellerNick,
                     burst.BuyerNick,
-                    failure);
+                    failure,
+                    burst.ShopKey);
                 Log.Info("流式文本AI失败，保持失败态且不进入答案就绪/完成: buyer="
                     + burst.BuyerNick + ", reason=" + CompactPreview(failure, 180));
                 return;
@@ -268,7 +270,7 @@ namespace Bot.ChromeNs
                 const string cancelledDuringValidation = "generation在发送前答案校验/去重期间已失效";
                 if (conversationCtl != null) conversationCtl.SetStatus(cancelledDuringValidation, false);
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, cancelledDuringValidation);
+                    burst.SellerNick, burst.BuyerNick, cancelledDuringValidation, burst.ShopKey);
                 return;
             }
 
@@ -276,18 +278,19 @@ namespace Bot.ChromeNs
             {
                 const string unstable = "发送前任务发生显式失效，答案已取消";
                 if (conversationCtl != null) conversationCtl.SetStatus(unstable, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable, burst.ShopKey);
                 return;
             }
 
             string relevanceReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason,
+                false, burst.ShopKey))
             {
                 var suppressed = "并发旧答案已抑制：" + relevanceReason;
                 lease.MarkCompleted("streaming_relevance_suppressed");
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed, burst.ShopKey);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
                 return;
             }
@@ -298,7 +301,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("reception_business_guard_suppressed");
                 if (conversationCtl != null) conversationCtl.SetSkipped(businessBlock);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -306,7 +309,7 @@ namespace Bot.ChromeNs
             {
                 const string invalidAtReady = "generation在答案发布前已终止，迟到答案已丢弃";
                 if (conversationCtl != null) conversationCtl.SetStatus(invalidAtReady, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady, burst.ShopKey);
                 return;
             }
 
@@ -323,7 +326,8 @@ namespace Bot.ChromeNs
                 answer,
                 answerSource,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("流式文本答案已生成: buyer=" + burst.BuyerNick
                 + ", aiMs=" + Math.Max(0, (long)(answerReadyAt - aiStartedAt).TotalMilliseconds)
@@ -333,7 +337,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("streaming_answer_generated_only");
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -341,7 +345,7 @@ namespace Bot.ChromeNs
             {
                 const string invalidBeforeSend = "未发送：generation在发送前已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidBeforeSend);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend, burst.ShopKey);
                 return;
             }
 
@@ -355,7 +359,7 @@ namespace Bot.ChromeNs
             {
                 const string cancelledDuringSend = "未发送：generation在等待发送资源/会话确认期间已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, cancelledDuringSend);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend, burst.ShopKey);
                 Log.Info("Smart Reply发送期间generation硬失效，已停止后续UI发送副作用: buyer="
                     + burst.BuyerNick);
                 return;
@@ -387,7 +391,7 @@ namespace Bot.ChromeNs
             }
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private static async Task<T> AwaitWithCancellationAsync<T>(Task<T> task, CancellationToken token)
@@ -500,17 +504,17 @@ namespace Bot.ChromeNs
                 .Contains(value, StringComparer.OrdinalIgnoreCase);
         }
 
-        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason, bool trustedReviewedImageAnswer = false)
+        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason, bool trustedReviewedImageAnswer = false, string shopKey = null)
         {
             reason = string.Empty;
             try
             {
-                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24);
                 // Use the typed BuyerSessionAgent event stream, not every unmarked seller
                 // bubble: Qianniu's automatic shop greetings can lack [A], and must not
                 // be mistaken for an intentional human takeover.
                 // Order-ledger-authorized contractual messages use a separate sender.
-                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);
+                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer, shopKey);
                 var newerHuman = snapshot != null
                     && snapshot.RecentEvents != null
                     && snapshot.RecentEvents.Any(x => x != null
