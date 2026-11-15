@@ -424,13 +424,14 @@ namespace Bot.ChromeNs
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var ctl = ResponseProgressTracker.BeginAnswer(
-                item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt);
+                item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
             {
                 KnowledgeLearningService.RegisterAnswerSource(
                     item.SellerNick, item.BuyerNick, item.DisplayText, answer, source);
                 ctl = ResponseProgressTracker.SetAnswerReady(
-                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source, detectedAt, DateTime.Now);
+                    item.SellerNick, item.BuyerNick, item.DisplayText, answer, source,
+                    detectedAt, DateTime.Now, item.ShopKey);
                 BotRuntimeStats.RecordDisplayedAnswer(true);
                 Log.Info(source + "由统一买家生命周期在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
@@ -1082,7 +1083,7 @@ namespace Bot.ChromeNs
             if (previous.LatestReceivedAt != DateTime.MinValue)
             {
                 ResponseProgressTracker.MarkContextualContinuationMerged(
-                    item.SellerNick, item.BuyerNick, previous.LatestReceivedAt, currentText);
+                    item.SellerNick, item.BuyerNick, previous.LatestReceivedAt, currentText, item.ShopKey);
             }
             Log.Info("买家省略/催问续句已关联未解决主问题: seller=" + item.SellerNick
                 + ", buyer=" + item.BuyerNick
