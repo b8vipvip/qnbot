@@ -42,7 +42,7 @@ def test_duplicate_status_cannot_overwrite_logical_current_buyer():
     source = read("src/Bot/ChromeNs/CDPClient.cs")
 
     assert "RepairDuplicateStatusDiagnostics" in source
-    assert "PreferredSellerSessions" in source
+    assert "PreferredShopSessions" in source
     assert "BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, logicalBuyer)" in source
 
 
