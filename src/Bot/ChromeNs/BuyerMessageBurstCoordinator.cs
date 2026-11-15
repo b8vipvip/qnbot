@@ -294,7 +294,7 @@ namespace Bot.ChromeNs
         {
             if (!Params.Robot.GetIsAutoReply()) return CanonicalPreMergeOutcome.Continue;
             var qn = QN.FindExistingByShopKey(item.ShopKey);
-            if (qn == null || qn.CDP == null)
+            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
             {
                 Log.ErrorWithMaxCount(
                     "统一买家生命周期固定规则未发送：找不到当前ShopKey的活动客服/CDP实例，已阻断普通AI链路。seller="
