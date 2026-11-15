@@ -231,7 +231,8 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
                     throw new IOException(error);
             }
-            return "已恢复上一份流程草稿备份；仍需单独人工审核和灰度激活。";
+            return "已恢复最近一份有效的流程草稿备份：" + Path.GetFileName(selectedBackup)
+                + "；仍需单独人工审核和灰度激活。";
         }
     }
 }
