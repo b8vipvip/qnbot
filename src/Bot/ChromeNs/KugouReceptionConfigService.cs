@@ -472,7 +472,7 @@ namespace Bot.ChromeNs
                     throw new IOException("恢复历史备份失败：" + error);
             }
             KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey);
-            return "已恢复上一份有效的当前 ShopKey 接待规则备份。";
+            return "已恢复最近一份有效的当前 ShopKey 接待规则备份：" + Path.GetFileName(selectedBackup);
         }
     }
 }
