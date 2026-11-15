@@ -352,3 +352,17 @@ def test_history_page_with_null_message_entries_is_not_silently_counted_complete
     assert 'result.ErrorCode = "history_page_contains_null_messages"' in method
     assert 'result.StopReason = "invalid_messages"' in method
     assert "foreach (var item in messages.OrderBy(GetSortValue))" in method
+
+
+
+def test_history_response_missing_messages_field_is_not_treated_as_an_empty_terminal_page():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "if (messagesToken == null)" in method
+    assert 'result.ErrorCode = "history_page_missing_messages"' in method
+    assert 'result.StopReason = "missing_messages"' in method
+    assert "var messages = messagesToken.ToObject<List<QNChatMessage>>()" in method

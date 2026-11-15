@@ -910,9 +910,14 @@ namespace Bot.ChromeNs
                         var messagesToken = resultObject == null
                             ? resultToken as JArray
                             : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
-                        var messages = messagesToken == null
-                            ? new List<QNChatMessage>()
-                            : (messagesToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>());
+                        if (messagesToken == null)
+                        {
+                            result.ErrorCode = "history_page_missing_messages";
+                            result.StopReason = "missing_messages";
+                            break;
+                        }
+                        var messages = messagesToken.ToObject<List<QNChatMessage>>()
+                            ?? new List<QNChatMessage>();
                         result.MessagesFetched += messages.Count;
                         int hasMore = 0;
                         var hasMoreKnown = resultObject != null
