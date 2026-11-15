@@ -75,7 +75,7 @@ def test_progress_tracker_does_not_delete_newer_buyer_message_state():
     assert "AnswerReadyAt" in source
     assert "ConcurrentDictionary<string, string> CurrentTurns" in source
     assert "AsyncLocal<string> OperationTurnKey" in source
-    assert "TurnKey(string seller, string buyer, DateTime detectedAt)" in source
+    assert "TurnKey(string seller, string buyer, DateTime detectedAt, string shopKey = null)" in source
     assert "ResolveTerminalTurnKey" in source
     assert "PromoteCurrentTurn" in source
     assert "ConsolidatePendingBurstEntries" in source
