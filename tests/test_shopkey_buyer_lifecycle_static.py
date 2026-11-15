@@ -83,6 +83,7 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert "verifiedShop.ShopKey, shopKey" in server
     assert "if (requireVacant && !string.IsNullOrWhiteSpace(previousOwner)" in server
+    assert "_lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding)" in server
     assert "releasedPreviousAuthority = true;" in identity_change
     assert "if (releasedPreviousAuthority)" in identity_change
     assert 'TryPromoteAvailableStandbyAsync(previousShopKey, "shop_identity_changed", sessionId)' in identity_change
