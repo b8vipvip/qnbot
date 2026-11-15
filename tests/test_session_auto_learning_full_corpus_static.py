@@ -362,7 +362,7 @@ def test_history_response_missing_messages_field_is_not_treated_as_an_empty_term
         context.index("private static bool TryReadInt")
     ]
 
-    assert "if (messagesToken == null)" in method
+    assert "if (messagesToken == null || messagesToken.Type == JTokenType.Null)" in method
     assert 'result.ErrorCode = "history_page_missing_messages"' in method
     assert 'result.StopReason = "missing_messages"' in method
     assert "var messages = messagesToken.ToObject<List<QNChatMessage>>()" in method

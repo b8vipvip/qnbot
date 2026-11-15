@@ -910,7 +910,7 @@ namespace Bot.ChromeNs
                         var messagesToken = resultObject == null
                             ? resultToken as JArray
                             : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
-                        if (messagesToken == null)
+                        if (messagesToken == null || messagesToken.Type == JTokenType.Null)
                         {
                             result.ErrorCode = "history_page_missing_messages";
                             result.StopReason = "missing_messages";
