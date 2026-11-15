@@ -99,7 +99,7 @@ def test_progress_cards_are_isolated_per_turn_without_cancelling_previous_genera
     assert "上一条Bot任务继续独立处理，发送前会再次检查相关性" in source
     assert "该条消息已合并到同一轮连续消息中" in source
     assert "ResolveTerminalTurnKey" in source
-    assert "ScopeKey(seller)" in source
+    assert "ScopeKey(seller, shopKey)" in source
     manual_start = source.index("public static void MarkManualIntervention")
     manual_end = source.index("public static void ObserveNewBuyerTurn", manual_start)
     assert "TryRemoveTurn" not in source[manual_start:manual_end]
@@ -151,7 +151,7 @@ def test_buyer_session_agent_keeps_parallel_generations_alive_until_explicit_inv
     assert "public void CancelAll" in source
     assert "CompleteMergedAwayGenerations" in burst
     assert "coalesced_into_generation_" in burst
-    assert "_sessionAgent.CancelAll(seller, buyer, reason)" in burst
+    assert "_sessionAgent.CancelAll(seller, buyer, reason, shopKey)" in burst
 
 
 def test_answer_context_menu_has_copy_action():
