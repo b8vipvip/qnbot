@@ -29,6 +29,7 @@ def test_qn_runtime_registry_uses_shopkey_not_nickname_or_display():
     assert "ResolveRuntimeBySellerNick(sellerNick)" in find_by_nick
     assert "ResolveRuntimeBySellerIdentity(DbEntity.LocalUser seller)" in locator
     assert "if (!context.HasStableSellerId)" in locator
+    assert "x.CDP != null && !x.CDP.IsShopIdentityRetired" in locator
 
 
 def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
@@ -94,9 +95,11 @@ def test_buyer_burst_and_deterministic_reply_require_exact_shopkey():
     assert "ResolveRuntimeByShopKey(item.ShopKey)" in burst
     assert "QN.FindExistingByShopKey(item.ShopKey)" in burst
     assert "shop_scope_unresolved" in burst
+    assert "qn.CDP.IsShopIdentityRetired" in burst
     assert "ShopKey = shopKey" in qn
     assert "ResolveRuntimeByShopKey(item.ShopKey)" in autoreply
     assert "QN.FindExistingByShopKey" in autoreply
+    assert "qn.CDP.IsShopIdentityRetired" in autoreply
     assert "Key(shop.ShopKey, item.SellerNick, item.BuyerNick)" in autoreply
     assert "已阻断普通Knowledge/AI链路" in autoreply
 
