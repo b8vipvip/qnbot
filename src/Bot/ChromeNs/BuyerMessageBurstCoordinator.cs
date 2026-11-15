@@ -461,7 +461,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick);
+                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
             }
         }
 
