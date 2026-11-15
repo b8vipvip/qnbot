@@ -55,8 +55,8 @@ def test_status_arbitration_uses_exact_shopkey_and_rebinds_authority():
 def test_authority_promotion_reapplies_duplicate_cap_per_shopkey():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     promotion = server[
-        server.index("private bool TryPromoteDuplicateShopSession"):
-        server.index("internal bool IsAuthoritativeShopSession")
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync"):
+        server.index("internal string GetShopKeyForSession")
     ]
 
     assert "_duplicateShopSessions[previousOwner] = shopKey;" in promotion
@@ -69,6 +69,11 @@ def test_authority_promotion_reapplies_duplicate_cap_per_shopkey():
         "EnforceDuplicateShopSessionCapLocked(shopKey);"
     )
     assert "QN.FindExistingByShopKey(shopKey)" in promotion
+    assert "await client.GetCurrentUser().ConfigureAwait(false)" in promotion
+    assert "ResolveRuntimeBySellerIdentity(user.Result)" in promotion
+    assert "verifiedShop.ShopKey, shopKey" in promotion
+    assert "TryClaimShopSession(verifiedShop.ShopKey, sessionId)" in promotion
+    assert "QN.GetByShopIdentity(user.Result)" in promotion
     assert "CDPClient.PreferRuntimeSession(" in promotion
 
 
