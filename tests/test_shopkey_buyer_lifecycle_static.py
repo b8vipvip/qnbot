@@ -34,6 +34,7 @@ def test_qn_runtime_registry_uses_shopkey_not_nickname_or_display():
 
 def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    guard = read("src/Bot/ChromeNs/WebSocketPageLifecycleGuard.cs")
 
     assert "ConcurrentDictionary<string, string> _shopSessions" in server
     assert "ConcurrentDictionary<string, string> _sessionShopKeys" in server
@@ -44,6 +45,11 @@ def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     assert "TryClaimShopSession(loginNick" not in server
     assert "TryClaimShopSession(sellerNick" not in server
     assert 'DiagnosticRef("shop", shopKey)' in server
+    assert "GetShopKeyForSession(sessionId)" in guard
+    assert "IsAuthoritativeShopSession(shopKey, sessionId)" in guard
+    assert "BuildDuplicateProbeFingerprint(shopKey, type, response)" in guard
+    assert "FindConnectedQnByShopKey(shopKey)" in guard
+    assert "FindExistingBySellerNick" not in guard
 
 
 def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity():
