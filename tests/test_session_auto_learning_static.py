@@ -509,3 +509,57 @@ def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
     assert "StartForManualReply(\n                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey)" in bridge
     assert "GetRecords(shopKey, seller, 500)" in history_ui
     assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in history_ui
+
+def test_learning_cleanup_preserves_pending_reports_and_startup_can_retry_schema():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    cleanup = service[
+        service.index("private static void CleanupReports()"):
+        service.index("private static void EnsureSchema()", service.index("private static void CleanupReports()"))
+    ]
+    init = service[
+        service.index("public static void Initialize()"):
+        service.index("public static void ObserveLiveMessage")
+    ]
+    assert "where CompletedAtTicks > 0 and EntityId not in" in cleanup
+    assert "select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0" in cleanup
+    assert "Interlocked.CompareExchange(ref _initialized, 1, 0)" in init
+    assert "Interlocked.Exchange(ref _initialized, 0);" in init
+
+
+def test_learning_scoped_timeline_uses_real_seller_nick_even_for_duplicate_names():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    state = context[
+        context.index("internal static object GetExistingLearningState("):
+        context.index("internal static async Task<ConversationHistoryRefreshResult>")
+    ]
+    seller = context[
+        context.index("private static string GetSellerNick("):
+        context.index("private static string GetBuyerNick(")
+    ]
+    assert "ShopSettingsScope.Current" in state
+    assert "?? ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in state
+    assert "current.SellerNick" in seller
+    assert "current.DisplayName" not in seller
+
+
+def test_failed_bot_history_flush_never_overwrites_newer_pending_update():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    flush = history[
+        history.index("private static void FlushPendingCore()"):
+        history.index("private static void EnsureSchema()", history.index("private static void FlushPendingCore()"))
+    ]
+    assert "Pending.TryAdd(entity.EntityId, entity);" in flush
+    assert "Pending[entity.EntityId] = entity;" not in flush
+
+
+def test_knowledge_v2_session_history_filters_by_shop_before_sql_limit():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2AiToolsUi.cs")
+    scoped = service[
+        service.index("public static List<ConversationSessionLearningReportView> GetReportsForShop("):
+        service.index("private static string BuildInputCoverageSummary")
+    ]
+    assert '"where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "' in scoped
+    assert "shopKey, seller" in scoped
+    assert "ConversationSessionLearningService.GetReportsForShop(" in ui
+    assert "_shopKey, _seller, 1000" in ui
