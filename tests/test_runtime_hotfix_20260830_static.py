@@ -63,7 +63,7 @@ def test_central_log_redaction_covers_colons_and_json_fields():
 
 def test_duplicate_page_websockets_are_quarantined_not_eagerly_initialized():
     src = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
-    assert "_duplicateSellerSessions" in src
+    assert "_duplicateShopSessions" in src
     assert "RecordAuthoritativeCdpSessionCount" in src
     assert "业务CDP=" in src and "页面通道=" in src
     connected = src.index("webSocket.NewSessionConnected")
