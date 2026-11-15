@@ -266,6 +266,11 @@ namespace Bot.Automation.ChatDeskNs
             }
         }
 
+        internal static bool IsSingleShopRuntime
+        {
+            get { return RuntimeShopCount() <= 1; }
+        }
+
         private static int RuntimeShopCount()
         {
             try
