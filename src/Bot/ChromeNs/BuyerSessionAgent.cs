@@ -162,6 +162,7 @@ namespace Bot.ChromeNs
                     return new BuyerSessionAgentObservation
                     {
                         SessionKey = key,
+                        ShopKey = shopKey,
                         Generation = state.Generation,
                         CancellationToken = token,
                         AcceptedAtUtc = acceptedAtUtc,
@@ -214,6 +215,7 @@ namespace Bot.ChromeNs
             return new BuyerSessionAgentObservation
             {
                 SessionKey = key,
+                ShopKey = shopKey,
                 Generation = generation,
                 CancellationToken = token,
                 AcceptedAtUtc = acceptedAtUtc,
