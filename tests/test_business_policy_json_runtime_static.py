@@ -180,3 +180,16 @@ def test_shop_policy_updates_are_cross_process_atomic_and_custom_regexes_are_bou
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(userPath, initial, 3, 50, out error)" in ensure
     assert "TimeSpan.FromMilliseconds(100)" in compile_optional
     assert "TimeSpan.FromMilliseconds(100)" in get_regex
+
+def test_runtime_policy_editor_requires_and_enters_exact_store_prompt_shop_scope():
+    ui = read(BOT / "Knowledge" / "BusinessPolicyProfileUi.cs")
+    handler = ui[
+        ui.index('button.Click += (s, args) =>'):
+        ui.index('var index = panel.Children.IndexOf(save);')
+    ]
+    assert 'GetField<ShopContext>(window, "_shop")' in handler
+    assert "ShopScopedUiBridge.Get(window)" in handler
+    assert "if (shop == null)" in handler
+    assert "阻止打开全局运行策略配置" in handler
+    assert "using (ShopSettingsScope.Enter(shop))" in handler
+    assert "ShopScopedUiBridge.Attach(editor, shop);" in handler
