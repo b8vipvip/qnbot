@@ -584,3 +584,13 @@ def test_windows_reusable_and_standalone_builds_use_distinct_concurrency_groups(
     assert "github.workflow" in workflow
     assert 'group: windows-release-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' in workflow
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+
+def test_manual_source_correction_updates_audit_and_visible_history_atomically():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    correction = history[
+        history.index("public static bool UpdateAnswerSource(\n            string shopKey"):
+        history.index("public static string GetManualSource(", history.index("public static bool UpdateAnswerSource(\n            string shopKey"))
+    ]
+    assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { original, row });" in correction
+    assert "DbHelper.Db.SaveOneRecord(original);" not in correction
+    assert "DbHelper.Db.SaveOneRecord(row);" not in correction
