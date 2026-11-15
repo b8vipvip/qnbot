@@ -966,28 +966,98 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static QN GetByNick(LocalUser seller)
+        public static QN GetByShopIdentity(LocalUser seller)
         {
             if (seller == null) throw new ArgumentNullException("seller");
+            var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(seller);
             lock (QNSetLock)
             {
-                var qn = QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == seller.Nick || q._seller.Display == seller.Display));
+                var matches = QNSet
+                    .Where(q => q != null && q._seller != null)
+                    .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
+                    .Where(x => string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    .ToList();
+                if (matches.Count > 1 && matches.Any(x =>
+                    !ShopIdentityResolver.Resolve(x.Qn._seller).HasStableSellerId))
+                    throw new InvalidOperationException("昵称回退身份对应多个千牛实例，已阻止合并。");
+
+                var qn = matches
+                    .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
+                    .Select(x => x.Qn)
+                    .FirstOrDefault();
                 if (qn == null)
                 {
                     qn = new QN(seller);
                     QNSet.Add(qn);
                 }
+                else
+                {
+                    // Same stable ShopKey may receive refreshed login metadata/nickname.
+                    qn._seller = seller;
+                }
                 return qn;
+            }
+        }
+
+        // Compatibility alias. Identity is resolved by TargetId/ShopKey, not nick or display.
+        public static QN GetByNick(LocalUser seller)
+        {
+            return GetByShopIdentity(seller);
+        }
+
+        public static QN FindExistingByShopKey(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return null;
+            lock (QNSetLock)
+            {
+                return QNSet
+                    .Where(q => q != null && q._seller != null)
+                    .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
+                    .Where(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal))
+                    .OrderByDescending(x => ActiveShopSessionRegistry.IsActive(x.Qn))
+                    .Select(x => x.Qn)
+                    .FirstOrDefault();
             }
         }
 
         public static QN FindExistingBySellerNick(string sellerNick)
         {
-            if (string.IsNullOrWhiteSpace(sellerNick)) return null;
-            lock (QNSetLock)
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return null;
+
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null)
             {
-                return QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == sellerNick || q._seller.Display == sellerNick));
+                return string.Equals((scopedShop.SellerNick ?? string.Empty).Trim(),
+                    sellerNick, StringComparison.Ordinal)
+                    ? FindExistingByShopKey(scopedShop.ShopKey)
+                    : null;
             }
+
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0)
+            {
+                if (!string.Equals(ActiveShopSessionRegistry.GetActiveSellerNick(),
+                    sellerNick, StringComparison.Ordinal)) return null;
+                return FindExistingByShopKey(activeShopKey);
+            }
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                return FindExistingByShopKey(shop.ShopKey);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string TryGetShopKey(LocalUser seller)
+        {
+            try { return ShopIdentityResolver.Resolve(seller).ShopKey; }
+            catch { return string.Empty; }
         }
 
         public void SendTimiMsg(string userId, string smartTip)
