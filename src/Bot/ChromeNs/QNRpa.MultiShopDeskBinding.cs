@@ -22,13 +22,13 @@ namespace Bot.ChromeNs
             if (desk != null) return desk;
 
             var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
-            if (desks.Count == 1 && RuntimeSellerCount() <= 1) return desks[0];
+            if (desks.Count == 1 && RuntimeShopCount() <= 1) return desks[0];
             return null;
         }
 
         private Desk TryRecoverActiveSellerDesk(string seller)
         {
-            if (RuntimeSellerCount() <= 1) return null;
+            if (RuntimeShopCount() <= 1) return null;
 
             string isolationReason;
             if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return null;
@@ -84,7 +84,7 @@ namespace Bot.ChromeNs
             var seller = SellerNick;
             if (string.IsNullOrWhiteSpace(seller)) return false;
 
-            if (RuntimeSellerCount() > 1)
+            if (RuntimeShopCount() > 1)
             {
                 string isolationReason;
                 if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason))
@@ -101,7 +101,7 @@ namespace Bot.ChromeNs
             if (desk == null) desk = TryRecoverActiveSellerDesk(seller);
             if (desk == null)
             {
-                if (Desk.HasMultipleDesks || RuntimeSellerCount() > 1)
+                if (Desk.HasMultipleDesks || RuntimeShopCount() > 1)
                 {
                     Log.ErrorWithMaxCount(
                         "多店铺RPA绑定失败，未找到当前seller已登记的千牛窗口，禁止猜测其他窗口: seller=" + seller,
@@ -110,7 +110,7 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            if (RuntimeSellerCount() > 1 && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
+            if (RuntimeShopCount() > 1 && !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller))
             {
                 Log.ErrorWithMaxCount("多客服RPA已隔离：当前可见千牛输入框不属于目标seller，禁止跨客服写入/发送: seller="
                     + seller + ", activeSeller=" + DeskSellerBindingRegistry.GetSeller(desk)
@@ -160,7 +160,7 @@ namespace Bot.ChromeNs
             get
             {
                 var desk = DeskSellerBindingRegistry.FindSellerDesk(SellerNick);
-                if (RuntimeSellerCount() > 1)
+                if (RuntimeShopCount() > 1)
                 {
                     string isolationReason;
                     if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return false;
@@ -214,7 +214,7 @@ namespace Bot.ChromeNs
             return cleared;
         }
 
-        private static int RuntimeSellerCount()
+        private static int RuntimeShopCount()
         {
             try
             {
