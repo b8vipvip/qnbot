@@ -121,6 +121,22 @@ def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity()
     assert "return;" in cdp[cdp.index("千牛会话身份与当前CDP绑定不一致"):]
 
 
+def test_native_desk_guards_count_shopkeys_not_colliding_seller_nicks():
+    rpa_desk = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
+    desk_registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey" in rpa_desk
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey" in desk_registry
+    assert "return 2;" in rpa_desk and "return 2;" in desk_registry
+    assert ".Select(qn => qn.Seller.Nick.Trim())" not in rpa_desk
+    assert ".Select(qn => qn.Seller.Nick.Trim())" not in desk_registry
+    assert "ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)" in rpa_desk
+    assert "expectedTargetId.Length > 0" in coordinator
+    assert "targetId.Length == 0" in coordinator
+    assert "cannot only trust seller nickname" not in coordinator
+
+
 def test_buyer_session_generations_and_deadline_watchers_include_shopkey():
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
