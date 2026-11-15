@@ -29,7 +29,7 @@ namespace Bot.ChromeNs
         public ConversationProgressSnapshot()
         {
             CurrentInputKind = "text";
-            Stage = "售前咨询";
+            Stage = "一般咨询";
             NextAction = string.Empty;
         }
     }

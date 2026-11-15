@@ -60,7 +60,7 @@ namespace Bot.Knowledge
                 Height = 30,
                 Margin = new Thickness(0, 0, 8, 0),
                 Tag = "business-policy-json",
-                ToolTip = "编辑会话阶段、业务识别正则、发送前校验和转人工例外。保存后无需重启即可生效。"
+                ToolTip = "编辑当前店铺私有的业务识别正则、流程提示、发送前校验和转人工例外。默认模板为空白，不含商家事实；保存前会校验并备份。保存后约2秒生效。"
             };
             button.Click += (s, args) =>
             {
@@ -109,8 +109,8 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 0, 0, 10),
                 Child = new TextBlock
                 {
-                    Text = "这里配置业务识别正则、会话阶段、流程提示、发送前校验和转人工例外。"
-                        + "它们不再写死在程序代码中。保存后约2秒内生效；保存前会自动校验全部正则并备份旧文件。",
+                    Text = "这里配置当前店铺私有的业务识别正则、流程提示、发送前校验和转人工例外。"
+                        + "安装包默认模板不包含任何商家业务事实，空白正则表示不启用该项。请按当前店铺单独配置；保存后约2秒生效，保存前会校验并备份旧文件。",
                     TextWrapping = TextWrapping.Wrap,
                     Foreground = Brushes.DimGray
                 }

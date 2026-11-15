@@ -14,67 +14,99 @@ def policy():
     return json.loads(read(BOT / "default-business-policy.json"))
 
 
-def test_business_phrases_are_client_json_not_progress_guard_constants():
-    source = read(BOT / "ChromeNs" / "ConversationProgressGuardService.cs")
-    assert "BusinessPolicyProfileService.GetRegex" in source
-    assert "BusinessPolicyProfileService.GetString" in source
-    assert "OrderEvidenceRegex" not in source
-    assert "CompatibilityQuestionRegex" not in source
-    assert "ScreenshotRequestRegex" not in source
-    assert "先下单|下单后联系客服" not in source
-
-
-def test_default_policy_has_all_runtime_sections_and_regexes_compile():
+def test_default_policy_is_neutral_and_preserves_runtime_key_contract():
     data = policy()
     assert data["schema"] == "qnbot.business-policy"
-    assert data["version"] >= 2
+    assert data["version"] >= 3
     for key in ("patterns", "stages", "facts", "buyerGoals", "prompts", "validationIssues", "handoffOverrides"):
         assert key in data
-    for name, pattern in data["patterns"].items():
-        re.compile(pattern)
-    for item in data["handoffOverrides"]:
-        for name in ("strongRiskPattern", "allowAiPattern", "fixedReplyPattern"):
-            if item.get(name):
-                re.compile(item[name])
+
+    progress = read(BOT / "ChromeNs" / "ConversationProgressGuardService.cs")
+    used_patterns = set(re.findall(r'R\("([^"]+)"\)', progress))
+    assert used_patterns.issubset(set(data["patterns"]))
+    # PII and channel-shape detectors are universal safety primitives, not merchant policy.
+    # Keep them active in the neutral package so phone numbers, verification codes and
+    # image-only turns still enter the contextual path without exposing their raw values.
+    core_safety_patterns = {
+        "phone", "verificationCode", "codeRequest", "phoneRequest", "image"
+    }
+    assert core_safety_patterns.issubset(data["patterns"])
+    assert all(data["patterns"][key] for key in core_safety_patterns)
+    for key, pattern in data["patterns"].items():
+        if key not in core_safety_patterns:
+            assert pattern == ""
+        elif pattern:
+            re.compile(pattern, re.I)
+    assert data["stages"] == {"preSaleGeneral": {"stage": "一般咨询", "nextAction": ""}}
+    assert data["facts"] == {}
+    assert data["buyerGoals"] == {}
+    assert data["prompts"] == {}
+    assert data["validationIssues"] == {}
+    assert data["handoffOverrides"] == []
+
+    serialized = json.dumps(data, ensure_ascii=False)
+    for merchant_specific in ("酷狗", "大屏VIP", "k2n.cn", "guide_url"):
+        assert merchant_specific not in serialized
+    assert not re.search(r"https?://", serialized, re.I)
 
 
-def test_normal_own_account_question_is_not_forced_to_handoff():
-    data = policy()
-    account = next(x for x in data["handoffOverrides"] if x["keyword"] == "账号")
-    question = "电视端的有吗 能登自己账号吗"
-    assert not re.search(account["strongRiskPattern"], question, re.I)
-    assert re.search(account["allowAiPattern"], question, re.I)
+def test_empty_default_patterns_are_valid_noop_runtime_rules():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    assert 'if (string.IsNullOrWhiteSpace(pattern))' in service
+    assert 'state.Regexes[path ?? string.Empty] = NeverRegex;' in service
+    assert 'if (!string.IsNullOrWhiteSpace(pattern))' in service
+    assert "CompileRequired(" not in service
 
 
-def test_account_security_question_remains_manual():
-    data = policy()
-    account = next(x for x in data["handoffOverrides"] if x["keyword"] == "账号")
-    assert re.search(account["strongRiskPattern"], "账号密码忘了还收不到验证码", re.I)
+def test_existing_shop_policy_is_preserved_and_legacy_adoption_is_single_shop_only():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    ensure = service[
+        service.index("private static void EnsureUserFile"):
+        service.index("private static bool CanAutoAdoptLegacy")
+    ]
+    assert "if (File.Exists(userPath)) return;" in ensure
+    assert "Paths.GetRulesRoot(shop)" in service
+    assert "shop != null && CanAutoAdoptLegacy() && File.Exists(legacy)" in ensure
+    assert "Profiles.GetAll().Count == 1" in service
 
 
-def test_pai_object_disambiguates_order_link_from_screenshot_page():
-    data = policy()
-    p = data["patterns"]
-
-    order_question = "那拍哪个链接啊"
-    assert not re.search(p["screenshotTargetQuestion"], order_question, re.I)
-    assert re.search(p["purchaseTargetQuestion"], order_question, re.I)
-
-    for question in ("拍哪个商品", "选哪个SKU下单", "这个链接怎么拍"):
-        assert re.search(p["purchaseTargetQuestion"], question, re.I)
-
-    for question in ("拍哪个页面", "要拍哪个界面", "拍照哪个页面", "拍哪里"):
-        assert re.search(p["screenshotTargetQuestion"], question, re.I)
-
-    good = "拍电视端/大屏VIP这个商品链接，选择需要的时长或规格下单即可。"
-    wrong = "不是拍商品链接，请拍电视上的酷狗账号绑定页面。"
-    assert re.search(p["purchaseTargetAnswer"], good, re.I)
-    assert not re.search(p["badPurchaseTargetAnswer"], good, re.I)
-    assert re.search(p["badPurchaseTargetAnswer"], wrong, re.I)
-    assert "这里的“拍”表示购买下单" in data["prompts"]["purchaseTarget"]
+def test_custom_policy_can_configure_account_handoff_without_shipping_it_by_default():
+    override = {
+        "keyword": "account",
+        "strongRiskPattern": r"password|verification code|account recovery|stolen|frozen",
+        "allowAiPattern": r"can i (?:sign in|log in) with my own account",
+        "fixedReplyPattern": r"another account|friend.?s account",
+        "fixedReply": "Please ask the account owner to confirm the supported sign-in method."
+    }
+    normal_question = "Can I sign in with my own account on this device?"
+    risky_question = "I forgot my account password and cannot receive a verification code."
+    assert not re.search(override["strongRiskPattern"], normal_question, re.I)
+    assert re.search(override["allowAiPattern"], normal_question, re.I)
+    assert re.search(override["strongRiskPattern"], risky_question, re.I)
+    assert policy()["handoffOverrides"] == []
 
 
-def test_progress_guard_routes_purchase_target_as_contextual_order_intent():
+def test_custom_patterns_can_disambiguate_purchase_selection_from_screenshot_questions():
+    patterns = {
+        "screenshotTargetQuestion": r"\b(?:which|what)\s+(?:page|screen)\b",
+        "purchaseTargetQuestion": r"\b(?:which|what)\s+(?:product|link|sku)\b",
+        "purchaseTargetAnswer": r"\b(?:product|link|sku|option)\b",
+        "badPurchaseTargetAnswer": r"\b(?:capture|screenshot)\b.*\b(?:account|screen)\b"
+    }
+    order_question = "Which product link should I choose?"
+    screenshot_question = "Which page should I capture?"
+    assert not re.search(patterns["screenshotTargetQuestion"], order_question, re.I)
+    assert re.search(patterns["purchaseTargetQuestion"], order_question, re.I)
+    assert re.search(patterns["screenshotTargetQuestion"], screenshot_question, re.I)
+
+    good = "Choose the product link that matches the requested item and SKU."
+    wrong = "Please capture the account screen."
+    assert re.search(patterns["purchaseTargetAnswer"], good, re.I)
+    assert not re.search(patterns["badPurchaseTargetAnswer"], good, re.I)
+    assert re.search(patterns["badPurchaseTargetAnswer"], wrong, re.I)
+
+
+def test_progress_guard_routes_configured_purchase_target_as_contextual_order_intent():
     source = read(BOT / "ChromeNs" / "ConversationProgressGuardService.cs")
     assert "AsksPurchaseTarget" in source
     assert "!asksScreenshotTarget && R(\"purchaseTargetQuestion\")" in source
@@ -100,3 +132,23 @@ def test_business_policy_editor_and_package_wiring_exist():
     assert "BusinessPolicyProfileService.cs" in props
     assert "default-business-policy.json" in props
     assert "CopyToOutputDirectory" in props
+
+
+def test_neutral_default_keeps_privacy_and_image_detection_enabled():
+    data = policy()
+    patterns = data["patterns"]
+    assert re.search(patterns["phone"], "买家手机号 13800138000")
+    assert re.search(patterns["verificationCode"], " 123456 ")
+    assert re.search(patterns["codeRequest"], "请提供验证码")
+    assert re.search(patterns["phoneRequest"], "麻烦发送手机号")
+    assert re.search(patterns["image"], "[图片]")
+
+    # The runtime stores only progress booleans / input kinds, never the matched values.
+    source = read(BOT / "ChromeNs" / "ConversationProgressGuardService.cs")
+    assert "HasPhoneNumber = R(\"phone\").IsMatch(buyerText)" in source
+    assert "CurrentInputKind = \"phone_number\"" in source
+    assert "CurrentInputKind = \"verification_code\"" in source
+    assert "AddFact(state, progress.HasPhoneNumber, T(\"facts.phone\"))" in source
+    assert "AddFact(state, progress.HasVerificationCode, T(\"facts.code\"))" in source
+    assert "string PhoneNumber" not in source
+    assert "string VerificationCode" not in source

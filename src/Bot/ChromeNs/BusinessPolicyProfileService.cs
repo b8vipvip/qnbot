@@ -249,7 +249,11 @@ namespace Bot.ChromeNs
             if (!(root["stages"] is JObject)) throw new Exception("运行策略缺少 stages 对象。");
 
             foreach (var property in ((JObject)root["patterns"]).Properties())
-                CompileRequired(property.Name, Convert.ToString(property.Value));
+            {
+                var pattern = Convert.ToString(property.Value);
+                if (!string.IsNullOrWhiteSpace(pattern))
+                    CompileOptional(pattern);
+            }
             var overrides = root["handoffOverrides"] as JArray;
             if (overrides != null)
             {
@@ -269,12 +273,6 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(pattern)) return NeverRegex;
             try { return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase); }
             catch (Exception ex) { throw new Exception("正则表达式无效：" + ex.Message); }
-        }
-
-        private static void CompileRequired(string name, string pattern)
-        {
-            if (string.IsNullOrWhiteSpace(pattern)) throw new Exception("patterns." + name + " 不能为空。");
-            CompileOptional(pattern);
         }
 
         private static string ReadString(JObject root, string path)
