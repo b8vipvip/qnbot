@@ -126,7 +126,7 @@ namespace Bot.ChromeNs
             if (!lease.MarkGenerating("streaming_answer_started"))
             {
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick,
-                    "generation已失效，未进入答案生成");
+                    "generation已失效，未进入答案生成", burst.ShopKey);
                 return;
             }
             var aiStartedAt = DateTime.Now;
@@ -181,7 +181,7 @@ namespace Bot.ChromeNs
                         conversationCtl.SetProcessing(cancelled);
                         conversationCtl.SetStatus(cancelled, false);
                     }
-                    ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelled);
+                    ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelled, burst.ShopKey);
                     Log.Info("文本AI流已取消: buyer=" + burst.BuyerNick + ", hardInvalidated=True");
                 }
                 return;
@@ -204,7 +204,7 @@ namespace Bot.ChromeNs
                     conversationCtl.SetProcessing(stale);
                     conversationCtl.SetStatus(stale, false);
                 }
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, stale);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, stale, burst.ShopKey);
                 return;
             }
 
@@ -268,7 +268,7 @@ namespace Bot.ChromeNs
                 const string cancelledDuringValidation = "generation在发送前答案校验/去重期间已失效";
                 if (conversationCtl != null) conversationCtl.SetStatus(cancelledDuringValidation, false);
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, cancelledDuringValidation);
+                    burst.SellerNick, burst.BuyerNick, cancelledDuringValidation, burst.ShopKey);
                 return;
             }
 
@@ -307,7 +307,7 @@ namespace Bot.ChromeNs
             {
                 const string invalidAtReady = "generation在答案发布前已终止，迟到答案已丢弃";
                 if (conversationCtl != null) conversationCtl.SetStatus(invalidAtReady, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady, burst.ShopKey);
                 return;
             }
 
@@ -342,7 +342,7 @@ namespace Bot.ChromeNs
             {
                 const string invalidBeforeSend = "未发送：generation在发送前已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidBeforeSend);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend, burst.ShopKey);
                 return;
             }
 
@@ -356,7 +356,7 @@ namespace Bot.ChromeNs
             {
                 const string cancelledDuringSend = "未发送：generation在等待发送资源/会话确认期间已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, cancelledDuringSend);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend, burst.ShopKey);
                 Log.Info("Smart Reply发送期间generation硬失效，已停止后续UI发送副作用: buyer="
                     + burst.BuyerNick);
                 return;
