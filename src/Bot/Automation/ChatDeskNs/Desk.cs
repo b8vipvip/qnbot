@@ -346,7 +346,16 @@ namespace Bot.Automation.ChatDeskNs
                     if (exactQn != null && exactQn.Seller != null)
                         sellerNick = (exactQn.Seller.Nick ?? string.Empty).Trim();
                     if (sellerNick.Length == 0) return null;
-                    return DeskSellerBindingRegistry.FindSellerDesk(sellerNick, scopedShop.ShopKey);
+                    var scopedDesk = DeskSellerBindingRegistry.FindSellerDesk(sellerNick, scopedShop.ShopKey);
+                    if (scopedDesk != null) return scopedDesk;
+                    if (DeskSellerBindingRegistry.IsSingleShopRuntime)
+                    {
+                        var available = Snapshot().Where(x => x != null && x.IsAlive).ToList();
+                        if (available.Count == 1)
+                            return DeskSellerBindingRegistry.BindResolvedSeller(
+                                available[0], sellerNick, "scoped-single-shop-desk", scopedShop.ShopKey);
+                    }
+                    return null;
                 }
 
                 var current = QN.CurQN;
@@ -357,6 +366,13 @@ namespace Bot.Automation.ChatDeskNs
                     catch { return null; }
                     var currentDesk = DeskSellerBindingRegistry.FindSellerDesk(current.Seller.Nick, shopKey);
                     if (currentDesk != null) return currentDesk;
+                    if (DeskSellerBindingRegistry.IsSingleShopRuntime)
+                    {
+                        var available = Snapshot().Where(x => x != null && x.IsAlive).ToList();
+                        if (available.Count == 1)
+                            return DeskSellerBindingRegistry.BindResolvedSeller(
+                                available[0], current.Seller.Nick, "current-qn-single-shop-desk", shopKey);
+                    }
                 }
 
                 var snapshot = Snapshot();
