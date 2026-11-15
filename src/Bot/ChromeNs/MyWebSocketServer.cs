@@ -342,6 +342,15 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (verifiedShop == null || string.IsNullOrWhiteSpace(verifiedShop.ShopKey))
+            {
+                client.IsShopIdentityRetired = true;
+                Log.Info("standby当前登录身份缺少可验证ShopKey，保持非权威: expectedShopRef="
+                    + DiagnosticRef("shop", shopKey)
+                    + ", sessionRef=" + DiagnosticRef("session", sessionId));
+                return false;
+            }
+
             if (!string.Equals(verifiedShop.ShopKey, shopKey, StringComparison.Ordinal))
             {
                 client.IsShopIdentityRetired = true;
@@ -363,6 +372,7 @@ namespace Bot.ChromeNs
                     + DiagnosticRef("shop", shopKey) + ", reason=" + ex.Message);
                 return false;
             }
+            if (qn == null) return false;
 
             string previousOwner = string.Empty;
             lock (_sellerSessionSync)
