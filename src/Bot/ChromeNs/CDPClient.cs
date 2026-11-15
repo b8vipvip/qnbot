@@ -366,17 +366,30 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<string> SendExecuteAndWaitAsync(string cmd, string desc)
+        private async Task<string> SendExecuteAndWaitAsync(
+            string cmd, string desc, bool allowRetiredIdentityRead = false)
         {
-            var preferred = ResolvePreferredRuntimeClient();
-            if (preferred != null && !ReferenceEquals(preferred, this))
+            if (IsShopIdentityRetired && !allowRetiredIdentityRead)
             {
-                return await preferred.SendExecuteAndWaitCoreAsync(cmd, desc + "@runtime-active-session").ConfigureAwait(false);
+                Log.Info("CDP调用已阻止：当前WebSocket登录身份已变化，等待ShopKey重新绑定。desc="
+                    + desc + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                return string.Empty;
             }
-            return await SendExecuteAndWaitCoreAsync(cmd, desc).ConfigureAwait(false);
+
+            // Identity discovery must execute on this physical page, never on the old
+            // preferred page; it is how a switched account is safely rebound.
+            if (!allowRetiredIdentityRead)
+            {
+                var preferred = ResolvePreferredRuntimeClient();
+                if (preferred != null && !ReferenceEquals(preferred, this))
+                    return await preferred.SendExecuteAndWaitCoreAsync(
+                        cmd, desc + "@runtime-active-session").ConfigureAwait(false);
+            }
+            return await SendExecuteAndWaitCoreAsync(cmd, desc, allowRetiredIdentityRead).ConfigureAwait(false);
         }
 
-        private async Task<string> SendExecuteAndWaitCoreAsync(string cmd, string desc)
+        private async Task<string> SendExecuteAndWaitCoreAsync(
+            string cmd, string desc, bool allowRetiredIdentityRead = false)
         {
             var gateAcquired = false;
             try
