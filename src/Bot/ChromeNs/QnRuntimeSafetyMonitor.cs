@@ -1,6 +1,7 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -355,6 +356,9 @@ namespace Bot.ChromeNs
                 if (response == null || response.result == null) return;
                 var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
                 if (seller.Length == 0) return;
+                string shopKey;
+                try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+                catch { return; }
 
                 foreach (var message in response.result.Where(x => x != null))
                 {
@@ -380,7 +384,7 @@ namespace Bot.ChromeNs
                     if (texts.Length == 0) continue;
                     var text = SelectPreferredMessageText(texts);
 
-                    if (TryConfirmBotDelivery(seller, buyer, texts))
+                    if (TryConfirmBotDelivery(seller, buyer, texts, shopKey))
                     {
                         continue;
                     }
@@ -392,7 +396,8 @@ namespace Bot.ChromeNs
                             seller,
                             buyer,
                             botAuthoredText,
-                            "通过卖家消息多字段中的[AI]署名确认这是Bot回显");
+                            "通过卖家消息多字段中的[AI]署名确认这是Bot回显",
+                            shopKey);
                         Log.Info("卖家消息多字段命中Bot署名，未判定人工回复: seller=" + seller
                             + ", buyer=" + buyer
                             + ", variants=" + texts.Length
@@ -411,7 +416,7 @@ namespace Bot.ChromeNs
                     // Keep the Bot generation/send path alive and record the human answer so the
                     // learning pipeline can compare both answers and decide whether knowledge needs
                     // reinforcement, correction or no change.
-                    ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
+                    ResponseProgressTracker.MarkManualIntervention(seller, buyer, text, shopKey);
                     Log.Info("人工客服回复已记录为对比学习证据，Bot任务继续: seller=" + seller
                         + ", buyer=" + buyer + ", reply=" + Short(text, 120));
                 }
@@ -494,17 +499,17 @@ namespace Bot.ChromeNs
                 ?? string.Empty;
         }
 
-        private static bool TryConfirmBotDelivery(string seller, string buyer, string[] texts)
+        private static bool TryConfirmBotDelivery(string seller, string buyer, string[] texts, string shopKey)
         {
             if (texts == null) return false;
 
             foreach (var candidate in texts)
             {
-                if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, candidate)) return true;
+                if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, candidate, shopKey)) return true;
             }
             foreach (var candidate in texts)
             {
-                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, candidate)) return true;
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, candidate, shopKey)) return true;
             }
             return false;
         }
