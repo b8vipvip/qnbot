@@ -199,6 +199,7 @@ namespace Bot.ChromeNs
         public static string RestoreLatestDraft(string seller)
         {
             var path = PathForShop(seller);
+            string selectedBackup = null;
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowDraft", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取恢复写锁");
@@ -208,7 +209,6 @@ namespace Bot.ChromeNs
                     .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
                 if (backups.Count == 0) throw new FileNotFoundException("暂无草稿备份");
                 string validated = null;
-                string selectedBackup = string.Empty;
                 foreach (var candidate in backups)
                 {
                     try

@@ -439,6 +439,7 @@ namespace Bot.ChromeNs
         {
             var shop = ResolveShop(seller);
             var path = PathForShop(shop);
+            string selectedBackup = null;
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "KugouReceptionRules", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("恢复锁未获取。");
@@ -448,7 +449,6 @@ namespace Bot.ChromeNs
                     .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
                 if (backups.Count == 0) throw new FileNotFoundException("尚无可恢复的流程规则备份。");
                 string original = null;
-                string selectedBackup = string.Empty;
                 foreach (var candidate in backups)
                 {
                     try
