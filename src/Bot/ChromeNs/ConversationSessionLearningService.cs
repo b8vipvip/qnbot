@@ -137,26 +137,37 @@ namespace Bot.ChromeNs
 
         public static void Initialize()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EnsureSchema();
-            ConversationSessionLearningRuntimeBridge.Initialize();
+            if (Interlocked.CompareExchange(ref _initialized, 1, 0) != 0) return;
             try
             {
-                if (Application.Current != null)
+                // Schema initialization must be retryable after a transient
+                // database lock; otherwise the first failed startup leaves the
+                // learning service permanently marked as initialized.
+                EnsureSchema();
+                ConversationSessionLearningRuntimeBridge.Initialize();
+                try
                 {
-                    Application.Current.Exit += (s, e) => DisposeAll();
+                    if (Application.Current != null)
+                    {
+                        Application.Current.Exit += (s, e) => DisposeAll();
+                    }
                 }
+                catch
+                {
+                }
+                Task.Run(async () =>
+                {
+                    await Task.Delay(2500);
+                    ResumePending();
+                    CleanupReports();
+                });
+                Log.Info("接待结束自动学习已启用：买家或客服连续5分钟无新消息后自动复盘；历史覆盖不完整时跳过AI与知识写入。");
             }
             catch
             {
+                Interlocked.Exchange(ref _initialized, 0);
+                throw;
             }
-            Task.Run(async () =>
-            {
-                await Task.Delay(2500);
-                ResumePending();
-                CleanupReports();
-            });
-            Log.Info("接待结束自动学习已启用：买家或客服连续5分钟无新消息后自动复盘；历史覆盖不完整时跳过AI与知识写入。" );
         }
 
         public static void ObserveLiveMessage(QNChatMessage message, string messageText, string seller, string buyer)
