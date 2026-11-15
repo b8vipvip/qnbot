@@ -7,6 +7,7 @@ using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Globalization;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -1674,6 +1675,28 @@ namespace Bot.ChromeNs
             return delay < TimeSpan.FromSeconds(5) ? TimeSpan.FromSeconds(5) : delay;
         }
 
+        private static bool TryGetPersistedKnowledgeCorpusCircuitOpenUntil(
+            string reportError, out DateTime openUntilUtc)
+        {
+            const string prefix = "ai_upstream_circuit_open_until:";
+            openUntilUtc = DateTime.MinValue;
+            reportError = (reportError ?? string.Empty).Trim();
+            if (!reportError.StartsWith(prefix, StringComparison.Ordinal)) return false;
+
+            DateTime parsed;
+            var value = reportError.Substring(prefix.Length).Trim();
+            if (!DateTime.TryParse(
+                value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsed))
+                return false;
+
+            openUntilUtc = parsed.Kind == DateTimeKind.Utc
+                ? parsed
+                : (parsed.Kind == DateTimeKind.Local
+                    ? parsed.ToUniversalTime()
+                    : DateTime.SpecifyKind(parsed, DateTimeKind.Utc));
+            return openUntilUtc > DateTime.UtcNow;
+        }
+
         private static async Task<JObject> AnalyzeAsync(
             ActiveSession session,
             List<ConversationContextTurn> turns,
@@ -2294,7 +2317,20 @@ namespace Bot.ChromeNs
                         continue;
                     }
                     var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
-                    Schedule(session, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
+                    if (due < TimeSpan.FromSeconds(5)) due = TimeSpan.FromSeconds(5);
+
+                    // The in-memory circuit is lost on process restart. The pending
+                    // report keeps the exact UTC deadline in Error, so startup recovery
+                    // must honor the remaining cooldown instead of immediately probing
+                    // the same unhealthy upstream again.
+                    DateTime persistedCircuitOpenUntil;
+                    if (TryGetPersistedKnowledgeCorpusCircuitOpenUntil(
+                        report.Error, out persistedCircuitOpenUntil))
+                    {
+                        var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(persistedCircuitOpenUntil);
+                        if (circuitDelay > due) due = circuitDelay;
+                    }
+                    Schedule(session, due);
                 }
             }
             catch (Exception ex)
