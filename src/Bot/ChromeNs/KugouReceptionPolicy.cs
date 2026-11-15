@@ -407,9 +407,23 @@ namespace Bot.ChromeNs
                     if (lease == null || !lease.Acquired) return;
                     string error;
                     var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
+                    if (!string.IsNullOrWhiteSpace(error))
+                        throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
                     List<ReceptionAuditEntry> entries;
-                    try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw) ?? new List<ReceptionAuditEntry>(); }
-                    catch { entries = new List<ReceptionAuditEntry>(); }
+                    if (string.IsNullOrWhiteSpace(raw))
+                    {
+                        entries = new List<ReceptionAuditEntry>();
+                    }
+                    else
+                    {
+                        try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw); }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidDataException("既有接待审计结构损坏，保留原文件不覆盖。", ex);
+                        }
+                        if (entries == null)
+                            throw new InvalidDataException("既有接待审计不是有效数组，保留原文件不覆盖。");
+                    }
                     entries.Add(new ReceptionAuditEntry
                     {
                         AtUtc = DateTime.UtcNow, BuyerHash = HashBuyer(seller, buyer),
