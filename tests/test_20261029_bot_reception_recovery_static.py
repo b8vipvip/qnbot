@@ -46,7 +46,7 @@ def test_reception_can_wait_without_upstream_call_or_error():
     assert "answer.StartsWith(ReceptionFlowPolicy.SilentMarker" in source
     assert 'lease.MarkCompleted("reception_wait_for_evidence");' in source
     assert "conversationCtl.SetSkipped(why);" in source
-    assert "ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);" in source
+    assert "ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);" in source
     assert "MobileOnly.IsMatch(input)" in source
     assert "PhotoRequest.IsMatch(instruction)" in source
     assert 'instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0' in source
