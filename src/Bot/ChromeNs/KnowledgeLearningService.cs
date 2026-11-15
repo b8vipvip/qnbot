@@ -208,9 +208,14 @@ namespace Bot.ChromeNs
             if (qn == null || qn.Seller == null) return false;
             var seller = qn.Seller.Nick ?? string.Empty;
             string shopKey;
-            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+            ShopContext shop;
+            try
+            {
+                shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey;
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
             catch { return false; }
-            using (ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey)))
+            using (ShopSettingsScope.Enter(shop))
             {
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
