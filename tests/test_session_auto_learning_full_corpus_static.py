@@ -258,3 +258,19 @@ def test_incomplete_corpus_scans_remain_pending_and_retry_from_checkpoint_up_to_
     assert "if (retryCorpus)" in finalize
     assert "string waitingStatus = \"等待聊天历史恢复后再次复盘\"" in requeue
     assert "SaveSnapshot(session, waitingStatus)" in requeue
+
+
+
+def test_resume_reuses_the_exact_redacted_session_summary_used_by_completed_batches():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+
+    assert "var corpusSessionSummary = Redact(Clean(sessionSummary, 1200))" in method
+    assert 'priorCoverage["knowledgeCorpusSessionSummary"] != null' in method
+    assert 'corpusSessionSummary = Convert.ToString(priorCoverage["knowledgeCorpusSessionSummary"])' in method
+    assert 'coverage["knowledgeCorpusSessionSummary"] = corpusSessionSummary' in method
+    assert "transcript, corpusSessionSummary, styleBefore, localFirst" in method
+    assert "ComputeKnowledgeCorpusTranscriptFingerprint(\n                    transcript, styleBefore, localFirst)" in method

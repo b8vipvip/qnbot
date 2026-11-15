@@ -822,7 +822,8 @@ namespace Bot.ChromeNs
                 var humanMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 CollectEvidenceMessageIds(turns, cards, allMessageIds, humanMessageIds);
                 var transcriptFingerprint = ComputeKnowledgeCorpusTranscriptFingerprint(
-                    transcript, sessionSummary, styleBefore, localFirst);
+                    transcript, styleBefore, localFirst);
+                var corpusSessionSummary = Redact(Clean(sessionSummary, 1200));
 
                 var priorCoverage = ParseCoverage(report.InputCoverageJson);
                 var priorCompleted = priorCoverage["knowledgeCorpusCompletedBatchIndices"] as JArray;
@@ -836,11 +837,16 @@ namespace Bot.ChromeNs
                     && priorCoverage.Value<int?>("knowledgeCorpusBatchSize") == KnowledgeCorpusBatchSize
                     && priorCoverage.Value<int?>("knowledgeCorpusPromptVersion") == KnowledgeCorpusPromptVersion
                     && priorCoverage.Value<int?>("knowledgeCorpusBatches") == result.BatchCount
+                    && priorCoverage["knowledgeCorpusSessionSummary"] != null
                     && priorCompleted != null
                     && priorCandidates != null;
 
                 if (canResume)
                 {
+                    // Reuse the exact redacted summary that successful batches saw.
+                    // AnalyzeAsync may produce slightly different wording after a restart;
+                    // that must not invalidate or silently mix a durable batch checkpoint.
+                    corpusSessionSummary = Convert.ToString(priorCoverage["knowledgeCorpusSessionSummary"]) ?? string.Empty;
                     foreach (var token in priorCompleted)
                     {
                         int completedIndex;
@@ -905,6 +911,7 @@ namespace Bot.ChromeNs
                     : Math.Round(result.RecordsReviewed * 100.0 / result.RecordCount, 2);
                 coverage["knowledgeCorpusSourceFingerprint"] = result.SourceFingerprint;
                 coverage["knowledgeCorpusTranscriptFingerprint"] = transcriptFingerprint;
+                coverage["knowledgeCorpusSessionSummary"] = corpusSessionSummary;
                 coverage["knowledgeCorpusBatchSize"] = KnowledgeCorpusBatchSize;
                 coverage["knowledgeCorpusPromptVersion"] = KnowledgeCorpusPromptVersion;
                 coverage["knowledgeCorpusCompletedBatchIndices"] = JArray.FromObject(
@@ -946,7 +953,7 @@ namespace Bot.ChromeNs
                     {
                         var batchResult = await AnalyzeKnowledgeCorpusBatchAsync(
                             batch, batchIndex + 1, result.SourceFingerprint,
-                            transcript, sessionSummary, styleBefore, localFirst,
+                            transcript, corpusSessionSummary, styleBefore, localFirst,
                             allMessageIds, humanMessageIds);
                         if (batchResult == null || !batchResult.Success)
                         {
@@ -1097,10 +1104,9 @@ namespace Bot.ChromeNs
         }
 
         private static string ComputeKnowledgeCorpusTranscriptFingerprint(
-            string transcript, string sessionSummary, string styleBefore, bool localFirst)
+            string transcript, string styleBefore, bool localFirst)
         {
             var canonical = (localFirst ? "local_first" : "ai_first") + "\n"
-                + (sessionSummary ?? string.Empty) + "\n"
                 + (styleBefore ?? string.Empty) + "\n"
                 + (transcript ?? string.Empty);
             using (var sha = SHA256.Create())
