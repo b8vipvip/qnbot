@@ -295,7 +295,8 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private bool TryPromoteDuplicateShopSession(string shopKey, WebSocketSession session, string reason)
+        private bool TryPromoteDuplicateShopSession(
+            string shopKey, WebSocketSession session, string reason, bool requireVacant = false)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
             if (session == null || string.IsNullOrWhiteSpace(session.SessionID) || shopKey.Length == 0) return false;
@@ -314,6 +315,9 @@ namespace Bot.ChromeNs
                 if (!knownDuplicate && !knownShopSession) return false;
 
                 _shopSessions.TryGetValue(shopKey, out previousOwner);
+                if (requireVacant && !string.IsNullOrWhiteSpace(previousOwner)
+                    && _connectedSessions.ContainsKey(previousOwner))
+                    return false;
                 if (string.Equals(previousOwner, sessionId, StringComparison.Ordinal)) return true;
 
                 if (!string.IsNullOrWhiteSpace(previousOwner) && _connectedSessions.ContainsKey(previousOwner))
@@ -440,7 +444,7 @@ namespace Bot.ChromeNs
             {
                 WebSocketSession candidate;
                 if (!_liveSessions.TryGetValue(candidateId, out candidate) || candidate == null) continue;
-                if (TryPromoteDuplicateShopSession(shopKey, candidate, reason)) return;
+                if (TryPromoteDuplicateShopSession(shopKey, candidate, reason, requireVacant: true)) return;
             }
 
             Log.Info("ShopKey权威千牛CDP会话已释放，但当前没有可提升的在线standby: shopRef="
