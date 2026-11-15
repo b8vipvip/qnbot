@@ -56,6 +56,11 @@ def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity()
     assert "QN.FindExistingByShopKey(shopKey)" in cdp
     assert "cdp.ShopKey = shopKey;" in server
     assert "client.ShopKey = shopKey;" in server
+    assert "CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId)" in server
+    assert "previousQn.CDP = null;" in server
+    assert "_lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding)" in server
+    assert "!string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal)" in cdp
+    assert "return;" in cdp[cdp.index("千牛会话身份与当前CDP绑定不一致"):]
 
 
 def test_buyer_session_generations_and_deadline_watchers_include_shopkey():
