@@ -622,3 +622,17 @@ def test_native_send_requires_exact_shop_identity_and_background_events_cannot_s
     assert 'reason = "ShopKey缺失或不一致"' in native
     assert "sessionId.Length > 0" not in native
     assert "if (shopKey.Length == 0) return false;" in activate
+
+def test_legacy_shop_backfill_is_once_per_verified_shop_not_on_every_history_read():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    backfill = history[
+        history.index("private static void BackfillLegacyShopRows("):
+        history.index("private static BotConversationHistoryEntity Clone(", history.index("private static void BackfillLegacyShopRows("))
+    ]
+    assert "ConcurrentDictionary<string, bool> CompletedLegacyShopBackfills" in history
+    assert "CompletedLegacyShopBackfills.ContainsKey(backfillKey)" in backfill
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in backfill
+    assert "CompletedLegacyShopBackfills.TryAdd(backfillKey, true);" in backfill
+    assert backfill.index("CompletedLegacyShopBackfills.TryAdd(backfillKey, true);") > backfill.index(
+        "update BotReplyManualSourceEntity set ShopKey = ?"
+    )
