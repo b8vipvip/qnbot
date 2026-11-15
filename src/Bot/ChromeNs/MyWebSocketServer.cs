@@ -349,6 +349,15 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        internal string GetShopKeyForSession(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            string shopKey;
+            return sessionId.Length > 0 && _sessionShopKeys.TryGetValue(sessionId, out shopKey)
+                ? shopKey
+                : string.Empty;
+        }
+
         internal bool IsAuthoritativeShopSession(string shopKey, string sessionId)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
