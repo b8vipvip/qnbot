@@ -94,7 +94,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
             var observedAt = NormalizeDetectedAt(detectedAt);
-            ObserveNewBuyerTurn(seller, buyer);
+            ObserveNewBuyerTurn(seller, buyer, shopKey);
             SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, observedAt);
             CleanupEntries();
             CleanupDeliveryUi();
@@ -332,7 +332,7 @@ namespace Bot.ChromeNs
                 + ", reply=" + (sellerReply ?? string.Empty));
         }
 
-        public static void ObserveNewBuyerTurn(string seller, string buyer)
+        public static void ObserveNewBuyerTurn(string seller, string buyer, string shopKey = null)
         {
             // Human replies no longer create a conversation-wide intervention latch.
         }
