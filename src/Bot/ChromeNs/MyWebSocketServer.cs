@@ -198,6 +198,7 @@ namespace Bot.ChromeNs
 
             string previousShopKey = string.Empty;
             var identityChanged = false;
+            var releasedPreviousAuthority = false;
             lock (_sellerSessionSync)
             {
                 if (_sessionShopKeys.TryGetValue(sessionId, out previousShopKey)
@@ -214,7 +215,10 @@ namespace Bot.ChromeNs
                     string previousOwner;
                     if (_shopSessions.TryGetValue(previousShopKey, out previousOwner)
                         && string.Equals(previousOwner, sessionId, StringComparison.Ordinal))
+                    {
                         _shopSessions.TryRemove(previousShopKey, out ignoredShop);
+                        releasedPreviousAuthority = true;
+                    }
                     identityChanged = true;
                     BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                 }
@@ -280,7 +284,8 @@ namespace Bot.ChromeNs
                 CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);
                 string ignoredStatusBinding;
                 _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
-                TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId);
+                if (releasedPreviousAuthority)
+                    TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId);
                 Log.Info("检测到同一WebSocket切换了登录店铺身份，已解绑旧ShopKey并等待下一次状态事件重新绑定: oldShopRef="
                     + DiagnosticRef("shop", previousShopKey)
                     + ", newShopRef=" + DiagnosticRef("shop", shopKey)
