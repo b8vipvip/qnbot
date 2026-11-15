@@ -274,3 +274,20 @@ def test_resume_reuses_the_exact_redacted_session_summary_used_by_completed_batc
     assert 'coverage["knowledgeCorpusSessionSummary"] = corpusSessionSummary' in method
     assert "transcript, corpusSessionSummary, styleBefore, localFirst" in method
     assert "ComputeKnowledgeCorpusTranscriptFingerprint(\n                    transcript, styleBefore, localFirst)" in method
+
+
+
+def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    docs = read("docs/SESSION_AUTO_LEARNING.md")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static int ReadInt")
+    ]
+
+    assert "LearningHistoryMaxPages = 200" in context
+    assert "for (var page = 0; page < LearningHistoryMaxPages; page++)" in method
+    assert 'result.ErrorCode = "history_page_limit_reached"' in method
+    assert "if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))" in method
+    assert "最多尝试 200 页" in docs
+    assert "标记历史覆盖不完整并跳过 AI 分析" in docs
