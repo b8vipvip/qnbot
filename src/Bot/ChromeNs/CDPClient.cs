@@ -57,6 +57,7 @@ namespace Bot.ChromeNs
         private int _sessionInvalidated;
         public string Nick { get; set; }
         internal string ShopKey { get; set; }
+        internal bool IsShopIdentityRetired { get; set; }
 
         private sealed class ForwardedInboundScope : IDisposable
         {
@@ -395,6 +396,12 @@ namespace Bot.ChromeNs
                     Log.Info("CDP调用已跳过：会话已失效，等待注入脚本重连。desc=" + desc + ", session=" + SessionId);
                     return string.Empty;
                 }
+                if (IsShopIdentityRetired && !allowRetiredIdentityRead)
+                {
+                    Log.Info("CDP调用已阻止：登录身份已变化，禁止旧ShopKey继续发送。desc="
+                        + desc + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                    return string.Empty;
+                }
 
                 // 当前注入协议的 execute 响应没有请求 ID，只能保证同一 WebSocket 会话同时存在
                 // 一个等待请求。旧实现允许多个异步调用并发时还会为每个等待额外占用线程池线程；
@@ -699,9 +706,18 @@ namespace Bot.ChromeNs
                 });
         }
 
+        private async Task<T> InvokeShopIdentity<T>(string apiName)
+        {
+            var cmd = $@"imsdk.invoke('{apiName}',{JsonConvert.SerializeObject(new object())})";
+            var response = await SendExecuteAndWaitAsync(
+                cmd, "InvokeShopIdentity:" + apiName, allowRetiredIdentityRead: true).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(response)) return default(T);
+            return JsonConvert.DeserializeObject<T>(response);
+        }
+
         public async Task<LocalUserResponse> GetCurrentUser()
         {
-            var user = await Invoke<LocalUserResponse>("im.login.GetCurrentLoginID");
+            var user = await InvokeShopIdentity<LocalUserResponse>("im.login.GetCurrentLoginID");
             if (user == null || user.Result == null || string.IsNullOrEmpty(user.Result.Nick))
             {
                 throw new Exception("GetCurrentLoginID 返回为空，可能不是千牛聊天 WebView。session=" + SessionId);
