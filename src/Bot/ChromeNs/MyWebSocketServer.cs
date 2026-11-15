@@ -278,7 +278,13 @@ namespace Bot.ChromeNs
             try
             {
                 var qn = QN.FindExistingByShopKey(shopKey);
-                if (qn != null) qn.CDP = GetOrCreateClient(session);
+                if (qn != null)
+                {
+                    var client = GetOrCreateClient(session);
+                    client.ShopKey = shopKey;
+                    client.Nick = qn.Seller == null ? string.Empty : qn.Seller.Nick;
+                    qn.CDP = client;
+                }
             }
             catch (Exception ex)
             {
@@ -377,6 +383,8 @@ namespace Bot.ChromeNs
                 if (loginNick.Length > 0 && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
                     Log.Info("状态事件loginNick与CDP登录身份昵称不同，已以TargetId/ShopKey为准: shopRef="
                         + DiagnosticRef("shop", shopKey));
+                cdp.ShopKey = shopKey;
+                cdp.Nick = sellerNick;
                 qn.CDP = cdp;
                 qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
@@ -420,6 +428,8 @@ namespace Bot.ChromeNs
                 }
 
                 qn.QnVersion = ver != null ? ver.version : string.Empty;
+                cdp.ShopKey = shopKey;
+                cdp.Nick = sellerNick;
                 qn.CDP = cdp;
                 _initialized[session.SessionID] = true;
 
