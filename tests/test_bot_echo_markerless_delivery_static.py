@@ -15,7 +15,7 @@ def test_delivery_matching_uses_one_canonical_buyer_visible_identity():
     strip_marker = watchdog.index("BotOutboundMessageFormatter.StripAiMarker", normalize)
     strip_transport = watchdog.index('Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$"', strip_marker)
     whitespace = watchdog.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);', strip_transport)
-    answer_key = watchdog.index('return ConversationKey(seller, buyer) + "#" + Normalize(answer);')
+    answer_key = watchdog.index('return ConversationKey(seller, buyer, shopKey) + "#" + Normalize(answer);')
 
     # Bot ownership is decided by the watchdog ledger. Both the internal AI marker and
     # Qianniu's transport-only [A] echo suffix must disappear before the AnswerKey is built,
