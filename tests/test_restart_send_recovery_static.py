@@ -23,7 +23,9 @@ def test_websocket_server_keeps_one_authoritative_cdp_session_per_shopkey():
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in source
 
     # Both assignment points must be protected by the authoritative-session claim.
-    assert source.count("qn.CDP = cdp;") == 2
+    # Status binding, initial initialization and periodic exact-ShopKey revalidation
+    # are the three verified paths allowed to attach a CDP client to a QN instance.
+    assert source.count("qn.CDP = cdp;") == 3
     bind_pos = source.index("qn.CDP = cdp;")
     init_pos = source.index("qn.CDP = cdp;", bind_pos + 1)
     assert source.rfind("TryClaimShopSession", 0, bind_pos) > source.rfind("QN.GetByShopIdentity", 0, bind_pos)

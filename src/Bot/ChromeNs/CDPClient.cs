@@ -315,9 +315,39 @@ namespace Bot.ChromeNs
             DispatchInboundEvent(e.Type, response);
         }
 
+        // The raw WebSocket dispatcher is a separate path from duplicate-page recovery.
+        // It must enforce the same ShopKey authority so a retired physical socket cannot
+        // deliver directly to its former QN while the identity-transition queue is drained.
+        // qnbotStatus remains available on standby/retired pages because it is needed to
+        // discover and rebind the new login identity.
+        private bool HasCurrentShopAuthority()
+        {
+            var sessionId = SessionId;
+            if (string.IsNullOrWhiteSpace(sessionId)
+                || IsInvalidated
+                || IsShopIdentityRetired
+                || DuplicateCdpInboundRecoveryBridge.IsSessionIdentityTransitioning(sessionId))
+                return false;
+
+            var shopKey = (ShopKey ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return shopKey.Length > 0
+                && server != null
+                && server.IsAuthoritativeShopSession(shopKey, sessionId);
+        }
+
+        private bool CanDispatchInboundEvent(string type)
+        {
+            // Status is diagnostic/identity-discovery traffic only. Business events
+            // must come from the current authoritative ShopKey session.
+            if (string.Equals(type, "qnbotStatus", StringComparison.Ordinal)) return true;
+            return HasCurrentShopAuthority();
+        }
+
         internal void DispatchInboundEvent(string type, string response)
         {
             if (string.IsNullOrEmpty(response)) return;
+            if (!CanDispatchInboundEvent(type)) return;
             if (type == "receiveNewMsg")
             {
                 RecieveNewMessage(response);
@@ -424,6 +454,17 @@ namespace Bot.ChromeNs
                 {
                     Log.Info("CDP调用已阻止：登录身份已变化，禁止旧ShopKey继续发送。desc="
                         + desc + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                    return string.Empty;
+                }
+                // The physical page may have changed shops while this call waited on the
+                // per-socket execute gate. Revalidate the exact ShopKey owner immediately
+                // before sending any business command. Only GetCurrentUser identity probes
+                // may use allowRetiredIdentityRead to discover and rebind the new account.
+                if (!allowRetiredIdentityRead && !HasCurrentShopAuthority())
+                {
+                    Log.Info("CDP业务命令已阻止：当前WebSocket不再拥有该ShopKey权威身份。desc="
+                        + desc + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", ShopKey)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
                     return string.Empty;
                 }
 
