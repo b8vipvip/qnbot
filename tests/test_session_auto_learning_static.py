@@ -594,3 +594,31 @@ def test_manual_source_correction_updates_audit_and_visible_history_atomically()
     assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { original, row });" in correction
     assert "DbHelper.Db.SaveOneRecord(original);" not in correction
     assert "DbHelper.Db.SaveOneRecord(row);" not in correction
+
+def test_native_send_requires_exact_shop_identity_and_background_events_cannot_switch_shops():
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    active = coordinator[
+        coordinator.index("internal static bool IsActive(QN qn)"):
+        coordinator.index("internal static void ObserveChatDialogActive")
+    ]
+    chat_event = coordinator[
+        coordinator.index("internal static void ObserveChatDialogActive"):
+        coordinator.index("internal static bool ActivateFromFocusedWebView")
+    ]
+    native = coordinator[
+        coordinator.index("internal static bool ValidateNativeSend"):
+        coordinator.index("internal static void ReassertCurrent")
+    ]
+    activate = coordinator[
+        coordinator.index("private static bool Activate(QN qn"):
+        coordinator.index("private static string ShopKey(QN qn)")
+    ]
+    assert "_activeShopKey.Length > 0" in active
+    assert "shopKey.Length > 0" in active
+    assert "string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)" in active
+    assert "string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)" in chat_event
+    assert "DateTime.UtcNow - _lastFocusProofUtc" not in chat_event
+    assert "_activeShopKey.Length == 0 || shopKey.Length == 0" in native
+    assert 'reason = "ShopKey缺失或不一致"' in native
+    assert "sessionId.Length > 0" not in native
+    assert "if (shopKey.Length == 0) return false;" in activate
