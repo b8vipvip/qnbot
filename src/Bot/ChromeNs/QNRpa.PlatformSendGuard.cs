@@ -210,7 +210,8 @@ namespace Bot.ChromeNs
         /// Qianniu accepted this exact Bot-owned draft. Live seller echo is still preferred, but a
         /// missing/delayed echo must never cause the same text to be written and sent a second time.
         /// </summary>
-        private async Task<bool> WaitForTextSubmissionAcceptedAsync(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
+        private async Task<bool> WaitForTextSubmissionAcceptedAsync(
+            string buyer, string text, DateTime sendStart, string method, int timeoutMs, string shopKey)
         {
             var end = DateTime.Now.AddMilliseconds(Math.Max(900, timeoutMs));
             var emptyObserved = false;
@@ -259,7 +260,7 @@ namespace Bot.ChromeNs
                                 SellerNick, buyer, text, submissionEvidence, shopKey);
                             BotConnectionDiagnostics.RecordSendAttempt(true, method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
                             Log.Info(method + "发送提交确认成功：本次精确草稿在发送动作后稳定清空；禁止因实时回显缺失重新写入同一文本。buyer=" + buyer);
-                            ArmLateServiceAttitudeContinuationWatch(buyer, text, method);
+                            ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey);
                             return true;
                         }
                     }
@@ -277,7 +278,7 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string text, string method)
+        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string text, string method, string shopKey)
         {
             if (Interlocked.CompareExchange(ref _lateServiceAttitudeWatchArmed, 1, 0) != 0) return;
             var startedAt = DateTime.Now;
