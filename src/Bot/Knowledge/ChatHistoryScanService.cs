@@ -256,7 +256,6 @@ namespace Bot.Knowledge
                 var storedContacts = new List<string>();
                 try
                 {
-                    var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey;
                     storedContacts = BotConversationHistoryStore.LoadRecentBySeller(shopKey, seller, 5000)
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Buyer))
                         .Select(x => CleanNick(x.Buyer))

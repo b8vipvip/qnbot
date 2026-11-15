@@ -43,3 +43,9 @@ def test_current_shop_scope_resolver_remains_fail_closed_for_legacy_ambiguous_ni
     assert "ShopSettingsScope.Current" in helper
     assert "if (current != null) return current;" in helper
     assert "return ResolveBySellerNick(sellerNick);" in helper
+
+
+def test_history_scan_reuses_the_already_verified_shopkey_for_history_store_reads():
+    scan = read("src/Bot/Knowledge/ChatHistoryScanService.cs")
+    assert "BotConversationHistoryStore.LoadRecentBySeller(shopKey, seller, 5000)" in scan
+    assert "var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey" not in scan
