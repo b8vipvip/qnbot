@@ -362,7 +362,7 @@ namespace Bot.ChromeNs
                 // Historical refresh is a fallback, not the only writer. Keep the
                 // original message id so duplicate events/history cannot double-add.
                 ConversationContextStore.RecordObservedSellerMessage(
-                    seller, buyer, message, text);
+                    seller, buyer, message, text, shopKey);
                 var result = Agent.RecordEvent(
                     seller,
                     buyer,
