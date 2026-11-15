@@ -443,12 +443,30 @@ namespace Bot.ChromeNs
                 if (lease == null || !lease.Acquired) throw new IOException("恢复锁未获取。");
                 var directory = Path.GetDirectoryName(path);
                 if (!Directory.Exists(directory)) throw new FileNotFoundException("尚无历史备份。");
-                var backup = Directory.GetFiles(directory, Path.GetFileName(path) + ".backup.*")
-                    .OrderByDescending(x => x, StringComparer.Ordinal).FirstOrDefault();
-                if (backup == null) throw new FileNotFoundException("尚无可恢复的流程规则备份。");
-                var original = Validate(File.ReadAllText(backup, Encoding.UTF8)).ToString(Formatting.Indented);
+                var backups = Directory.GetFiles(directory, Path.GetFileName(path) + ".backup.*")
+                    .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
+                if (backups.Count == 0) throw new FileNotFoundException("尚无可恢复的流程规则备份。");
+                string original = null;
+                string selectedBackup = string.Empty;
+                foreach (var candidate in backups)
+                {
+                    try
+                    {
+                        original = Validate(File.ReadAllText(candidate, Encoding.UTF8)).ToString(Formatting.Indented);
+                        selectedBackup = candidate;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过无效的店铺接待规则备份: file="
+                            + Path.GetFileName(candidate) + ", error=" + ex.Message, 10);
+                    }
+                }
+                if (original == null)
+                    throw new InvalidDataException("没有找到有效的店铺接待规则备份，当前配置未修改。");
                 if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"), false);
+                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N"), false);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, original, 3, 50, out error))
                     throw new IOException("恢复历史备份失败：" + error);
