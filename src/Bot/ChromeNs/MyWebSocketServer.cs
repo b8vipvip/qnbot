@@ -390,22 +390,24 @@ namespace Bot.ChromeNs
                 if (requireVacant && !string.IsNullOrWhiteSpace(previousOwner)
                     && _connectedSessions.ContainsKey(previousOwner))
                     return false;
-                if (string.Equals(previousOwner, sessionId, StringComparison.Ordinal)) return true;
-
-                if (!string.IsNullOrWhiteSpace(previousOwner) && _connectedSessions.ContainsKey(previousOwner))
+                var alreadyOwner = string.Equals(previousOwner, sessionId, StringComparison.Ordinal);
+                if (!alreadyOwner)
                 {
-                    _duplicateShopSessions[previousOwner] = shopKey;
-                    _sessionShopKeys[previousOwner] = shopKey;
-                }
-                else if (!string.IsNullOrWhiteSpace(previousOwner))
-                {
-                    string ignoredStaleShop;
-                    _sessionShopKeys.TryRemove(previousOwner, out ignoredStaleShop);
-                    string ignoredStaleDuplicate;
-                    _duplicateShopSessions.TryRemove(previousOwner, out ignoredStaleDuplicate);
-                }
+                    if (!string.IsNullOrWhiteSpace(previousOwner) && _connectedSessions.ContainsKey(previousOwner))
+                    {
+                        _duplicateShopSessions[previousOwner] = shopKey;
+                        _sessionShopKeys[previousOwner] = shopKey;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(previousOwner))
+                    {
+                        string ignoredStaleShop;
+                        _sessionShopKeys.TryRemove(previousOwner, out ignoredStaleShop);
+                        string ignoredStaleDuplicate;
+                        _duplicateShopSessions.TryRemove(previousOwner, out ignoredStaleDuplicate);
+                    }
 
-                _shopSessions[shopKey] = sessionId;
+                    _shopSessions[shopKey] = sessionId;
+                }
                 _sessionShopKeys[sessionId] = shopKey;
                 string ignored;
                 _duplicateShopSessions.TryRemove(sessionId, out ignored);
