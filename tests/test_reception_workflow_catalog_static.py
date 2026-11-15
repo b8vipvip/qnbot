@@ -50,4 +50,14 @@ def test_workflow_restore_skips_corrupt_newest_backup_and_keeps_draft_fail_close
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error)" in restore
     assert "仍需单独人工审核和灰度激活" in restore
 
+def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    save = s[
+        s.index("public static string SaveDraft"):
+        s.index("public static string RestoreLatestDraft")
+    ]
+    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")' in save
+    assert 'Guid.NewGuid().ToString("N")' in save
+    assert "File.Copy(path, path + ".backup."" in save
+
 
