@@ -436,9 +436,8 @@ namespace Bot.ChromeNs
                 Log.Info("已按ShopKey/CDP会话纠正全局当前店铺，阻止后台WebView抢占: seller="
                     + seller + ", shopKey=" + shopKey + ", reason=" + (reason ?? string.Empty));
             }
-            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
-            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
-                desk, seller, "active-shop-reassert:" + (reason ?? string.Empty), shopKey);
+            // Reasserting the global QN pointer is not new foreground evidence. Only the
+            // focused-WebView probe may update the native Desk's active ShopKey.
         }
 
         private static bool Activate(QN qn, string sessionId, string targetId, bool focusProof, string evidence)
@@ -472,9 +471,11 @@ namespace Bot.ChromeNs
             }
             QN.CurQN = qn;
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
-            if (desk == null) desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "active-shop:" + (evidence ?? string.Empty));
-            if (desk != null) DeskSellerBindingRegistry.MarkActiveSeller(
-                desk, seller, "active-shop:" + (evidence ?? string.Empty), shopKey);
+            if (focusProof && desk == null)
+                desk = DeskSellerBindingRegistry.BindForegroundSeller(qn, "active-shop:" + (evidence ?? string.Empty));
+            if (focusProof && desk != null)
+                DeskSellerBindingRegistry.MarkActiveSeller(
+                    desk, seller, "active-shop:" + (evidence ?? string.Empty), shopKey);
             if (changed)
             {
                 Log.Info("活动店铺会话已切换: previousSeller=" + previousSeller + ", previousShopKey=" + previousShopKey
