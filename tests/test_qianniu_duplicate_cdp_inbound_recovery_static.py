@@ -69,7 +69,7 @@ def test_duplicate_cdp_bridge_never_replaces_outbound_cdp_ownership():
 
     # Existing server still owns the one-authoritative-CDP decision.
     assert "TryClaimShopSession" in server
-    assert "重复千牛CDP会话已完成识别但不接管卖家运行通道" in server
+    assert "重复千牛CDP会话已完成识别但不接管该ShopKey运行通道" in server
     assert "qn.CDP = cdp;" in server
 
 
