@@ -210,6 +210,8 @@ namespace Bot.ChromeNs
             string shopKey;
             try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
             catch { return false; }
+            using (ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey)))
+            {
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
             if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now) return false;
@@ -259,6 +261,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("检测本店客服人工回复失败，继续原发送流程：" + ex.Message);
                 return false;
+            }
             }
         }
 
