@@ -1097,8 +1097,8 @@ namespace Bot.ChromeNs
             if (message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
                 return message.loginid.nick.Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null && !string.IsNullOrWhiteSpace(current.DisplayName))
-                return current.DisplayName.Trim();
+            if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
+                return current.SellerNick.Trim();
             return message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
         }
 
