@@ -201,6 +201,10 @@ namespace Bot.ChromeNs
             var releasedPreviousAuthority = false;
             lock (_sellerSessionSync)
             {
+                // Async login/status probes may complete after SessionClosed. Never let
+                // their late result resurrect a disconnected socket as the ShopKey owner.
+                if (!_connectedSessions.ContainsKey(sessionId)) return false;
+
                 if (_sessionShopKeys.TryGetValue(sessionId, out previousShopKey)
                     && !string.IsNullOrWhiteSpace(previousShopKey)
                     && !string.Equals(previousShopKey, shopKey, StringComparison.Ordinal))
