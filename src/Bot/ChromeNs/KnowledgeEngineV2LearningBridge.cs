@@ -2,6 +2,7 @@ using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -12,6 +13,10 @@ namespace Bot.ChromeNs
     internal static class KnowledgeEngineV2LearningBridge
     {
         private static int _initialized;
+        private static readonly ConcurrentDictionary<string, byte> SynchronizingShops =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, byte> PendingShopSynchronizations =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
         public static object InitializeForApp()
         {
@@ -25,17 +30,76 @@ namespace Bot.ChromeNs
 
         private static void OnLegacyKnowledgeChanged(object sender, EventArgs e)
         {
-            QN[] qns;
-            try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
-            catch { return; }
-            foreach (var seller in qns
-                .Where(x => x != null && x.Seller != null && !string.IsNullOrWhiteSpace(x.Seller.Nick))
-                .Select(x => x.Seller.Nick.Trim())
-                .Distinct(StringComparer.Ordinal))
+            List<QN> qns;
+            try
             {
-                var captured = seller;
-                Task.Run(() => SynchronizeSeller(captured));
+                qns = QN.QNSet == null ? new List<QN>() : QN.QNSet.ToArray().ToList();
+                var current = QN.CurQN;
+                if (current != null && !qns.Any(x => ReferenceEquals(x, current)))
+                    qns.Add(current);
             }
+            catch { return; }
+
+            var scheduled = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var qn in qns.Where(x => x != null && x.Seller != null
+                && !string.IsNullOrWhiteSpace(x.Seller.Nick)))
+            {
+                ShopContext shop;
+                try
+                {
+                    // Seller nick is display data. Stable TargetId identities may share it,
+                    // so resolve each source QN independently before coalescing by ShopKey.
+                    shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount(
+                        "Knowledge V2店铺学习同步无法解析来源QN身份，已安全跳过: " + ex.Message,
+                        20);
+                    continue;
+                }
+
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !scheduled.Add(shop.ShopKey))
+                    continue;
+
+                QueueSynchronizeShop(shop, qn.Seller.Nick.Trim());
+            }
+        }
+
+        private static void QueueSynchronizeShop(ShopContext shop, string seller)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+            if (!SynchronizingShops.TryAdd(shop.ShopKey, 0))
+            {
+                // Coalesce changes that arrive while a shop import is running. The worker
+                // performs another pass after the current snapshot has been reconciled.
+                PendingShopSynchronizations[shop.ShopKey] = 0;
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    byte ignored;
+                    do
+                    {
+                        PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored);
+                        ImportLearningChanges(shop, seller);
+                    }
+                    while (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored));
+                }
+                finally
+                {
+                    byte ignored;
+                    SynchronizingShops.TryRemove(shop.ShopKey, out ignored);
+                    // Close the race where a change arrives after the worker's last
+                    // pending check but before its running marker is removed.
+                    if (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored))
+                        QueueSynchronizeShop(shop, seller);
+                }
+            });
         }
 
         internal static void SynchronizeSeller(string seller)
@@ -43,63 +107,89 @@ namespace Bot.ChromeNs
             ImportLearningChanges(seller);
         }
 
+        // Compatibility entry point for older callers that only have a seller nick.
+        // Ambiguous nicknames intentionally fail closed; event-driven sync uses the QN ShopKey.
         private static void ImportLearningChanges(string seller)
         {
             try
             {
                 var shop = ShopContextLocator.ResolveBySellerNick(seller);
                 if (shop == null) return;
-                List<KnowledgeBaseEntry> legacy;
+                ImportLearningChanges(shop, seller);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("同步V2知识来源失败（昵称兼容入口）: error=" + ex.Message, 20);
+            }
+        }
+
+        private static void ImportLearningChanges(ShopContext shop, string seller)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+            var changed = 0;
+            try
+            {
+                // Keep every repository operation, legacy read, policy lookup, write and
+                // index warm inside one immutable ShopContext scope. This prevents a
+                // same-nickname account from changing the ambient store between operations.
                 using (ShopSettingsScope.Enter(shop))
-                    legacy = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-
-                var current = KnowledgeEngineV2Repository.LoadAll(seller);
-                var byId = current.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
-                    .ToDictionary(x => x.Id, x => x, StringComparer.Ordinal);
-                var added = 0;
-                foreach (var entry in legacy.Where(KnowledgeV2AuthorityPolicy.ShouldImportLegacyEntry))
                 {
-                    KnowledgeV2Record existing = null;
-                    if (!string.IsNullOrWhiteSpace(entry.Id))
-                        byId.TryGetValue(entry.Id, out existing);
-                    if (existing != null
-                        && Same(existing.Answer, entry.Answer)
-                        && KnowledgeV2AuthorityPolicy.IsPersistedStateSynchronized(existing, entry))
+                    var legacy = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+                    var current = KnowledgeEngineV2Repository.LoadAll(seller);
+                    var byId = current.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
+                        .ToDictionary(x => x.Id, x => x, StringComparer.Ordinal);
+
+                    foreach (var entry in legacy.Where(KnowledgeV2AuthorityPolicy.ShouldImportLegacyEntry))
                     {
-                        continue;
+                        KnowledgeV2Record existing = null;
+                        if (!string.IsNullOrWhiteSpace(entry.Id))
+                            byId.TryGetValue(entry.Id, out existing);
+                        if (existing != null
+                            && Same(existing.Answer, entry.Answer)
+                            && KnowledgeV2AuthorityPolicy.IsPersistedStateSynchronized(existing, entry))
+                        {
+                            continue;
+                        }
+
+                        KnowledgePolicyProfile profile = null;
+                        try { profile = KnowledgePolicyProfileService.GetProfile(entry); }
+                        catch { }
+
+                        var record = KnowledgeEngineV2Semantics.FromLegacy(entry, profile);
+                        if (record == null) continue;
+                        record.Enabled = entry.Enabled;
+                        KnowledgeV2AuthorityPolicy.ApplyImportedLegacyProvenance(record, entry);
+                        if (existing != null
+                            && !Same(existing.Answer, entry.Answer)
+                            && !KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(record.SourceType))
+                        {
+                            record.Id = "candidate-" + KnowledgeAiService.ContentHash(
+                                entry.Id ?? string.Empty, entry.Answer ?? string.Empty);
+                            record.Title = "候选修正：" + (entry.Title ?? string.Empty);
+                        }
+
+                        KnowledgeEngineV2Repository.Save(seller, record);
+                        if (!string.IsNullOrWhiteSpace(record.Id))
+                            byId[record.Id] = record;
+                        changed++;
                     }
 
-                    KnowledgePolicyProfile profile = null;
-                    try
-                    {
-                        using (ShopSettingsScope.Enter(shop))
-                            profile = KnowledgePolicyProfileService.GetProfile(entry);
-                    }
-                    catch { }
-                    var record = KnowledgeEngineV2Semantics.FromLegacy(entry, profile);
-                    if (record == null) continue;
-                    record.Enabled = entry.Enabled;
-                    KnowledgeV2AuthorityPolicy.ApplyImportedLegacyProvenance(record, entry);
-                    if (existing != null
-                        && !Same(existing.Answer, entry.Answer)
-                        && !KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(record.SourceType))
-                    {
-                        record.Id = "candidate-" + KnowledgeAiService.ContentHash(
-                            entry.Id ?? string.Empty, entry.Answer ?? string.Empty);
-                        record.Title = "候选修正：" + (entry.Title ?? string.Empty);
-                    }
-                    KnowledgeEngineV2Repository.Save(seller, record);
-                    added++;
+                    if (changed > 0)
+                        KnowledgeEngineV2Service.Warm(seller);
                 }
-                if (added > 0)
+
+                if (changed > 0)
                 {
-                    KnowledgeEngineV2Service.Warm(seller);
-                    Log.Info("Knowledge Engine V2已同步知识来源权威状态: seller=" + seller + ", changed=" + added);
+                    Log.Info("Knowledge Engine V2已同步知识来源权威状态: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                        + ", changed=" + changed);
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("同步V2知识来源失败: seller=" + seller + ", error=" + ex.Message, 20);
+                Log.ErrorWithMaxCount("同步V2知识来源失败: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                    + ", error=" + ex.Message, 20);
             }
         }
 
