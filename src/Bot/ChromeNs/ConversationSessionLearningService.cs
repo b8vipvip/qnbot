@@ -93,6 +93,8 @@ namespace Bot.ChromeNs
         private const int KnowledgeCorpusPromptVersion = 1;
         private const int MaxKnowledgeCorpusCandidates = 24;
         private const int KnowledgeCorpusTimeoutSeconds = 120;
+        private const int KnowledgeCorpusCircuitFailureThreshold = 3;
+        private static readonly TimeSpan KnowledgeCorpusCircuitCooldown = TimeSpan.FromMinutes(5);
         // Keep candidate generation observable, but do not mutate production V2
         // knowledge until full-corpus coverage, transactional rollback and canary
         // acceptance are implemented and verified.
@@ -166,12 +168,25 @@ namespace Bot.ChromeNs
             public string Protocol = string.Empty;
         }
 
+        private sealed class KnowledgeCorpusCircuitState
+        {
+            public readonly object Sync = new object();
+            public int ConsecutiveFailures;
+            public DateTime OpenUntilUtc;
+            public DateTime LastTouchedUtc;
+        }
+
         private static readonly ConcurrentDictionary<string, ActiveSession> Active =
             new ConcurrentDictionary<string, ActiveSession>(StringComparer.Ordinal);
         // Full-corpus analysis is serialized per shop so simultaneous idle buyers
         // cannot fan out duplicate batches or race each other's corpus snapshots.
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates =
             new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+        // AI upstream failures are isolated by ShopKey. A scheduler invariant violation
+        // opens the circuit immediately; repeated transient failures open it after three
+        // consecutive failures. The per-shop analysis gate serializes the half-open probe.
+        private static readonly ConcurrentDictionary<string, KnowledgeCorpusCircuitState> KnowledgeCorpusCircuitBreakers =
+            new ConcurrentDictionary<string, KnowledgeCorpusCircuitState>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, StoreReplyStyleProfileEntity> StyleCache =
             new ConcurrentDictionary<string, StoreReplyStyleProfileEntity>(StringComparer.Ordinal);
         private static readonly object DbSync = new object();
@@ -647,29 +662,68 @@ namespace Bot.ChromeNs
                 KnowledgeCorpusAnalysisResult corpusAnalysis;
                 SaveReport(report);
                 NotifyChanged();
-                using (ShopSettingsScope.Enter(shop))
+                var corpusGate = CorpusAnalysisGates.GetOrAdd(
+                    session.ShopKey, _ => new SemaphoreSlim(1, 1));
+                report.Status = "等待当前店铺AI学习队列";
+                report.UpdatedAtTicks = DateTime.Now.Ticks;
+                SaveReport(report);
+                NotifyChanged();
+                await corpusGate.WaitAsync();
+                try
                 {
-                    localFirst = ReplyModeService.IsLocalFirst(session.Seller);
-                    styleBefore = GetStyleProfile(session.Seller);
-                    analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
-                    var corpusGate = CorpusAnalysisGates.GetOrAdd(
-                        session.ShopKey, _ => new SemaphoreSlim(1, 1));
-                    report.Status = "等待当前店铺Knowledge V2全库分析队列";
-                    report.UpdatedAtTicks = DateTime.Now.Ticks;
-                    SaveReport(report);
-                    NotifyChanged();
-                    await corpusGate.WaitAsync();
-                    try
+                    using (ShopSettingsScope.Enter(shop))
                     {
+                        DateTime circuitOpenUntil;
+                        if (TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out circuitOpenUntil))
+                        {
+                            report.Status = "AI上游熔断，等待冷却后恢复";
+                            report.Error = "ai_upstream_circuit_open_until:" + circuitOpenUntil.ToString("o");
+                            report.CompletedAtTicks = 0;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                            NotifyChanged();
+                            Requeue(session, "等待AI上游熔断冷却", GetKnowledgeCorpusCircuitRetryDelay(circuitOpenUntil));
+                            return;
+                        }
+
+                        localFirst = ReplyModeService.IsLocalFirst(session.Seller);
+                        styleBefore = GetStyleProfile(session.Seller);
+                        try
+                        {
+                            analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
+                            RecordKnowledgeCorpusAiSuccess(session.ShopKey);
+                        }
+                        catch (Exception aiException)
+                        {
+                            DateTime ignoredOpenUntil;
+                            RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message, out ignoredOpenUntil);
+                            throw;
+                        }
+
                         corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
                             session, turns, cards, styleBefore, localFirst,
                             Clean(Convert.ToString(analysis["summary"]), 1200), report);
                     }
-                    finally
-                    {
-                        corpusGate.Release();
-                    }
                 }
+                finally
+                {
+                    corpusGate.Release();
+                }
+                DateTime corpusCircuitOpenUntil;
+                if (TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out corpusCircuitOpenUntil))
+                {
+                    report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
+                    report.Status = "AI上游熔断，等待冷却后恢复";
+                    report.Error = "ai_upstream_circuit_open_until:" + corpusCircuitOpenUntil.ToString("o");
+                    report.CompletedAtTicks = 0;
+                    report.RetryCount = session.RetryCount;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    Requeue(session, "等待AI上游熔断冷却", GetKnowledgeCorpusCircuitRetryDelay(corpusCircuitOpenUntil));
+                    return;
+                }
+
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
                 if (EnableAutomaticWrites
@@ -781,6 +835,35 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
+                DateTime circuitOpenUntil;
+                if (IsRetryableKnowledgeCorpusError(ex.Message)
+                    && TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out circuitOpenUntil))
+                {
+                    report.Status = "AI上游熔断，等待冷却后恢复";
+                    report.Error = "ai_upstream_circuit_open_until:" + circuitOpenUntil.ToString("o");
+                    report.CompletedAtTicks = 0;
+                    report.RetryCount = session.RetryCount;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    Requeue(session, "等待AI上游熔断冷却", GetKnowledgeCorpusCircuitRetryDelay(circuitOpenUntil));
+                    return;
+                }
+
+                if (IsRetryableKnowledgeCorpusError(ex.Message) && session.RetryCount < 3)
+                {
+                    session.RetryCount++;
+                    report.Status = "AI上游暂时不可用，等待重试(" + session.RetryCount + "/3)";
+                    report.Error = "ai_upstream_retryable:" + Clean(ex.Message, 1200);
+                    report.CompletedAtTicks = 0;
+                    report.RetryCount = session.RetryCount;
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    Requeue(session, "等待AI上游恢复后再次复盘", TimeSpan.FromMinutes(1));
+                    return;
+                }
+
                 report.Status = "学习失败";
                 report.Error = Clean(ex.Message, 1500);
                 report.CompletedAtTicks = DateTime.Now.Ticks;
@@ -948,11 +1031,17 @@ namespace Bot.ChromeNs
                 for (var batchIndex = 0; batchIndex < batches.Count; batchIndex++)
                 {
                     if (result.CompletedBatchIndices.Contains(batchIndex)) continue;
+                    DateTime circuitOpenUntil;
+                    if (TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out circuitOpenUntil))
+                    {
+                        result.Error = "ai_upstream_circuit_open_until:" + circuitOpenUntil.ToString("o");
+                        break;
+                    }
                     var batch = batches[batchIndex];
                     try
                     {
                         var batchResult = await AnalyzeKnowledgeCorpusBatchAsync(
-                            batch, batchIndex + 1, result.SourceFingerprint,
+                            session.ShopKey, batch, batchIndex + 1, result.SourceFingerprint,
                             transcript, corpusSessionSummary, styleBefore, localFirst,
                             allMessageIds, humanMessageIds);
                         if (batchResult == null || !batchResult.Success)
@@ -1195,6 +1284,7 @@ namespace Bot.ChromeNs
         }
 
         private static async Task<KnowledgeCorpusBatchResult> AnalyzeKnowledgeCorpusBatchAsync(
+            string shopKey,
             List<KnowledgeV2Record> batch,
             int batchIndex,
             string sourceFingerprint,
@@ -1210,6 +1300,13 @@ namespace Bot.ChromeNs
             string parseError = string.Empty;
             for (var attempt = 0; attempt < 2; attempt++)
             {
+                DateTime circuitOpenUntil;
+                if (TryGetKnowledgeCorpusCircuitOpenUntil(shopKey, out circuitOpenUntil))
+                {
+                    failed.Error = "ai_upstream_circuit_open_until:" + circuitOpenUntil.ToString("o");
+                    return failed;
+                }
+
                 var messages = BuildKnowledgeCorpusBatchMessages(
                     batch, batchIndex, sourceFingerprint, transcript, sessionSummary,
                     styleBefore, localFirst, !string.IsNullOrWhiteSpace(invalidAnswer),
@@ -1223,19 +1320,32 @@ namespace Bot.ChromeNs
                 catch (OperationCanceledException ex)
                 {
                     // CallRawChatCompletions deliberately propagates its internal
-                    // CancelAfter timeout. Convert that timeout into a retryable batch
-                    // failure instead of letting it bypass this retry loop.
+                    // CancelAfter timeout. Count it toward the per-shop circuit before
+                    // retrying so a failing upstream cannot be hammered by every batch.
+                    var timeoutError = "timeout:" + Clean(ex.Message, 300);
+                    DateTime openedUntil;
+                    if (RegisterKnowledgeCorpusAiFailure(shopKey, timeoutError, out openedUntil))
+                    {
+                        failed.Error = "ai_upstream_circuit_open_until:" + openedUntil.ToString("o");
+                        return failed;
+                    }
                     if (attempt == 0)
                     {
                         await Task.Delay(1200);
                         continue;
                     }
-                    failed.Error = "timeout:" + Clean(ex.Message, 300);
+                    failed.Error = timeoutError;
                     return failed;
                 }
                 catch (Exception ex)
                 {
                     var exceptionError = Clean(ex.Message, 500);
+                    DateTime openedUntil;
+                    if (RegisterKnowledgeCorpusAiFailure(shopKey, exceptionError, out openedUntil))
+                    {
+                        failed.Error = "ai_upstream_circuit_open_until:" + openedUntil.ToString("o");
+                        return failed;
+                    }
                     if (attempt == 0 && IsRetryableKnowledgeCorpusError(exceptionError))
                     {
                         await Task.Delay(1200);
@@ -1248,6 +1358,12 @@ namespace Bot.ChromeNs
                 if (raw == null || !raw.Success || string.IsNullOrWhiteSpace(raw.Answer))
                 {
                     var rawError = raw == null ? "ai_result_null" : Clean(raw.Error, 500);
+                    DateTime openedUntil;
+                    if (RegisterKnowledgeCorpusAiFailure(shopKey, rawError, out openedUntil))
+                    {
+                        failed.Error = "ai_upstream_circuit_open_until:" + openedUntil.ToString("o");
+                        return failed;
+                    }
                     if (attempt == 0 && IsRetryableKnowledgeCorpusError(rawError))
                     {
                         await Task.Delay(1200);
@@ -1257,6 +1373,7 @@ namespace Bot.ChromeNs
                     return failed;
                 }
 
+                RecordKnowledgeCorpusAiSuccess(shopKey);
                 KnowledgeCorpusBatchResult parsed;
                 if (TryParseKnowledgeCorpusBatch(
                     raw.Answer, batch, batchIndex, sourceFingerprint, localFirst,
@@ -1471,10 +1588,90 @@ namespace Bot.ChromeNs
             return error.Contains("timeout") || error.Contains("timed out")
                 || error.Contains("超时") || error.Contains("network")
                 || error.Contains("connection") || error.Contains("temporarily")
+                || error.Contains("scheduler invariant") || error.Contains("already owns request")
                 || error.Contains("http 408") || error.Contains("http 425")
                 || error.Contains("http 429") || error.Contains("http 500")
                 || error.Contains("http 502") || error.Contains("http 503")
                 || error.Contains("http 504");
+        }
+
+        private static bool IsKnowledgeCorpusSchedulerInvariantError(string error)
+        {
+            error = (error ?? string.Empty).ToLowerInvariant();
+            return error.Contains("scheduler invariant") || error.Contains("already owns request");
+        }
+
+        private static bool TryGetKnowledgeCorpusCircuitOpenUntil(string shopKey, out DateTime openUntilUtc)
+        {
+            openUntilUtc = DateTime.MinValue;
+            if (string.IsNullOrWhiteSpace(shopKey)) return false;
+
+            KnowledgeCorpusCircuitState state;
+            if (!KnowledgeCorpusCircuitBreakers.TryGetValue(shopKey, out state)) return false;
+            lock (state.Sync)
+            {
+                var now = DateTime.UtcNow;
+                state.LastTouchedUtc = now;
+                if (state.OpenUntilUtc > now)
+                {
+                    openUntilUtc = state.OpenUntilUtc;
+                    return true;
+                }
+                if (state.OpenUntilUtc != DateTime.MinValue)
+                {
+                    state.OpenUntilUtc = DateTime.MinValue;
+                    state.ConsecutiveFailures = 0;
+                }
+            }
+            return false;
+        }
+
+        private static bool RegisterKnowledgeCorpusAiFailure(
+            string shopKey, string error, out DateTime openUntilUtc)
+        {
+            openUntilUtc = DateTime.MinValue;
+            if (string.IsNullOrWhiteSpace(shopKey) || !IsRetryableKnowledgeCorpusError(error))
+                return false;
+
+            var state = KnowledgeCorpusCircuitBreakers.GetOrAdd(
+                shopKey, _ => new KnowledgeCorpusCircuitState());
+            lock (state.Sync)
+            {
+                var now = DateTime.UtcNow;
+                state.LastTouchedUtc = now;
+                state.ConsecutiveFailures++;
+                if (IsKnowledgeCorpusSchedulerInvariantError(error)
+                    || state.ConsecutiveFailures >= KnowledgeCorpusCircuitFailureThreshold)
+                {
+                    state.OpenUntilUtc = now.Add(KnowledgeCorpusCircuitCooldown);
+                    state.ConsecutiveFailures = 0;
+                    openUntilUtc = state.OpenUntilUtc;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static void RecordKnowledgeCorpusAiSuccess(string shopKey)
+        {
+            if (string.IsNullOrWhiteSpace(shopKey)) return;
+            KnowledgeCorpusCircuitState state;
+            if (!KnowledgeCorpusCircuitBreakers.TryGetValue(shopKey, out state)) return;
+            lock (state.Sync)
+            {
+                state.LastTouchedUtc = DateTime.UtcNow;
+                if (state.OpenUntilUtc <= state.LastTouchedUtc)
+                {
+                    state.OpenUntilUtc = DateTime.MinValue;
+                    state.ConsecutiveFailures = 0;
+                }
+            }
+        }
+
+        private static TimeSpan GetKnowledgeCorpusCircuitRetryDelay(DateTime openUntilUtc)
+        {
+            var delay = openUntilUtc - DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            return delay < TimeSpan.FromSeconds(5) ? TimeSpan.FromSeconds(5) : delay;
         }
 
         private static async Task<JObject> AnalyzeAsync(
@@ -1785,7 +1982,9 @@ namespace Bot.ChromeNs
         }
 
         private static void Requeue(
-            ActiveSession session, string waitingStatus = "等待聊天历史恢复后再次复盘")
+            ActiveSession session,
+            string waitingStatus = "等待聊天历史恢复后再次复盘",
+            TimeSpan? retryDelay = null)
         {
             if (session == null) return;
             var key = Key(session.ShopKey, session.Seller, session.Buyer);
@@ -1814,7 +2013,9 @@ namespace Bot.ChromeNs
             }
 
             SaveSnapshot(session, waitingStatus);
-            Schedule(session, TimeSpan.FromMinutes(1));
+            var delay = retryDelay ?? TimeSpan.FromMinutes(1);
+            if (delay < TimeSpan.FromSeconds(5)) delay = TimeSpan.FromSeconds(5);
+            Schedule(session, delay);
         }
 
         private static void CompleteSkipped(ActiveSession session, string summary, string error)
