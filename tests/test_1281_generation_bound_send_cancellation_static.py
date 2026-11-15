@@ -29,7 +29,7 @@ def test_reliable_send_checks_cancellation_before_real_ui_side_effects():
 def test_premerge_fixed_reply_passes_exact_generation_token_without_marking_sending():
     fixed = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     region = fixed.split("private static async Task<bool> SendFixedAsync", 1)[1].split("public static async Task<bool> TryHandleAsync", 1)[0]
-    assert "GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration)" in region
+    assert "GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)" in region
     assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in region
     assert "catch (OperationCanceledException)" in region
     assert "BuyerSessionAgentState.Sending" not in region
