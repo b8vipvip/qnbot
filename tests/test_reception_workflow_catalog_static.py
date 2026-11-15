@@ -14,11 +14,18 @@ def test_generic_flow_catalog_does_not_publish_or_execute_operations():
     assert 'order_snapshot' in s and 'image_message' in s and 'manual_correction' in s
     assert 'next_state' in s and 'timeout_minutes' in s
     assert 'Path.Combine(dir, "reception-workflow-drafts.json")' in s
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in s
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in s
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in s
     assert "RestoreLatestDraft(" in s
     assert "SendTextWithRetryAsync" not in s
     assert "SubmitRecharge" not in s
+
+def test_workflow_draft_path_respects_exact_current_shop_scope():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    resolver = s[s.index("private static string PathForShop"):s.index("private static JObject Default")]
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in resolver
+    assert "ShopSettingsScope.Enter(shop)" in resolver
+
 
 def test_generic_workflow_editor_exposes_draft_only_navigation():
     ui = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
