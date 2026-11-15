@@ -555,7 +555,6 @@ namespace Bot.ChromeNs
         private const int SoftRecentBuyerTextLimit = 512;
         private static readonly TimeSpan RecentBuyerTextMaxIdle = TimeSpan.FromMinutes(30);
         private static readonly TimeSpan RecentBuyerTextSweepInterval = TimeSpan.FromMinutes(10);
-        private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, RecentBuyerText> _recentBuyerTexts =
