@@ -146,10 +146,11 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
     assert "DispatchScopedAsync(burst, lease)" in source
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey)" in source
     assert "using (ShopSettingsScope.Enter(shop))" in source
-    assert "LegacyAiConfigurationGate.WaitAsync" in source
-    assert "LegacyAiConfigurationGate.Release" in source
+    assert "shop_scope_unresolved" in source
+    assert "LegacyAiConfigurationGate.WaitAsync" not in source
+    assert "LegacyAiConfigurationGate.Release" not in source
     assert "await _handler(lease)" in source
     assert "ResolveRuntimeBySellerNick" in locator
 
