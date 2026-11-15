@@ -268,7 +268,10 @@ namespace Bot.ChromeNs
                     var previousQn = QN.FindExistingByShopKey(previousShopKey);
                     if (previousQn != null && previousQn.CDP != null
                         && string.Equals(previousQn.CDP.SessionId, sessionId, StringComparison.Ordinal))
+                    {
+                        previousQn.CDP.IsShopIdentityRetired = true;
                         previousQn.CDP = null;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -330,6 +333,7 @@ namespace Bot.ChromeNs
                 {
                     var client = GetOrCreateClient(session);
                     client.ShopKey = shopKey;
+                    client.IsShopIdentityRetired = false;
                     client.Nick = qn.Seller == null ? string.Empty : qn.Seller.Nick;
                     qn.CDP = client;
                     CDPClient.PreferRuntimeSession(
@@ -442,6 +446,7 @@ namespace Bot.ChromeNs
                         + DiagnosticRef("shop", shopKey)
                         + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
                 cdp.ShopKey = shopKey;
+                cdp.IsShopIdentityRetired = false;
                 cdp.Nick = sellerNick;
                 qn.CDP = cdp;
                 qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
@@ -496,6 +501,7 @@ namespace Bot.ChromeNs
                     + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
                 qn.QnVersion = ver != null ? ver.version : string.Empty;
                 cdp.ShopKey = shopKey;
+                cdp.IsShopIdentityRetired = false;
                 cdp.Nick = sellerNick;
                 qn.CDP = cdp;
                 _initialized[session.SessionID] = true;
