@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
             public string Type;
             public string Response;
             public DateTime ReceivedAt;
+            public long PayloadBytes;
         }
 
         private sealed class SessionSellerBinding
@@ -57,13 +58,18 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
         private const int MaxPendingInboundEvents = 512;
+        // The WebSocket listener accepts payloads up to 5 MiB. A count-only queue
+        // could therefore retain multiple GiB during an authority outage.
+        private const long MaxPendingInboundPayloadBytes = 16L * 1024L * 1024L;
 
         private static readonly ConcurrentDictionary<string, SessionSellerBinding> SessionSellers =
             new ConcurrentDictionary<string, SessionSellerBinding>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> RecentInboundFingerprints =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-        private static readonly ConcurrentQueue<PendingInboundEvent> Pending =
-            new ConcurrentQueue<PendingInboundEvent>();
+        private static readonly object PendingSync = new object();
+        private static readonly Queue<PendingInboundEvent> Pending =
+            new Queue<PendingInboundEvent>();
+        private static long _pendingPayloadBytes;
         private static Timer _retryTimer;
         private static int _initialized;
         private static int _draining;
@@ -78,7 +84,8 @@ namespace Bot.ChromeNs
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
                 Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话；暂存队列上限="
-                    + MaxPendingInboundEvents + "。");
+                    + MaxPendingInboundEvents + " 条 / "
+                    + (MaxPendingInboundPayloadBytes / 1024 / 1024) + " MiB。");
             }
             return new object();
         }
@@ -132,7 +139,7 @@ namespace Bot.ChromeNs
                 EnqueuePendingBounded(item, "initial");
                 Log.Info("千牛入站消息已暂存等待权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
                     + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type
-                    + ", pending=" + Pending.Count + "/" + MaxPendingInboundEvents);
+                    + ", pending=" + GetPendingCount() + "/" + MaxPendingInboundEvents);
             }
         }
 
@@ -332,22 +339,80 @@ namespace Bot.ChromeNs
         private static void EnqueuePendingBounded(PendingInboundEvent item, string reason)
         {
             if (item == null) return;
-
-            PendingInboundEvent dropped;
-            while (Pending.Count >= MaxPendingInboundEvents && Pending.TryDequeue(out dropped))
+            item.PayloadBytes = (long)(item.Response ?? string.Empty).Length * sizeof(char);
+            if (item.PayloadBytes > MaxPendingInboundPayloadBytes)
             {
-                var total = Interlocked.Increment(ref _droppedPendingCount);
-                if (total <= 3 || total % 50 == 0)
+                var oversizedTotal = Interlocked.Increment(ref _droppedPendingCount);
+                if (oversizedTotal <= 3 || oversizedTotal % 50 == 0)
                 {
                     Log.ErrorWithMaxCount(
-                        "重复CDP入站暂存队列达到上限，已丢弃最旧补偿事件以保护进程内存: droppedTotal="
-                        + total + ", limit=" + MaxPendingInboundEvents
+                        "重复CDP入站补偿事件超过单队列内存预算，已丢弃超大事件: droppedTotal="
+                        + oversizedTotal + ", payloadBytes=" + item.PayloadBytes
+                        + ", limitBytes=" + MaxPendingInboundPayloadBytes
                         + ", reason=" + (reason ?? string.Empty)
-                        + ", droppedType=" + (dropped == null ? string.Empty : dropped.Type),
+                        + ", type=" + item.Type,
+                        100);
+                }
+                return;
+            }
+
+            long droppedCount = 0;
+            string lastDroppedType = string.Empty;
+            int pendingCount;
+            long pendingBytes;
+            lock (PendingSync)
+            {
+                while (Pending.Count >= MaxPendingInboundEvents
+                    || _pendingPayloadBytes + item.PayloadBytes > MaxPendingInboundPayloadBytes)
+                {
+                    if (Pending.Count == 0) break;
+                    var dropped = Pending.Dequeue();
+                    _pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - dropped.PayloadBytes);
+                    lastDroppedType = dropped.Type ?? string.Empty;
+                    droppedCount++;
+                }
+
+                Pending.Enqueue(item);
+                _pendingPayloadBytes += item.PayloadBytes;
+                pendingCount = Pending.Count;
+                pendingBytes = _pendingPayloadBytes;
+            }
+
+            if (droppedCount > 0)
+            {
+                var total = Interlocked.Add(ref _droppedPendingCount, droppedCount);
+                if (total <= 3 || total % 50 < droppedCount)
+                {
+                    Log.ErrorWithMaxCount(
+                        "重复CDP入站暂存队列达到数量/内存预算，已丢弃最旧补偿事件: droppedTotal="
+                        + total + ", limit=" + MaxPendingInboundEvents
+                        + ", payloadLimitBytes=" + MaxPendingInboundPayloadBytes
+                        + ", pending=" + pendingCount + ", pendingBytes=" + pendingBytes
+                        + ", reason=" + (reason ?? string.Empty)
+                        + ", lastDroppedType=" + lastDroppedType,
                         100);
                 }
             }
-            Pending.Enqueue(item);
+        }
+
+        private static bool TryDequeuePending(out PendingInboundEvent item)
+        {
+            lock (PendingSync)
+            {
+                if (Pending.Count == 0)
+                {
+                    item = null;
+                    return false;
+                }
+                item = Pending.Dequeue();
+                _pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - (item == null ? 0 : item.PayloadBytes));
+                return true;
+            }
+        }
+
+        private static int GetPendingCount()
+        {
+            lock (PendingSync) return Pending.Count;
         }
 
         private static bool TryDeliverLive(PendingInboundEvent item)
@@ -381,11 +446,11 @@ namespace Bot.ChromeNs
             try
             {
                 MaybeCleanupTransientState(DateTime.Now);
-                var count = Math.Min(Pending.Count, MaxPendingInboundEvents);
+                var count = Math.Min(GetPendingCount(), MaxPendingInboundEvents);
                 for (var i = 0; i < count; i++)
                 {
                     PendingInboundEvent item;
-                    if (!Pending.TryDequeue(out item) || item == null) continue;
+                    if (!TryDequeuePending(out item) || item == null) continue;
                     if (DateTime.Now - item.ReceivedAt > TimeSpan.FromSeconds(15))
                     {
                         Log.Info("千牛入站暂存消息等待权威CDP超时，已放弃: sellerRef="
