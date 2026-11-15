@@ -247,7 +247,7 @@ def test_remote_history_coverage_counts_only_unique_accepted_messages():
     ]
     refresh = context[
         context.index("RefreshLearningHistoryCompleteAsync"):
-        context.index("private static int ReadInt")
+        context.index("private static bool TryReadInt")
     ]
     assert "private static string RecordMessage" in method
     assert "return exact.MessageKey ?? string.Empty;" in method
@@ -356,7 +356,7 @@ def test_repeated_history_refresh_counts_canonical_turns_not_only_new_merges():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     refresh = context[
         context.index("internal static async Task<ConversationHistoryRefreshResult>"):
-        context.index("private static int ReadInt")
+        context.index("private static bool TryReadInt")
     ]
     record = context[
         context.index("private static string RecordMessage"):
@@ -374,7 +374,7 @@ def test_repeated_history_refresh_counts_canonical_turns_not_only_new_merges():
 
 def test_pagination_flag_accepts_boolean_and_numeric_json_values():
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
-    parser = context[context.index("private static int ReadInt"):]
+    parser = context[context.index("private static bool TryReadInt"):]
     assert "JTokenType.Boolean" in parser
     assert "bool.TryParse(text, out boolean)" in parser
     assert "double.TryParse(text, NumberStyles.Float" in parser

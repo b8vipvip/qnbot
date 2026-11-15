@@ -282,7 +282,7 @@ def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_comp
     docs = read("docs/SESSION_AUTO_LEARNING.md")
     method = context[
         context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
-        context.index("private static int ReadInt")
+        context.index("private static bool TryReadInt")
     ]
 
     assert "LearningHistoryMaxPages = 200" in context
@@ -291,3 +291,91 @@ def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_comp
     assert "if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))" in method
     assert "最多尝试 200 页" in docs
     assert "标记历史覆盖不完整并跳过 AI 分析" in docs
+
+
+
+def test_remote_history_never_infers_end_from_missing_hasmore_or_empty_page_with_more():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert 'var hasMoreKnown = resultObject != null' in method
+    assert 'TryReadInt(resultObject["hasMore"], out hasMore)' in method
+    assert "if (hasMoreKnown && hasMore > 0)" in method
+    assert 'result.ErrorCode = "history_empty_page_with_more"' in method
+    assert "if (hasMoreKnown && hasMore == 0)" in method
+    assert "if (hasMore == 0 && messages.Count < LearningHistoryPageSize)" not in method
+    assert "private static bool TryReadInt(JToken token, out int value)" in context
+    assert "if (token == null || token.Type == JTokenType.Null) return false;" in context
+
+
+
+def test_nonempty_history_page_without_any_valid_message_is_not_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert 'result.ErrorCode = "history_page_no_valid_messages"' in method
+    assert 'result.StopReason = "no_valid_messages"' in method
+    assert "result.IsComplete = true;" not in method[
+        method.index("if (oldest == null)"):
+        method.index("var oldestTime")
+    ]
+
+
+
+def test_explicit_server_end_takes_precedence_over_repeated_final_cursor():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    server_end = method.index("if (hasMoreKnown && hasMore == 0)")
+    cursor_stall = method.index('result.ErrorCode = "history_cursor_stalled"')
+    assert server_end < cursor_stall
+
+
+
+def test_history_page_with_null_message_entries_is_not_silently_counted_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "if (messages.Any(x => x == null))" in method
+    assert 'result.ErrorCode = "history_page_contains_null_messages"' in method
+    assert 'result.StopReason = "invalid_messages"' in method
+    assert "foreach (var item in messages.OrderBy(GetSortValue))" in method
+
+
+
+def test_history_response_missing_messages_field_is_not_treated_as_an_empty_terminal_page():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "if (messagesToken == null || messagesToken.Type == JTokenType.Null)" in method
+    assert 'result.ErrorCode = "history_page_missing_messages"' in method
+    assert 'result.StopReason = "missing_messages"' in method
+    assert "var messages = messagesToken.ToObject<List<QNChatMessage>>()" in method
+
+
+
+def test_invalid_message_list_shape_is_not_coerced_to_a_complete_empty_page():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "var messages = messagesToken.ToObject<List<QNChatMessage>>();" in method
+    assert "if (messages == null)" in method
+    assert 'result.ErrorCode = "history_page_invalid_messages"' in method
