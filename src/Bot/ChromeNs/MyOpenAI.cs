@@ -572,7 +572,16 @@ namespace Bot.ChromeNs
                             {
                                 return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
                             }
-                            var ok = new StructuredChatResult { Success = true, Answer = answer.Trim(), Raw = body, LatencyMs = sw.ElapsedMilliseconds };
+                            var ok = new StructuredChatResult
+                            {
+                                Success = true,
+                                Answer = answer.Trim(),
+                                Raw = body,
+                                LatencyMs = sw.ElapsedMilliseconds,
+                                EndpointName = endpoint.Name ?? string.Empty,
+                                Model = endpoint.TextModel ?? string.Empty,
+                                Protocol = "openai_chat_completions"
+                            };
                             FillUsage(ok, payloadText, answer, body);
                             return ok;
                         }
@@ -858,5 +867,8 @@ namespace Bot.ChromeNs
 
     public class StructuredChatResult : MyOpenAI.ApiCallResult
     {
+        public string EndpointName { get; set; }
+        public string Model { get; set; }
+        public string Protocol { get; set; }
     }
 }
