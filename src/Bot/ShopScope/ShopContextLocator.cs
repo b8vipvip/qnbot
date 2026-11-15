@@ -106,7 +106,8 @@ namespace Bot.ShopScope
             if (shopKey.Length == 0) return null;
             var matches = SnapshotQns()
                 .Where(x => x != null && x.Seller != null
-                    && x.CDP != null && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
+                    && x.CDP != null && !x.CDP.IsShopIdentityRetired
+                    && !string.IsNullOrWhiteSpace(x.CDP.SessionId)
                     && (sessionId.Length == 0
                         || string.Equals((x.CDP.SessionId ?? string.Empty).Trim(),
                             sessionId, StringComparison.Ordinal)))
