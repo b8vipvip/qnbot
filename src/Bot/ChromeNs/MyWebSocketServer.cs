@@ -719,6 +719,7 @@ namespace Bot.ChromeNs
                 ReleaseShopSession(sessionId, false);
                 BotConnectionDiagnostics.RecordWebSocketClose(sessionId);
                 WebSocketPageLifecycleGuard.ForgetClosedSession(sessionId);
+                DuplicateCdpInboundRecoveryBridge.ForgetClosedSession(sessionId);
             }
 
             lock (_sellerSessionSync)
@@ -935,6 +936,7 @@ namespace Bot.ChromeNs
                         // Session-scoped lifecycle-guard dictionaries must not keep
                         // a strong reference to every old 12-second reconnect lease.
                         WebSocketPageLifecycleGuard.ForgetClosedSession(session.SessionID);
+                        DuplicateCdpInboundRecoveryBridge.ForgetClosedSession(session.SessionID);
                         Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
                             + ", reason=" + value);
                         CDPClient removed;

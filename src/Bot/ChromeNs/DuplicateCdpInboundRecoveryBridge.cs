@@ -61,6 +61,7 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
         private const int MaxPendingInboundEvents = 512;
+        private const int MaxRecentInboundFingerprints = 65536;
         // The WebSocket listener accepts payloads up to 5 MiB. A count-only queue
         // could therefore retain multiple GiB during an authority outage.
         private const long MaxPendingInboundPayloadBytes = 16L * 1024L * 1024L;
@@ -324,6 +325,14 @@ namespace Bot.ChromeNs
                 + ", type=" + type + ", suppressedTotal=" + count);
         }
 
+        internal static void ForgetClosedSession(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return;
+            SessionSellerBinding ignored;
+            SessionSellers.TryRemove(sessionId, out ignored);
+        }
+
         private static void MaybeCleanupTransientState(DateTime now)
         {
             if ((Interlocked.Increment(ref _cleanupTick) & 127) != 0) return;
@@ -334,6 +343,7 @@ namespace Bot.ChromeNs
                 DateTime ignored;
                 RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
             }
+            TrimOldestRecentFingerprints();
 
             foreach (var pair in SessionSellers)
             {
@@ -343,6 +353,21 @@ namespace Bot.ChromeNs
                     SessionSellerBinding ignored;
                     SessionSellers.TryRemove(pair.Key, out ignored);
                 }
+            }
+        }
+
+        private static void TrimOldestRecentFingerprints()
+        {
+            var count = RecentInboundFingerprints.Count;
+            if (count <= MaxRecentInboundFingerprints) return;
+            // Trim in batches to 75% so a busy queue does not sort on every insert
+            // while still keeping the cache strictly bounded after each cleanup pass.
+            var targetCount = MaxRecentInboundFingerprints * 3 / 4;
+            var removeCount = count - targetCount;
+            foreach (var pair in RecentInboundFingerprints.OrderBy(x => x.Value).Take(removeCount))
+            {
+                DateTime ignored;
+                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
             }
         }
 

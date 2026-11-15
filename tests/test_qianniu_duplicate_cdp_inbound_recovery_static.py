@@ -178,3 +178,21 @@ def test_pending_duplicate_cdp_events_revalidate_shopkey_and_replay_only_to_that
     assert "TryDeliverLive(item, true)" in drain
     assert "QN.FindExistingBySellerNick" not in drain
     assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in deliver
+
+
+
+def test_duplicate_cdp_fingerprint_cache_has_hard_count_cap_and_closed_sessions_are_released():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    cleanup = bridge[
+        bridge.index("private static void MaybeCleanupTransientState"):
+        bridge.index("private static void EnqueuePendingBounded")
+    ]
+
+    assert "MaxRecentInboundFingerprints = 65536" in bridge
+    assert "private static void TrimOldestRecentFingerprints()" in cleanup
+    assert "RecentInboundFingerprints.OrderBy(x => x.Value).Take(removeCount)" in cleanup
+    assert "targetCount = MaxRecentInboundFingerprints * 3 / 4" in cleanup
+    assert "internal static void ForgetClosedSession(string sessionId)" in bridge
+    assert "SessionSellers.TryRemove(sessionId, out ignored)" in bridge
+    assert server.count("DuplicateCdpInboundRecoveryBridge.ForgetClosedSession(session") == 2

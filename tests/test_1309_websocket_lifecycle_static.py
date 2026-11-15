@@ -116,3 +116,18 @@ def test_total_ai_budget_stops_waiting_for_non_cooperative_provider_calls():
     assert "Interlocked.Decrement(ref _unfinishedAnswerTasksAfterCancel);" in source
     assert "token.ThrowIfCancellationRequested();" in source
     assert "answer = await StreamingBuyerAnswerService.GetAnswerAsync(" not in source
+
+
+
+def test_duplicate_probe_fingerprint_cache_enforces_its_declared_hard_cap():
+    guard = text("src/Bot/ChromeNs/WebSocketPageLifecycleGuard.cs")
+    method = guard[
+        guard.index("private static bool TryClaimDuplicateProbePayload"):
+        guard.index("private static string BuildDuplicateProbeFingerprint")
+    ]
+
+    assert "MaxDuplicateProbeFingerprints = 2048" in guard
+    assert "TrimOldestDuplicateProbeFingerprints();" in method
+    assert "private static void TrimOldestDuplicateProbeFingerprints()" in guard
+    assert "RecentDuplicateProbePayloads.OrderBy(x => x.Value).Take(removeCount)" in guard
+    assert "targetCount = MaxDuplicateProbeFingerprints * 3 / 4" in guard

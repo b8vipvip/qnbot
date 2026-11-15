@@ -244,8 +244,22 @@ namespace Bot.ChromeNs
                     DateTime ignored;
                     RecentDuplicateProbePayloads.TryRemove(pair.Key, out ignored);
                 }
+                TrimOldestDuplicateProbeFingerprints();
             }
             return true;
+        }
+
+        private static void TrimOldestDuplicateProbeFingerprints()
+        {
+            var count = RecentDuplicateProbePayloads.Count;
+            if (count <= MaxDuplicateProbeFingerprints) return;
+            var targetCount = MaxDuplicateProbeFingerprints * 3 / 4;
+            var removeCount = count - targetCount;
+            foreach (var pair in RecentDuplicateProbePayloads.OrderBy(x => x.Value).Take(removeCount))
+            {
+                DateTime ignored;
+                RecentDuplicateProbePayloads.TryRemove(pair.Key, out ignored);
+            }
         }
 
         private static string BuildDuplicateProbeFingerprint(string shopKey, string type, string response)
