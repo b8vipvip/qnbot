@@ -1,3 +1,4 @@
+using Bot.ChromeNs;
 using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
@@ -5,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -26,7 +28,16 @@ namespace Bot.Knowledge
 {
     internal static class KnowledgeV2CloudSyncService
     {
-        private sealed class State { public int Syncing; public int Revision; public string Fingerprint = string.Empty; }
+        private const string SettingsScope = "knowledge-v2-cloud";
+        private const string RevisionKey = "KnowledgeV2CloudRevision";
+        private const string FingerprintKey = "KnowledgeV2CloudFingerprint";
+
+        private sealed class State
+        {
+            public int Syncing;
+            public int Revision;
+            public string Fingerprint = string.Empty;
+        }
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static readonly ConcurrentDictionary<string, State> States = new ConcurrentDictionary<string, State>(StringComparer.Ordinal);
@@ -50,7 +61,7 @@ namespace Bot.Knowledge
         private static void Queue(ShopContext shop)
         {
             if(shop==null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)) return;
-            var state=States.GetOrAdd(shop.ShopKey,_=>new State());
+            var state=States.GetOrAdd(shop.ShopKey,_=>LoadState(shop));
             if(Interlocked.Exchange(ref state.Syncing,1)!=0) return;
             Task.Run(async()=>{try{await SyncOnce(shop,state);}catch(Exception ex){Log.ErrorWithMaxCount("Knowledge V2 云同步失败："+Safe(ex.Message,260),20);}finally{Interlocked.Exchange(ref state.Syncing,0);}});
         }
@@ -59,13 +70,16 @@ namespace Bot.Knowledge
             using(ShopSettingsScope.Enter(shop))
             {
                 var connection=new ShopControlPlaneConnectionStore(shop,Paths);
-                string token,error; var url=connection.GetServerUrl();
+                string token,error;
+                var url=connection.GetServerUrl();
                 if(!connection.TryGetToken(out token,out error)||string.IsNullOrWhiteSpace(url)||string.IsNullOrWhiteSpace(token)) return;
+
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
-                var fingerprint=Fingerprint(local);
+                var localFingerprint=Fingerprint(local);
                 var payload=new JObject { ["revision"]=state.Revision };
-                if(state.Revision==0 || !string.Equals(fingerprint,state.Fingerprint,StringComparison.Ordinal))
+                if(state.Revision==0 || !string.Equals(localFingerprint,state.Fingerprint,StringComparison.Ordinal))
                     payload["records"]=JArray.FromObject(local);
+
                 ServicePointManager.SecurityProtocol|=SecurityProtocolType.Tls12;
                 using(var handler=new HttpClientHandler{UseProxy=true,Proxy=WebRequest.DefaultWebProxy})
                 using(var http=new HttpClient(handler))
@@ -80,24 +94,196 @@ namespace Bot.Knowledge
                     {
                         var body=await response.Content.ReadAsStringAsync();
                         if(!response.IsSuccessStatusCode) throw new Exception("HTTP "+(int)response.StatusCode+" "+Safe(body,200));
-                        var root=JObject.Parse(body); var cloudRevision=root.Value<int?>("revision")??state.Revision;
+                        var root=JObject.Parse(body);
+                        var cloudRevision=root.Value<int?>("revision")??state.Revision;
                         var records=root["records"]==null?null:root["records"].ToObject<List<KnowledgeV2Record>>();
-                        if(cloudRevision>state.Revision && records!=null)
+
+                        if(cloudRevision<state.Revision)
+                            throw new InvalidOperationException("Knowledge V2 云端 revision 回退，已拒绝覆盖本地版本。");
+                        if(cloudRevision>state.Revision)
                         {
-                            // ReplaceAll is the existing structural V2 write path: it updates the
-                            // shop-scoped DB, compatibility mirror and runtime snapshot together.
-                            KnowledgeEngineV2Repository.ReplaceAll(shop.DisplayName,records);
-                            local=records; fingerprint=Fingerprint(local);
-                            Log.Info("Knowledge V2 已应用云端版本: shop="+shop.ShopKey+", revision="+cloudRevision+", records="+records.Count);
+                            if(records==null)
+                                throw new InvalidOperationException("Knowledge V2 云端版本已更新但未返回 records，已保留本地数据并等待重试。");
+
+                            // Re-read after the network round-trip. A user or learning task may
+                            // have edited V2 while the HTTP request was in flight.
+                            var latestLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                            var latestFingerprint=Fingerprint(latestLocal);
+                            var hasBaseline=!string.IsNullOrWhiteSpace(state.Fingerprint);
+                            var localDirty=hasBaseline
+                                ? !string.Equals(latestFingerprint,state.Fingerprint,StringComparison.Ordinal)
+                                : latestLocal.Count>0;
+                            var merged=localDirty
+                                ? MergeCloudAndLocal(records,latestLocal,preserveLocalOnly:!hasBaseline)
+                                : records;
+                            var mergedFingerprint=Fingerprint(merged);
+
+                            if(!string.Equals(mergedFingerprint,latestFingerprint,StringComparison.Ordinal))
+                            {
+                                // A complete local snapshot is written before the conditional
+                                // replacement. If backup creation fails, no cloud data is applied.
+                                var backup=Backup(shop,latestLocal,cloudRevision);
+                                if(!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(
+                                    shop.DisplayName,latestFingerprint,merged))
+                                {
+                                    Log.Info("Knowledge V2 云端版本到达时本地知识同时发生变化，本轮未覆盖；将于下一轮重新合并: shopRef="
+                                        + MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey));
+                                    return;
+                                }
+                                Log.Info("Knowledge V2 云端版本已安全合并: shopRef="
+                                    + MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey)
+                                    + ", revision="+cloudRevision+", cloud_records="+records.Count
+                                    + ", merged_records="+merged.Count+", backup="+Path.GetFileName(backup));
+                            }
+
+                            // Persist the cloud snapshot as the next comparison baseline.
+                            // If local-only/conflicting records were retained, the next poll
+                            // sends the merged set at this revision instead of discarding it.
+                            state.Revision=cloudRevision;
+                            state.Fingerprint=Fingerprint(records);
+                            PersistState(shop,state);
+                            return;
                         }
-                        state.Revision=cloudRevision; state.Fingerprint=fingerprint;
+
+                        state.Revision=cloudRevision;
+                        state.Fingerprint=localFingerprint;
+                        PersistState(shop,state);
                     }
                 }
             }
         }
+
+        private static State LoadState(ShopContext shop)
+        {
+            using(ShopSettingsScope.Enter(shop))
+            {
+                int revision;
+                if(!int.TryParse(PersistentParams.GetParam2Key(RevisionKey,SettingsScope,"0"),out revision))
+                    revision=0;
+                var fingerprint=PersistentParams.GetParam2Key(FingerprintKey,SettingsScope,string.Empty);
+                return new State
+                {
+                    Revision=Math.Max(0,revision),
+                    Fingerprint=fingerprint??string.Empty
+                };
+            }
+        }
+
+        private static void PersistState(ShopContext shop,State state)
+        {
+            using(ShopSettingsScope.Enter(shop))
+            {
+                var revision=Math.Max(0,state.Revision).ToString();
+                PersistentParams.TrySaveParam2Key(RevisionKey,SettingsScope,revision);
+                PersistentParams.TrySaveParam2Key(FingerprintKey,SettingsScope,state.Fingerprint??string.Empty);
+                if(!string.Equals(PersistentParams.GetParam2Key(RevisionKey,SettingsScope,"0"),revision,StringComparison.Ordinal)
+                    || !string.Equals(PersistentParams.GetParam2Key(FingerprintKey,SettingsScope,string.Empty),state.Fingerprint??string.Empty,StringComparison.Ordinal))
+                    throw new InvalidOperationException("Knowledge V2 云同步 revision/hash 持久化失败；已保留上次成功检查点。");
+            }
+        }
+
+        private static List<KnowledgeV2Record> MergeCloudAndLocal(
+            IEnumerable<KnowledgeV2Record> cloudRecords,
+            IEnumerable<KnowledgeV2Record> localRecords,
+            bool preserveLocalOnly)
+        {
+            var merged=(cloudRecords??Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x=>x!=null).Select(CloneRecord).ToList();
+            var cloudById=merged.Where(x=>!string.IsNullOrWhiteSpace(x.Id))
+                .GroupBy(x=>x.Id,StringComparer.Ordinal)
+                .ToDictionary(x=>x.Key,x=>x.First(),StringComparer.Ordinal);
+            var mergedIds=new HashSet<string>(merged.Where(x=>!string.IsNullOrWhiteSpace(x.Id))
+                .Select(x=>x.Id),StringComparer.Ordinal);
+
+            foreach(var local in localRecords??Enumerable.Empty<KnowledgeV2Record>())
+            {
+                if(local==null) continue;
+                KnowledgeV2Record cloud;
+                var id=(local.Id??string.Empty).Trim();
+                if(id.Length>0 && cloudById.TryGetValue(id,out cloud))
+                {
+                    if(SameRecordContent(cloud,local)) continue;
+                    AddCandidate(merged,mergedIds,local,id);
+                    continue;
+                }
+
+                if(preserveLocalOnly)
+                    AddUnique(merged,mergedIds,CloneRecord(local));
+                else
+                    AddCandidate(merged,mergedIds,local,id);
+            }
+            return merged;
+        }
+
+        private static void AddCandidate(List<KnowledgeV2Record> merged,HashSet<string> ids,
+            KnowledgeV2Record source,string originalId)
+        {
+            var candidate=CloneRecord(source);
+            if(string.Equals(candidate.SourceType,"cloud_sync_conflict_candidate",StringComparison.OrdinalIgnoreCase)
+                && string.Equals(candidate.Status,"candidate",StringComparison.OrdinalIgnoreCase)
+                && !candidate.Enabled)
+            {
+                AddUnique(merged,ids,candidate);
+                return;
+            }
+
+            var sourceFingerprint=Fingerprint(new[]{source});
+            candidate.Id="cloud-conflict-"+sourceFingerprint.Substring(0,24);
+            candidate.Title="云同步冲突待审核："+Safe(source.Title,180);
+            candidate.SourceType="cloud_sync_conflict_candidate";
+            candidate.SourceId=originalId??string.Empty;
+            candidate.Enabled=false;
+            candidate.Status="candidate";
+            candidate.Authority=Math.Min(candidate.Authority,0.85);
+            candidate.Confidence=Math.Min(candidate.Confidence,0.85);
+            AddUnique(merged,ids,candidate);
+        }
+
+        private static void AddUnique(List<KnowledgeV2Record> records,HashSet<string> ids,KnowledgeV2Record item)
+        {
+            if(item==null) return;
+            var id=(item.Id??string.Empty).Trim();
+            if(id.Length>0 && !ids.Add(id)) return;
+            records.Add(item);
+        }
+
+        private static bool SameRecordContent(KnowledgeV2Record left,KnowledgeV2Record right)
+        {
+            if(left==null||right==null) return false;
+            return string.Equals(left.Title??string.Empty,right.Title??string.Empty,StringComparison.Ordinal)
+                && string.Equals(left.Answer??string.Empty,right.Answer??string.Empty,StringComparison.Ordinal)
+                && left.Enabled==right.Enabled
+                && string.Equals(left.Status??string.Empty,right.Status??string.Empty,StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.Type??string.Empty,right.Type??string.Empty,StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.Intent??string.Empty,right.Intent??string.Empty,StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static KnowledgeV2Record CloneRecord(KnowledgeV2Record record)
+        {
+            return JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                JsonConvert.SerializeObject(record))??new KnowledgeV2Record();
+        }
+
+        private static string Backup(ShopContext shop,IEnumerable<KnowledgeV2Record> records,int cloudRevision)
+        {
+            var directory=Paths.GetBackupRoot(shop);
+            Directory.CreateDirectory(directory);
+            var path=Path.Combine(directory,"knowledge-v2-cloud-before-apply-"
+                +DateTime.Now.ToString("yyyyMMdd-HHmmssfff")+"-"+Guid.NewGuid().ToString("N").Substring(0,6)+".json");
+            var snapshot=new JObject
+            {
+                ["shop_ref"]=MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey),
+                ["cloud_revision"]=cloudRevision,
+                ["created_at_utc"]=DateTime.UtcNow.ToString("o"),
+                ["records"]=JArray.FromObject((records??Enumerable.Empty<KnowledgeV2Record>()).ToList())
+            };
+            File.WriteAllText(path,snapshot.ToString(Formatting.Indented),new UTF8Encoding(false));
+            return path;
+        }
+
         private static string Fingerprint(IEnumerable<KnowledgeV2Record> records)
         {
-            return JsonConvert.SerializeObject((records??Enumerable.Empty<KnowledgeV2Record>()).Select(x=>new { x.Id,x.UpdatedAt,x.Enabled,x.Status,x.Title,x.Answer }));
+            return KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records);
         }
         private static string Safe(string value,int max){value=(value??string.Empty).Replace("\r"," ").Replace("\n"," ").Trim();return value.Length<=max?value:value.Substring(0,max)+"...";}
     }
