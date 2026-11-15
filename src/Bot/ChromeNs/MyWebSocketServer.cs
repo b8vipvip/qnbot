@@ -16,6 +16,7 @@ using Bot.Automation;
 using Bot.Automation.ChatDeskNs;
 using SuperSocket.SocketBase.Config;
 using Bot.AssistWindow.NotifyIcon;
+using Bot.ShopScope;
 
 namespace Bot.ChromeNs
 {
