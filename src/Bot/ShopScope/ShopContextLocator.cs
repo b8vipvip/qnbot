@@ -38,6 +38,16 @@ namespace Bot.ShopScope
             return Profiles.GetOrCreate(context).ToContext();
         }
 
+        // UI/service operations already running inside a ShopSettingsScope must
+        // keep that exact identity. Only legacy callers without a scope may fall
+        // back to nickname resolution, which remains fail-closed when ambiguous.
+        public static ShopContext ResolveCurrentOrBySellerNick(string sellerNick)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current;
+            return ResolveBySellerNick(sellerNick);
+        }
+
         // Resolve from the exact QN instance that raised an event. Seller nick is
         // display data and may be shared by multiple accounts; never infer identity
         // from the nick when the source QN object is available.

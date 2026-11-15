@@ -55,7 +55,7 @@ namespace Bot.Knowledge
 
         internal BuyerHistoryScanEvidenceSession(string seller)
         {
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick((seller ?? "").Trim());
             if (shop == null) throw new InvalidOperationException("店铺未绑定，无法保存扫描记录。");
             _root = Path.Combine(new ShopScopedPathProvider().GetLogRoot(shop), "buyer-history-scans");
             Directory.CreateDirectory(_root);
@@ -274,7 +274,7 @@ namespace Bot.Knowledge
 
         internal static IList<BuyerHistoryScanEvidence> List(string seller)
         {
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick((seller ?? "").Trim());
             if (shop == null) return new List<BuyerHistoryScanEvidence>();
             var root = Path.Combine(new ShopScopedPathProvider().GetLogRoot(shop), "buyer-history-scans");
             if (!Directory.Exists(root)) return new List<BuyerHistoryScanEvidence>();

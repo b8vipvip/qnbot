@@ -12,7 +12,7 @@ archive = read("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
 targets = read("src/Directory.Build.targets")
 
 def test_checkpoint_is_private_encrypted_shop_scoped_atomic_and_versioned():
-    for x in ('"buyer-history-resume-private"', 'ShopContextLocator.ResolveBySellerNick',
+    for x in ('"buyer-history-resume-private"', 'ShopContextLocator.ResolveCurrentOrBySellerNick',
               'shop.ShopKey', "ProtectedData.Protect(", "ProtectedData.Unprotect(",
               "DataProtectionScope.CurrentUser", "File.Replace(temp, path, null)",
               "File.Move(temp, path)", "SchemaVersion", "CreatedAt",

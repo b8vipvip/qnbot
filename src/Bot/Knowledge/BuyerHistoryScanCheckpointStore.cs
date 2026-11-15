@@ -48,7 +48,7 @@ namespace Bot.Knowledge
 
         private static string Root(string seller)
         {
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick((seller ?? "").Trim());
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
                 throw new InvalidOperationException("当前店铺 ShopKey 不可用，不能恢复历史扫描。");
             return Path.Combine(new ShopScopedPathProvider().GetLogRoot(shop),
@@ -57,7 +57,7 @@ namespace Bot.Knowledge
 
         private static byte[] Entropy(string seller)
         {
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick((seller ?? "").Trim());
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
                 throw new InvalidOperationException("无法绑定扫描任务的店铺身份。");
             return Encoding.UTF8.GetBytes("qnbot:history-scan:resume:v1:" + shop.ShopKey);

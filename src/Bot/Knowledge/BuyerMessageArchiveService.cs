@@ -83,7 +83,7 @@ namespace Bot.Knowledge
         }
         private static State Get(string seller)
         {
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? "").Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick((seller ?? "").Trim());
             return States.GetOrAdd(shop.ShopKey, _ =>
             {
                 var root = Paths.GetKnowledgeRoot(shop);
@@ -301,7 +301,7 @@ namespace Bot.Knowledge
         private static async Task<JObject> Ask(string seller, string instructions, JToken payload, CancellationToken ct,
             int maxTokens = 6500, int timeoutSeconds = 180)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
             if (shop == null) throw new InvalidOperationException("当前店铺AI接口不可用");
             var messages = new JArray
             {
