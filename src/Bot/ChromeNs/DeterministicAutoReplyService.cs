@@ -376,7 +376,8 @@ namespace Bot.ChromeNs
                 item.SellerNick,
                 item.BuyerNick,
                 item.DisplayText,
-                detectedAt);
+                detectedAt,
+                item.ShopKey);
             try
             {
                 KnowledgeLearningService.RegisterAnswerSource(
@@ -392,7 +393,8 @@ namespace Bot.ChromeNs
                     answer,
                     source,
                     detectedAt,
-                    DateTime.Now);
+                    DateTime.Now,
+                    item.ShopKey);
                 BotRuntimeStats.RecordDisplayedAnswer(true);
                 Log.Info(
                     source + "在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
@@ -423,7 +425,8 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         item.SessionGeneration,
                         BuyerSessionAgentState.Failed,
-                        "fixed_reply_send_failed");
+                        "fixed_reply_send_failed",
+                        item.ShopKey);
                 }
                 if (ctl != null)
                 {
@@ -455,7 +458,8 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         item.SessionGeneration,
                         BuyerSessionAgentState.Failed,
-                        "fixed_reply_send_exception");
+                        "fixed_reply_send_exception",
+                        item.ShopKey);
                 }
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(
@@ -466,7 +470,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick);
+                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
             }
         }
 
