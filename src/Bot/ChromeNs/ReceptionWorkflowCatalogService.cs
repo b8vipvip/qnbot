@@ -30,7 +30,7 @@ namespace Bot.ChromeNs
 
         private static string PathForShop(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
             if (shop == null) throw new InvalidOperationException("店铺身份无法验证，不允许保存流程");
             using (ShopSettingsScope.Enter(shop))
             {
