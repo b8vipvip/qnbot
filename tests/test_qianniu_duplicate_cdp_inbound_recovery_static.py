@@ -47,7 +47,8 @@ def test_duplicate_cdp_pages_forward_only_safe_inbound_events_to_authoritative_s
     assert "target.DispatchInboundEvent(item.Type, item.Response);" in bridge
     assert "重复千牛CDP入站消息已转交权威会话" in bridge
     assert "已补发初始化期间暂存的千牛入站消息" in bridge
-    assert "ConcurrentQueue<PendingInboundEvent>" in bridge
+    assert "Queue<PendingInboundEvent>" in bridge
+    assert "PendingSync" in bridge
     assert "TimeSpan.FromSeconds(15)" in bridge
 
     assert "internal void DispatchInboundEvent(string type, string response)" in client
@@ -123,3 +124,27 @@ def test_conversation_change_replay_window_does_not_block_returning_to_recent_bu
     assert "? ConversationChangeFingerprintWindow" in accept
     assert ": InboundFingerprintWindow" in accept
     assert "now - seenAt <= fingerprintWindow" in accept
+
+
+
+def test_duplicate_cdp_pending_recovery_queue_has_a_real_payload_byte_budget():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDeliverLive")
+    ]
+    drain = bridge[
+        bridge.index("private static void DrainPending"):
+        bridge.index("private static void MaybeLogSuppressedDuplicate")
+    ]
+
+    assert "MaxPendingInboundEvents = 512" in bridge
+    assert "MaxPendingInboundPayloadBytes = 16L * 1024L * 1024L" in bridge
+    assert "item.PayloadBytes = (long)(item.Response ?? string.Empty).Length * sizeof(char)" in enqueue
+    assert "item.PayloadBytes > MaxPendingInboundPayloadBytes" in enqueue
+    assert "_pendingPayloadBytes + item.PayloadBytes > MaxPendingInboundPayloadBytes" in enqueue
+    assert "lock (PendingSync)" in enqueue
+    assert "_pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - dropped.PayloadBytes)" in enqueue
+    assert "private static bool TryDequeuePending" in enqueue
+    assert "_pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - (item == null ? 0 : item.PayloadBytes))" in enqueue
+    assert "TryDequeuePending(out item)" in drain
