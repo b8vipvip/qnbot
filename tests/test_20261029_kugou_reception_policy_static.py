@@ -214,3 +214,15 @@ def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers
     assert not re.search(r"(?<![A-Za-z0-9])\d{12,20}(?![A-Za-z0-9])", combined + "\n" + fixture)
     assert not re.search(r"(?<![A-Za-z0-9])[a-f0-9]{24,}(?![A-Za-z0-9])", combined + "\n" + fixture, re.I)
     assert not re.search(r"https?://", combined, re.I)
+
+def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
+    policy = src(POLICY)
+    audit = policy[
+        policy.index("internal static void Audit("):
+        policy.index("private static string HashBuyer")
+    ]
+    assert "if (!string.IsNullOrWhiteSpace(error))" in audit
+    assert "保留原文件不覆盖" in audit
+    assert "new InvalidDataException" in audit
+    assert "entries = new List<ReceptionAuditEntry>();" in audit
+    assert "catch { entries = new List<ReceptionAuditEntry>(); }" not in audit
