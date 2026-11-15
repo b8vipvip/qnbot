@@ -329,16 +329,13 @@ namespace Bot.ChromeNs
             try
             {
                 var qn = QN.FindExistingByShopKey(shopKey);
-                if (qn != null)
-                {
-                    var client = GetOrCreateClient(session);
-                    client.ShopKey = shopKey;
-                    client.IsShopIdentityRetired = false;
-                    client.Nick = qn.Seller == null ? string.Empty : qn.Seller.Nick;
-                    qn.CDP = client;
-                    CDPClient.PreferRuntimeSession(
-                        shopKey, client.Nick, sessionId, string.Empty, "standby_promoted");
-                }
+                var client = GetOrCreateClient(session);
+                client.ShopKey = shopKey;
+                client.IsShopIdentityRetired = false;
+                client.Nick = qn == null || qn.Seller == null ? client.Nick : qn.Seller.Nick;
+                if (qn != null) qn.CDP = client;
+                CDPClient.PreferRuntimeSession(
+                    shopKey, client.Nick, sessionId, string.Empty, "standby_promoted");
             }
             catch (Exception ex)
             {
