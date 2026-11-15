@@ -149,3 +149,18 @@ def test_corpus_coverage_percentage_counts_records_not_batches_and_includes_prov
     assert '["correction_count"] = record.CorrectionCount' in prompt
     assert '["last_verified_at"]' in prompt
     assert "提示注入" in prompt
+
+
+
+def test_full_corpus_ai_scans_are_serialized_per_shop_to_avoid_duplicate_fanout():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    assert "ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates" in service
+    assert "CorpusAnalysisGates.GetOrAdd(" in finalize
+    assert "await corpusGate.WaitAsync();" in finalize
+    assert "finally" in finalize
+    assert "corpusGate.Release();" in finalize

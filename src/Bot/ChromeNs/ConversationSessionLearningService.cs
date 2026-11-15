@@ -166,6 +166,10 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, ActiveSession> Active =
             new ConcurrentDictionary<string, ActiveSession>(StringComparer.Ordinal);
+        // Full-corpus analysis is serialized per shop so simultaneous idle buyers
+        // cannot fan out duplicate batches or race each other's corpus snapshots.
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, StoreReplyStyleProfileEntity> StyleCache =
             new ConcurrentDictionary<string, StoreReplyStyleProfileEntity>(StringComparer.Ordinal);
         private static readonly object DbSync = new object();
@@ -625,9 +629,23 @@ namespace Bot.ChromeNs
                     localFirst = ReplyModeService.IsLocalFirst(session.Seller);
                     styleBefore = GetStyleProfile(session.Seller);
                     analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
-                    corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
-                        session, turns, cards, styleBefore, localFirst,
-                        Clean(Convert.ToString(analysis["summary"]), 1200), report);
+                    var corpusGate = CorpusAnalysisGates.GetOrAdd(
+                        session.ShopKey, _ => new SemaphoreSlim(1, 1));
+                    report.Status = "等待当前店铺Knowledge V2全库分析队列";
+                    report.UpdatedAtTicks = DateTime.Now.Ticks;
+                    SaveReport(report);
+                    NotifyChanged();
+                    await corpusGate.WaitAsync();
+                    try
+                    {
+                        corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
+                            session, turns, cards, styleBefore, localFirst,
+                            Clean(Convert.ToString(analysis["summary"]), 1200), report);
+                    }
+                    finally
+                    {
+                        corpusGate.Release();
+                    }
                 }
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
