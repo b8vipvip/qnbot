@@ -38,7 +38,10 @@ def test_history_scan_pages_remote_history():
     assert "im.singlemsg.GetRemoteHisMsg" in source
     assert "msgid = cursorId" in source
     assert "msgtime = cursorTime" in source
-    assert "MaxHistoryPages" in source
+    assert "MaxHistoryPages" not in source
+    assert "while (true)" in source
+    assert "visitedCursors.Add(cursor)" in source
+    assert "history_pagination_incomplete:cursor_stalled" in source
 
 
 def test_history_scan_reuses_smart_import_batches():

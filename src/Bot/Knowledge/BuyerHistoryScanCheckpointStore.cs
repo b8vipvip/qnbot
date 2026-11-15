@@ -44,7 +44,7 @@ namespace Bot.Knowledge
         private static readonly Regex IdPattern = new Regex(
             @"^\d{8}T\d{6}Z-[0-9a-f]{10}$", RegexOptions.Compiled);
         private static readonly object Sync = new object();
-        private const int Schema = 1;
+        private const int Schema = 2;
 
         private static string Root(string seller)
         {
@@ -76,14 +76,32 @@ namespace Bot.Knowledge
                 Entropy(seller), DataProtectionScope.CurrentUser);
             var value = JsonConvert.DeserializeObject<BuyerHistoryScanCheckpoint>(
                 Encoding.UTF8.GetString(bytes));
-            if (value == null || value.SchemaVersion != Schema
+            if (value == null
                 || value.Id != Path.GetFileNameWithoutExtension(path)
                 || value.Contacts == null || value.Completed == null)
                 throw new InvalidDataException("断点记录格式无效。");
+
+            // Schema 1 could mark a buyer complete after the old 200-page cap or
+            // 120-round contact scroll silently stopped. Force a fresh contact
+            // discovery and full history rescan when upgrading that checkpoint.
+            var requiresFullRescan = value.SchemaVersion == 1;
+            if (requiresFullRescan)
+            {
+                value.SchemaVersion = Schema;
+                value.Contacts = new List<string>();
+                value.Completed = new List<string>();
+                value.State = "interrupted";
+            }
+            else if (value.SchemaVersion != Schema)
+            {
+                throw new InvalidDataException("断点记录版本不受支持。");
+            }
+
             value.Contacts = value.Contacts.Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.Ordinal).ToList();
             value.Completed = value.Completed.Where(x => value.Contacts.Contains(x))
                 .Distinct(StringComparer.Ordinal).ToList();
+            if (requiresFullRescan) Save(seller, value);
             return value;
         }
 
