@@ -812,7 +812,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             var task = new VisionReplyTask
             {
                 SellerNick = burst.SellerNick,
@@ -860,7 +861,8 @@ namespace Bot.ChromeNs
                 answer,
                 source,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("视觉答案已生成: buyer=" + burst.BuyerNick
                 + ", totalToAnswerMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds)
