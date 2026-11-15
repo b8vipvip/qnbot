@@ -385,7 +385,7 @@ namespace Bot.ChromeNs
         {
             if (shop == null) return null;
             var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
-            if (qn == null || qn.Seller == null || qn.CDP == null) return null;
+            if (qn == null || qn.Seller == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return null;
             return string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
                 (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
                 ? qn
