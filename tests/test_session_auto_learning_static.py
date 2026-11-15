@@ -666,7 +666,7 @@ def test_conversation_shop_resolution_prefers_exact_scope_and_active_shop_over_s
     robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
     resolver = robot[
         robot.index("private string ResolveShopKeyForConversation"):
-        robot.index("private void PruneConversationUiCache")
+        robot.index("private static string BuildConversationKey")
     ]
     assert "ShopSettingsScope.Current" in resolver
     assert "scopedShop.SellerNick" in resolver
