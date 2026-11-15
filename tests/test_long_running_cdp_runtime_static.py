@@ -35,7 +35,7 @@ def test_precise_conversation_change_keeps_authoritative_runtime_command_webview
     assert 'PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange")' not in source
     assert "ResolvePreferredRuntimeClient" in source
     assert 'desc + "@runtime-active-session"' in source
-    assert "活动CDP会话失效，已撤销会话偏好并回退权威通道" in source
+    assert "活动CDP会话失效，已撤销ShopKey会话偏好并回退权威通道" in source
 
 
 def test_duplicate_status_cannot_overwrite_logical_current_buyer():
