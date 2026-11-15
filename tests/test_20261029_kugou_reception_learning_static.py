@@ -85,7 +85,7 @@ def test_shop_rule_editor_is_validated_versioned_and_reversible():
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in rules
     assert ".backup." in rules
     assert "RestoreLatestBackup(" in rules
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in rules
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in rules
     assert 'Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller))' in nav
     assert "KugouReceptionConfigService.SaveJson(_seller, _editor.Text)" in ui
     assert "KugouReceptionConfigService.RestoreLatestBackup(_seller)" in ui

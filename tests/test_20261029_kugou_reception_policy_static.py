@@ -90,3 +90,30 @@ def test_uncertain_or_negated_image_evidence_cannot_authorize_device():
     assert "HasPositiveCue(compact, \"已绑定酷狗\", \"酷狗账号已绑定\")" in policy
     assert "无法确认|不能确定|不确定|无法识别" in policy
     assert "没有|并非|不是" in policy
+
+
+
+def test_reception_policy_cache_and_knowledge_detection_are_shopkey_scoped():
+    policy = src(POLICY)
+    applies = policy[
+        policy.index("public static bool Applies"):
+        policy.index("internal static bool RequiresManualKnowledgeReview")
+    ]
+
+    assert "internal static ShopContext ResolveShopForSeller(string seller)" in policy
+    assert "var cacheKey = shop.ShopKey;" in applies
+    assert "Shops.TryGetValue(cacheKey" in applies
+    assert "Shops[cacheKey]" in applies
+    assert "using (ShopSettingsScope.Enter(shop))" in applies
+    assert "KnowledgeEngineV2Repository.LoadAll(seller)" in applies
+    assert "current.SellerNick" in policy
+    assert "拒绝跨店读取接待规则" in policy
+
+
+def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
+    policy = src(POLICY)
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in config
+    assert policy.count("var shop = ResolveShopForSeller(seller);") >= 3
+    assert "var cacheKey = shop.ShopKey;" in policy

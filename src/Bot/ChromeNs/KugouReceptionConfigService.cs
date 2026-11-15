@@ -31,7 +31,7 @@ namespace Bot.ChromeNs
 
         private static string PathForSeller(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
             if (shop == null) throw new InvalidOperationException("无法确认店铺，禁止读写跨店铺流程规则");
             using (ShopSettingsScope.Enter(shop))
             {
