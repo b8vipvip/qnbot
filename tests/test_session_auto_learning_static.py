@@ -636,3 +636,45 @@ def test_legacy_shop_backfill_is_once_per_verified_shop_not_on_every_history_rea
     assert backfill.index("CompletedLegacyShopBackfills.TryAdd(backfillKey, true);") > backfill.index(
         "update BotReplyManualSourceEntity set ShopKey = ?"
     )
+
+def test_learning_history_uses_connected_cdp_wrapper_for_exact_shopkey():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    find_qn = context[
+        context.index("private static QN FindQn("):
+        context.index("private static string RecordMessage")
+    ]
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey)" in find_qn
+    assert "string.Equals(resolved.ShopKey, shop.ShopKey, StringComparison.Ordinal)" in find_qn
+    assert "foreach (var qn in qns)" not in find_qn
+
+
+def test_pending_learning_resume_covers_full_retention_and_audits_expired_rows():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    resume = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+    assert '"where CompletedAtTicks = 0 order by UpdatedAtTicks desc"' in resume
+    assert "LastBuyerAtTicks >= ?" not in resume
+    assert "ReportRetentionDays" in resume
+    assert 'report.Error = "pending_session_exceeded_retention";' in resume
+    assert 'report.Error = "pending_session_timestamp_missing";' in resume
+    assert "report.CompletedAtTicks = DateTime.Now.Ticks;" in resume
+
+
+def test_conversation_shop_resolution_prefers_exact_scope_and_active_shop_over_stale_pre_qn():
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    resolver = robot[
+        robot.index("private string ResolveShopKeyForConversation"):
+        robot.index("private void PruneConversationUiCache")
+    ]
+    assert "ShopSettingsScope.Current" in resolver
+    assert "scopedShop.SellerNick" in resolver
+    assert "ActiveShopSessionRegistry.GetActiveShopKey()" in resolver
+    assert "ActiveShopSessionRegistry.IsActive(activeQn)" in resolver
+    assert "FindConnectedQnByShopKey(activeShopKey)" in resolver
+    assert "ShopContextLocator.ResolveRuntimeBySeller(activeQn)" in resolver
+    assert resolver.index("if (activeShopKey.Length > 0)") < resolver.index(
+        "ResolveRuntimeBySellerNick(seller)"
+    )
+
