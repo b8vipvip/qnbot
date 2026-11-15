@@ -77,10 +77,7 @@ def test_first_page_initializes_from_its_own_cdp_login_identity():
         server.index('if (wMsg.Type == "qnbotStatus")'):
         server.index('else if (wMsg.Type == "imsdkApiScan")')
     ]
-    init = server[
-        server.index("private async Task TryInitSession"):
-        server.index("private void ScheduleDuplicateSessionClose")
-    ]
+    init = server[server.index("private async Task TryInitSession"):]
     assert "if (!wasInitialized)" in status
     assert 'Task.Run(() => TryInitSession(session, "status"));' in status
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in init
