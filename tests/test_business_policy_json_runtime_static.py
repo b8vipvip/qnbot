@@ -152,3 +152,31 @@ def test_neutral_default_keeps_privacy_and_image_detection_enabled():
     assert "AddFact(state, progress.HasVerificationCode, T(\"facts.code\"))" in source
     assert "string PhoneNumber" not in source
     assert "string VerificationCode" not in source
+
+def test_shop_policy_updates_are_cross_process_atomic_and_custom_regexes_are_bounded():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    save = service[
+        service.index("public static string SaveJson"):
+        service.index("public static string RestoreDefault")
+    ]
+    ensure = service[
+        service.index("private static void EnsureUserFile"):
+        service.index("private static bool CanAutoAdoptLegacy")
+    ]
+    compile_optional = service[
+        service.index("private static Regex CompileOptional"):
+        service.index("private static string ReadString")
+    ]
+    get_regex = service[
+        service.index("public static Regex GetRegex"):
+        service.index("public static string GetString")
+    ]
+
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "BusinessPolicyProfile", 3000)' in save
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, normalized, 3, 50, out error)" in save
+    assert "File.Copy(path, backup, false);" in save
+    assert 'CrossProcessAtomicStateFile.Acquire(userPath, "BusinessPolicyProfile", 3000)' in ensure
+    assert "if (File.Exists(userPath)) return;" in ensure
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(userPath, initial, 3, 50, out error)" in ensure
+    assert "TimeSpan.FromMilliseconds(100)" in compile_optional
+    assert "TimeSpan.FromMilliseconds(100)" in get_regex
