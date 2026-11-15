@@ -564,7 +564,7 @@ namespace Bot.ChromeNs
                 || !string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal)
                 || !server.IsAuthoritativeShopSession(shopKey, SessionId))
             {
-                Log.Info("千牛会话身份与当前CDP绑定不一致，已拒绝修改旧QN身份或接管命令路由: shopRef="
+                Log.Info("千牛会话身份与当前CDP绑定不一致，已拒绝修改旧QN身份，不接管CDP命令路由: shopRef="
                     + MyWebSocketServer.DiagnosticRef("shop", shopKey)
                     + ", boundShopRef=" + MyWebSocketServer.DiagnosticRef("shop", sessionShopKey)
                     + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", sellerNick)
