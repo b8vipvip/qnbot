@@ -80,6 +80,8 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     assert "_liveSessions.TryGetValue(candidateId, out candidate)" in promotion
     assert "TryPromoteDuplicateShopSessionAsync(" in promotion
     assert "requireVacant: true" in promotion
+    assert "var alreadyOwner = string.Equals(previousOwner, sessionId, StringComparison.Ordinal);" in promotion
+    assert "if (string.Equals(previousOwner, sessionId, StringComparison.Ordinal)) return true;" not in promotion
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in server
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert "verifiedShop.ShopKey, shopKey" in server
