@@ -122,7 +122,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             if (!lease.MarkGenerating("streaming_answer_started"))
             {
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick,
@@ -169,7 +170,7 @@ namespace Bot.ChromeNs
                         conversationCtl.SetStatus(timeout, false);
                     }
                     lease.MarkFailed("streaming_ai_budget_exhausted");
-                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout);
+                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout, burst.ShopKey);
                     Log.Info("文本AI流总预算超时: buyer=" + burst.BuyerNick
                         + ", budgetSeconds=" + TotalAiBudgetSeconds);
                 }
@@ -216,7 +217,7 @@ namespace Bot.ChromeNs
                 var why = answer.Substring(ReceptionFlowPolicy.SilentMarker.Length);
                 lease.MarkCompleted("reception_wait_for_evidence");
                 if (conversationCtl != null) conversationCtl.SetSkipped(why);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 Log.Info("接待流程决定暂不回复: seller=" + burst.SellerNick
                     + ", buyer=" + burst.BuyerNick + ", reason=" + why);
                 return;
@@ -246,7 +247,8 @@ namespace Bot.ChromeNs
                 ResponseProgressTracker.Fail(
                     burst.SellerNick,
                     burst.BuyerNick,
-                    failure);
+                    failure,
+                    burst.ShopKey);
                 Log.Info("流式文本AI失败，保持失败态且不进入答案就绪/完成: buyer="
                     + burst.BuyerNick + ", reason=" + CompactPreview(failure, 180));
                 return;
@@ -299,7 +301,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("reception_business_guard_suppressed");
                 if (conversationCtl != null) conversationCtl.SetSkipped(businessBlock);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -324,7 +326,8 @@ namespace Bot.ChromeNs
                 answer,
                 answerSource,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("流式文本答案已生成: buyer=" + burst.BuyerNick
                 + ", aiMs=" + Math.Max(0, (long)(answerReadyAt - aiStartedAt).TotalMilliseconds)
@@ -334,7 +337,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("streaming_answer_generated_only");
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -388,7 +391,7 @@ namespace Bot.ChromeNs
             }
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private static async Task<T> AwaitWithCancellationAsync<T>(Task<T> task, CancellationToken token)
