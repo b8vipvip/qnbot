@@ -168,6 +168,7 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     send_guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+    rpa = read("src/Bot/ChromeNs/QNRpa.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
@@ -191,6 +192,8 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "ResolveShopKeyForDeliveryWatchdog()" in send_guard
     assert "MarkSubmissionAccepted(" in send_guard
     assert "CancelConversation(" in send_guard
+    assert "EnsurePending(" in rpa and "ResolveShopKeyForDeliveryWatchdog()" in rpa
+    assert "CancelPending(" in rpa and "ResolveShopKeyForDeliveryWatchdog()" in rpa
 
 
 def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
