@@ -564,3 +564,15 @@ def test_knowledge_v2_session_history_filters_by_shop_before_sql_limit():
     assert "shopKey, seller" in scoped
     assert "ConversationSessionLearningService.GetReportsForShop(" in ui
     assert "_shopKey, _seller, 1000" in ui
+
+def test_learning_qn_message_listener_registration_uses_weak_instance_identity():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    attach = bridge[
+        bridge.index("private static void AttachExisting()"):
+        bridge.index("private static void OnRawMessages(")
+    ]
+    assert "ConditionalWeakTable<QN, object>" in bridge
+    assert "lock (AttachSync)" in attach
+    assert "Attached.TryGetValue(qn, out marker)" in attach
+    assert "Attached.Add(qn, new object());" in attach
+    assert "RuntimeHelpers.GetHashCode(qn)" not in attach
