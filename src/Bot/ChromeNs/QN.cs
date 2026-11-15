@@ -577,7 +577,7 @@ namespace Bot.ChromeNs
                 out orderPlan))
             {
                 if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick);
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shop.ShopKey);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);
@@ -605,7 +605,7 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt);
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shop.ShopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
                 BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
@@ -673,7 +673,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
             var aiStartedAt = DateTime.Now;
             Log.Info("文本回复开始: buyer=" + burst.BuyerNick + ", queueMs="
                 + Math.Max(0, (long)(aiStartedAt - detectedAt).TotalMilliseconds));
@@ -738,7 +739,7 @@ namespace Bot.ChromeNs
                     conversationCtl.SetProcessing("AI未生成可用答案");
                     conversationCtl.SetStatus(failure, false);
                 }
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure, burst.ShopKey);
                 Log.Info("旧文本回复路径AI失败，保持失败态且不进入答案就绪/完成: buyer="
                     + burst.BuyerNick);
                 return;
@@ -757,7 +758,8 @@ namespace Bot.ChromeNs
                 answer,
                 answerSource,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
             Log.Info("文本答案已生成: buyer=" + burst.BuyerNick
                 + ", aiMs=" + Math.Max(0, (long)(answerReadyAt - aiStartedAt).TotalMilliseconds)
@@ -766,7 +768,7 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -796,7 +798,7 @@ namespace Bot.ChromeNs
             }
             Log.Info("文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private async Task ProcessVisionBurstAsync(
@@ -830,7 +832,7 @@ namespace Bot.ChromeNs
             if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
             {
                 var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
                 Log.Info("视觉消息跳过: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", messageId=" + visionItem.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
@@ -866,7 +868,7 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (ctl != null) ctl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (!lease.IsCurrent)
@@ -889,7 +891,7 @@ namespace Bot.ChromeNs
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
             Log.Info("视觉真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
