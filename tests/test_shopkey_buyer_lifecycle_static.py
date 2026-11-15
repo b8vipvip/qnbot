@@ -40,6 +40,8 @@ def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     assert "ConcurrentDictionary<string, string> _sessionShopKeys" in server
     assert "ConcurrentDictionary<string, string> _duplicateShopSessions" in server
     assert "TryClaimShopSession(shopKey, session.SessionID)" in server
+    claim = server[server.index("private bool TryClaimShopSession"):server.index("private bool TryPromoteDuplicateShopSession")]
+    assert "if (!_connectedSessions.ContainsKey(sessionId)) return false;" in claim
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert "QN.GetByShopIdentity(user.Result)" in server
     assert "TryClaimShopSession(loginNick" not in server
