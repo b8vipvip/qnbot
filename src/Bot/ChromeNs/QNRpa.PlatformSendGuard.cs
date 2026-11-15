@@ -34,11 +34,21 @@ namespace Bot.ChromeNs
         /// </summary>
         private string ResolveShopKeyForDeliveryWatchdog()
         {
-            try { return ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey; }
+            try
+            {
+                if (_qn == null || _qn.CDP == null || _qn.CDP.IsInvalidated
+                    || _qn.CDP.IsShopIdentityRetired) return string.Empty;
+                var resolved = ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey;
+                var bound = (_qn.CDP.ShopKey ?? string.Empty).Trim();
+                return bound.Length > 0 && string.Equals(bound, resolved, StringComparison.Ordinal)
+                    ? bound
+                    : string.Empty;
+            }
             catch { return string.Empty; }
         }
 
-        private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string expectedText, string stage)
+        private async Task<bool> StopIfPlatformSendBlockedAsync(
+            string buyer, string expectedText, string stage, string shopKey)
         {
             var detected = await GetBoundedServiceAttitudeReadProbeAsync(buyer, stage).ConfigureAwait(false);
             if (detected == null || !detected.Detected) return false;
@@ -60,7 +70,6 @@ namespace Bot.ChromeNs
             // followed by misleading failure reports. Cancel every pending delivery for this exact
             // seller+buyer conversation; the platform reminder itself remains untouched for human
             // review and Bot still never clicks “继续发送”.
-            var shopKey = ResolveShopKeyForDeliveryWatchdog();
             var cancelledWatchdogs = SendDeliveryWatchdog.CancelConversation(
                 SellerNick,
                 buyer,
@@ -207,12 +216,11 @@ namespace Bot.ChromeNs
                             if (!stablePlatformProbeDone)
                             {
                                 stablePlatformProbeDone = true;
-                                if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认").ConfigureAwait(false)) return false;
+                                if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认", shopKey).ConfigureAwait(false)) return false;
                             }
                             if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
                             ResetSendFailure();
                             var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
-                            var shopKey = ResolveShopKeyForDeliveryWatchdog();
                             SendDeliveryWatchdog.MarkSubmissionAccepted(
                                 SellerNick, buyer, text, submissionEvidence, shopKey);
                             BotConnectionDiagnostics.RecordSendAttempt(true, method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
@@ -225,12 +233,12 @@ namespace Bot.ChromeNs
                 else if (probe.Completed && !probe.IsEmpty && !earlyPlatformProbeDone && (DateTime.Now - sendStart).TotalMilliseconds >= 350)
                 {
                     earlyPlatformProbeDone = true;
-                    if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "发送动作后平台确认").ConfigureAwait(false)) return false;
+                    if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "发送动作后平台确认", shopKey).ConfigureAwait(false)) return false;
                 }
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
-            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, text, method + "超时前平台确认").ConfigureAwait(false)) return false;
+            if (!stablePlatformProbeDone && await StopIfPlatformSendBlockedAsync(buyer, text, method + "超时前平台确认", shopKey).ConfigureAwait(false)) return false;
             SetSendFailure("发送确认", method + "后既未检测到卖家回显，也未观察到发送动作后的稳定输入框清空；emptyObserved=" + emptyObserved);
             return false;
         }
@@ -245,7 +253,7 @@ namespace Bot.ChromeNs
                 {
                     await Task.Delay(650).ConfigureAwait(false);
                     if (_lastServiceAttitudeContinueAt >= startedAt) return;
-                    await StopIfPlatformSendBlockedAsync(buyer, text, method + "迟到服务态度提醒单次监控").ConfigureAwait(false);
+                    await StopIfPlatformSendBlockedAsync(buyer, text, method + "迟到服务态度提醒单次监控", shopKey).ConfigureAwait(false);
                 }
                 catch (Exception ex) { Log.Info("迟到服务态度提醒单次监控异常: " + ex.Message); }
                 finally { Interlocked.Exchange(ref _lateServiceAttitudeWatchArmed, 0); }
