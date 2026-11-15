@@ -207,6 +207,7 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "MarkDeliveryConfirmedCore(seller, buyer, answer, detail, shopKey)" in progress
     assert "MarkDeliveryTimedOutCore(seller, buyer, answer, detail, shopKey)" in progress
     assert "ResolveOperationOrDetectedTurnKey(seller, buyer, detected, shopKey)" in progress
+    assert "string.Equals(operationKey, detectedTurnKey, StringComparison.Ordinal)" in progress
     assert "ResolveShopKeyForDeliveryWatchdog()" in send_guard
     assert "MarkSubmissionAccepted(" in send_guard
     assert "CancelConversation(" in send_guard
