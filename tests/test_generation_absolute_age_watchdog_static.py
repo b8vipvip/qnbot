@@ -53,4 +53,4 @@ def test_generation_watchdog_is_not_triggered_by_human_reply():
 
     assert "WatchSession(shopKey, seller, buyer);" in source
     assert "SellerHumanReply" in source
-    assert "false);" in source
+    assert "false, shopKey);" in source
