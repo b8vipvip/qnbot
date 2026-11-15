@@ -47,6 +47,40 @@ namespace Bot.ChromeNs
             catch { return string.Empty; }
         }
 
+        private async Task<bool> VerifyShopIdentityBeforeSendAsync(string expectedShopKey)
+        {
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            var client = _qn == null ? null : _qn.CDP;
+            if (expectedShopKey.Length == 0 || client == null || client.IsInvalidated
+                || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal))
+                return false;
+
+            try
+            {
+                var current = await client.GetCurrentUser().ConfigureAwait(false);
+                if (current == null || current.Result == null) return false;
+                var actualShopKey = ShopContextLocator.ResolveRuntimeBySellerIdentity(current.Result).ShopKey;
+                if (!string.Equals(actualShopKey, expectedShopKey, StringComparison.Ordinal))
+                {
+                    client.IsShopIdentityRetired = true;
+                    Log.Info("发送前物理CDP登录身份与任务ShopKey不一致，已阻止发送: expectedShopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", actualShopKey));
+                    return false;
+                }
+                return !client.IsShopIdentityRetired && !client.IsInvalidated;
+            }
+            catch (Exception ex)
+            {
+                client.IsShopIdentityRetired = true;
+                Log.Info("发送前无法验证物理CDP登录身份，已fail-closed: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", reason=" + ex.Message);
+                return false;
+            }
+        }
+
         private async Task<bool> StopIfPlatformSendBlockedAsync(
             string buyer, string expectedText, string stage, string shopKey)
         {
