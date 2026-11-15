@@ -43,7 +43,7 @@ def test_cdp_foreground_chat_can_promote_connected_standby_without_disabling_gua
     assert "TryPromoteDuplicateShopSession" in window, (
         "A real foreground onChatDlgActive from a connected standby must atomically become authority."
     )
-    assert "IsAuthoritativeSellerSession" in server, (
+    assert "IsAuthoritativeShopSession" in server, (
         "The WebSocket authority registry must remain fail-closed after foreground rebinding."
     )
     assert "ValidateNativeSend" in coordinator, (
