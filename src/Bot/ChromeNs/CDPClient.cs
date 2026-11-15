@@ -227,6 +227,7 @@ namespace Bot.ChromeNs
             CDPClient client;
             if (!TryGetBySessionId(sessionId, out client)) return;
             client.ShopKey = shopKey;
+            client.IsShopIdentityRetired = false;
             client.Nick = sellerNick;
 
             string previous = string.Empty;
@@ -571,6 +572,9 @@ namespace Bot.ChromeNs
                 || !string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal)
                 || !server.IsAuthoritativeShopSession(shopKey, SessionId))
             {
+                if (sessionShopKey.Length > 0
+                    && !string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal))
+                    IsShopIdentityRetired = true;
                 Log.Info("千牛会话身份与当前CDP绑定不一致，已拒绝修改旧QN身份，不接管CDP命令路由: shopRef="
                     + MyWebSocketServer.DiagnosticRef("shop", shopKey)
                     + ", boundShopRef=" + MyWebSocketServer.DiagnosticRef("shop", sessionShopKey)
