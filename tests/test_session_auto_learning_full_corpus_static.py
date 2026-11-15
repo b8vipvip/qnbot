@@ -439,3 +439,30 @@ def test_primary_session_ai_502_is_requeued_instead_of_becoming_terminal_learnin
     assert "ai_upstream_retryable:" in finalize
     assert 'Requeue(session, "等待AI上游恢复后再次复盘", TimeSpan.FromMinutes(1))' in finalize
     assert 'report.CompletedAtTicks = 0;' in finalize
+
+
+def test_open_ai_learning_circuit_cooldown_survives_application_restart():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    parser = service[
+        service.index("private static bool TryGetPersistedKnowledgeCorpusCircuitOpenUntil"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+    requeue = service[
+        service.index("private static void Requeue"):
+        service.index("private static void CompleteSkipped")
+    ]
+
+    assert 'const string prefix = "ai_upstream_circuit_open_until:"' in parser
+    assert "DateTimeStyles.RoundtripKind" in parser
+    assert "CultureInfo.InvariantCulture" in parser
+    assert "return openUntilUtc > DateTime.UtcNow;" in parser
+    assert "TryGetPersistedKnowledgeCorpusCircuitOpenUntil(" in recovery
+    assert "var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(persistedCircuitOpenUntil);" in recovery
+    assert "if (circuitDelay > due) due = circuitDelay;" in recovery
+    # SaveSnapshot must not erase the durable deadline written before Requeue.
+    assert "SaveSnapshot(session, waitingStatus);" in requeue
+    assert "report.Error =" not in requeue
