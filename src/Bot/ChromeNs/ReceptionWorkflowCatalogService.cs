@@ -203,12 +203,30 @@ namespace Bot.ChromeNs
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取恢复写锁");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) throw new FileNotFoundException("暂无草稿备份");
-                var original = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
-                    .OrderByDescending(x => x, StringComparer.Ordinal).FirstOrDefault();
-                if (original == null) throw new FileNotFoundException("暂无草稿备份");
-                var validated = Validate(File.ReadAllText(original, Encoding.UTF8)).ToString(Formatting.Indented);
+                var backups = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
+                    .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
+                if (backups.Count == 0) throw new FileNotFoundException("暂无草稿备份");
+                string validated = null;
+                string selectedBackup = string.Empty;
+                foreach (var candidate in backups)
+                {
+                    try
+                    {
+                        validated = Validate(File.ReadAllText(candidate, Encoding.UTF8)).ToString(Formatting.Indented);
+                        selectedBackup = candidate;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过无效的流程草稿备份: file="
+                            + Path.GetFileName(candidate) + ", error=" + ex.Message, 10);
+                    }
+                }
+                if (validated == null)
+                    throw new InvalidDataException("没有找到有效的流程草稿备份，当前草稿未修改。");
                 if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"), false);
+                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N"), false);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
                     throw new IOException(error);
