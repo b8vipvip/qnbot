@@ -916,8 +916,13 @@ namespace Bot.ChromeNs
                             result.StopReason = "missing_messages";
                             break;
                         }
-                        var messages = messagesToken.ToObject<List<QNChatMessage>>()
-                            ?? new List<QNChatMessage>();
+                        var messages = messagesToken.ToObject<List<QNChatMessage>>();
+                        if (messages == null)
+                        {
+                            result.ErrorCode = "history_page_invalid_messages";
+                            result.StopReason = "invalid_messages";
+                            break;
+                        }
                         result.MessagesFetched += messages.Count;
                         int hasMore = 0;
                         var hasMoreKnown = resultObject != null

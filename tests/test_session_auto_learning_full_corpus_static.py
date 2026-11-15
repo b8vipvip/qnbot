@@ -366,3 +366,16 @@ def test_history_response_missing_messages_field_is_not_treated_as_an_empty_term
     assert 'result.ErrorCode = "history_page_missing_messages"' in method
     assert 'result.StopReason = "missing_messages"' in method
     assert "var messages = messagesToken.ToObject<List<QNChatMessage>>()" in method
+
+
+
+def test_invalid_message_list_shape_is_not_coerced_to_a_complete_empty_page():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert "var messages = messagesToken.ToObject<List<QNChatMessage>>();" in method
+    assert "if (messages == null)" in method
+    assert 'result.ErrorCode = "history_page_invalid_messages"' in method
