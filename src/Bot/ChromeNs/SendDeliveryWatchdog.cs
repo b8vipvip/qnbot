@@ -280,7 +280,8 @@ namespace Bot.ChromeNs
                             pending.Seller,
                             pending.Buyer,
                             pending.Answer,
-                            "千牛已接收发送提交；实时卖家回显缺失，未据此判失败");
+                            "千牛已接收发送提交；实时卖家回显缺失，未据此判失败",
+                            pending.Shop.ShopKey);
                         Log.Info("[本店发送回显缺失但提交已确认] shop=" + pending.Shop.ShopKey
                             + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                             + ", watchdogId=" + pending.Id + ", submissionAcceptedAt="
@@ -300,7 +301,7 @@ namespace Bot.ChromeNs
                             + "也没有取得输入框稳定清空等千牛提交证据。"
                             + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果无法证明。";
                         ResponseProgressTracker.MarkDeliveryTimedOut(
-                            pending.Seller, pending.Buyer, pending.Answer, reason);
+                            pending.Seller, pending.Buyer, pending.Answer, reason, pending.Shop.ShopKey);
                         Log.Error("[本店发送异常] shop=" + pending.Shop.ShopKey
                             + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                             + ", watchdogId=" + pending.Id + ", reason=" + reason);
@@ -314,7 +315,8 @@ namespace Bot.ChromeNs
                         true,
                         Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
                     ResponseProgressTracker.MarkDeliveryConfirmed(
-                        pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送");
+                        pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送",
+                        pending.Shop.ShopKey);
                     Log.Info("本店发送回显监控确认成功: shop=" + pending.Shop.ShopKey
                         + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
                         + ", watchdogId=" + pending.Id);
@@ -352,7 +354,8 @@ namespace Bot.ChromeNs
                             Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
                         ResponseProgressTracker.MarkDeliveryConfirmed(
                             removed.Seller, removed.Buyer, removed.Answer,
-                            "已通过卖家消息回显确认真实发送");
+                            "已通过卖家消息回显确认真实发送",
+                            removed.Shop == null ? null : removed.Shop.ShopKey);
                     }
                 }
             }
@@ -380,30 +383,26 @@ namespace Bot.ChromeNs
 
         private static QN FindQn(ShopContext shop, string seller)
         {
-            try
-            {
-                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
-                foreach (var qn in qns)
-                {
-                    if (qn == null || qn.Seller == null) continue;
-                    if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
-                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal)) continue;
-                    try
-                    {
-                        if (string.Equals(ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
-                            shop.ShopKey, StringComparison.Ordinal)) return qn;
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            return null;
+            if (shop == null) return null;
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+            if (qn == null || qn.Seller == null || qn.CDP == null) return null;
+            return string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                ? qn
+                : null;
         }
 
         private static ShopContext ResolveShop(string seller)
         {
+            seller = (seller ?? string.Empty).Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
+            if (current != null)
+            {
+                return string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    seller, StringComparison.Ordinal)
+                    ? current
+                    : null;
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
             catch { return null; }
         }
@@ -412,7 +411,7 @@ namespace Bot.ChromeNs
         {
             var shop = ResolveShop(seller);
             return shop == null
-                ? "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant()
+                ? "unresolved:" + Guid.NewGuid().ToString("N")
                 : shop.ShopKey;
         }
 
