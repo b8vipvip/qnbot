@@ -59,8 +59,9 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
     assert "KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records)" in service
-    assert "PersistentParams.GetParam2Key(FingerprintKey,SettingsScope" in service
-    assert "PersistentParams.TrySaveParam2Key(FingerprintKey,SettingsScope" in service
+    assert "new ShopScopedSettingsStore(shop,Paths)" in service
+    assert "store.TryGetString(FingerprintKey,out fingerprint)" in service
+    assert "store.SetString(FingerprintKey,fingerprint)" in service
     assert "private static State LoadState(ShopContext shop)" in service
     assert "private static void PersistState(ShopContext shop,State state)" in service
-    assert "KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection))" in repository
+    assert "KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty)" in repository

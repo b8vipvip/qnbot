@@ -60,6 +60,7 @@ def test_windows_v2_cloud_revision_and_fingerprint_survive_process_restart():
     assert 'private const string RevisionKey = "KnowledgeV2CloudRevision"' in s
     assert 'private const string FingerprintKey = "KnowledgeV2CloudFingerprint"' in s
     assert "States.GetOrAdd(shop.ShopKey,_=>LoadState(shop))" in s
-    assert "PersistentParams.GetParam2Key(RevisionKey,SettingsScope" in s
-    assert "PersistentParams.TrySaveParam2Key(RevisionKey,SettingsScope" in s
-    assert "PersistentParams.TrySaveParam2Key(FingerprintKey,SettingsScope" in s
+    assert "new ShopScopedSettingsStore(shop,Paths)" in s
+    assert "store.TryGetString(RevisionKey,out revisionText)" in s
+    assert "store.SetString(RevisionKey,revision)" in s
+    assert "store.SetString(FingerprintKey,fingerprint)" in s

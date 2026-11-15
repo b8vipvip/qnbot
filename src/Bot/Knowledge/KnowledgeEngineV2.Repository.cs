@@ -561,7 +561,7 @@ namespace Bot.Knowledge
                     Answer=x.Answer??string.Empty
                 })
                 .OrderBy(x=>x.Id,StringComparer.Ordinal);
-            return KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection));
+            return KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty);
         }
 
         // Compare-and-replace for cloud replay. The expected fingerprint is checked while

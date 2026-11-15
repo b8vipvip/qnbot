@@ -157,10 +157,14 @@ namespace Bot.Knowledge
         {
             using(ShopSettingsScope.Enter(shop))
             {
+                var store=new ShopScopedSettingsStore(shop,Paths);
+                string revisionText;
                 int revision;
-                if(!int.TryParse(PersistentParams.GetParam2Key(RevisionKey,SettingsScope,"0"),out revision))
+                if(!store.TryGetString(RevisionKey,out revisionText)
+                    || !int.TryParse(revisionText,out revision))
                     revision=0;
-                var fingerprint=PersistentParams.GetParam2Key(FingerprintKey,SettingsScope,string.Empty);
+                string fingerprint;
+                store.TryGetString(FingerprintKey,out fingerprint);
                 return new State
                 {
                     Revision=Math.Max(0,revision),
@@ -173,11 +177,16 @@ namespace Bot.Knowledge
         {
             using(ShopSettingsScope.Enter(shop))
             {
+                var store=new ShopScopedSettingsStore(shop,Paths);
                 var revision=Math.Max(0,state.Revision).ToString();
-                PersistentParams.TrySaveParam2Key(RevisionKey,SettingsScope,revision);
-                PersistentParams.TrySaveParam2Key(FingerprintKey,SettingsScope,state.Fingerprint??string.Empty);
-                if(!string.Equals(PersistentParams.GetParam2Key(RevisionKey,SettingsScope,"0"),revision,StringComparison.Ordinal)
-                    || !string.Equals(PersistentParams.GetParam2Key(FingerprintKey,SettingsScope,string.Empty),state.Fingerprint??string.Empty,StringComparison.Ordinal))
+                var fingerprint=state.Fingerprint??string.Empty;
+                store.SetString(RevisionKey,revision);
+                store.SetString(FingerprintKey,fingerprint);
+                string storedRevision,storedFingerprint;
+                if(!store.TryGetString(RevisionKey,out storedRevision)
+                    || !store.TryGetString(FingerprintKey,out storedFingerprint)
+                    || !string.Equals(storedRevision,revision,StringComparison.Ordinal)
+                    || !string.Equals(storedFingerprint,fingerprint,StringComparison.Ordinal))
                     throw new InvalidOperationException("Knowledge V2 云同步 revision/hash 持久化失败；已保留上次成功检查点。");
             }
         }
