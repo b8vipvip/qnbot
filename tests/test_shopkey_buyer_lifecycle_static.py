@@ -140,6 +140,31 @@ def test_native_desk_guards_count_shopkeys_not_colliding_seller_nicks():
     assert "_activeSessionId.Length > 0" in coordinator
 
 
+def test_native_desk_registry_uses_shopkey_for_window_and_composer_ownership():
+    registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
+    rpa_desk = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
+    robot_ui = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
+
+    assert "ConcurrentDictionary<string, int> ShopToHwnd" in registry
+    assert "ConcurrentDictionary<int, string> ActiveShopByHwnd" in registry
+    assert "FindSellerDesk(seller, ResolveUniqueShopKey(seller))" in registry
+    assert "IsSellerForDesk(Desk desk, string seller, string shopKey)" in registry
+    assert "BindResolvedSeller(Desk desk, string seller, string evidence, string shopKey)" in registry
+    assert "ShopToHwnd.TryGetValue(shopKey, out hwnd)" in registry
+    assert "ActiveShopByHwnd.TryGetValue(desk.Hwnd.Handle, out activeShopKey)" in registry
+    assert "Desk.FindExistingBySellerNick" not in registry
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in rpa_desk
+    assert "_sellerDeskBoundShopKey" in rpa_desk
+    assert "IsSellerForDesk(desk, seller, shopKey)" in rpa_desk
+    assert "MarkActiveSeller(desk, seller, \"focused-webview\", shopKey)" in coordinator
+    assert "focusProof && desk != null" in coordinator
+    assert "FindSellerDesk(sellerNick, scopedShop.ShopKey)" in desk
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot_ui
+    assert "DeskSellerBindingRegistry.IsSingleShopRuntime" in desk
+
+
 def test_buyer_session_generations_and_deadline_watchers_include_shopkey():
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
