@@ -125,7 +125,52 @@ namespace Bot.ChromeNs
             var comparison = String.Compare(QnVersion, "9.19.06N", StringComparison.OrdinalIgnoreCase);
             if (comparison < 0)
             {
-                SendTimiMsg(buyer, text);
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+                catch
+                {
+                    rpa.SetSendFailure("旧版发送店铺身份确认", "无法解析当前QN的唯一ShopKey，已阻止旧版接口发送");
+                    return false;
+                }
+                var client = CDP;
+                if (shop == null || client == null
+                    || !await rpa.VerifyShopIdentityBeforeSendAsync(shop.ShopKey).ConfigureAwait(false)
+                    || !ReferenceEquals(CDP, client))
+                {
+                    rpa.SetSendFailure("旧版发送店铺身份确认", "当前CDP不是该ShopKey的权威登录会话，已阻止旧版接口发送");
+                    return false;
+                }
+
+                var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+                var now = DateTime.Now;
+                SendDeliveryWatchdog.ExpectDelivery(
+                    seller, buyer, string.Empty, text, "旧版SendSmartTipMsg", now, now,
+                    force: true, shopKey: shop.ShopKey);
+                try
+                {
+                    SendTimiMsg(buyer, text);
+                }
+                catch (Exception ex)
+                {
+                    SendDeliveryWatchdog.CancelPending(
+                        seller, buyer, text, "旧版SendSmartTipMsg执行异常：" + ex.Message, shop.ShopKey);
+                    rpa.SetSendFailure("旧版接口发送", ex.Message);
+                    return false;
+                }
+
+                if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                    || !MyWebSocketServer.WSocketSvrInst.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId))
+                {
+                    SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
+                    rpa.SetSendCancellation(
+                        "旧版接口发送结果不确定",
+                        "发送期间CDP身份或权威会话发生变化，已停止重试并等待卖家回显核验");
+                    return false;
+                }
+
+                SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
+                SendDeliveryWatchdog.MarkSubmissionAccepted(
+                    seller, buyer, text, "旧版SendSmartTipMsg执行完成且CDP权威身份保持不变", shop.ShopKey);
                 BotConnectionDiagnostics.RecordSendAttempt(true, "旧版接口发送");
                 return true;
             }
