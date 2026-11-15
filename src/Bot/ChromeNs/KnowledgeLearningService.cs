@@ -207,6 +207,9 @@ namespace Bot.ChromeNs
             manualAnswer = string.Empty;
             if (qn == null || qn.Seller == null) return false;
             var seller = qn.Seller.Nick ?? string.Empty;
+            string shopKey;
+            try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+            catch { return false; }
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
             if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now) return false;
@@ -234,7 +237,7 @@ namespace Bot.ChromeNs
                 // the current candidate and must not be promoted to a manual correction. Reuse the
                 // delivery watchdog's authoritative Bot-echo ledger instead of inventing a second
                 // text/timing heuristic here.
-                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho))
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey))
                 {
                     Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
                         + seller + ", buyer=" + buyer);
