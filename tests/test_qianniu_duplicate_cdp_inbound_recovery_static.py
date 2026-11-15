@@ -108,3 +108,18 @@ def test_duplicate_cdp_bridge_redacts_identifiers_and_rate_limits_duplicate_logs
     duplicate_log = bridge[bridge.index("private static void MaybeLogSuppressedDuplicate"):bridge.index("private static void MaybeCleanupTransientState")]
     assert ' + seller' not in duplicate_log
     assert ' + sessionId' not in duplicate_log
+
+
+
+def test_conversation_change_replay_window_does_not_block_returning_to_recent_buyer():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    accept = bridge[
+        bridge.index("private static bool TryAcceptInboundFingerprint"):
+        bridge.index("private static string BuildInboundFingerprint")
+    ]
+
+    assert "ConversationChangeFingerprintWindow = TimeSpan.FromSeconds(3)" in bridge
+    assert 'string.Equals(type, "onConversationChange", StringComparison.Ordinal)' in accept
+    assert "? ConversationChangeFingerprintWindow" in accept
+    assert ": InboundFingerprintWindow" in accept
+    assert "now - seenAt <= fingerprintWindow" in accept
