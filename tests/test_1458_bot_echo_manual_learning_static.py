@@ -52,7 +52,7 @@ def test_bot_echo_identity_canonicalizes_qianniu_transport_suffix_once():
     # ledger records the buyer-visible body. Keep this transport normalization inside
     # the watchdog's AnswerKey authority so learning does not add another decision layer.
     strip_transport = 'Regex.Replace(value.Trim(), @"\\s*\\[A\\]\\s*$", string.Empty, RegexOptions.IgnoreCase)'
-    build_key = "return ConversationKey(seller, buyer) + \"#\" + Normalize(answer);"
+    build_key = "return ConversationKey(seller, buyer, shopKey) + \"#\" + Normalize(answer);"
     assert build_key in watchdog
     assert strip_transport in method
     assert method.index(strip_transport) < method.index('return Regex.Replace(value.Trim(), @"\\s+", string.Empty);')
