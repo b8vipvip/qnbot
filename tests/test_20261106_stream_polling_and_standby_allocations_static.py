@@ -39,7 +39,7 @@ def test_standby_page_observation_is_scheduled_once_per_candidate():
 def test_live_websocket_and_reply_safety_still_owned_by_existing_protocol():
     server = src("src/Bot/ChromeNs/MyWebSocketServer.cs")
     stream = src("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
-    assert "TryPromoteDuplicateSellerSession" in server
+    assert "TryPromoteDuplicateShopSession" in server
     assert "WebSocketPageLifecycleGuard.ForgetClosedSession(session.SessionID);" in server
     assert "await ProcessTextBurstStreamingAsync(qn, lease);" in stream
     assert "if (!lease.IsCurrent)" in stream
