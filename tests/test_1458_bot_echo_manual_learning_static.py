@@ -36,7 +36,7 @@ def test_manual_learning_reuses_delivery_watchdog_bot_echo_authority():
     authority_call = "SendDeliveryWatchdog.IsKnownBotAnswer"
     assert authority_call in learning
     assert "public static bool IsKnownBotAnswer(" in watchdog
-    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
+    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)]" in watchdog
     # The runtime keeps Bot and human seller events distinct; the learning guard consumes
     # the same delivery ledger that establishes Bot ownership instead of duplicating heuristics.
     assert "SellerBotEcho" in runtime
