@@ -1,4 +1,5 @@
 using Bot.Automation.ChatDeskNs;
+using Bot.ShopScope;
 using BotLib;
 using FlaUI.UIA3;
 using System;
