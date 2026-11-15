@@ -455,6 +455,10 @@ def test_open_ai_learning_circuit_cooldown_survives_application_restart():
         service.index("private static void Requeue"):
         service.index("private static void CompleteSkipped")
     ]
+    snapshot = service[
+        service.index("private static void SaveSnapshot"):
+        service.index("private static ConversationSessionLearningReportEntity NewReport")
+    ]
 
     assert 'const string prefix = "ai_upstream_circuit_open_until:"' in parser
     assert "DateTimeStyles.RoundtripKind" in parser
@@ -463,6 +467,6 @@ def test_open_ai_learning_circuit_cooldown_survives_application_restart():
     assert "TryGetPersistedKnowledgeCorpusCircuitOpenUntil(" in recovery
     assert "var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(persistedCircuitOpenUntil);" in recovery
     assert "if (circuitDelay > due) due = circuitDelay;" in recovery
-    # SaveSnapshot must not erase the durable deadline written before Requeue.
+    # The successful requeue path calls SaveSnapshot, which must preserve report.Error.
     assert "SaveSnapshot(session, waitingStatus);" in requeue
-    assert "report.Error =" not in requeue
+    assert "report.Error =" not in snapshot
