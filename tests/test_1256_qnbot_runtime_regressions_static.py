@@ -49,7 +49,7 @@ def test_ordinary_fixed_rule_gate_never_fail_opens_into_ai_after_timeout():
 def test_fixed_send_checks_generation_age_without_advancing_pre_merge_state():
     source = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     method = source[source.index("private static async Task<bool> SendFixedAsync"):source.index("public static async Task<bool> TryHandleAsync")]
-    assert method.count("sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)") >= 2
+    assert method.count("sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)") >= 2
     assert "fixed_reply_ready" not in method
     assert "fixed_reply_sending" not in method
     assert "SendTextWithRetryAsync" in method
