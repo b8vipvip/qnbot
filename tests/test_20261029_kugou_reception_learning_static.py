@@ -39,7 +39,7 @@ def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
     assert "AtUtc > DateTime.UtcNow.AddHours(-2)" in policy
     assert '"awaiting_binding_proof"' in policy
     assert '"awaiting_order_review"' in policy
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in policy
+    assert "ResolveShopForSeller(seller)" in policy
     assert 'Path.Combine(directory, "kugou-reception-decisions.json")' in policy
 
 def test_order_photo_wait_only_advances_after_confirmed_delivery():
@@ -78,10 +78,14 @@ def test_shop_rule_editor_is_validated_versioned_and_reversible():
     ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
     nav = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     target = text("src/Directory.Build.targets")
-    assert "qnbot.kugou.reception-rules.v1" in rules
-    assert 'obj.Value<bool>("manual_review_required") != true' in rules
+    assert "qnbot.kugou.reception-rules.v2" in rules
+    assert 'obj.Value<bool?>("manual_review_required") != true' in rules
     assert 'obj.Value<bool?>("automatic_recharge_enabled") != false' in rules
-    assert 'string.Equals(uri.Host, "howhub.k2n.cn"' in rules
+    assert "IsHttpsUrl" in rules
+    assert "guide_url" in rules
+    assert "product_ids" in rules
+    assert "quarantine_knowledge_ids" in rules
+    assert "visual_rules" in rules
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in rules
     assert ".backup." in rules
     assert "RestoreLatestBackup(" in rules
@@ -102,3 +106,15 @@ def test_optional_guidance_flags_never_disable_critical_safety():
     assert "KugouReceptionPolicy.IsQuarantined" in text(
         "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs"
     )
+
+
+
+def test_private_profile_migration_is_explicit_and_never_auto_enables_old_store_policy():
+    rules = text("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
+    assert "MigrateLegacyV1" in rules
+    assert 'migrated["notes"]' in rules
+    assert '["enabled"] = false' in rules
+    assert "专属接待保持关闭" in ui
+    assert "私有商品ID" in ui
+    assert "ShopKey" in ui

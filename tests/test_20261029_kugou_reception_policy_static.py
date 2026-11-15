@@ -14,16 +14,15 @@ SENDER = "src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs"
 def test_scoped_identity_prevents_cross_shop_knowledge_leak():
     p = src(POLICY)
     assert "KnowledgeEngineV2Repository.LoadAll(seller)" in p
-    assert 'x.ProductIds.Any(id => id == FirstProduct)' in p
-    assert "return matched;" in p
-    assert 'internal const string SecondProduct = "1066362196568"' in p
+    assert "config.ProductIds" in p
+    assert "productIds.Contains(id ?? string.Empty)" in p
+    assert "config.Enabled" in p
+    assert "HasStableSellerId" in p
 
 def test_quarantine_is_non_destructive_and_applies_to_both_knowledge_paths():
     p = src(POLICY)
-    assert "QuarantineIds" in p
-    assert "25ef03a5b5d6412dbb3c9c0e9d8dd69e" in p
-    assert "3df9874e49d24a16b0c01685558e7c15" in p
-    assert "07ed86dfbdb149d7a2565288c582c25a" in p
+    assert "config.QuarantineKnowledgeIds" in p
+    assert "config.QuarantineTextPatterns" in p
     v2 = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     smart = src("src/Bot/ChromeNs/SmartReplyRouterService.cs")
     assert "KugouReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
@@ -36,7 +35,8 @@ def test_phone_only_wait_blocks_before_other_auto_reply_lanes():
     premerge = src("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert "PhoneOnly.IsMatch(input)" in p
     assert "PhotoInstruction.IsMatch(instruction)" in p
-    assert 'instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0' in p
+    assert "config.PhotoInstructionExcludedCues" in p
+    assert "HasAllCues(instruction, config.PhotoInstructionAllCues)" in p
     assert premerge.index("KugouReceptionPolicy.TryWaitForEvidence(") < premerge.index(
         "ManualRechargeAssistantService.TryHandleAsync("
     )
@@ -58,12 +58,14 @@ def test_visual_branch_uses_evidence_not_product_title_to_authorize():
     vision = src(VISION)
     assert "KugouReceptionPolicy.TryResolveVisual(" in vision
     assert "result.VisualSummary, result.LocalOcrText" in vision
-    assert "hisense_builtin_decline" in policy
-    assert "tcl_qq_reject" in policy
-    assert "tcl_need_verified_binding" in policy
-    assert "xiaomi_builtin_karaoke" in policy
-    assert "https://howhub.k2n.cn/guide/tcl-ln" in policy
-    assert "if (answer.Length == 0) return false;" in policy
+    assert "config.VisualRules" in policy
+    assert "MatchesVisualRule(compact, rule)" in policy
+    assert 'rule.Reply.Replace("{guide_url}", config.GuideUrl' in policy
+    assert "hisense_builtin_decline" not in policy
+    assert "tcl_qq_reject" not in policy
+    assert "tcl_need_verified_binding" not in policy
+    assert "xiaomi_builtin_karaoke" not in policy
+    assert "if (evidence.Trim().Length == 0) return false;" in policy
 
 def test_explicit_photo_referential_followups_last_90_seconds():
     followup = src("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
@@ -83,14 +85,15 @@ def test_decision_audit_is_bounded_and_anonymizes_buyer():
 
 def test_uncertain_or_negated_image_evidence_cannot_authorize_device():
     policy = src(POLICY)
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
     assert "visual_evidence_uncertain" in policy
     assert "ASK_EVIDENCE" in policy
     assert "need_resource_confirmation" in policy
-    assert "HasPositiveCue(compact, \"绑定qq\", \"qq音乐账号\", \"qq音乐资源\")" in policy
-    assert "HasPositiveCue(compact, \"已绑定酷狗\", \"酷狗账号已绑定\")" in policy
-    assert "无法确认|不能确定|不确定|无法识别" in policy
-    assert "没有|并非|不是" in policy
-
+    assert "HasPositiveCue(text, cue)" in policy
+    assert "NonePositiveCues" in policy
+    assert "visual_uncertain_patterns" in config
+    assert "positive_cue_groups" in config
+    assert "none_positive_cues" in config
 
 
 def test_reception_policy_cache_and_knowledge_detection_are_shopkey_scoped():
@@ -117,3 +120,98 @@ def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
     assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in config
     assert policy.count("var shop = ResolveShopForSeller(seller);") >= 3
     assert "var cacheKey = shop.ShopKey;" in policy
+
+
+
+def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default():
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    policy = src(POLICY)
+    assert 'qnbot.kugou.reception-rules.v2' in config
+    assert '["enabled"] = false' in config
+    assert '["product_ids"] = new JArray()' in config
+    assert '["quarantine_knowledge_ids"] = new JArray()' in config
+    assert '["guide_url"] = string.Empty' in config
+    assert '["policy_prompt"] = string.Empty' in config
+    assert "shop.HasStableSellerId" in config
+    assert 'Path.Combine(folder, "kugou-reception-rules.json")' in config
+    assert "KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
+    assert "KugouReceptionConfigService.GetConfig(shop)" in policy
+
+
+def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review():
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    migration = config[
+        config.index("private static JObject MigrateLegacyV1"):
+        config.index("private static bool IsHttpsUrl")
+    ]
+    assert "LegacySchema" in migration
+    assert 'migrated["notes"]' in migration
+    assert 'migrated = DefaultDocument()' in migration
+    assert '["enabled"] = false' in config
+    assert 'legacy.Value<bool?>("manual_review_required") != true' in migration
+    assert 'legacy.Value<bool?>("automatic_recharge_enabled") != false' in migration
+
+
+def test_store_visual_facts_and_reply_templates_are_data_driven_not_public_constants():
+    policy = src(POLICY)
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    assert "KugouVisualRule" in config
+    assert "all_cue_groups" in config
+    assert "positive_cue_groups" in config
+    assert "visual_rules" in config
+    assert "policy_prompt" in config
+    assert "blocked_outgoing_patterns" in config
+    assert "quarantine_text_patterns" in config
+    assert "TClGuideUrl" not in policy
+    assert "FirstProduct" not in policy
+    assert "SecondProduct" not in policy
+
+
+
+def test_high_risk_learning_review_is_global_and_not_disabled_by_optional_shop_profile():
+    policy = src(POLICY)
+    method = policy[
+        policy.index("internal static bool RequiresManualKnowledgeReview"):
+        policy.index("public static bool IsQuarantined")
+    ]
+    assert "if (!Applies(seller))" not in method
+    assert "会员|设备|账号|登录|绑定|充值|退款|支付|付款|到账|验证码|密码" in method
+
+
+def test_private_config_regex_patterns_have_a_runtime_timeout_and_fail_closed():
+    policy = src(POLICY)
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    assert "SafeIsMatch" in policy
+    assert "return true;" in policy[policy.index("private static bool SafeIsMatch"):policy.index("private static bool MatchesVisualRule")]
+    assert "TimeSpan.FromMilliseconds(100)" in policy
+    assert "new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100))" in config
+
+
+
+def test_private_profile_schema_documentation_covers_fail_closed_enablement_and_visual_rule_semantics():
+    docs = src("docs/SHOPKEY_RECEPTION_PROFILE_V2.md")
+    assert "qnbot.kugou.reception-rules.v2" in docs
+    assert "enabled" in docs and "product_ids" in docs
+    assert "all_cue_groups" in docs and "positive_cue_groups" in docs
+    assert "none_positive_cues" in docs
+    assert "manual_review_required" in docs
+    assert "automatic_recharge_enabled" in docs
+    assert "默认关闭" in docs
+    assert "v1" in docs and "备份" in docs
+
+
+
+def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers_or_urls():
+    paths = [
+        POLICY,
+        "src/Bot/ChromeNs/KugouReceptionConfigService.cs",
+        "docs/SHOPKEY_RECEPTION_PROFILE_V2.md",
+        "tests/test_20261029_kugou_reception_learning_static.py",
+    ]
+    combined = "\n".join(src(path) for path in paths)
+    fixture = src("tests/test_20261029_kugou_reception_policy_static.py")
+    import re
+    assert not re.search(r"(?<![A-Za-z0-9])\d{12,20}(?![A-Za-z0-9])", combined + "\n" + fixture)
+    assert not re.search(r"(?<![A-Za-z0-9])[a-f0-9]{24,}(?![A-Za-z0-9])", combined + "\n" + fixture, re.I)
+    assert not re.search(r"https?://", combined, re.I)
+    assert "://" not in fixture

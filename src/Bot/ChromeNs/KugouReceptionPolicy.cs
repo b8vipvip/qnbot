@@ -40,24 +40,7 @@ namespace Bot.ChromeNs
             @"^(?:\+?86[- ]?)?1[3-9]\d{9}$", RegexOptions.Compiled);
         private static readonly Regex PhotoInstruction = new Regex(
             "拍照|截图|拍一张|发图片|发张图|拍给我", RegexOptions.Compiled);
-        private static readonly Regex BadOutgoingClaim = new Regex(
-            "手机端不通用|不支持手机端|仅适用于电视大屏|仅限电视大屏|店铺仅提供当贝酷狗会员|充值成功后(绝对|一律)?不支持退款",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly HashSet<string> QuarantineIds = new HashSet<string>(
-            new[] {
-                "25ef03a5b5d6412dbb3c9c0e9d8dd69e",
-                "3df9874e49d24a16b0c01685558e7c15",
-                "9b17f1df3c504631b50ff33579399027",
-                "1934c28bfad941f1852da38d193a829e",
-                "347f8fa6e74d4133a9bcaeaf2a793833",
-                "033f1ea1a3c84b18b8b4b36a6eac6996",
-                "18d7d5cb57394393a8c475b9b2262c84",
-                "07ed86dfbdb149d7a2565288c582c25a"
-            }, StringComparer.OrdinalIgnoreCase);
         private static readonly object AuditSync = new object();
-        internal const string TClGuideUrl = "https://howhub.k2n.cn/guide/tcl-ln";
-        internal const string FirstProduct = "1057505313937";
-        internal const string SecondProduct = "1066362196568";
 
         internal static ShopContext ResolveShopForSeller(string seller)
         {
@@ -83,34 +66,38 @@ namespace Bot.ChromeNs
             try
             {
                 shop = ResolveShopForSeller(seller);
-                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey) || !shop.HasStableSellerId)
+                    return false;
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("酷狗接待规则店铺身份无法唯一解析，保持原流程：" + ex.Message, 5);
+                Log.ErrorWithMaxCount("店铺专属接待身份无法唯一解析，保持原流程：" + ex.Message, 5);
                 return false;
             }
 
-            // Seller nickname is display data and may be shared by multiple shops.
-            // Cache and knowledge lookup must always use the exact ShopKey scope.
             var cacheKey = shop.ShopKey;
             ShopDetection cached;
             if (Shops.TryGetValue(cacheKey, out cached) && cached.ExpiresUtc > DateTime.UtcNow)
                 return cached.Match;
+
             var matched = false;
             try
             {
-                using (ShopSettingsScope.Enter(shop))
+                var config = KugouReceptionConfigService.GetConfig(shop);
+                if (config.Enabled && config.ProductIds != null && config.ProductIds.Count > 0)
                 {
-                    // Do not activate another merchant's flow on merely seeing "酷狗" in chat.
-                    var records = KnowledgeEngineV2Repository.LoadAll(seller);
-                    matched = records.Any(x => x != null && x.ProductIds != null
-                        && x.ProductIds.Any(id => id == FirstProduct));
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        var productIds = new HashSet<string>(config.ProductIds, StringComparer.OrdinalIgnoreCase);
+                        var records = KnowledgeEngineV2Repository.LoadAll(seller);
+                        matched = records.Any(x => x != null && x.ProductIds != null
+                            && x.ProductIds.Any(id => productIds.Contains(id ?? string.Empty)));
+                    }
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("酷狗接待规则店铺识别失败，保持原流程：" + ex.Message, 5);
+                Log.ErrorWithMaxCount("店铺专属接待规则识别失败，保持原流程：" + ex.Message, 5);
             }
             Shops[cacheKey] = new ShopDetection
             {
@@ -120,46 +107,57 @@ namespace Bot.ChromeNs
             return matched;
         }
 
+        internal static void InvalidateShopCache(string shopKey)
+        {
+            if (string.IsNullOrWhiteSpace(shopKey)) return;
+            ShopDetection ignored;
+            Shops.TryRemove(shopKey, out ignored);
+        }
+
         internal static bool RequiresManualKnowledgeReview(string seller, string question, string answer)
         {
-            if (!Applies(seller)) return false;
+            // High-risk facts require review for every shop, even when a shop has not
+            // configured its optional business profile. The profile enable switch must
+            // never weaken this global learning safety boundary.
             var text = (question ?? string.Empty) + " " + (answer ?? string.Empty);
-            // Device eligibility, recharge and account-binding rules may never be
-            // inferred solely from AI or incidental past conversations.
             return Regex.IsMatch(text,
-                @"酷狗|会员|设备|电视|车机|账号|登录|绑定|充值|退款|支持|不支持|支付|付款|到账|发货|教程|app|tcl|海信|雷鸟|小米",
+                @"会员|设备|账号|登录|绑定|充值|退款|支付|付款|到账|验证码|密码|银行卡|隐私|实名|发货异常|教程",
                 RegexOptions.IgnoreCase);
         }
 
         public static bool IsQuarantined(string seller, string id, string title, string answer)
         {
             if (!Applies(seller)) return false;
-            if (QuarantineIds.Contains((id ?? string.Empty).Trim())) return true;
+            var config = KugouReceptionConfigService.GetConfig(seller);
+            if (config.QuarantineKnowledgeIds.Contains((id ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))
+                return true;
             var body = (title ?? string.Empty) + " " + (answer ?? string.Empty);
-            return BadOutgoingClaim.IsMatch(body)
-                || body.Contains("不要勾选“保留数据”")
-                || body.Contains("恢复出厂设置后不要升级");
+            return config.QuarantineTextPatterns.Any(pattern => SafeIsMatch(body, pattern));
         }
 
         // Called only after the order action ledger confirms the instruction was delivered.
         // This does not claim that payment, binding or recharge has been verified.
         internal static void ObserveDeliveredOrderInstruction(string seller, string buyer, string text)
         {
-            if (!Applies(seller) || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait) return;
+            if (!Applies(seller)) return;
+            var config = KugouReceptionConfigService.GetConfig(seller);
+            if (!config.EnablePhoneWait) return;
             text = (text ?? string.Empty).Trim();
             if (!PhotoInstruction.IsMatch(text)
-                || (text.IndexOf("酷狗", StringComparison.Ordinal) < 0
-                    && text.IndexOf("账号", StringComparison.Ordinal) < 0)
-                || text.IndexOf("电视", StringComparison.Ordinal) < 0) return;
+                || !HasAllCues(text, config.PhotoInstructionAllCues)
+                || !HasAnyCue(text, config.PhotoInstructionAnyCues)
+                || HasAnyCue(text, config.PhotoInstructionExcludedCues)) return;
             ReceptionEvidenceLedger.RecordDeliveredEvidenceRequest(seller, buyer, text);
             Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
-                "verified_order_photo_instruction_delivered", "kg_order_photo");
+                "verified_order_photo_instruction_delivered", "configured_photo_instruction");
         }
 
         public static bool TryWaitForEvidence(string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
-            if (!Applies(seller) || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait) return false;
+            if (!Applies(seller)) return false;
+            var config = KugouReceptionConfigService.GetConfig(seller);
+            if (!config.EnablePhoneWait) return false;
             var input = (question ?? string.Empty).Trim();
             if (!PhoneOnly.IsMatch(input)) return false;
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
@@ -168,21 +166,21 @@ namespace Bot.ChromeNs
             if (lastSeller == null)
             {
                 if (GetRecentStage(seller, buyer) != "awaiting_account_screenshot") return false;
-                reason = "订单截图要求已确认送达，正在等待设备账号图片";
+                reason = config.PhoneWaitReason;
                 Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
-                    "phone_only_after_order_instruction", "kg_wait_photo");
+                    "phone_only_after_order_instruction", "configured_phone_wait");
                 return true;
             }
             if (lastSeller.Timestamp == DateTime.MinValue
                 || lastSeller.Timestamp < DateTime.Now.AddHours(-2)) return false;
             var instruction = lastSeller.Text ?? string.Empty;
             if (!PhotoInstruction.IsMatch(instruction)
-                || (instruction.IndexOf("电视", StringComparison.Ordinal) < 0
-                    && instruction.IndexOf("酷狗", StringComparison.Ordinal) < 0
-                    && instruction.IndexOf("账号", StringComparison.Ordinal) < 0)
-                || instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0) return false;
-            reason = "等待设备酷狗账号界面截图；手机号并非当前步骤需要的证据";
-            Audit(seller, buyer, "WAIT", "awaiting_account_screenshot", "phone_only", "kg_wait_photo");
+                || !HasAllCues(instruction, config.PhotoInstructionAllCues)
+                || !HasAnyCue(instruction, config.PhotoInstructionAnyCues)
+                || HasAnyCue(instruction, config.PhotoInstructionExcludedCues)) return false;
+            reason = config.PhoneWaitReason;
+            Audit(seller, buyer, "WAIT", "awaiting_account_screenshot",
+                "phone_only_after_configured_photo_instruction", "configured_phone_wait");
             return true;
         }
 
@@ -191,31 +189,29 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             if (!Applies(seller)) return false;
             var config = KugouReceptionConfigService.GetConfig(seller);
-            if (!config.EnableAutoGuidance
-                && (answer ?? string.Empty).Contains(config.TclGuideUrl))
-                reason = "自动设备教程已在本店配置中关闭";
-            else if (BadOutgoingClaim.IsMatch(answer ?? string.Empty))
-                reason = "命中已隔离的错误跨端/店铺/退款表述";
-            else if (IsScreenshotQuestion(question)
-                && Regex.IsMatch(answer ?? string.Empty, @"^.{0,12}(包含酷狗K歌会员|包含.*?会员的)", RegexOptions.IgnoreCase))
-                reason = "买家正在核验设备截图，禁止以会员权益描述答非所问";
+            var output = answer ?? string.Empty;
+            if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
+                && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
+                reason = "当前店铺已关闭自动设备指导";
+            else if (config.BlockedOutgoingPatterns.Any(pattern => SafeIsMatch(output, pattern)))
+                reason = "命中当前店铺配置的禁止发送规则";
+            else if (IsScreenshotQuestion(question, config)
+                && !string.IsNullOrWhiteSpace(config.ScreenshotReplyPattern)
+                && SafeIsMatch(output, config.ScreenshotReplyPattern))
+                reason = "当前问题与店铺配置的截图答复校验规则冲突";
             if (reason.Length == 0) return false;
-            Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "kg_outgoing");
+            Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "configured_outgoing_guard");
             return true;
         }
 
-        internal static bool IsScreenshotQuestion(string question)
+        internal static bool IsScreenshotQuestion(string question, KugouReceptionConfig config)
         {
             var value = (question ?? string.Empty).Replace(" ", "").Trim();
-            return value.IndexOf("是这个", StringComparison.Ordinal) >= 0
-                || value.IndexOf("这张", StringComparison.Ordinal) >= 0
-                || value.IndexOf("这个界面", StringComparison.Ordinal) >= 0
-                || value.IndexOf("这页面", StringComparison.Ordinal) >= 0
-                || value.IndexOf("这是吗", StringComparison.Ordinal) >= 0;
+            return HasAnyCue(value, config == null ? null : config.ScreenshotQuestionCues);
         }
 
-        // Only trusted, observable attributes of the current image may choose a branch.
-        // No "eligible" or recharge permission is inferred from a brand alone.
+        // Visual decisions are data-driven. The rule engine is generic; store facts,
+        // vendor cues and customer-facing templates are loaded only from the ShopKey profile.
         public static bool TryResolveVisual(
             string seller, string buyer, string question, string summary, string ocr,
             out string answer, out string reason)
@@ -225,83 +221,91 @@ namespace Bot.ChromeNs
             if (!Applies(seller)) return false;
             var config = KugouReceptionConfigService.GetConfig(seller);
             if (!config.EnableAutoGuidance) return false;
-            var evidence = ((summary ?? string.Empty) + " " + (ocr ?? string.Empty));
+            var evidence = (summary ?? string.Empty) + " " + (ocr ?? string.Empty);
             if (evidence.Trim().Length == 0) return false;
             var compact = Regex.Replace(evidence, @"\s+", "").ToLowerInvariant();
-            // A vision summary containing speculation or negated account labels is not
-            // positive proof of the music provider or binding. Request clearer evidence.
-            if (Regex.IsMatch(compact,
-                @"无法确认|不能确定|不确定|无法识别|看不清|模糊|疑似|可能是|推测|未显示|未看到|没有看到|尚未确认"))
+
+            if (config.VisualUncertainPatterns.Any(pattern => SafeIsMatch(compact, pattern)))
             {
-                answer = "这张图片还不能可靠确认当前音乐栏目使用的账号体系或酷狗账号绑定状态。请打开对应的“我的账号”或会员开通页面，拍一张清晰完整的照片发来核实。";
+                if (string.IsNullOrWhiteSpace(config.VisualUncertainReply)) return false;
+                answer = config.VisualUncertainReply;
                 reason = "visual_evidence_uncertain";
                 Audit(seller, buyer, "ASK_EVIDENCE", "need_resource_confirmation",
-                    reason, "kg_visual_evidence");
+                    reason, "configured_visual_uncertainty");
                 return true;
             }
-            var official = compact.Contains("官方酷狗app") || compact.Contains("酷狗官方app")
-                || compact.Contains("自行安装") || compact.Contains("独立安装");
-            var tcl = compact.Contains("tcl") || compact.Contains("雷鸟");
-            var builtIn = compact.Contains("自带音乐") || compact.Contains("系统音乐")
-                || compact.Contains("聚好看") || compact.Contains("内置音乐");
-            var otherProvider = HasPositiveCue(compact, "绑定qq", "qq音乐账号", "qq音乐资源");
-            var kugouAccount = HasPositiveCue(compact, "已绑定酷狗", "酷狗账号已绑定")
-                || (HasPositiveCue(compact, "绑定成功") && compact.Contains("酷狗"));
-            if ((compact.Contains("海信") || compact.Contains("vidaa")
-                || compact.Contains("聚好看") || compact.Contains("东芝")) && builtIn && !official)
+
+            foreach (var rule in config.VisualRules)
             {
-                answer = "您当前使用的是电视系统自带的音乐栏目，这类栏目本店暂不提供充值服务。如果已经下单，可以先申请退款；如果是另行安装的酷狗官方应用，请把应用及登录页面发来再确认。";
-                reason = "hisense_builtin_decline";
+                if (!MatchesVisualRule(compact, rule)) continue;
+                if (rule.Reply.IndexOf("{guide_url}", StringComparison.Ordinal) >= 0
+                    && string.IsNullOrWhiteSpace(config.GuideUrl)) continue;
+                answer = rule.Reply.Replace("{guide_url}", config.GuideUrl ?? string.Empty);
+                reason = rule.Reason;
+                Audit(seller, buyer, "REPLY", rule.Stage, reason, rule.Id);
+                return true;
             }
-            else if (tcl && otherProvider && !official)
+            return false;
+        }
+
+        private static bool SafeIsMatch(string input, string pattern)
+        {
+            try
             {
-                answer = "从这张图看，当前音乐栏目使用的是 QQ 音乐账号体系，无法在这个栏目使用本店的酷狗会员。如果您另外安装了酷狗官方应用，可将那个应用的账号页面发来确认。";
-                reason = "tcl_qq_reject";
+                return Regex.IsMatch(input ?? string.Empty, pattern,
+                    RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
             }
-            else if (tcl && !official && kugouAccount)
+            catch (RegexMatchTimeoutException)
             {
-                answer = "收到您发来的绑定界面。图片上显示了酷狗账号绑定信息，我再结合订单核对；确认前暂不安排充值。";
-                reason = "tcl_binding_seen_pending_order_review";
+                // A pathological private pattern must never bypass a quarantine/send guard.
+                // For uncertainty checks, this conservatively requests additional evidence.
+                Log.ErrorWithMaxCount("店铺接待规则正则匹配超时，按安全拦截处理。", 5);
+                return true;
             }
-            else if (tcl && !official && !kugouAccount)
-            {
-                answer = "这张图还不能确认已绑定您自己的酷狗账号。请按 TCL/雷鸟电视教程进入“我的账号”绑定页面，确认是酷狗资源，并使用您本人能再次登录的电视账号绑定酷狗账号，完成后拍照发给我确认：" + config.TclGuideUrl;
-                reason = "tcl_need_verified_binding";
-            }
-            else if (!official && (compact.Contains("华数") || compact.Contains("iptv")
-                || compact.Contains("点歌机") || compact.Contains("话费开通")))
-            {
-                answer = "您这张图显示的系统目前不属于本店支持的酷狗账号充值范围。如果您使用的是另行安装的酷狗官方应用，可以把官方应用的账号页面发来单独确认。";
-                reason = "unsupported_platform";
-            }
-            else if (compact.Contains("小米") && compact.Contains("自带k歌") && !official)
-            {
-                answer = "小米电视系统自带的 K 歌栏目不支持本店酷狗会员。若您是使用独立安装的酷狗官方应用，请再发该应用的登录界面核验。";
-                reason = "xiaomi_builtin_karaoke";
-            }
-            if (answer.Length == 0) return false;
-            var newStage = reason == "tcl_need_verified_binding"
-                ? "awaiting_binding_proof"
-                : reason == "tcl_binding_seen_pending_order_review"
-                    ? "awaiting_order_review" : "device_rejected";
-            Audit(seller, buyer, "REPLY", newStage, reason, "kg_visual");
+        }
+
+        private static bool MatchesVisualRule(string text, KugouVisualRule rule)
+        {
+            if (rule == null) return false;
+            foreach (var group in rule.AllCueGroups)
+                if (!group.Any(cue => ContainsCue(text, cue))) return false;
+            if (rule.AnyCues.Count > 0 && !HasAnyCue(text, rule.AnyCues)) return false;
+            if (HasAnyCue(text, rule.NoneCues)) return false;
+            foreach (var group in rule.PositiveCueGroups)
+                if (!group.Any(cue => HasPositiveCue(text, cue))) return false;
+            if (rule.NonePositiveCues.Any(cue => HasPositiveCue(text, cue))) return false;
             return true;
         }
 
-        private static bool HasPositiveCue(string text, params string[] cues)
+        private static bool HasAllCues(string text, IEnumerable<string> cues)
         {
-            foreach (var cue in cues)
+            var values = cues == null ? new List<string>() : cues.ToList();
+            return values.Count > 0 && values.All(cue => ContainsCue(text, cue));
+        }
+
+        private static bool HasAnyCue(string text, IEnumerable<string> cues)
+        {
+            return cues != null && cues.Any(cue => ContainsCue(text, cue));
+        }
+
+        private static bool ContainsCue(string text, string cue)
+        {
+            return !string.IsNullOrWhiteSpace(cue)
+                && (text ?? string.Empty).IndexOf(cue, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool HasPositiveCue(string text, string cue)
+        {
+            if (string.IsNullOrWhiteSpace(cue)) return false;
+            var cursor = 0;
+            while (cursor < (text ?? string.Empty).Length)
             {
-                var cursor = 0;
-                while (cursor < text.Length)
-                {
-                    var i = text.IndexOf(cue, cursor, StringComparison.Ordinal);
-                    if (i < 0) break;
-                    var prefix = text.Substring(Math.Max(0, i - 10), Math.Min(10, i));
-                    if (!Regex.IsMatch(prefix, @"(?:未|无|没有|并非|不是|不|无法|看不到)[^，。；]{0,5}$"))
-                        return true;
-                    cursor = i + cue.Length;
-                }
+                var i = text.IndexOf(cue, cursor, StringComparison.OrdinalIgnoreCase);
+                if (i < 0) break;
+                var prefix = text.Substring(Math.Max(0, i - 10), Math.Min(10, i));
+                if (!Regex.IsMatch(prefix, @"(?:未|无|没有|并非|不是|不|无法|看不到)[^，。；]{0,5}$"))
+                    return true;
+                cursor = i + cue.Length;
             }
             return false;
         }
@@ -309,20 +313,16 @@ namespace Bot.ChromeNs
         public static string BuildPromptAddon(string seller, string buyer)
         {
             if (!Applies(seller)) return string.Empty;
-            var knownStage = GetRecentStage(seller, buyer);
             var config = KugouReceptionConfigService.GetConfig(seller);
-            return "\n\n【本店酷狗会员接待政策，必须遵守】"
-                + "\n最近经过规则决策的接待阶段：" + (knownStage.Length == 0 ? "未确认" : knownStage) + "。该阶段不是订单实时状态，必须用最新消息或订单证据重新验证。"
-                + "\n本店两商品1057505313937、1066362196568对应同一酷狗超级会员权益；按买家实际使用场景如实解释跨端权益，不得说手机端不通用；准确的价格、库存、会员类型仍需以实际订单及商品为准。"
-                + "\n卖家店铺先核验设备，再执行充值；已付款≠已核验≠已绑定≠已充值。手机/电脑/平板官方酷狗应用无需电视截图。其他智能设备需以当前应用、资源提供方和账号体系核验。"
-                + "\n海信/聚好看等系统自带音乐栏目按店铺经营政策暂不受理充值，独立安装的酷狗官方APP须单独核验。小米内置K歌不支持；自带听歌必须看开通会员页资源。"
-                + "\nTCL/雷鸟内置音乐先确认酷狗而非QQ资源、本人可重复登录的电视账号，必要时解绑旧账号，然后绑定本人酷狗账号；没有已绑定证据不得批准充值。已审核教程：" + config.TclGuideUrl
-                + (config.EnableAutoGuidance ? "" : "\n当前店铺已关闭自动设备指导，应交人工核验，不要自动发送设备操作教程。")
-                + "\n图片提问‘是这个吗’先回答当前图片是否为指定账号界面；无法确认就要求当前步骤证据，禁止机械回答会员包含哪些权益。人工已经处理时不抢答。"
-                + "\n不得擅自声称订单已充值/已到账，不能仅凭品牌或图片相似性确认可用；不能建议恢复出厂删除数据、拒绝升级或一律拒绝退款；有关退款和验证码由真实订单及人工/平台政策处理。\n";
+            if (string.IsNullOrWhiteSpace(config.PolicyPrompt)) return string.Empty;
+            var knownStage = GetRecentStage(seller, buyer);
+            return "\n\n" + config.PolicyPrompt
+                + "\n最近经过规则决策的接待阶段：" + (knownStage.Length == 0 ? "未确认" : knownStage)
+                + "。该阶段不是订单实时状态，必须用最新消息或外部订单证据重新验证。"
+                + (config.EnableAutoGuidance ? string.Empty
+                    : "\n当前店铺已关闭自动设备指导；涉及设备判断时应转人工核验，不得自动发送教程。")
+                + "\n任何情况下都不得仅凭付款、品牌或图片相似性确认履约完成；自动充值权限始终关闭，高风险业务事实必须人工审核。\n";
         }
-
-
 
         public static string GetAuditJson(string seller)
         {
