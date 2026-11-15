@@ -360,8 +360,9 @@ namespace Bot.ChromeNs
             if (qn == null || qn.Seller == null) return false;
             var expectedTargetId = (qn.Seller.TargetId ?? string.Empty).Trim();
             targetId = (targetId ?? string.Empty).Trim();
-            if (expectedTargetId.Length > 0 && targetId.Length > 0
-                && !string.Equals(expectedTargetId, targetId, StringComparison.Ordinal)) return false;
+            if (expectedTargetId.Length > 0
+                && (targetId.Length == 0
+                    || !string.Equals(expectedTargetId, targetId, StringComparison.Ordinal))) return false;
             return Activate(qn, sessionId, targetId, true,
                 evidence + (string.IsNullOrWhiteSpace(buyer) ? string.Empty : ", buyer=" + buyer));
         }
