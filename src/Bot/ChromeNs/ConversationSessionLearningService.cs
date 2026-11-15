@@ -1697,6 +1697,28 @@ namespace Bot.ChromeNs
             return openUntilUtc > DateTime.UtcNow;
         }
 
+        private static void RestoreKnowledgeCorpusCircuitBreakers(
+            IEnumerable<ConversationSessionLearningReportEntity> reports)
+        {
+            foreach (var report in reports)
+            {
+                DateTime openUntilUtc;
+                if (report == null || string.IsNullOrWhiteSpace(report.ShopKey)
+                    || !TryGetPersistedKnowledgeCorpusCircuitOpenUntil(report.Error, out openUntilUtc))
+                    continue;
+
+                var state = KnowledgeCorpusCircuitBreakers.GetOrAdd(
+                    report.ShopKey, _ => new KnowledgeCorpusCircuitState());
+                lock (state.Sync)
+                {
+                    if (openUntilUtc <= state.OpenUntilUtc) continue;
+                    state.OpenUntilUtc = openUntilUtc;
+                    state.ConsecutiveFailures = 0;
+                    state.LastTouchedUtc = DateTime.UtcNow;
+                }
+            }
+        }
+
         private static async Task<JObject> AnalyzeAsync(
             ActiveSession session,
             List<ConversationContextTurn> turns,
@@ -2219,6 +2241,7 @@ namespace Bot.ChromeNs
                         .OfType<ConversationSessionLearningReportEntity>()
                         .ToList();
                 }
+                RestoreKnowledgeCorpusCircuitBreakers(reports);
                 var resumedKeys = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var report in reports)
                 {
@@ -2319,15 +2342,11 @@ namespace Bot.ChromeNs
                     var due = TimeSpan.FromMinutes(InactivityMinutes) - (DateTime.Now - session.LastActivityAt);
                     if (due < TimeSpan.FromSeconds(5)) due = TimeSpan.FromSeconds(5);
 
-                    // The in-memory circuit is lost on process restart. The pending
-                    // report keeps the exact UTC deadline in Error, so startup recovery
-                    // must honor the remaining cooldown instead of immediately probing
-                    // the same unhealthy upstream again.
-                    DateTime persistedCircuitOpenUntil;
-                    if (TryGetPersistedKnowledgeCorpusCircuitOpenUntil(
-                        report.Error, out persistedCircuitOpenUntil))
+                    // Every recovered session for this ShopKey shares the restored deadline.
+                    DateTime circuitOpenUntil;
+                    if (TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out circuitOpenUntil))
                     {
-                        var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(persistedCircuitOpenUntil);
+                        var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(circuitOpenUntil);
                         if (circuitDelay > due) due = circuitDelay;
                     }
                     Schedule(session, due);

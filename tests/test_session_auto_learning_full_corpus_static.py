@@ -464,8 +464,7 @@ def test_open_ai_learning_circuit_cooldown_survives_application_restart():
     assert "DateTimeStyles.RoundtripKind" in parser
     assert "CultureInfo.InvariantCulture" in parser
     assert "return openUntilUtc > DateTime.UtcNow;" in parser
-    assert "TryGetPersistedKnowledgeCorpusCircuitOpenUntil(" in recovery
-    assert "var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(persistedCircuitOpenUntil);" in recovery
+    assert "var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(circuitOpenUntil);" in recovery
     assert "if (circuitDelay > due) due = circuitDelay;" in recovery
     # The successful requeue path calls SaveSnapshot, which must preserve report.Error.
     assert "SaveSnapshot(session, waitingStatus);" in requeue
@@ -473,3 +472,27 @@ def test_open_ai_learning_circuit_cooldown_survives_application_restart():
     assert "var delay = retryDelay ?? TimeSpan.FromMinutes(1);" in requeue
     assert "Schedule(session, delay);" in requeue
     assert "Schedule(session, TimeSpan.FromMinutes(1));" not in requeue
+
+
+def test_startup_restores_latest_unexpired_circuit_before_scheduling_all_sessions_for_that_shop():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    restore = service[
+        service.index("private static void RestoreKnowledgeCorpusCircuitBreakers"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+
+    assert "string.IsNullOrWhiteSpace(report.ShopKey)" in restore
+    assert "!TryGetPersistedKnowledgeCorpusCircuitOpenUntil(report.Error, out openUntilUtc)" in restore
+    assert "KnowledgeCorpusCircuitBreakers.GetOrAdd(\n                    report.ShopKey" in restore
+    assert "if (openUntilUtc <= state.OpenUntilUtc) continue;" in restore
+    assert "state.OpenUntilUtc = openUntilUtc;" in restore
+    assert recovery.index("RestoreKnowledgeCorpusCircuitBreakers(reports);") < recovery.index(
+        "foreach (var report in reports)"
+    )
+    assert recovery.index("TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey") < recovery.index(
+        "Schedule(session, due);"
+    )
