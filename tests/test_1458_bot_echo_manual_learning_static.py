@@ -21,7 +21,7 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
     comparison = "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer)"
 
     assert guard in method
-    assert "ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey))" in method
+    assert "ShopSettingsScope.Enter(shop)" in method
     assert manual_source in method
     assert comparison in method
     assert method.index(guard) < method.index(manual_source)
