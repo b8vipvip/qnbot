@@ -280,6 +280,7 @@ namespace Bot.ChromeNs
                 CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);
                 string ignoredStatusBinding;
                 _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
+                TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId);
                 Log.Info("检测到同一WebSocket切换了登录店铺身份，已解绑旧ShopKey并等待下一次状态事件重新绑定: oldShopRef="
                     + DiagnosticRef("shop", previousShopKey)
                     + ", newShopRef=" + DiagnosticRef("shop", shopKey)
@@ -368,10 +369,12 @@ namespace Bot.ChromeNs
                 && string.Equals(owner, sessionId, StringComparison.Ordinal);
         }
 
-        private void ReleaseShopSession(string sessionId)
+        private void ReleaseShopSession(string sessionId, bool promoteStandby = true)
         {
             sessionId = (sessionId ?? string.Empty).Trim();
             if (sessionId.Length == 0) return;
+            var releasedAuthority = false;
+            var releasedShopKey = string.Empty;
             lock (_sellerSessionSync)
             {
                 string ignoredDuplicate;
@@ -390,11 +393,53 @@ namespace Bot.ChromeNs
                 {
                     string removed;
                     _shopSessions.TryRemove(shopKey, out removed);
-                    Log.Info("ShopKey权威千牛CDP会话已释放，等待在线standby页面自动接管: shopRef="
+                    releasedAuthority = true;
+                    releasedShopKey = shopKey;
+                    Log.Info("ShopKey权威千牛CDP会话已释放，正在检查在线standby页面: shopRef="
                         + DiagnosticRef("shop", shopKey) + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 }
                 BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
             }
+
+            // Do not promote during a full listener teardown: all stale sessions are about
+            // to be discarded. On an ordinary socket close, elect one already-authenticated
+            // standby immediately instead of waiting for a future onChatDlgActive event.
+            if (releasedAuthority && promoteStandby)
+                TryPromoteAvailableStandby(releasedShopKey, "authority_disconnected", sessionId);
+        }
+
+        private void TryPromoteAvailableStandby(string shopKey, string reason, string excludedSessionId = null)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            excludedSessionId = (excludedSessionId ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return;
+
+            List<string> candidates;
+            lock (_sellerSessionSync)
+            {
+                candidates = _duplicateShopSessions
+                    .Where(x => string.Equals(x.Value, shopKey, StringComparison.Ordinal)
+                        && !string.Equals(x.Key, excludedSessionId, StringComparison.Ordinal)
+                        && !_closingDuplicateSessions.ContainsKey(x.Key)
+                        && _connectedSessions.ContainsKey(x.Key))
+                    .OrderByDescending(x =>
+                    {
+                        DateTime last;
+                        return _sessionLastActivityUtc.TryGetValue(x.Key, out last) ? last : DateTime.MinValue;
+                    })
+                    .Select(x => x.Key)
+                    .ToList();
+            }
+
+            foreach (var candidateId in candidates)
+            {
+                WebSocketSession candidate;
+                if (!_liveSessions.TryGetValue(candidateId, out candidate) || candidate == null) continue;
+                if (TryPromoteDuplicateShopSession(shopKey, candidate, reason)) return;
+            }
+
+            Log.Info("ShopKey权威千牛CDP会话已释放，但当前没有可提升的在线standby: shopRef="
+                + DiagnosticRef("shop", shopKey) + ", reason=" + (reason ?? string.Empty));
         }
 
         private bool ShouldRefreshStatusBinding(string sessionId, string loginNick, string conversationNick)
@@ -584,7 +629,7 @@ namespace Bot.ChromeNs
                 CDPClient removed;
                 _clients.TryRemove(sessionId, out removed);
                 CDPClient.ReleaseClosedSession(sessionId, reason, removed);
-                ReleaseShopSession(sessionId);
+                ReleaseShopSession(sessionId, false);
                 BotConnectionDiagnostics.RecordWebSocketClose(sessionId);
                 WebSocketPageLifecycleGuard.ForgetClosedSession(sessionId);
             }
