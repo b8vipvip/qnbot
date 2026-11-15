@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -64,8 +65,28 @@ namespace Bot.Knowledge
             };
             button.Click += (s, args) =>
             {
-                var editor = new BusinessPolicyProfileWindow { Owner = window };
-                editor.ShowDialog();
+                // This editor is injected into the per-shop StorePromptProfileWindow.
+                // Resolve its exact ShopKey first; never let a missing UI scope silently
+                // fall back to the process-global legacy business-policy.json.
+                var shop = GetField<ShopContext>(window, "_shop")
+                    ?? ShopScopedUiBridge.Get(window)
+                    ?? ShopSettingsScope.Current;
+                if (shop == null)
+                {
+                    MessageBox.Show(
+                        "当前店铺身份无法确认，已阻止打开全局运行策略配置。请从对应千牛店铺的店铺规则中心重新进入。",
+                        "运行策略 JSON",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var editor = new BusinessPolicyProfileWindow { Owner = window };
+                    ShopScopedUiBridge.Attach(editor, shop);
+                    editor.ShowDialog();
+                }
             };
             var index = panel.Children.IndexOf(save);
             panel.Children.Insert(index < 0 ? 0 : index, button);
