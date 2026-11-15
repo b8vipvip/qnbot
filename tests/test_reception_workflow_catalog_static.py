@@ -36,3 +36,18 @@ def test_generic_workflow_editor_exposes_draft_only_navigation():
     assert "ReceptionWorkflowCatalogService.RestoreLatestDraft(" in page
     assert "ReceptionWorkflowCatalogService.cs" in build
     assert "KnowledgeV2WorkflowDraftPage.cs" in build
+
+def test_workflow_restore_skips_corrupt_newest_backup_and_keeps_draft_fail_closed():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    restore = s[
+        s.index("public static string RestoreLatestDraft"):
+        s.index("\n    }\n}")
+    ]
+    assert "OrderByDescending(x => x, StringComparer.Ordinal).ToList()" in restore
+    assert "foreach (var candidate in backups)" in restore
+    assert "Validate(File.ReadAllText(candidate, Encoding.UTF8))" in restore
+    assert "没有找到有效的流程草稿备份，当前草稿未修改" in restore
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error)" in restore
+    assert "仍需单独人工审核和灰度激活" in restore
+
+
