@@ -14,7 +14,8 @@ def test_seller_echo_enters_canonical_mirror_before_agent_event():
         "var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text, shopKey);", 1
     )[1].split("var result = Agent.RecordEvent(", 1)[0]
     assert "ConversationContextStore.RecordObservedSellerMessage(" in segment
-    assert "seller, buyer, message, text" in segment
+    assert "seller, buyer, message, text, shopKey" in segment
+    assert "ResolveRuntimeByShopKey(shopKey)" in store
     assert "RefreshRemoteHistory" not in segment
 
 
@@ -25,7 +26,7 @@ def test_seller_echo_is_strictly_shop_scoped_and_id_deduplicated():
     )[1].split("public static bool IsPlatformSystemTip(", 1)[0]
     assert "string.Equals(from, seller, StringComparison.Ordinal)" in segment
     assert "string.Equals(to, buyer, StringComparison.Ordinal)" in segment
-    assert "var shop = ResolveShop(seller);" in segment
+    assert "var shop = ResolveShop(seller, shopKey);" in segment
     assert "if (shop == null) return false;" in segment
     assert "ShopSettingsScope.Enter(shop)" in segment
     assert "RecordMessage(state, seller, buyer, message, messageText, false);" in segment
