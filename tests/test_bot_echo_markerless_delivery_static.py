@@ -27,7 +27,7 @@ def test_delivery_matching_uses_one_canonical_buyer_visible_identity():
 def test_rpa_registers_pending_delivery_before_real_send_action():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
 
-    pending = rpa.index("SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text)")
+    pending = rpa.index("SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text, ResolveShopKeyForDeliveryWatchdog())")
     real_send = rpa.index("TrySendTextNativeFirstAsync(buyer, text, sendStart)", pending)
 
     assert pending < real_send
