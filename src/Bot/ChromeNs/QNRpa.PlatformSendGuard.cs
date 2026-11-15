@@ -253,6 +253,13 @@ namespace Bot.ChromeNs
                                 stablePlatformProbeDone = true;
                                 if (await StopIfPlatformSendBlockedAsync(buyer, text, method + "稳定清空后平台确认", shopKey).ConfigureAwait(false)) return false;
                             }
+                            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+                            {
+                                SetSendFailure("提交后店铺身份确认", "CDP登录身份已变化，未将提交证据归属到其他店铺");
+                                SendDeliveryWatchdog.CancelPending(
+                                    SellerNick, buyer, text, GetSendFailureReason(), shopKey);
+                                return false;
+                            }
                             if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
                             ResetSendFailure();
                             var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
