@@ -76,6 +76,8 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     assert "OrderByDescending" in promotion
     assert "_liveSessions.TryGetValue(candidateId, out candidate)" in promotion
     assert "TryPromoteDuplicateShopSession(shopKey, candidate, reason)" in promotion
+    assert "releasedPreviousAuthority = true;" in identity_change
+    assert "if (releasedPreviousAuthority)" in identity_change
     assert 'TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId)' in identity_change
 
 
