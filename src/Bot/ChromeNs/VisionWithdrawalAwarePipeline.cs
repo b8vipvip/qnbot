@@ -133,7 +133,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                detectedAt);
+                detectedAt,
+                burst.ShopKey);
 
             // Calling Prime again is idempotent. It guarantees a cache task exists even for a
             // recovered/background image that bypassed the normal incoming-message hook.
@@ -173,7 +174,7 @@ namespace Bot.ChromeNs
                 var note = withdrawn && cacheComplete
                     ? "图片已撤回；后台识别未取得可用结果，但完整本地缓存仍保留供后续重试。"
                     : "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_processing_failed");
                 Log.Info("视觉消息后台处理完成但未回复: seller=" + burst.SellerNick
                     + ", buyer=" + burst.BuyerNick
@@ -198,7 +199,7 @@ namespace Bot.ChromeNs
                     + ", cacheComplete=" + cacheComplete
                     + ", summary=" + Short(result.VisualSummary, 140));
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkCompleted("vision_withdrawn_analysis_completed");
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -213,7 +214,7 @@ namespace Bot.ChromeNs
                     + ", buyer=" + burst.BuyerNick
                     + ", withdrawn=" + withdrawn
                     + ", summary=" + Short(result.VisualSummary, 140));
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
 
@@ -250,7 +251,7 @@ namespace Bot.ChromeNs
             {
                 lifecycleLease.MarkCompleted("vision_auto_guidance_disabled");
                 if (ctl != null) ctl.SetSkipped("本店已关闭自动视觉设备引导，图片仍可供人工核验");
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             string receptionBlock;
@@ -259,7 +260,7 @@ namespace Bot.ChromeNs
             {
                 lifecycleLease.MarkCompleted("vision_business_guard_suppressed");
                 if (ctl != null) ctl.SetSkipped(receptionBlock);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             string humanReason;
@@ -272,7 +273,7 @@ namespace Bot.ChromeNs
                     + ", reason=" + humanReason);
                 lifecycleLease.MarkCompleted("vision_human_relevance_suppressed");
                 if (ctl != null) ctl.SetSkipped(humanReason);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (!await lifecycleLease.ConfirmStableAsync(220))
@@ -300,21 +301,22 @@ namespace Bot.ChromeNs
                 answer,
                 source,
                 detectedAt,
-                answerReadyAt);
+                answerReadyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
             if (!autoSend)
             {
                 lifecycleLease.MarkCompleted("vision_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案；图片语义已缓存", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
             {
                 lifecycleLease.MarkFailed("vision_answer_invalid");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：AI错误");
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (!lifecycleLease.IsCurrent)
@@ -372,7 +374,7 @@ namespace Bot.ChromeNs
                 + ", followUp=" + hasFollowUpText
                 + ", cacheComplete=" + cacheComplete
                 + ", success=" + sendOk);
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private static async Task SendCacheMissFallbackAsync(
@@ -395,12 +397,13 @@ namespace Bot.ChromeNs
                 answer,
                 "本地图片缓存兜底",
                 detectedAt,
-                DateTime.Now);
+                DateTime.Now,
+                burst.ShopKey);
             if (!Params.Robot.GetIsAutoReply())
             {
                 lifecycleLease.MarkCompleted("vision_cache_miss_fallback_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             if (!lifecycleLease.MarkSending("vision_cache_miss_fallback_send_started")) return;
@@ -421,7 +424,7 @@ namespace Bot.ChromeNs
             else
                 lifecycleLease.MarkFailed("vision_cache_miss_fallback_failed");
             if (ctl != null) ctl.SetSendResult(sent, sent ? "已发送：图片未完整缓存，需要买家重发" : "发送失败");
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private static bool TryRebindRecentCachedImage(
