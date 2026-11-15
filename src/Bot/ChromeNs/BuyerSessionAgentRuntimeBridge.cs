@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
@@ -19,6 +20,7 @@ namespace Bot.ChromeNs
     {
         private sealed class WatchedSession
         {
+            public string ShopKey { get; set; }
             public string Seller { get; set; }
             public string Buyer { get; set; }
             public DateTime LastSeenUtc { get; set; }
@@ -26,6 +28,7 @@ namespace Bot.ChromeNs
 
         private sealed class WatchedGeneration
         {
+            public string ShopKey { get; set; }
             public string Seller { get; set; }
             public string Buyer { get; set; }
             public long Generation { get; set; }
@@ -65,24 +68,27 @@ namespace Bot.ChromeNs
         }
 
         internal static void RegisterAcceptedGeneration(
+            string shopKey,
             string seller,
             string buyer,
             long generation,
             DateTime acceptedAtUtc)
         {
+            shopKey = Normalize(shopKey);
             seller = Normalize(seller);
             buyer = Normalize(buyer);
-            if (seller.Length == 0 || buyer.Length == 0 || generation <= 0) return;
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || generation <= 0) return;
             if (string.Equals(seller, buyer, StringComparison.Ordinal)) return;
             if (acceptedAtUtc == default(DateTime)) acceptedAtUtc = DateTime.UtcNow;
             if (acceptedAtUtc.Kind != DateTimeKind.Utc) acceptedAtUtc = acceptedAtUtc.ToUniversalTime();
 
-            WatchSession(seller, buyer);
-            var watchKey = BuildGenerationWatchKey(seller, buyer, generation);
+            WatchSession(shopKey, seller, buyer);
+            var watchKey = BuildGenerationWatchKey(shopKey, seller, buyer, generation);
             WatchedGenerations.AddOrUpdate(
                 watchKey,
                 _ => new WatchedGeneration
                 {
+                    ShopKey = shopKey,
                     Seller = seller,
                     Buyer = buyer,
                     Generation = generation,
@@ -91,6 +97,7 @@ namespace Bot.ChromeNs
                 (_, existing) =>
                 {
                     existing = existing ?? new WatchedGeneration();
+                    existing.ShopKey = shopKey;
                     existing.Seller = seller;
                     existing.Buyer = buyer;
                     existing.Generation = generation;
@@ -139,7 +146,7 @@ namespace Bot.ChromeNs
                 }
 
                 BuyerSessionAgentState state;
-                if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, watched.Generation, out state)
+                if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, watched.Generation, out state, watched.ShopKey)
                     || state == BuyerSessionAgentState.Completed
                     || state == BuyerSessionAgentState.Cancelled
                     || state == BuyerSessionAgentState.Failed)
@@ -154,7 +161,8 @@ namespace Bot.ChromeNs
                     watched.Seller,
                     watched.Buyer,
                     watched.Generation,
-                    out authoritativeAcceptedAtUtc)
+                    out authoritativeAcceptedAtUtc,
+                    watched.ShopKey)
                     && authoritativeAcceptedAtUtc != default(DateTime))
                 {
                     watched.AcceptedAtUtc = authoritativeAcceptedAtUtc;
@@ -168,7 +176,8 @@ namespace Bot.ChromeNs
                     watched.Seller,
                     watched.Buyer,
                     watched.Generation,
-                    "absolute_generation_age_exceeded");
+                    "absolute_generation_age_exceeded",
+                    watched.ShopKey);
                 WatchedGeneration removed;
                 WatchedGenerations.TryRemove(pair.Key, out removed);
                 Log.ErrorWithMaxCount(
@@ -189,19 +198,22 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void WatchSession(string seller, string buyer)
+        private static void WatchSession(string shopKey, string seller, string buyer)
         {
+            shopKey = Normalize(shopKey);
             seller = Normalize(seller);
             buyer = Normalize(buyer);
-            if (seller.Length == 0 || buyer.Length == 0 || string.Equals(seller, buyer, StringComparison.Ordinal)) return;
-            var key = seller + "#" + buyer;
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0
+                || string.Equals(seller, buyer, StringComparison.Ordinal)) return;
+            var key = shopKey + "#" + seller + "#" + buyer;
             var now = DateTime.UtcNow;
             WatchedSessions.AddOrUpdate(
                 key,
-                _ => new WatchedSession { Seller = seller, Buyer = buyer, LastSeenUtc = now },
+                _ => new WatchedSession { ShopKey = shopKey, Seller = seller, Buyer = buyer, LastSeenUtc = now },
                 (_, existing) =>
                 {
                     existing = existing ?? new WatchedSession();
+                    existing.ShopKey = shopKey;
                     existing.Seller = seller;
                     existing.Buyer = buyer;
                     existing.LastSeenUtc = now;
@@ -209,9 +221,22 @@ namespace Bot.ChromeNs
                 });
         }
 
-        private static string BuildGenerationWatchKey(string seller, string buyer, long generation)
+        private static string BuildGenerationWatchKey(string shopKey, string seller, string buyer, long generation)
         {
-            return Normalize(seller) + "#" + Normalize(buyer) + "#" + generation;
+            return Normalize(shopKey) + "#" + Normalize(seller) + "#" + Normalize(buyer) + "#" + generation;
+        }
+
+        private static string ResolveShopKey(QN qn)
+        {
+            if (qn == null || qn.Seller == null) return string.Empty;
+            var seller = Normalize(qn.Seller.Nick);
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null)
+                return string.Equals(Normalize(scopedShop.SellerNick), seller, StringComparison.Ordinal)
+                    ? Normalize(scopedShop.ShopKey)
+                    : string.Empty;
+            try { return Normalize(ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey); }
+            catch { return string.Empty; }
         }
 
         private static void AttachExisting()
@@ -238,7 +263,13 @@ namespace Bot.ChromeNs
                             Log.Info("BuyerSessionAgent忽略非买家后台通知: reason=" + nonBuyerReason);
                             return;
                         }
-                        WatchSession(e.Seller.Nick, e.Buyer.Nick);
+                        var shopKey = ResolveShopKey(qn);
+                        if (shopKey.Length == 0)
+                        {
+                            Log.ErrorWithMaxCount("BuyerSessionAgent后台通知缺少唯一ShopKey，已跳过以避免跨店状态污染。", 20);
+                            return;
+                        }
+                        WatchSession(shopKey, e.Seller.Nick, e.Buyer.Nick);
                         var now = DateTime.Now;
                         Agent.RecordEvent(
                             e.Seller.Nick,
@@ -249,7 +280,8 @@ namespace Bot.ChromeNs
                             now,
                             now,
                             "background:new_message_signal",
-                            false);
+                            false,
+                            shopKey);
                     };
                     Log.Info("BuyerSessionAgent已挂载客服实例原始消息流: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
@@ -299,7 +331,13 @@ namespace Bot.ChromeNs
             }
             var buyer = sellerMessage ? to : from;
             if (buyer.Length == 0 || string.Equals(buyer, seller, StringComparison.Ordinal)) return;
-            WatchSession(seller, buyer);
+            var shopKey = ResolveShopKey(qn);
+            if (shopKey.Length == 0)
+            {
+                Log.ErrorWithMaxCount("BuyerSessionAgent原始消息缺少唯一ShopKey，已跳过以避免跨店generation污染。", 20);
+                return;
+            }
+            WatchSession(shopKey, seller, buyer);
 
             var display = IncomingMessageSafety.GetDisplayText(message, text);
             var key = IncomingMessageSafety.BuildMessageKey(message, text);
@@ -313,7 +351,7 @@ namespace Bot.ChromeNs
                 if (ConversationContextStore.IsWithdrawalNotice(message, text))
                 {
                     Agent.RecordEvent(seller, buyer, BuyerSessionEventKind.SellerWithdrawal, key, sort,
-                        sourceTime, now, source + ":seller_withdrawal", false);
+                        sourceTime, now, source + ":seller_withdrawal", false, shopKey);
                     return;
                 }
 
@@ -338,7 +376,8 @@ namespace Bot.ChromeNs
                     sourceTime,
                     now,
                     source + (botEcho ? ":bot_echo" : ":human_reply"),
-                    false);
+                    false,
+                    shopKey);
 
                 if (!botEcho)
                 {
@@ -353,12 +392,12 @@ namespace Bot.ChromeNs
             if (OrderCardParser.TryParse(message, text, seller, buyer, "BuyerSessionAgent:" + source, out order))
             {
                 Agent.RecordEvent(seller, buyer, MapOrderKind(order.EventType), key, sort,
-                    order.EventTime, now, source + ":order:" + order.EventType, false);
+                    order.EventTime, now, source + ":order:" + order.EventType, false, shopKey);
                 return;
             }
 
             var kind = ClassifyBuyerEvent(message, text, display);
-            Agent.RecordEvent(seller, buyer, kind, key, sort, sourceTime, now, source + ":raw_buyer_event", false);
+            Agent.RecordEvent(seller, buyer, kind, key, sort, sourceTime, now, source + ":raw_buyer_event", false, shopKey);
         }
 
         private static BuyerSessionEventKind ClassifyBuyerEvent(QNChatMessage message, string text, string display)
