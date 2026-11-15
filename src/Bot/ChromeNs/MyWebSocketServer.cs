@@ -1328,14 +1328,20 @@ namespace Bot.ChromeNs
 
         private static async Task RecoverAsync(string reason)
         {
+            var shopKey = string.Empty;
             var lastBuyer = string.Empty;
-            try
+            var previous = QN.CurQN;
+            var previousClient = previous == null ? null : previous.CDP;
+            if (previousClient != null)
             {
-                var snapshot = BotConnectionDiagnostics.GetSnapshot();
-                if (snapshot != null) lastBuyer = snapshot.Buyer;
-            }
-            catch
-            {
+                var candidateShopKey = previousClient.ShopKey;
+                if (ReferenceEquals(ShopContextLocator.FindConnectedQnByShopKey(
+                    candidateShopKey, previousClient.SessionId), previous))
+                {
+                    shopKey = candidateShopKey;
+                    var buyer = previous.Buyer;
+                    lastBuyer = buyer == null ? string.Empty : buyer.Nick;
+                }
             }
 
             Log.Error("触发显式授权的千牛破坏性自动恢复：" + reason);
@@ -1372,7 +1378,7 @@ namespace Bot.ChromeNs
             }
 
             Log.Info("千牛进程已启动，等待接待窗口和客服参数恢复...");
-            await WaitForChatDeskAndOpenLastBuyerAsync(lastBuyer, 75);
+            await WaitForChatDeskAndOpenLastBuyerAsync(shopKey, lastBuyer, 75);
         }
 
         private static void KillQianniuProcesses()
@@ -1410,33 +1416,37 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private static async Task WaitForChatDeskAndOpenLastBuyerAsync(string lastBuyer, int seconds)
+        private static async Task WaitForChatDeskAndOpenLastBuyerAsync(string shopKey, string lastBuyer, int seconds)
         {
             var end = DateTime.Now.AddSeconds(seconds);
             while (DateTime.Now < end)
             {
                 try
                 {
-                    if (Desk.Inst != null)
+                    var qn = string.IsNullOrWhiteSpace(shopKey)
+                        ? QN.CurQN
+                        : ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                    var client = qn == null ? null : qn.CDP;
+                    var server = MyWebSocketServer.WSocketSvrInst;
+                    if (client != null && qn.Seller != null
+                        && !client.IsInvalidated && !client.IsShopIdentityRetired
+                        && server != null && server.IsAuthoritativeShopSession(client.ShopKey, client.SessionId))
                     {
-                        Desk.Inst.Show();
-                        Desk.Inst.BringTop();
-                    }
-
-                    if (QN.CurQN != null && QN.CurQN.Seller != null && !string.IsNullOrWhiteSpace(QN.CurQN.Seller.Nick))
-                    {
-                        Log.Info("千牛自动恢复成功: sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", QN.CurQN.Seller.Nick));
-                        if (!string.IsNullOrWhiteSpace(lastBuyer))
+                        Log.Info("千牛自动恢复成功: sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", qn.Seller.Nick));
+                        var desk = DeskSellerBindingRegistry.FindSellerDesk(qn.Seller.Nick, client.ShopKey);
+                        if (desk != null)
                         {
-                            try
-                            {
-                                QN.CurQN.OpenChat(lastBuyer);
-                                Log.Info("已尝试恢复打开最近买家会话: buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", lastBuyer));
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Exception(ex);
-                            }
+                            desk.Show();
+                            desk.BringTop();
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(shopKey) && !string.IsNullOrWhiteSpace(lastBuyer)
+                            && qn.Rpa != null && await qn.Rpa.VerifyShopIdentityBeforeSendAsync(shopKey)
+                            && ReferenceEquals(qn.CDP, client)
+                            && server.IsAuthoritativeShopSession(shopKey, client.SessionId))
+                        {
+                            client.OpenChat(lastBuyer);
+                            Log.Info("已尝试恢复打开最近买家会话: buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", lastBuyer));
                         }
                         return;
                     }

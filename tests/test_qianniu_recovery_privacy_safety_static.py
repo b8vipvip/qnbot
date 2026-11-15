@@ -33,16 +33,30 @@ def test_websocket_and_recovery_logs_use_stable_refs_for_runtime_identities():
     assert 'DiagnosticRef("seller", sellerNick)' in server
     assert 'DiagnosticRef("session", sessionId)' in server
     assert 'DiagnosticRef("buyer", buyerNick)' in server
-    assert 'MyWebSocketServer.DiagnosticRef("seller", QN.CurQN.Seller.Nick)' in server
+    assert 'MyWebSocketServer.DiagnosticRef("seller", qn.Seller.Nick)' in server
     assert 'MyWebSocketServer.DiagnosticRef("buyer", lastBuyer)' in server
 
-    # Keep seller/buyer values in the in-memory diagnostic snapshot because local UI and recovery
-    # need them, while preventing those raw values from being appended to ordinary runtime logs.
+    # Local diagnostics retain seller/buyer values without logging them verbatim.
     assert "Seller = seller" in server
     assert "Buyer = buyer" in server
     assert 'Log.Info("千牛CDP初始化成功, seller=" + qn.Seller.Nick' not in server
     assert 'Log.Info("千牛自动恢复成功：客服=" + QN.CurQN.Seller.Nick)' not in server
     assert 'Log.Info("已尝试恢复打开最近买家会话：" + lastBuyer)' not in server
+
+
+def test_restart_recovery_keeps_last_buyer_with_its_original_shopkey():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    recovery = server[server.index("private static async Task RecoverAsync"):]
+    assert "candidateShopKey, previousClient.SessionId), previous)" in recovery
+    assert "var buyer = previous.Buyer;" in recovery
+    assert "BotConnectionDiagnostics.GetSnapshot()" not in recovery
+    assert "WaitForChatDeskAndOpenLastBuyerAsync(shopKey, lastBuyer, 75)" in recovery
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in recovery
+    assert "await qn.Rpa.VerifyShopIdentityBeforeSendAsync(shopKey)" in recovery
+    assert "ReferenceEquals(qn.CDP, client)" in recovery
+    assert "server.IsAuthoritativeShopSession(shopKey, client.SessionId)" in recovery
+    assert "client.OpenChat(lastBuyer);" in recovery
+    assert "QN.CurQN.OpenChat" not in recovery
 
 
 def test_qnbot_status_raw_payload_still_flows_only_through_central_log_sanitizer():
