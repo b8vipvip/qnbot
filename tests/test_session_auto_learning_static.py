@@ -576,3 +576,11 @@ def test_learning_qn_message_listener_registration_uses_weak_instance_identity()
     assert "Attached.TryGetValue(qn, out marker)" in attach
     assert "Attached.Add(qn, new object());" in attach
     assert "RuntimeHelpers.GetHashCode(qn)" not in attach
+
+def test_windows_reusable_and_standalone_builds_use_distinct_concurrency_groups():
+    workflow = read(".github/workflows/windows-build.yml")
+    assert "workflow_call:" in workflow
+    assert "pull_request:" in workflow
+    assert "github.workflow" in workflow
+    assert 'group: windows-release-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}' in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
