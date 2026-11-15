@@ -65,7 +65,7 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
 
-    assert "ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);" in monitor
+    assert "ResponseProgressTracker.MarkManualIntervention(seller, buyer, text, shopKey);" in monitor
     assert "qn.CancelActiveBuyerGeneration" not in monitor
     assert "kind != BuyerSessionEventKind.SellerHumanReply" in agent
     assert "人工客服回复但不取消Bot任务" in progress
