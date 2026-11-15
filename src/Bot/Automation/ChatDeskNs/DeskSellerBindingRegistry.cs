@@ -315,8 +315,6 @@ namespace Bot.Automation.ChatDeskNs
 
         private static void ForgetShop(string shopKey, int hwnd)
         {
-            string current;
-            if (ShopToHwnd.TryGetValue(shopKey, out current) && int.TryParse(current, out _)) { }
             int mapped;
             if (ShopToHwnd.TryGetValue(shopKey, out mapped) && mapped == hwnd)
             {
