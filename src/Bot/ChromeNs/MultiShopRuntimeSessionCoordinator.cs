@@ -372,7 +372,7 @@ namespace Bot.ChromeNs
                 { reason = "ShopKey缺失或不一致"; return false; }
                 if (_activeSessionId.Length > 0
                     && !string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal))
-                { reason = "CDP会话缺失或不一致: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
+                { reason = "CDP会话不一致或缺失: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
                 return true;
             }
         }
