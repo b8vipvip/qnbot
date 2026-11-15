@@ -36,11 +36,11 @@ def test_exact_duplicate_cdp_payloads_stay_suppressed_across_recovery_cadences()
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
     assert "InboundFingerprintWindow = TimeSpan.FromMinutes(2)" in bridge
     assert "InboundFingerprintRetention = TimeSpan.FromMinutes(5)" in bridge
-    assert "BuildInboundFingerprint(seller, type, response)" in bridge
+    assert "BuildInboundFingerprint(shopKey, type, response)" in bridge
     assert "+ (response ?? string.Empty)" in bridge
     assert "MaxPendingInboundEvents = 512" in bridge
     assert "EnqueuePendingBounded(item, \"initial\")" in bridge
-    assert "EnqueuePendingBounded(item, \"retry_wait_authoritative_cdp\")" in bridge
+    assert "EnqueuePendingBounded(item, \"retry_wait_shopkey_authoritative_cdp\")" in bridge
 
 
 def test_owned_draft_forget_helper_clears_state_without_self_recursion():

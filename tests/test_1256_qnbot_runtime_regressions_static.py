@@ -31,7 +31,9 @@ def test_duplicate_cdp_recovery_queue_is_bounded_without_disabling_compensation(
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
     assert "MaxPendingInboundEvents = 512" in bridge
     assert "while (Pending.Count >= MaxPendingInboundEvents" in bridge
-    assert "TryDeliverLive(item)" in bridge
+    assert "TryDeliverLive(item, false)" in bridge
+    assert "TryDeliverLive(item, true)" in bridge
+    assert "MaxPendingInboundPayloadBytes" in bridge
     assert "target.DispatchInboundEvent(item.Type, item.Response)" in bridge
     assert "BeginForwardedInbound(item.SourceSession)" in bridge
 

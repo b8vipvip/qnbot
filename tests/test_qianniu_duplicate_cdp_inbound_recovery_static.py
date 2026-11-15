@@ -45,7 +45,7 @@ def test_duplicate_cdp_pages_forward_only_safe_inbound_events_to_authoritative_s
     recoverable = bridge[bridge.index("private static bool IsRecoverableInboundType"):bridge.index("private static void ObserveStatusSeller")]
     assert 'string.Equals(type, "onChatDlgActive"' not in recoverable
     assert "target.DispatchInboundEvent(item.Type, item.Response);" in bridge
-    assert "重复千牛CDP入站消息已转交权威会话" in bridge
+    assert "重复千牛CDP入站消息已按ShopKey转交权威会话" in bridge
     assert "已补发初始化期间暂存的千牛入站消息" in bridge
     assert "Queue<PendingInboundEvent>" in bridge
     assert "PendingSync" in bridge
@@ -81,8 +81,8 @@ def test_duplicate_cdp_bridge_deduplicates_exact_cross_page_replays_with_bounded
     assert "InboundFingerprintRetention = TimeSpan.FromMinutes(5)" in bridge
     assert "SessionSellerRetention = TimeSpan.FromHours(2)" in bridge
     assert "ConcurrentDictionary<string, DateTime> RecentInboundFingerprints" in bridge
-    assert "TryAcceptInboundFingerprint(seller, e.Type, response, now)" in bridge
-    assert "BuildInboundFingerprint(seller, type, response)" in bridge
+    assert "TryAcceptInboundFingerprint(shopKey, e.Type, response, now)" in bridge
+    assert "BuildInboundFingerprint(shopKey, type, response)" in bridge
     assert "StableHash64(raw)" in bridge
     assert "RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)" in bridge
     assert "MaybeCleanupTransientState(now)" in bridge
@@ -145,3 +145,36 @@ def test_duplicate_cdp_pending_recovery_queue_has_a_real_payload_byte_budget():
     assert "private static bool TryDequeuePending" in enqueue
     assert "_pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - (item == null ? 0 : item.PayloadBytes))" in enqueue
     assert "TryDequeuePending(out item)" in drain
+
+
+
+def test_duplicate_cdp_inbound_routing_is_bound_to_source_shopkey_not_seller_nickname():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    deliver = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+
+    assert "GetShopKeyForSession(item.SourceSession)" in deliver
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in deliver
+    assert "server.IsAuthoritativeShopSession(shopKey, target.SessionId)" in deliver
+    assert "target.IsShopIdentityRetired" in deliver
+    assert "QN.FindExistingBySellerNick" not in bridge
+    assert "BuildInboundFingerprint(shopKey, type, response)" in bridge
+    assert "public string ShopKey;" in bridge
+    assert "public bool FingerprintAccepted;" in bridge
+
+
+def test_pending_duplicate_cdp_events_revalidate_shopkey_and_replay_only_to_that_shop():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    deliver = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+    drain = bridge[bridge.index("private static void DrainPending"):]
+
+    assert "mappedShopKey" in deliver
+    assert "拒绝跨店补发" in deliver
+    assert "TryDeliverLive(item, true)" in drain
+    assert "QN.FindExistingBySellerNick" not in drain
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in deliver
