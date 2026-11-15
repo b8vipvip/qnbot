@@ -69,6 +69,7 @@ def test_authority_promotion_reapplies_duplicate_cap_per_shopkey():
         "EnforceDuplicateShopSessionCapLocked(shopKey);"
     )
     assert "QN.FindExistingByShopKey(shopKey)" in promotion
+    assert "CDPClient.PreferRuntimeSession(" in promotion
 
 
 def test_first_page_initializes_from_its_own_cdp_login_identity():
