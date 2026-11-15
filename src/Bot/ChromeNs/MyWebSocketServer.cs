@@ -196,46 +196,92 @@ namespace Bot.ChromeNs
             sessionId = (sessionId ?? string.Empty).Trim();
             if (shopKey.Length == 0 || sessionId.Length == 0) return false;
 
+            string previousShopKey = string.Empty;
+            var identityChanged = false;
             lock (_sellerSessionSync)
             {
-                string owner;
-                if (_shopSessions.TryGetValue(shopKey, out owner))
+                if (_sessionShopKeys.TryGetValue(sessionId, out previousShopKey)
+                    && !string.IsNullOrWhiteSpace(previousShopKey)
+                    && !string.Equals(previousShopKey, shopKey, StringComparison.Ordinal))
                 {
-                    if (string.Equals(owner, sessionId, StringComparison.Ordinal))
-                    {
-                        _sessionShopKeys[sessionId] = shopKey;
-                        string ignoredDuplicate;
-                        _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
-                        BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
-                        return true;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
-                    {
-                        _duplicateShopSessions[sessionId] = shopKey;
-                        _sessionShopKeys[sessionId] = shopKey;
-                        EnforceDuplicateShopSessionCapLocked(shopKey);
-                        return false;
-                    }
-
-                    string staleOwner;
-                    _shopSessions.TryRemove(shopKey, out staleOwner);
-                    if (!string.IsNullOrWhiteSpace(staleOwner))
-                    {
-                        string staleShopKey;
-                        _sessionShopKeys.TryRemove(staleOwner, out staleShopKey);
-                    }
+                    // One physical WebSocket must never silently migrate its old QN/CDP
+                    // object to a different shop. Detach the previous identity first and
+                    // let the next status event establish a fresh ShopKey binding.
+                    string ignoredShop;
+                    _sessionShopKeys.TryRemove(sessionId, out ignoredShop);
+                    string ignoredDuplicate;
+                    _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
+                    string previousOwner;
+                    if (_shopSessions.TryGetValue(previousShopKey, out previousOwner)
+                        && string.Equals(previousOwner, sessionId, StringComparison.Ordinal))
+                        _shopSessions.TryRemove(previousShopKey, out ignoredShop);
+                    identityChanged = true;
+                    BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                 }
 
-                _shopSessions[shopKey] = sessionId;
-                _sessionShopKeys[sessionId] = shopKey;
-                string ignored;
-                _duplicateShopSessions.TryRemove(sessionId, out ignored);
-                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
-                Log.Info("已选定ShopKey权威千牛CDP会话: shopRef=" + DiagnosticRef("shop", shopKey)
-                    + ", sessionRef=" + DiagnosticRef("session", sessionId));
-                return true;
+                if (!identityChanged)
+                {
+                    string owner;
+                    if (_shopSessions.TryGetValue(shopKey, out owner))
+                    {
+                        if (string.Equals(owner, sessionId, StringComparison.Ordinal))
+                        {
+                            _sessionShopKeys[sessionId] = shopKey;
+                            string ignoredDuplicate;
+                            _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
+                            BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
+                            return true;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
+                        {
+                            _duplicateShopSessions[sessionId] = shopKey;
+                            _sessionShopKeys[sessionId] = shopKey;
+                            EnforceDuplicateShopSessionCapLocked(shopKey);
+                            return false;
+                        }
+
+                        string staleOwner;
+                        _shopSessions.TryRemove(shopKey, out staleOwner);
+                        if (!string.IsNullOrWhiteSpace(staleOwner))
+                        {
+                            string staleShopKey;
+                            _sessionShopKeys.TryRemove(staleOwner, out staleShopKey);
+                        }
+                    }
+
+                    _shopSessions[shopKey] = sessionId;
+                    _sessionShopKeys[sessionId] = shopKey;
+                    string ignored;
+                    _duplicateShopSessions.TryRemove(sessionId, out ignored);
+                    BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
+                    Log.Info("已选定ShopKey权威千牛CDP会话: shopRef=" + DiagnosticRef("shop", shopKey)
+                        + ", sessionRef=" + DiagnosticRef("session", sessionId));
+                    return true;
+                }
             }
+
+            if (identityChanged)
+            {
+                try
+                {
+                    var previousQn = QN.FindExistingByShopKey(previousShopKey);
+                    if (previousQn != null && previousQn.CDP != null
+                        && string.Equals(previousQn.CDP.SessionId, sessionId, StringComparison.Ordinal))
+                        previousQn.CDP = null;
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("千牛WebSocket身份变化时解绑旧QN实例失败: " + ex.Message);
+                }
+                CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);
+                Log.Info("检测到同一WebSocket切换了登录店铺身份，已解绑旧ShopKey并等待下一次状态事件重新绑定: oldShopRef="
+                    + DiagnosticRef("shop", previousShopKey)
+                    + ", newShopRef=" + DiagnosticRef("shop", shopKey)
+                    + ", sessionRef=" + DiagnosticRef("session", sessionId));
+                return false;
+            }
+            return false;
         }
 
         private bool TryPromoteDuplicateShopSession(string shopKey, WebSocketSession session, string reason)
