@@ -28,7 +28,7 @@ def test_history_chat_organizer_is_a_native_v2_left_navigation_page():
     assert "new ChatHistoryScanWindow" not in operator
     assert "InjectHistoryButton" not in operator
     assert "KnowledgeV2ChatHistoryPage" in page
-    assert "PromoteHistoryImport(_seller, scan.ImportResult)" in page
+    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in page
     assert '"历史聊天扫描"' in delta
     assert 'record.SourceType = "chat_history_import"' in delta
     assert "KnowledgeEngineV2Repository.LoadAll" in delta
