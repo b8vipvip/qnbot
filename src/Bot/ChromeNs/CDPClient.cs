@@ -55,9 +55,19 @@ namespace Bot.ChromeNs
         private const int InvokeTimeoutMs = 8000;
         private const int ExecuteGateWaitTimeoutMs = 1500;
         private int _sessionInvalidated;
+        private string _shopKey = string.Empty;
+        private int _shopIdentityRetired;
         public string Nick { get; set; }
-        internal string ShopKey { get; set; }
-        internal bool IsShopIdentityRetired { get; set; }
+        internal string ShopKey
+        {
+            get { return Volatile.Read(ref _shopKey); }
+            set { Volatile.Write(ref _shopKey, value ?? string.Empty); }
+        }
+        internal bool IsShopIdentityRetired
+        {
+            get { return Volatile.Read(ref _shopIdentityRetired) != 0; }
+            set { Volatile.Write(ref _shopIdentityRetired, value ? 1 : 0); }
+        }
 
         private sealed class ForwardedInboundScope : IDisposable
         {
