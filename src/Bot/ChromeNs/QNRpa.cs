@@ -1373,19 +1373,22 @@ namespace Bot.ChromeNs
                 {
                     SetSendFailure("会话确认", "当前会话不是目标买家；target=" + buyer
                         + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
                 if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认").ConfigureAwait(false))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查"))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
@@ -1393,7 +1396,8 @@ namespace Bot.ChromeNs
                 if (sellerDesk == null || !EnsureSellerDeskBinding(false))
                 {
                     SetSendFailure("发送窗口", "未找到当前卖家对应千牛窗口");
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
                 if (!sellerDesk.IsVisible)
@@ -1403,14 +1407,16 @@ namespace Bot.ChromeNs
 
                 if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
                 var setOk = await TrySetPlainTextByCdpAsync(buyer, text).ConfigureAwait(false);
                 if (!setOk)
                 {
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
@@ -1418,23 +1424,27 @@ namespace Bot.ChromeNs
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
                 if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认").ConfigureAwait(false))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
                 if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                     return false;
                 }
 
-                SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text);
+                SendDeliveryWatchdog.EnsurePending(
+                    SellerNick, buyer, text, ResolveShopKeyForDeliveryWatchdog());
                 var sendStart = DateTime.Now;
                 sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
@@ -1457,7 +1467,8 @@ namespace Bot.ChromeNs
             {
                 SetSendFailure("自动发送异常", ex.Message);
                 await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
-                SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                SendDeliveryWatchdog.CancelPending(
+                        SellerNick, buyer, text, GetSendFailureReason(), ResolveShopKeyForDeliveryWatchdog());
                 Log.Exception(ex);
                 sendResult = false;
             }
