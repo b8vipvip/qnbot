@@ -1209,7 +1209,7 @@ namespace Bot.ChromeNs
                 lock (DbSync)
                 {
                     DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where EntityId not in (select EntityId from ConversationSessionLearningReportEntity order by UpdatedAtTicks desc limit " + MaxReports + ")");
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 order by UpdatedAtTicks desc limit " + MaxReports + ")");
                 }
             }
             catch (Exception ex)
