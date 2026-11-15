@@ -63,12 +63,12 @@ def test_duplicate_cdp_bridge_never_replaces_outbound_cdp_ownership():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
 
     assert "qn.CDP =" not in bridge
-    assert "TryClaimSellerSession" not in bridge
+    assert "TryClaimShopSession" not in bridge
     assert "OpenChat(" not in bridge
     assert "SetActiveConversationByNick" not in bridge
 
     # Existing server still owns the one-authoritative-CDP decision.
-    assert "TryClaimSellerSession" in server
+    assert "TryClaimShopSession" in server
     assert "重复千牛CDP会话已完成识别但不接管卖家运行通道" in server
     assert "qn.CDP = cdp;" in server
 
