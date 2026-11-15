@@ -123,7 +123,7 @@ namespace Bot.Automation.ChatDeskNs
                     && IsAuthenticatedSeller(currentActive);
                 if (!hasActive && desk.IsForeground
                     && (string.Equals(currentTitle, seller, StringComparison.Ordinal)
-                        || RuntimeSellerCount() <= 1))
+                        || RuntimeShopCount() <= 1))
                 {
                     MarkActiveSeller(desk, seller, "initial:" + (evidence ?? string.Empty));
                 }
@@ -218,7 +218,7 @@ namespace Bot.Automation.ChatDeskNs
             }
         }
 
-        private static int RuntimeSellerCount()
+        private static int RuntimeShopCount()
         {
             try
             {
