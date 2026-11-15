@@ -240,4 +240,14 @@ def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriti
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, original, 3, 50, out error)" in restore
     assert "Guid.NewGuid().ToString(\"N\")" in restore
 
+def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    save = config[
+        config.index("public static string SaveJson"):
+        config.index("public static string RestoreLatestBackup")
+    ]
+    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")' in save
+    assert 'Guid.NewGuid().ToString("N")' in save
+    assert "File.Copy(path, backup, false);" in save
+
 
