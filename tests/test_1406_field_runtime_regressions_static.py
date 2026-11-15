@@ -13,13 +13,16 @@ def test_standby_duplicate_payloads_coalesce_only_expensive_history_probes():
     assert "DuplicateProbeFingerprintWindow = TimeSpan.FromMinutes(2)" in src
     assert "MaxDuplicateProbeFingerprints = 2048" in src
     assert "RecentDuplicateProbePayloads" in src
-    assert "TryClaimDuplicateProbePayload(seller, e.Type, e.Value)" in src
+    assert "TryClaimDuplicateProbePayload(shopKey, seller, e.Type, e.Value)" in src
     assert "BuildDuplicateProbeFingerprint" in src
     assert "SHA256.Create()" in src
-    assert "重复千牛standby实时入站已按payload指纹合并，不重复触发CDP历史核对" in src
+    assert "重复千牛standby实时入站已按ShopKey+payload指纹合并，不重复触发CDP历史核对" in src
 
-    gate = src.index("TryClaimDuplicateProbePayload(seller, e.Type, e.Value)")
-    probe = src.index("RequestImmediateHistoryProbe(seller, sessionId)", gate)
+    assert "BuildDuplicateProbeFingerprint(shopKey, type, response)" in src
+    assert "GetShopKeyForSession(sessionId)" in src
+    assert "IsAuthoritativeShopSession(shopKey, sessionId)" in src
+    gate = src.index("TryClaimDuplicateProbePayload(shopKey, seller, e.Type, e.Value)")
+    probe = src.index("RequestImmediateHistoryProbe(shopKey, seller, sessionId)", gate)
     assert gate < probe
     assert 'session.Close(' not in src
     assert '"retireDuplicate"' not in src
