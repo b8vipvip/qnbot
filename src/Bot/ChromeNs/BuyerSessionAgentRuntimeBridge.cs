@@ -229,12 +229,8 @@ namespace Bot.ChromeNs
         private static string ResolveShopKey(QN qn)
         {
             if (qn == null || qn.Seller == null) return string.Empty;
-            var seller = Normalize(qn.Seller.Nick);
-            var scopedShop = ShopSettingsScope.Current;
-            if (scopedShop != null)
-                return string.Equals(Normalize(scopedShop.SellerNick), seller, StringComparison.Ordinal)
-                    ? Normalize(scopedShop.ShopKey)
-                    : string.Empty;
+            // The event source is an exact QN object; never substitute ambient scope or
+            // seller nickname here, because two stores may legitimately share that nickname.
             try { return Normalize(ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey); }
             catch { return string.Empty; }
         }
