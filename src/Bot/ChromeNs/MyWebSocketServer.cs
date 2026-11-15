@@ -284,6 +284,8 @@ namespace Bot.ChromeNs
                     client.ShopKey = shopKey;
                     client.Nick = qn.Seller == null ? string.Empty : qn.Seller.Nick;
                     qn.CDP = client;
+                    CDPClient.PreferRuntimeSession(
+                        shopKey, client.Nick, sessionId, string.Empty, "standby_promoted");
                 }
             }
             catch (Exception ex)
