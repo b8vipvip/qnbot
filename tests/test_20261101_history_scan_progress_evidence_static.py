@@ -12,8 +12,8 @@ def test_scan_bound_to_verified_conversation_and_safe_when_focus_changes():
     assert "WaitForSafeChatSwitchAsync" in scan
     assert 'BotActivityCoordinator.GetSnapshot(qn.Seller.Nick).ActiveCount == 0' in scan
     assert "BotActivityCoordinator.GetSnapshot(seller).ActiveCount == 0" in scan
-    assert 'ActiveBuyerScans.TryAdd(seller, 0)' in scan
-    assert 'ActiveBuyerScans.TryRemove(seller, out ignored)' in scan
+    assert 'ActiveBuyerScans.TryAdd(shopKey, 0)' in scan
+    assert 'ActiveBuyerScans.TryRemove(shopKey, out ignored)' in scan
     assert "new { ccode = ccode, type = 1 }" in scan
     assert "if (!string.Equals(CleanNick(currentNick)" in scan
     assert "if (!await scanContact(names[i], i + 1)) pending.Add(names[i]);" in scan
