@@ -134,6 +134,10 @@ def test_native_desk_guards_count_shopkeys_not_colliding_seller_nicks():
     assert "ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)" in rpa_desk
     assert "expectedTargetId.Length > 0" in coordinator
     assert "targetId.Length == 0" in coordinator
+    assert "FocusProofMaxAge = TimeSpan.FromSeconds(5)" in coordinator
+    assert "HasFreshFocusProofLocked()" in coordinator
+    assert "else if (changed) _lastFocusProofUtc = DateTime.MinValue;" in coordinator
+    assert "_activeSessionId.Length > 0" in coordinator
     assert "cannot only trust seller nickname" not in coordinator
 
 
