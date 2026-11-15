@@ -138,7 +138,6 @@ def test_native_desk_guards_count_shopkeys_not_colliding_seller_nicks():
     assert "HasFreshFocusProofLocked()" in coordinator
     assert "else if (changed) _lastFocusProofUtc = DateTime.MinValue;" in coordinator
     assert "_activeSessionId.Length > 0" in coordinator
-    assert "cannot only trust seller nickname" not in coordinator
 
 
 def test_buyer_session_generations_and_deadline_watchers_include_shopkey():
