@@ -835,7 +835,7 @@ namespace Bot.ChromeNs
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
-            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer))
+            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer, shopKey))
             {
                 SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
                 return false;
