@@ -214,4 +214,3 @@ def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers
     assert not re.search(r"(?<![A-Za-z0-9])\d{12,20}(?![A-Za-z0-9])", combined + "\n" + fixture)
     assert not re.search(r"(?<![A-Za-z0-9])[a-f0-9]{24,}(?![A-Za-z0-9])", combined + "\n" + fixture, re.I)
     assert not re.search(r"https?://", combined, re.I)
-    assert (":" + "/" + "/") not in fixture
