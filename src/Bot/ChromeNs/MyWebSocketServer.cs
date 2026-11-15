@@ -382,7 +382,8 @@ namespace Bot.ChromeNs
                 var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
                 if (loginNick.Length > 0 && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
                     Log.Info("状态事件loginNick与CDP登录身份昵称不同，已以TargetId/ShopKey为准: shopRef="
-                        + DiagnosticRef("shop", shopKey));
+                        + DiagnosticRef("shop", shopKey)
+                        + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
                 cdp.ShopKey = shopKey;
                 cdp.Nick = sellerNick;
                 qn.CDP = cdp;
@@ -427,6 +428,8 @@ namespace Bot.ChromeNs
                     return;
                 }
 
+                Log.Info("千牛登录身份已绑定独立ShopKey运行通道: shopRef=" + DiagnosticRef("shop", shopKey)
+                    + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
                 qn.QnVersion = ver != null ? ver.version : string.Empty;
                 cdp.ShopKey = shopKey;
                 cdp.Nick = sellerNick;
