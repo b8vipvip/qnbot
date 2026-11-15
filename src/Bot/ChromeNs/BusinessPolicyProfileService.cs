@@ -49,7 +49,7 @@ namespace Bot.ChromeNs
                 }
                 try
                 {
-                    value = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                    value = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
                 }
                 catch (Exception ex)
                 {
@@ -87,17 +87,25 @@ namespace Bot.ChromeNs
             var normalized = Validate(json).ToString(Formatting.Indented);
             var path = GetUserPath();
             var directory = Path.GetDirectoryName(path);
-            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
             var backup = string.Empty;
-            if (File.Exists(path))
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "BusinessPolicyProfile", 3000))
             {
-                var backupDirectory = CurrentBackupRoot(directory);
-                Directory.CreateDirectory(backupDirectory);
-                backup = Path.Combine(backupDirectory,
-                    "business-policy-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff") + ".json");
-                File.Copy(path, backup, true);
+                if (lease == null || !lease.Acquired)
+                    throw new IOException("运行策略跨进程写锁未获取，未修改任何配置。");
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                if (File.Exists(path))
+                {
+                    var backupDirectory = CurrentBackupRoot(directory);
+                    Directory.CreateDirectory(backupDirectory);
+                    backup = Path.Combine(backupDirectory,
+                        "business-policy-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N") + ".json");
+                    File.Copy(path, backup, false);
+                }
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, normalized, 3, 50, out error))
+                    throw new IOException("运行策略原子保存失败：" + error);
             }
-            AtomicWrite(path, normalized);
             Invalidate(path);
             EnsureLoaded();
             Log.Info("客户端运行策略JSON已保存: file=" + Path.GetFileName(path)
@@ -216,16 +224,27 @@ namespace Bot.ChromeNs
 
         private static void EnsureUserFile(string userPath)
         {
-            if (File.Exists(userPath)) return;
-            var directory = Path.GetDirectoryName(userPath);
-            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+            using (var lease = CrossProcessAtomicStateFile.Acquire(userPath, "BusinessPolicyProfile", 3000))
+            {
+                if (lease == null || !lease.Acquired)
+                    throw new IOException("运行策略初始化跨进程写锁未获取。");
+                // Recheck under the named mutex: another Bot process may have created
+                // this ShopKey profile after our initial File.Exists check.
+                if (File.Exists(userPath)) return;
+                var directory = Path.GetDirectoryName(userPath);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
 
-            var source = GetDefaultPath();
-            var shop = ShopSettingsScope.Current;
-            var legacy = Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
-            if (shop != null && CanAutoAdoptLegacy() && File.Exists(legacy)) source = legacy;
-            if (!File.Exists(source)) throw new FileNotFoundException("安装包缺少默认运行策略文件。", source);
-            AtomicWrite(userPath, File.ReadAllText(source, Encoding.UTF8));
+                var source = GetDefaultPath();
+                var shop = ShopSettingsScope.Current;
+                var legacy = Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
+                if (shop != null && CanAutoAdoptLegacy() && File.Exists(legacy)) source = legacy;
+                if (!File.Exists(source))
+                    throw new FileNotFoundException("安装包缺少默认运行策略文件。", source);
+                var initial = File.ReadAllText(source, Encoding.UTF8);
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(userPath, initial, 3, 50, out error))
+                    throw new IOException("运行策略初始化原子保存失败：" + error);
+            }
         }
 
         private static bool CanAutoAdoptLegacy()
@@ -271,7 +290,7 @@ namespace Bot.ChromeNs
         private static Regex CompileOptional(string pattern)
         {
             if (string.IsNullOrWhiteSpace(pattern)) return NeverRegex;
-            try { return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase); }
+            try { return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)); }
             catch (Exception ex) { throw new Exception("正则表达式无效：" + ex.Message); }
         }
 
