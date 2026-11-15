@@ -282,7 +282,7 @@ def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_comp
     docs = read("docs/SESSION_AUTO_LEARNING.md")
     method = context[
         context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
-        context.index("private static int ReadInt")
+        context.index("private static bool TryReadInt")
     ]
 
     assert "LearningHistoryMaxPages = 200" in context
@@ -291,3 +291,21 @@ def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_comp
     assert "if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))" in method
     assert "最多尝试 200 页" in docs
     assert "标记历史覆盖不完整并跳过 AI 分析" in docs
+
+
+
+def test_remote_history_never_infers_end_from_missing_hasmore_or_empty_page_with_more():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert 'var hasMoreKnown = resultObject != null' in method
+    assert 'TryReadInt(resultObject["hasMore"], out hasMore)' in method
+    assert "if (hasMoreKnown && hasMore > 0)" in method
+    assert 'result.ErrorCode = "history_empty_page_with_more"' in method
+    assert "if (hasMoreKnown && hasMore == 0)" in method
+    assert "if (hasMore == 0 && messages.Count < LearningHistoryPageSize)" not in method
+    assert "private static bool TryReadInt(JToken token, out int value)" in context
+    assert "if (token == null || token.Type == JTokenType.Null) return false;" in context

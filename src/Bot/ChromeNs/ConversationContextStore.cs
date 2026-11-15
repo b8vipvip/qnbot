@@ -914,10 +914,19 @@ namespace Bot.ChromeNs
                             ? new List<QNChatMessage>()
                             : (messagesToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>());
                         result.MessagesFetched += messages.Count;
+                        int hasMore = 0;
+                        var hasMoreKnown = resultObject != null
+                            && TryReadInt(resultObject["hasMore"], out hasMore);
                         if (messages.Count == 0)
                         {
+                            if (hasMoreKnown && hasMore > 0)
+                            {
+                                result.ErrorCode = "history_empty_page_with_more";
+                                result.StopReason = "empty_page_with_more";
+                                break;
+                            }
                             result.IsComplete = true;
-                            result.StopReason = "empty_page";
+                            result.StopReason = hasMoreKnown ? "server_end" : "empty_page";
                             break;
                         }
 
@@ -972,8 +981,11 @@ namespace Bot.ChromeNs
                         }
                         previousCursor = cursor;
 
-                        var hasMore = resultObject == null ? 0 : ReadInt(resultObject["hasMore"]);
-                        if (hasMore == 0 && messages.Count < LearningHistoryPageSize)
+                        // Only an explicit hasMore=false is authoritative. If the
+                        // field is absent/invalid, continue until an empty page or the
+                        // explicit page safety limit; never infer completion from a
+                        // short page with missing pagination metadata.
+                        if (hasMoreKnown && hasMore == 0)
                         {
                             result.IsComplete = true;
                             result.StopReason = "server_end";
@@ -1011,23 +1023,35 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        private static int ReadInt(JToken token)
+        private static bool TryReadInt(JToken token, out int value)
         {
-            if (token == null || token.Type == JTokenType.Null) return 0;
-            if (token.Type == JTokenType.Boolean) return token.Value<bool>() ? 1 : 0;
+            value = 0;
+            // Missing or malformed pagination metadata is unknown, not hasMore=false.
+            if (token == null || token.Type == JTokenType.Null) return false;
+            if (token.Type == JTokenType.Boolean)
+            {
+                value = token.Value<bool>() ? 1 : 0;
+                return true;
+            }
 
             var text = token.ToString().Trim();
             bool boolean;
-            if (bool.TryParse(text, out boolean)) return boolean ? 1 : 0;
+            if (bool.TryParse(text, out boolean))
+            {
+                value = boolean ? 1 : 0;
+                return true;
+            }
 
-            int value;
             if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
-                return value;
+                return true;
 
             double numeric;
             if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out numeric))
-                return numeric > 0 ? 1 : 0;
-            return 0;
+            {
+                value = numeric > 0 ? 1 : 0;
+                return true;
+            }
+            return false;
         }
 
         private static TimelineState GetState(string seller, string buyer)
