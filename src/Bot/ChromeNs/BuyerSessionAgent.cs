@@ -1,4 +1,5 @@
 using BotLib;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -69,6 +70,7 @@ namespace Bot.ChromeNs
 
     public sealed class BuyerSessionAgentSnapshot
     {
+        public string ShopKey { get; set; }
         public string SellerNick { get; set; }
         public string BuyerNick { get; set; }
         public long Generation { get; set; }
@@ -88,6 +90,7 @@ namespace Bot.ChromeNs
     public sealed class BuyerSessionAgentObservation
     {
         public string SessionKey { get; set; }
+        public string ShopKey { get; set; }
         public long Generation { get; set; }
         public CancellationToken CancellationToken { get; set; }
         public DateTime AcceptedAtUtc { get; set; }
@@ -126,9 +129,11 @@ namespace Bot.ChromeNs
             string buyerNick,
             string messageKey,
             long sortValue,
-            DateTime observedAt)
+            DateTime observedAt,
+            string shopKey = null)
         {
-            var key = BuildKey(sellerNick, buyerNick);
+            shopKey = ResolveShopKey(sellerNick, shopKey);
+            var key = BuildKey(sellerNick, buyerNick, shopKey);
             var state = GetOrCreateState(key, sellerNick, buyerNick);
 
             long generation;
@@ -137,6 +142,7 @@ namespace Bot.ChromeNs
             DateTime acceptedAtUtc;
             lock (state.SyncRoot)
             {
+                state.ShopKey = shopKey;
                 state.SellerNick = Normalize(sellerNick);
                 state.BuyerNick = Normalize(buyerNick);
                 state.LastObservedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
@@ -191,6 +197,7 @@ namespace Bot.ChromeNs
             }
 
             BuyerSessionAgentRuntimeBridge.RegisterAcceptedGeneration(
+                shopKey,
                 sellerNick,
                 buyerNick,
                 generation,
@@ -225,9 +232,11 @@ namespace Bot.ChromeNs
             DateTime sourceTimestamp,
             DateTime observedAt,
             string reason,
-            bool cancelCurrentGeneration)
+            bool cancelCurrentGeneration,
+            string shopKey = null)
         {
-            var key = BuildKey(sellerNick, buyerNick);
+            shopKey = ResolveShopKey(sellerNick, shopKey);
+            var key = BuildKey(sellerNick, buyerNick, shopKey);
             var state = GetOrCreateState(key, sellerNick, buyerNick);
             CancellationTokenSource cancel = null;
             var result = new BuyerSessionEventResult();
@@ -237,6 +246,7 @@ namespace Bot.ChromeNs
 
             lock (state.SyncRoot)
             {
+                state.ShopKey = shopKey;
                 state.SellerNick = Normalize(sellerNick);
                 state.BuyerNick = Normalize(buyerNick);
                 state.LastObservedAt = observedAt;
@@ -309,10 +319,10 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        public bool IsCurrent(string sellerNick, string buyerNick, long generation)
+        public bool IsCurrent(string sellerNick, string buyerNick, long generation, string shopKey = null)
         {
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return false;
             var expired = false;
             long elapsedMs = 0;
             lock (state.SyncRoot)
@@ -328,7 +338,7 @@ namespace Bot.ChromeNs
                 if (!expired) return true;
             }
 
-            Cancel(sellerNick, buyerNick, generation, "absolute_generation_age_current_gate");
+            Cancel(sellerNick, buyerNick, generation, "absolute_generation_age_current_gate", shopKey);
             Log.ErrorWithMaxCount(
                 "generation超过绝对年龄已被同步current门禁取消: seller=" + Normalize(sellerNick)
                 + ", buyer=" + Normalize(buyerNick)
@@ -339,9 +349,9 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        public CancellationToken GetCancellationToken(string sellerNick, string buyerNick, long generation)
+        public CancellationToken GetCancellationToken(string sellerNick, string buyerNick, long generation, string shopKey = null)
         {
-            return GetCancellationToken(BuildKey(sellerNick, buyerNick), generation);
+            return GetCancellationToken(BuildKey(sellerNick, buyerNick, shopKey), generation);
         }
 
         public bool TryTransition(
@@ -349,10 +359,11 @@ namespace Bot.ChromeNs
             string buyerNick,
             long generation,
             BuyerSessionAgentState next,
-            string reason)
+            string reason,
+            string shopKey = null)
         {
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return false;
             BuyerSessionAgentState previous;
             CancellationTokenSource completedCts = null;
             CancellationTokenSource expiredCts = null;
@@ -437,10 +448,10 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        public void Cancel(string sellerNick, string buyerNick, long generation, string reason)
+        public void Cancel(string sellerNick, string buyerNick, long generation, string reason, string shopKey = null)
         {
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return;
             CancellationTokenSource cts = null;
             lock (state.SyncRoot)
             {
@@ -458,10 +469,10 @@ namespace Bot.ChromeNs
             }
         }
 
-        public void CancelAll(string sellerNick, string buyerNick, string reason)
+        public void CancelAll(string sellerNick, string buyerNick, string reason, string shopKey = null)
         {
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return;
             List<CancellationTokenSource> cancellations;
             lock (state.SyncRoot)
             {
@@ -493,11 +504,12 @@ namespace Bot.ChromeNs
             string sellerNick,
             string buyerNick,
             long generation,
-            out BuyerSessionAgentState generationState)
+            out BuyerSessionAgentState generationState,
+            string shopKey = null)
         {
             generationState = BuyerSessionAgentState.Idle;
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return false;
             lock (state.SyncRoot)
             {
                 return state.GenerationStates.TryGetValue(generation, out generationState);
@@ -508,11 +520,12 @@ namespace Bot.ChromeNs
             string sellerNick,
             string buyerNick,
             long generation,
-            out DateTime acceptedAtUtc)
+            out DateTime acceptedAtUtc,
+            string shopKey = null)
         {
             acceptedAtUtc = default(DateTime);
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return false;
             lock (state.SyncRoot)
             {
                 return state.GenerationAcceptedAtUtc.TryGetValue(generation, out acceptedAtUtc)
@@ -520,14 +533,15 @@ namespace Bot.ChromeNs
             }
         }
 
-        public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick)
+        public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick, string shopKey = null)
         {
             SessionState state;
-            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return null;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick, shopKey), out state)) return null;
             lock (state.SyncRoot)
             {
                 return new BuyerSessionAgentSnapshot
                 {
+                    ShopKey = state.ShopKey,
                     SellerNick = state.SellerNick,
                     BuyerNick = state.BuyerNick,
                     Generation = state.Generation,
@@ -760,9 +774,33 @@ namespace Bot.ChromeNs
             state.Reason = Normalize(reason);
         }
 
-        private static string BuildKey(string sellerNick, string buyerNick)
+        private static string ResolveShopKey(string sellerNick, string shopKey)
         {
-            return Normalize(sellerNick) + "#" + Normalize(buyerNick);
+            shopKey = Normalize(shopKey);
+            if (shopKey.Length > 0) return shopKey;
+
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null)
+            {
+                return string.Equals(Normalize(scopedShop.SellerNick), Normalize(sellerNick), StringComparison.Ordinal)
+                    ? Normalize(scopedShop.ShopKey)
+                    : string.Empty;
+            }
+
+            try { return Normalize(ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick).ShopKey); }
+            catch { return string.Empty; }
+        }
+
+        private static string BuildKey(string sellerNick, string buyerNick, string shopKey)
+        {
+            shopKey = ResolveShopKey(sellerNick, shopKey);
+            if (shopKey.Length == 0)
+            {
+                // Ambiguous legacy calls must never share a generation across shops.
+                // A unique unresolved key makes state reads fail closed for that call.
+                shopKey = "unresolved:" + Guid.NewGuid().ToString("N");
+            }
+            return shopKey + "#" + Normalize(sellerNick) + "#" + Normalize(buyerNick);
         }
 
         private static string Normalize(string value)
@@ -773,6 +811,7 @@ namespace Bot.ChromeNs
         private sealed class SessionState
         {
             public readonly object SyncRoot = new object();
+            public string ShopKey;
             public string SellerNick;
             public string BuyerNick;
             public long Generation;
