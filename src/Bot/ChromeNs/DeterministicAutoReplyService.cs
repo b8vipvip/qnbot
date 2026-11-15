@@ -398,7 +398,7 @@ namespace Bot.ChromeNs
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
                 if (item.SessionGeneration > 0
-                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                 {
                     if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
                     Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
