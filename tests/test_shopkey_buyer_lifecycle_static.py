@@ -146,6 +146,27 @@ def test_buyer_burst_and_deterministic_reply_require_exact_shopkey():
     assert "已阻断普通Knowledge/AI链路" in autoreply
 
 
+def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
+    progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+    send_guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+
+    assert "SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text, shopKey)" in bridge
+    assert "string shopKey = null" in watchdog
+    assert "var shop = ResolveShop(seller, shopKey);" in watchdog
+    assert "ResolveRuntimeByShopKey(shopKey)" in watchdog
+    assert "ScopeKey(seller, shopKey)" in watchdog
+    assert "AnswerKey(seller, buyer, answer, shopKey)" in watchdog
+    assert "SendDeliveryWatchdog.ExpectDelivery(" in progress
+    assert "answerReadyAt, shopKey: shopKey" in progress
+    assert "DeliveryKey(seller, buyer, answer, shopKey)" in progress
+    assert "ResolveOperationOrDetectedTurnKey(seller, buyer, detected, shopKey)" in progress
+    assert "ResolveShopKeyForDeliveryWatchdog()" in send_guard
+    assert "MarkSubmissionAccepted(" in send_guard
+    assert "CancelConversation(" in send_guard
+
+
 def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
