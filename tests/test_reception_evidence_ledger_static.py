@@ -7,7 +7,8 @@ def source(path):
 
 def test_event_ledger_is_shop_scoped_atomic_and_deduplicated():
     code=source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
-    assert "ResolveRuntimeBySellerNick(seller)" in code
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in code
+    assert "ShopSettingsScope.Current" not in code
     assert 'Path.Combine(parent, "reception-evidence-ledger.json")' in code
     assert "CrossProcessAtomicStateFile.Acquire" in code
     assert "WriteAllTextAtomic" in code
