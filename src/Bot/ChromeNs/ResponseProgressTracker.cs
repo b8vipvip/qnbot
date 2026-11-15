@@ -547,11 +547,13 @@ namespace Bot.ChromeNs
         {
             var conversationKey = Key(seller, buyer, shopKey);
             var operationKey = OperationTurnKey.Value;
+            var detectedTurnKey = TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt), shopKey);
             var expectedPrefix = conversationKey + "#turn:";
             if (!string.IsNullOrWhiteSpace(operationKey)
-                && operationKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                && operationKey.StartsWith(expectedPrefix, StringComparison.Ordinal)
+                && string.Equals(operationKey, detectedTurnKey, StringComparison.Ordinal))
                 return operationKey;
-            return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt), shopKey);
+            return detectedTurnKey;
         }
 
         private static string ResolveTerminalTurnKey(string seller, string buyer, string shopKey = null)
