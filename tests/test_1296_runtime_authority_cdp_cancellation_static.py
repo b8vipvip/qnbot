@@ -35,7 +35,7 @@ def test_ai_response_body_inherits_generation_cancellation():
 
 def test_duplicate_websocket_recovery_channels_are_bounded_as_lightweight_standby():
     ws = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
-    assert "MaxDuplicateSellerSessions = 3" in ws
+    assert "MaxDuplicateShopSessions = 3" in ws
     assert "DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4)" in ws
     assert "EnforceDuplicateSellerSessionCapLocked(sellerNick)" in ws
     assert "StartDuplicateSessionSweeper()" in ws
