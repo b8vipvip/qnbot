@@ -50,6 +50,10 @@ namespace Bot.ChromeNs
         // have independent ids/timestamps. Keep an exact replay suppressed across watchdog/recovery
         // cadences instead of accepting the same physical event again after only a few seconds.
         private static readonly TimeSpan InboundFingerprintWindow = TimeSpan.FromMinutes(2);
+        // Conversation changes are state transitions, not durable message identities.
+        // Keep only a short cross-page burst window so switching A -> B -> A within
+        // two minutes is not mistaken for a replay of the first A event.
+        private static readonly TimeSpan ConversationChangeFingerprintWindow = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
         private const int MaxPendingInboundEvents = 512;
@@ -237,6 +241,9 @@ namespace Bot.ChromeNs
             DateTime now)
         {
             var fingerprint = BuildInboundFingerprint(seller, type, response);
+            var fingerprintWindow = string.Equals(type, "onConversationChange", StringComparison.Ordinal)
+                ? ConversationChangeFingerprintWindow
+                : InboundFingerprintWindow;
             while (true)
             {
                 DateTime seenAt;
@@ -246,7 +253,7 @@ namespace Bot.ChromeNs
                     continue;
                 }
 
-                if (now - seenAt <= InboundFingerprintWindow) return false;
+                if (now - seenAt <= fingerprintWindow) return false;
                 if (RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)) return true;
             }
         }
