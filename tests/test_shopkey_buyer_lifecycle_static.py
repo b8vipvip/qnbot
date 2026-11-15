@@ -45,6 +45,19 @@ def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     assert 'DiagnosticRef("shop", shopKey)' in server
 
 
+def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity():
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+
+    assert "PreferredShopSessions" in cdp
+    assert "var shopKey = (ShopKey ?? string.Empty).Trim();" in cdp
+    assert "ResolveRuntimeBySellerIdentity(localUser.LoginID).ShopKey" in cdp
+    assert "server.IsAuthoritativeShopSession(shopKey, SessionId)" in cdp
+    assert "QN.FindExistingByShopKey(shopKey)" in cdp
+    assert "cdp.ShopKey = shopKey;" in server
+    assert "client.ShopKey = shopKey;" in server
+
+
 def test_buyer_session_generations_and_deadline_watchers_include_shopkey():
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
