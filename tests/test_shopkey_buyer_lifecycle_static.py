@@ -151,7 +151,16 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     send_guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
 
+    assert "BeginAnswer(" in burst and "detectedAt, item.ShopKey" in burst
+    assert "DateTime.Now, item.ShopKey" in burst
+    assert "detectedAt,\n                answerReadyAt,\n                burst.ShopKey" in streaming
+    assert "detectedAt,\n                answerReadyAt,\n                burst.ShopKey" in vision
+    assert "Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey)" in streaming
+    assert "Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey)" in vision
     assert "SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text, shopKey)" in bridge
     assert "string shopKey = null" in watchdog
     assert "var shop = ResolveShop(seller, shopKey);" in watchdog
