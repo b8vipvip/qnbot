@@ -187,7 +187,8 @@ namespace Bot.ChromeNs
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
                 if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"), false);
+                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N"), false);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, data, 3, 50, out error))
                     throw new IOException(error);
