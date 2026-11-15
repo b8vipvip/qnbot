@@ -613,8 +613,21 @@ namespace Bot.ChromeNs
             Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
                 + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);
 
+            string shopKey;
+            try
+            {
+                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("买家消息缺少可验证ShopKey，已阻断回复链路: seller="
+                    + sellerNick + ", error=" + ex.Message, 20);
+                return Task.CompletedTask;
+            }
+
             _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
             {
+                ShopKey = shopKey,
                 SellerNick = sellerNick,
                 BuyerNick = buyerNick,
                 MessageKey = messageKey,
