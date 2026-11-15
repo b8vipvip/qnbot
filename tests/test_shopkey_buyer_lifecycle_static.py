@@ -52,6 +52,33 @@ def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
     assert "FindExistingBySellerNick" not in guard
 
 
+def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    release = server[
+        server.index("private void ReleaseShopSession"):
+        server.index("private bool ShouldRefreshStatusBinding")
+    ]
+    promotion = server[
+        server.index("private void TryPromoteAvailableStandby"):
+        server.index("private bool ShouldRefreshStatusBinding")
+    ]
+    identity_change = server[
+        server.index("private bool TryClaimShopSession"):
+        server.index("private bool TryPromoteDuplicateShopSession")
+    ]
+
+    assert "TryPromoteAvailableStandby(releasedShopKey, \"authority_disconnected\", sessionId)" in release
+    assert "releasedAuthority && promoteStandby" in release
+    assert "ReleaseShopSession(sessionId, false)" in server
+    assert "_duplicateShopSessions" in promotion
+    assert "_connectedSessions.ContainsKey(x.Key)" in promotion
+    assert "_closingDuplicateSessions.ContainsKey(x.Key)" in promotion
+    assert "OrderByDescending" in promotion
+    assert "_liveSessions.TryGetValue(candidateId, out candidate)" in promotion
+    assert "TryPromoteDuplicateShopSession(shopKey, candidate, reason)" in promotion
+    assert 'TryPromoteAvailableStandby(previousShopKey, "shop_identity_changed", sessionId)' in identity_change
+
+
 def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity():
     cdp = read("src/Bot/ChromeNs/CDPClient.cs")
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
