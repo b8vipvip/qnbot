@@ -198,6 +198,23 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static void ReleasePreferredRuntimeSession(string shopKey, string sessionId)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || sessionId.Length == 0) return;
+            lock (PreferredShopSessionSync)
+            {
+                string current;
+                if (PreferredShopSessions.TryGetValue(shopKey, out current)
+                    && string.Equals(current, sessionId, StringComparison.Ordinal))
+                {
+                    string ignored;
+                    PreferredShopSessions.TryRemove(shopKey, out ignored);
+                }
+            }
+        }
+
         internal static void PreferRuntimeSession(string shopKey, string sellerNick, string sessionId, string buyerNick, string reason)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
@@ -542,18 +559,20 @@ namespace Bot.ChromeNs
             }
             catch { }
             var server = MyWebSocketServer.WSocketSvrInst;
-            if (server != null && shopKey.Length > 0
-                && server.IsAuthoritativeShopSession(shopKey, SessionId))
+            var sessionShopKey = (ShopKey ?? string.Empty).Trim();
+            if (server == null || shopKey.Length == 0
+                || !string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shopKey, SessionId))
             {
-                PreferRuntimeSession(shopKey, sellerNick, SessionId, buyerNick, "onConversationChange");
-            }
-            else
-            {
-                Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由: shopRef="
+                Log.Info("千牛会话身份与当前CDP绑定不一致，已拒绝修改旧QN身份或接管命令路由: shopRef="
                     + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", boundShopRef=" + MyWebSocketServer.DiagnosticRef("shop", sessionShopKey)
                     + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", sellerNick)
                     + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                return;
             }
+
+            PreferRuntimeSession(shopKey, sellerNick, SessionId, buyerNick, "onConversationChange");
 
             if (EvBuyerSwitched != null)
             {
