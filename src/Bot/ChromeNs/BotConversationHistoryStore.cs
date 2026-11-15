@@ -868,7 +868,10 @@ namespace Bot.ChromeNs
             {
                 foreach (var entity in batch)
                 {
-                    Pending[entity.EntityId] = entity;
+                    // A newer status/source update may have arrived during the
+                    // failed disk transaction. Never overwrite that newer state
+                    // when requeuing the older failed batch.
+                    Pending.TryAdd(entity.EntityId, entity);
                 }
                 throw;
             }
