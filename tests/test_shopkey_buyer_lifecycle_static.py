@@ -22,7 +22,7 @@ def test_qn_runtime_registry_uses_shopkey_not_nickname_or_display():
     ]
 
     assert "ResolveRuntimeBySellerIdentity(seller)" in factory
-    assert "ShopIdentityResolver.Resolve(q._seller).ShopKey" in factory
+    assert "TryGetShopKey(q._seller)" in factory
     assert "q._seller.Nick == seller.Nick || q._seller.Display == seller.Display" not in factory
     assert "ShopSettingsScope.Current" in find_by_nick
     assert "ActiveShopSessionRegistry.GetActiveShopKey()" in find_by_nick
