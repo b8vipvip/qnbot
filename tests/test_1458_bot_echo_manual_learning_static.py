@@ -16,7 +16,7 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
     method_end = source.index("public static bool TryTakeSendBlock(", method_start)
     method = source[method_start:method_end]
 
-    guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho)"
+    guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)"
     manual_source = 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")'
     comparison = "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer)"
 
