@@ -1,5 +1,6 @@
 using Bot.Automation.ChatDeskNs.Automators;
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
