@@ -36,7 +36,7 @@ namespace Bot.ChromeNs
         // closed session can be collected as soon as MyWebSocketServer releases it.
         private static readonly ConcurrentDictionary<string, WeakReference> SessionClients =
             new ConcurrentDictionary<string, WeakReference>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, string> PreferredSellerSessions =
+        private static readonly ConcurrentDictionary<string, string> PreferredShopSessions =
             new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private static readonly object PreferredSellerSessionSync = new object();
         private static readonly AsyncLocal<string> ForwardedInboundSourceSession = new AsyncLocal<string>();
@@ -55,6 +55,7 @@ namespace Bot.ChromeNs
         private const int ExecuteGateWaitTimeoutMs = 1500;
         private int _sessionInvalidated;
         public string Nick { get; set; }
+        internal string ShopKey { get; set; }
 
         private sealed class ForwardedInboundScope : IDisposable
         {
@@ -153,14 +154,15 @@ namespace Bot.ChromeNs
 
             lock (PreferredSellerSessionSync)
             {
-                foreach (var pair in PreferredSellerSessions
+                foreach (var pair in PreferredShopSessions
                     .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
                     .ToList())
                 {
                     string ignored;
-                    PreferredSellerSessions.TryRemove(pair.Key, out ignored);
-                    Log.Info("已释放关闭WebSocket对应的CDP活动会话偏好: seller=" + pair.Key
-                        + ", session=" + sessionId);
+                    PreferredShopSessions.TryRemove(pair.Key, out ignored);
+                    Log.Info("已释放关闭WebSocket对应的CDP活动会话偏好: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", pair.Key)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId));
                 }
             }
 
@@ -195,50 +197,52 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void PreferRuntimeSession(string sellerNick, string sessionId, string buyerNick, string reason)
+        private static void PreferRuntimeSession(string shopKey, string sellerNick, string sessionId, string buyerNick, string reason)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
             sellerNick = (sellerNick ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             buyerNick = (buyerNick ?? string.Empty).Trim();
-            if (sellerNick.Length == 0 || sessionId.Length == 0) return;
+            if (shopKey.Length == 0 || sessionId.Length == 0) return;
 
             CDPClient client;
             if (!TryGetBySessionId(sessionId, out client)) return;
+            client.ShopKey = shopKey;
             client.Nick = sellerNick;
 
             string previous = string.Empty;
             var changed = false;
             lock (PreferredSellerSessionSync)
             {
-                PreferredSellerSessions.TryGetValue(sellerNick, out previous);
+                PreferredShopSessions.TryGetValue(shopKey, out previous);
                 if (!string.Equals(previous, sessionId, StringComparison.Ordinal))
                 {
-                    PreferredSellerSessions[sellerNick] = sessionId;
+                    PreferredShopSessions[shopKey] = sessionId;
                     changed = true;
                 }
             }
 
             if (buyerNick.Length > 0)
-            {
                 BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, buyerNick);
-            }
             if (changed)
             {
-                Log.Info("检测到真实会话切换，CDP命令已跟随活动千牛WebView: seller=" + sellerNick
-                    + ", buyer=" + buyerNick
-                    + ", previousSession=" + previous
-                    + ", currentSession=" + sessionId
+                Log.Info("检测到真实会话切换，CDP命令已跟随ShopKey对应的活动千牛WebView: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", sellerNick)
+                    + ", buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", buyerNick)
+                    + ", previousSessionRef=" + MyWebSocketServer.DiagnosticRef("session", previous)
+                    + ", currentSessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId)
                     + ", reason=" + (reason ?? string.Empty));
             }
         }
 
         private CDPClient ResolvePreferredRuntimeClient()
         {
-            var sellerNick = (Nick ?? string.Empty).Trim();
-            if (sellerNick.Length == 0) return null;
+            var shopKey = (ShopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return null;
 
             string preferredSession;
-            if (!PreferredSellerSessions.TryGetValue(sellerNick, out preferredSession)
+            if (!PreferredShopSessions.TryGetValue(shopKey, out preferredSession)
                 || string.IsNullOrWhiteSpace(preferredSession)
                 || string.Equals(preferredSession, SessionId, StringComparison.Ordinal))
             {
@@ -251,11 +255,11 @@ namespace Bot.ChromeNs
             lock (PreferredSellerSessionSync)
             {
                 string current;
-                if (PreferredSellerSessions.TryGetValue(sellerNick, out current)
+                if (PreferredShopSessions.TryGetValue(shopKey, out current)
                     && string.Equals(current, preferredSession, StringComparison.Ordinal))
                 {
                     string ignored;
-                    PreferredSellerSessions.TryRemove(sellerNick, out ignored);
+                    PreferredShopSessions.TryRemove(shopKey, out ignored);
                 }
             }
             return null;
@@ -317,12 +321,13 @@ namespace Bot.ChromeNs
             {
                 var jo = JObject.Parse(response ?? "{}");
                 var sellerNick = Convert.ToString(jo["loginNick"] ?? string.Empty).Trim();
-                if (sellerNick.Length == 0) return;
-                var qn = QN.FindExistingBySellerNick(sellerNick);
+                var shopKey = (ShopKey ?? string.Empty).Trim();
+                if (shopKey.Length == 0) return;
+                var qn = QN.FindExistingByShopKey(shopKey);
                 if (qn == null) return;
 
                 string effectiveSession;
-                if (!PreferredSellerSessions.TryGetValue(sellerNick, out effectiveSession)
+                if (!PreferredShopSessions.TryGetValue(shopKey, out effectiveSession)
                     || string.IsNullOrWhiteSpace(effectiveSession))
                 {
                     effectiveSession = qn.CDP == null ? string.Empty : qn.CDP.SessionId;
@@ -456,12 +461,12 @@ namespace Bot.ChromeNs
                 SessionClients.TryRemove(sessionId, out ignoredClient);
                 lock (PreferredSellerSessionSync)
                 {
-                    foreach (var pair in PreferredSellerSessions
+                    foreach (var pair in PreferredShopSessions
                         .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
                         .ToList())
                     {
                         string ignored;
-                        PreferredSellerSessions.TryRemove(pair.Key, out ignored);
+                        PreferredShopSessions.TryRemove(pair.Key, out ignored);
                         Log.Info("活动CDP会话失效，已撤销会话偏好并回退权威通道: seller="
                             + pair.Key + ", session=" + sessionId);
                     }
@@ -528,17 +533,25 @@ namespace Bot.ChromeNs
 
             var sellerNick = localUser.LoginID == null ? string.Empty : (localUser.LoginID.Nick ?? string.Empty).Trim();
             var buyerNick = localUser.Conversation == null ? string.Empty : (localUser.Conversation.Nick ?? string.Empty).Trim();
-            // Forwarded duplicate pages are ingress-only. A duplicate page may report a
-            // valid conversation event, but it must never become the runtime command session.
-            var server = MyWebSocketServer.WSocketSvrInst;
-            if (server != null && server.IsAuthoritativeSellerSession(sellerNick, SessionId))
+            string shopKey = string.Empty;
+            try
             {
-                PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
+                if (localUser.LoginID != null)
+                    shopKey = ShopContextLocator.ResolveRuntimeBySellerIdentity(localUser.LoginID).ShopKey;
+            }
+            catch { }
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server != null && shopKey.Length > 0
+                && server.IsAuthoritativeShopSession(shopKey, SessionId))
+            {
+                PreferRuntimeSession(shopKey, sellerNick, SessionId, buyerNick, "onConversationChange");
             }
             else
             {
-                Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由: seller="
-                    + sellerNick + ", session=" + SessionId);
+                Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", sellerNick)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
             }
 
             if (EvBuyerSwitched != null)
