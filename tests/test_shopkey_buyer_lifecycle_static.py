@@ -54,6 +54,9 @@ def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity()
     assert "ResolveRuntimeBySellerIdentity(localUser.LoginID).ShopKey" in cdp
     assert "server.IsAuthoritativeShopSession(shopKey, SessionId)" in cdp
     assert "QN.FindExistingByShopKey(shopKey)" in cdp
+    assert "IsShopIdentityRetired" in cdp
+    assert "allowRetiredIdentityRead" in cdp
+    assert "InvokeShopIdentity<LocalUserResponse>" in cdp
     assert "cdp.ShopKey = shopKey;" in server
     assert "client.ShopKey = shopKey;" in server
     assert "CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId)" in server
