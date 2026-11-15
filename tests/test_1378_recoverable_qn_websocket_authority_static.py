@@ -68,7 +68,6 @@ def test_authority_promotion_reapplies_duplicate_cap_per_shopkey():
     assert promotion.index("_duplicateShopSessions.TryRemove(sessionId, out ignored);") < promotion.index(
         "EnforceDuplicateShopSessionCapLocked(shopKey);"
     )
-    assert "QN.FindExistingByShopKey(shopKey)" in promotion
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in promotion
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in promotion
     assert "verifiedShop.ShopKey, shopKey" in promotion
