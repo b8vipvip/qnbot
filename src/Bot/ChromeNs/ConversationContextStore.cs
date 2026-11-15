@@ -776,7 +776,11 @@ namespace Bot.ChromeNs
         // dictionary key in a consumer: keys are ShopKey#Seller#Buyer.
         internal static object GetExistingLearningState(string seller, string buyer)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            // Session finalization has already entered the exact persisted ShopKey
+            // scope. Never resolve by seller nickname again: multiple shops may
+            // legitimately share one nickname and must remain distinct.
+            var shop = ShopSettingsScope.Current
+                ?? ShopContextLocator.ResolveRuntimeBySellerNick(seller);
             if (shop == null) return null;
             using (ShopSettingsScope.Enter(shop))
             {
