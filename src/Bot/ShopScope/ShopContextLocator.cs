@@ -25,6 +25,19 @@ namespace Bot.ShopScope
             return ResolveBySellerNickCore(sellerNick);
         }
 
+        // Resolve the exact login payload obtained from a specific CDP session.
+        // Stable TargetId identities may share a nickname; only legacy identities
+        // without TargetId are allowed to fall back to the unique-nickname resolver.
+        public static ShopContext ResolveRuntimeBySellerIdentity(DbEntity.LocalUser seller)
+        {
+            if (seller == null || string.IsNullOrWhiteSpace(seller.Nick))
+                throw new InvalidOperationException("千牛登录身份缺少卖家昵称。");
+            var context = ShopIdentityResolver.Resolve(seller);
+            if (!context.HasStableSellerId)
+                return ResolveRuntimeBySellerNick(seller.Nick);
+            return Profiles.GetOrCreate(context).ToContext();
+        }
+
         // Resolve from the exact QN instance that raised an event. Seller nick is
         // display data and may be shared by multiple accounts; never infer identity
         // from the nick when the source QN object is available.
