@@ -181,3 +181,113 @@ def test_structured_chat_timeout_exception_retries_instead_of_bypassing_batch_re
     )
     assert "attempt == 0" in batch
     assert "await Task.Delay(1200)" in batch
+
+
+
+def test_full_corpus_checkpoint_resumes_only_when_shop_corpus_and_transcript_are_unchanged():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    assert "ComputeKnowledgeCorpusTranscriptFingerprint(" in method
+    assert 'priorCoverage["knowledgeCorpusCompletedBatchIndices"] as JArray' in method
+    assert 'priorCoverage["knowledgeCorpusCandidateSuggestions"] as JArray' in method
+    assert 'priorCoverage.Value<int?>("knowledgeCorpusBatchSize") == KnowledgeCorpusBatchSize' in method
+    assert 'priorCoverage.Value<int?>("knowledgeCorpusPromptVersion") == KnowledgeCorpusPromptVersion' in method
+    assert "result.CompletedBatchIndices.Contains(batchIndex)" in method
+    assert "result.CompletedBatchIndices.Sum(i => batches[i].Count)" in method
+    assert "ParseSuggestions(priorCandidates)" in method
+    assert 'coverage["knowledgeCorpusCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.Candidates))' in method
+    assert "RestoreStringSet(priorCoverage[\"knowledgeCorpusModels\"], result.Models)" in method
+    assert "RestoreStringSet(priorCoverage[\"knowledgeCorpusProtocols\"], result.Protocols)" in method
+    assert "RestoreStringSet(priorCoverage[\"knowledgeCorpusEndpointNames\"], result.Endpoints)" in method
+    assert 'property.Name.StartsWith("knowledgeCorpus", StringComparison.Ordinal)' in finalize
+    assert "property.Value.DeepClone()" in finalize
+
+
+def test_checkpoint_candidates_restore_knowledge_and_evidence_provenance():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    parser = service[
+        service.index("private static List<Suggestion> ParseSuggestions"):
+        service.index("private static IEnumerable<Suggestion> DeduplicateSuggestions")
+    ]
+
+    assert 'KnowledgeId = Clean(Convert.ToString(item["knowledge_id"]), 256)' in parser
+    assert 'SourceFingerprint = Clean(Convert.ToString(item["source_fingerprint"]), 128)' in parser
+    assert 'CorpusBatchIndex = Math.Max(0, item.Value<int?>("corpus_batch_index") ?? 0)' in parser
+    assert 'item["evidence_message_ids"] is JArray' in parser
+    assert "Distinct(StringComparer.Ordinal).ToList()" in parser
+
+
+
+def test_restored_checkpoint_is_not_marked_complete_before_history_revalidation():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    preserve = finalize.index('property.Name.StartsWith("knowledgeCorpus", StringComparison.Ordinal)')
+    reset = finalize.index('initialCoverage["knowledgeCorpusComplete"] = false;')
+    save = finalize.index("report.InputCoverageJson = initialCoverage.ToString(Formatting.None)")
+    assert preserve < reset < save
+
+
+
+def test_incomplete_corpus_scans_remain_pending_and_retry_from_checkpoint_up_to_three_times():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+    requeue = service[
+        service.index("private static void Requeue("):
+        service.index("private static void CompleteSkipped")
+    ]
+
+    assert "var retryCorpus = !corpusComplete && session.RetryCount < 3" in finalize
+    assert "report.CompletedAtTicks = 0" in finalize
+    assert "report.RetryCount = session.RetryCount" in finalize
+    assert "Requeue(session, \"等待Knowledge V2全库补偿重试\")" in finalize
+    assert "if (retryCorpus)" in finalize
+    assert "string waitingStatus = \"等待聊天历史恢复后再次复盘\"" in requeue
+    assert "SaveSnapshot(session, waitingStatus)" in requeue
+
+
+
+def test_resume_reuses_the_exact_redacted_session_summary_used_by_completed_batches():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+
+    assert "var corpusSessionSummary = Redact(Clean(sessionSummary, 1200))" in method
+    assert 'priorCoverage["knowledgeCorpusSessionSummary"] != null' in method
+    assert 'corpusSessionSummary = Convert.ToString(priorCoverage["knowledgeCorpusSessionSummary"])' in method
+    assert 'coverage["knowledgeCorpusSessionSummary"] = corpusSessionSummary' in method
+    assert "transcript, corpusSessionSummary, styleBefore, localFirst" in method
+    assert "ComputeKnowledgeCorpusTranscriptFingerprint(\n                    transcript, styleBefore, localFirst)" in method
+
+
+
+def test_remote_history_page_safety_limit_is_explicit_and_never_reported_as_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    docs = read("docs/SESSION_AUTO_LEARNING.md")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static int ReadInt")
+    ]
+
+    assert "LearningHistoryMaxPages = 200" in context
+    assert "for (var page = 0; page < LearningHistoryMaxPages; page++)" in method
+    assert 'result.ErrorCode = "history_page_limit_reached"' in method
+    assert "if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))" in method
+    assert "最多尝试 200 页" in docs
+    assert "标记历史覆盖不完整并跳过 AI 分析" in docs
