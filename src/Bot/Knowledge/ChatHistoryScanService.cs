@@ -99,7 +99,6 @@ namespace Bot.Knowledge
         }
 
         private const int PageSize = 100;
-        private const int MaxHistoryPages = 200;
         private static readonly string[] NickFields =
         {
             "nick", "buyerNick", "targetNick", "targetNickName", "userNick",
@@ -1017,7 +1016,7 @@ namespace Bot.Knowledge
                             (int)(bounds.Top + Math.Max(120, bounds.Height * 0.45)));
 
                         var stableRounds = 0;
-                        for (var round = 0; round < 120 && stableRounds < 6; round++)
+                        while (stableRounds < 6)
                         {
                             token.ThrowIfCancellationRequested();
                             var before = names.Count;
@@ -1038,6 +1037,7 @@ namespace Bot.Knowledge
                         }
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     diagnostics.AppendLine("读取消息管理器联系人失败：" + Safe(ex.Message));
@@ -1273,9 +1273,15 @@ namespace Bot.Knowledge
             var seen = new HashSet<string>(StringComparer.Ordinal);
             var cursorId = "-1";
             var cursorTime = "-1";
-            var previousCursor = string.Empty;
+            var visitedCursors = new HashSet<string>(StringComparer.Ordinal)
+            {
+                cursorId + "|" + cursorTime
+            };
 
-            for (var page = 0; page < MaxHistoryPages; page++)
+            // Continue until the server explicitly reports the end, or an empty page
+            // confirms it when hasMore is omitted. There is intentionally no fixed
+            // 200-page ceiling: a long conversation must not be silently truncated.
+            while (true)
             {
                 token.ThrowIfCancellationRequested();
                 JObject response = null;
@@ -1306,13 +1312,26 @@ namespace Bot.Knowledge
 
                 var result = response["result"] ?? response;
                 var resultObject = result as JObject;
+                var hasMoreToken = resultObject == null ? null : resultObject["hasMore"];
+                var hasMoreKnown = hasMoreToken != null;
+                var hasMore = hasMoreKnown ? ToInt(hasMoreToken) : -1;
                 var msgsToken = resultObject == null
                     ? result as JArray
                     : (resultObject["msgs"] ?? resultObject["messages"] ?? resultObject["list"]);
                 var messages = msgsToken == null
                     ? new List<QNChatMessage>()
                     : msgsToken.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>();
-                if (messages.Count < 1) break;
+
+                if (messages.Count < 1)
+                {
+                    if (hasMoreKnown && hasMore > 0)
+                    {
+                        if (onExcluded != null) onExcluded("history_incomplete_empty_page");
+                        throw new InvalidOperationException(
+                            "history_pagination_incomplete:server_reports_more_but_page_is_empty");
+                    }
+                    break;
+                }
 
                 foreach (var message in messages)
                 {
@@ -1326,18 +1345,32 @@ namespace Bot.Knowledge
                         onExcluded(excluded);
                 }
 
+                // An explicit hasMore=false is authoritative even when the last page
+                // happens to contain exactly PageSize messages.
+                if (hasMoreKnown && hasMore == 0) break;
+
                 var oldest = messages.OrderBy(GetMessageTime).FirstOrDefault();
-                if (oldest == null) break;
-                cursorId = oldest.mcode == null || string.IsNullOrWhiteSpace(oldest.mcode.messageId)
+                if (oldest == null)
+                {
+                    if (onExcluded != null) onExcluded("history_incomplete_missing_cursor");
+                    throw new InvalidOperationException("history_pagination_incomplete:missing_cursor");
+                }
+
+                var nextCursorId = oldest.mcode == null || string.IsNullOrWhiteSpace(oldest.mcode.messageId)
                     ? (oldest.ext == null ? "-1" : oldest.ext.ww_msgid.ToString())
                     : oldest.mcode.messageId;
-                cursorTime = !string.IsNullOrWhiteSpace(oldest.sortTimeMicrosecond)
+                var nextCursorTime = !string.IsNullOrWhiteSpace(oldest.sortTimeMicrosecond)
                     ? oldest.sortTimeMicrosecond
                     : (!string.IsNullOrWhiteSpace(oldest.sendTime) ? oldest.sendTime : "-1");
+                var cursor = nextCursorId + "|" + nextCursorTime;
+                if (!visitedCursors.Add(cursor))
+                {
+                    if (onExcluded != null) onExcluded("history_incomplete_cursor_stalled");
+                    throw new InvalidOperationException("history_pagination_incomplete:cursor_stalled");
+                }
 
-                var cursor = cursorId + "|" + cursorTime;
-                if (cursor == previousCursor) break;
-                previousCursor = cursor;
+                cursorId = nextCursorId;
+                cursorTime = nextCursorTime;
 
                 if (!options.ScanAll && options.StartTime.HasValue)
                 {
@@ -1345,8 +1378,9 @@ namespace Bot.Knowledge
                     if (oldestTime != DateTime.MinValue && oldestTime < options.StartTime.Value) break;
                 }
 
-                var hasMore = resultObject == null ? 0 : ToInt(resultObject["hasMore"]);
-                if (hasMore == 0 && messages.Count < PageSize) break;
+                // When hasMore is absent, keep requesting pages until an empty page
+                // confirms completion. A short page alone is not treated as proof that
+                // the server returned the entire history.
             }
 
             return turns.OrderBy(x => x.Time).ToList();
@@ -1355,8 +1389,11 @@ namespace Bot.Knowledge
         private static int ToInt(JToken token)
         {
             if (token == null) return 0;
+            if (token.Type == JTokenType.Boolean) return token.Value<bool>() ? 1 : 0;
             int value;
-            return int.TryParse(token.ToString(), out value) ? value : 0;
+            if (int.TryParse(token.ToString(), out value)) return value;
+            bool flag;
+            return bool.TryParse(token.ToString(), out flag) && flag ? 1 : 0;
         }
 
         private static bool TryConvertTurn(
