@@ -227,6 +227,50 @@ namespace Bot.AssistWindow.Widget.Robot
         private string ResolveShopKeyForConversation(string seller, string buyer)
         {
             seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return string.Empty;
+
+            // Incoming QN events enter an explicit scope from the exact QN object.
+            // Prefer that source identity over _preQN, which can outlive a tab switch.
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null)
+            {
+                return string.Equals((scopedShop.SellerNick ?? string.Empty).Trim(),
+                    seller, StringComparison.Ordinal)
+                    ? scopedShop.ShopKey
+                    : string.Empty;
+            }
+
+            // UI actions run outside the inbound event scope. Resolve them only
+            // against the currently elected ShopKey/CDP session; a stale _preQN
+            // with the same display nickname must never select another shop.
+            var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
+            if (activeShopKey.Length > 0)
+            {
+                if (!string.Equals(ActiveShopSessionRegistry.GetActiveSellerNick(),
+                    seller, StringComparison.Ordinal)) return string.Empty;
+
+                var activeQn = QN.CurQN;
+                if (activeQn == null || !ActiveShopSessionRegistry.IsActive(activeQn))
+                    activeQn = ShopContextLocator.FindConnectedQnByShopKey(activeShopKey);
+                if (activeQn == null || activeQn.Seller == null
+                    || !string.Equals((activeQn.Seller.Nick ?? string.Empty).Trim(),
+                        seller, StringComparison.Ordinal)) return string.Empty;
+
+                try
+                {
+                    var resolved = ShopContextLocator.ResolveRuntimeBySeller(activeQn);
+                    return string.Equals(resolved.ShopKey, activeShopKey, StringComparison.Ordinal)
+                        ? resolved.ShopKey
+                        : string.Empty;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+
+            // Compatibility path for startup before the active-session arbiter has
+            // elected a visible shop. Ambiguous nicknames still fail closed.
             var qn = _preQN;
             if (qn == null || qn.Seller == null
                 || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
@@ -240,7 +284,7 @@ namespace Bot.AssistWindow.Widget.Robot
             if (qn != null && qn.Seller != null
                 && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
             {
-                try { return ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
+                try { return ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
                 catch { return string.Empty; }
             }
 

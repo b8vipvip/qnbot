@@ -530,24 +530,28 @@ namespace Bot.ChromeNs
         private static QN FindQn(ShopContext shop, string seller)
         {
             if (shop == null) return null;
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return null;
+
+            // QNSet can temporarily contain the previous wrapper while Qianniu
+            // replaces an injected WebSocket. Select through the shared ShopKey
+            // router so an invalidated/stale CDP wrapper cannot win by list order.
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+            if (qn == null || qn.Seller == null || qn.CDP == null) return null;
+            if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                seller, StringComparison.Ordinal)) return null;
+
             try
             {
-                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
-                foreach (var qn in qns)
-                {
-                    if (qn == null || qn.Seller == null) continue;
-                    if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
-                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal)) continue;
-                    try
-                    {
-                        if (string.Equals(ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
-                            shop.ShopKey, StringComparison.Ordinal)) return qn;
-                    }
-                    catch { }
-                }
+                var resolved = ShopIdentityResolver.Resolve(qn.Seller);
+                return string.Equals(resolved.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                    ? qn
+                    : null;
             }
-            catch { }
-            return null;
+            catch
+            {
+                return null;
+            }
         }
 
         private static string RecordMessage(
