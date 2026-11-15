@@ -360,7 +360,9 @@ namespace Bot.Automation.ChatDeskNs
                 }
 
                 var snapshot = Snapshot();
-                return snapshot.Count == 1 ? snapshot[0] : null;
+                return snapshot.Count == 1 && DeskSellerBindingRegistry.IsSingleShopRuntime
+                    ? snapshot[0]
+                    : null;
             }
         }
 
