@@ -46,7 +46,7 @@ namespace Bot.Automation.ChatDeskNs
 
         internal static string GetSeller(Desk desk)
         {
-            if (desk == null || desk.Hwnd == null) return string.Empty;
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null) return string.Empty;
 
             string activeSeller;
             if (ActiveSellerByHwnd.TryGetValue(desk.Hwnd.Handle, out activeSeller))
@@ -67,7 +67,7 @@ namespace Bot.Automation.ChatDeskNs
 
         internal static string GetShopKey(Desk desk)
         {
-            if (desk == null || desk.Hwnd == null) return string.Empty;
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null) return string.Empty;
             string shopKey;
             return ActiveShopByHwnd.TryGetValue(desk.Hwnd.Handle, out shopKey)
                 ? NormalizeSeller(shopKey)
