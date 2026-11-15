@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -33,7 +34,9 @@ namespace Bot.ChromeNs
         private sealed class PendingInboundEvent
         {
             public string Seller;
+            public string ShopKey;
             public string SourceSession;
+            public bool FingerprintAccepted;
             public string Type;
             public string Response;
             public DateTime ReceivedAt;
@@ -107,37 +110,44 @@ namespace Bot.ChromeNs
             var response = e.Value ?? string.Empty;
             if (response.Length == 0) return;
 
+            var server = MyWebSocketServer.WSocketSvrInst;
+            var shopKey = server == null ? string.Empty : server.GetShopKeyForSession(sessionId);
             var seller = ResolveSeller(sessionId, e.Type, response);
-            if (seller.Length == 0)
+            if (seller.Length > 0) TouchSessionSeller(sessionId, seller, DateTime.Now);
+            if (seller.Length == 0 && shopKey.Length == 0)
             {
-                Log.Info("重复CDP入站消息暂无法确定seller，等待正常通道处理: sessionRef="
+                Log.Info("重复CDP入站消息暂无法确定ShopKey，等待正常通道处理: sessionRef="
                     + PrivacyToken("session", sessionId) + ", type=" + e.Type);
                 return;
             }
 
             var now = DateTime.Now;
-            TouchSessionSeller(sessionId, seller, now);
-            if (!TryAcceptInboundFingerprint(seller, e.Type, response, now))
-            {
-                MaybeLogSuppressedDuplicate(seller, sessionId, e.Type);
-                MaybeCleanupTransientState(now);
-                return;
-            }
-            MaybeCleanupTransientState(now);
-
             var item = new PendingInboundEvent
             {
                 Seller = seller,
+                ShopKey = shopKey,
                 SourceSession = sessionId,
                 Type = e.Type,
                 Response = response,
                 ReceivedAt = now
             };
+            if (shopKey.Length > 0)
+            {
+                if (!TryAcceptInboundFingerprint(shopKey, e.Type, response, now))
+                {
+                    MaybeLogSuppressedDuplicate(seller, sessionId, e.Type);
+                    MaybeCleanupTransientState(now);
+                    return;
+                }
+                item.FingerprintAccepted = true;
+            }
+            MaybeCleanupTransientState(now);
 
-            if (!TryDeliverLive(item))
+            if (!TryDeliverLive(item, false))
             {
                 EnqueuePendingBounded(item, "initial");
-                Log.Info("千牛入站消息已暂存等待权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
+                Log.Info("千牛入站消息已暂存等待ShopKey权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
+                    + ", shopRef=" + PrivacyToken("shop", item.ShopKey)
                     + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type
                     + ", pending=" + GetPendingCount() + "/" + MaxPendingInboundEvents);
             }
@@ -242,12 +252,12 @@ namespace Bot.ChromeNs
         }
 
         private static bool TryAcceptInboundFingerprint(
-            string seller,
+            string shopKey,
             string type,
             string response,
             DateTime now)
         {
-            var fingerprint = BuildInboundFingerprint(seller, type, response);
+            var fingerprint = BuildInboundFingerprint(shopKey, type, response);
             var fingerprintWindow = string.Equals(type, "onConversationChange", StringComparison.Ordinal)
                 ? ConversationChangeFingerprintWindow
                 : InboundFingerprintWindow;
@@ -265,11 +275,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string BuildInboundFingerprint(string seller, string type, string response)
+        private static string BuildInboundFingerprint(string shopKey, string type, string response)
         {
-            // Hash the complete event rather than buyer text. Distinct messages with identical human
-            // text still carry different message ids/timestamps and therefore remain independent.
-            var raw = (seller ?? string.Empty) + "\u001f"
+            // Scope exact replay suppression to the verified ShopKey, never to a display nickname.
+            // Distinct shops with the same seller nickname must not suppress each other's events.
+            var raw = (shopKey ?? string.Empty) + "\u001f"
                 + (type ?? string.Empty) + "\u001f"
                 + (response ?? string.Empty);
             return StableHash64(raw).ToString("x16");
@@ -415,25 +425,61 @@ namespace Bot.ChromeNs
             lock (PendingSync) return Pending.Count;
         }
 
-        private static bool TryDeliverLive(PendingInboundEvent item)
+        private static bool TryDeliverLive(PendingInboundEvent item, bool replayPending)
         {
-            var qn = QN.FindExistingBySellerNick(item.Seller);
+            if (item == null) return false;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return false;
+
+            var mappedShopKey = server.GetShopKeyForSession(item.SourceSession);
+            var shopKey = (item.ShopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                shopKey = mappedShopKey;
+            else if (mappedShopKey.Length > 0
+                && !string.Equals(shopKey, mappedShopKey, StringComparison.Ordinal))
+            {
+                // The source WebSocket changed login identity after this event was queued.
+                // Never reinterpret the old payload under the new ShopKey.
+                Log.Info("千牛入站暂存事件来源WebSocket身份已变化，拒绝跨店补发: oldShopRef="
+                    + PrivacyToken("shop", shopKey)
+                    + ", currentShopRef=" + PrivacyToken("shop", mappedShopKey)
+                    + ", sessionRef=" + PrivacyToken("session", item.SourceSession));
+                return true;
+            }
+            if (shopKey.Length == 0) return false;
+            item.ShopKey = shopKey;
+
+            if (!item.FingerprintAccepted)
+            {
+                if (!TryAcceptInboundFingerprint(shopKey, item.Type, item.Response, DateTime.Now))
+                {
+                    MaybeLogSuppressedDuplicate(item.Seller, item.SourceSession, item.Type);
+                    return true;
+                }
+                item.FingerprintAccepted = true;
+            }
+
+            // Resolve the receiver only from the ShopKey that was bound to this physical
+            // WebSocket. Seller nickname is diagnostic data and must never choose a QN.
+            var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
             var target = qn == null ? null : qn.CDP;
-            if (target == null || target.IsInvalidated) return false;
+            if (target == null || target.IsInvalidated || target.IsShopIdentityRetired
+                || !server.IsAuthoritativeShopSession(shopKey, target.SessionId))
+                return false;
 
             // The authoritative page already receives its own live global event normally.
-            // Only duplicate-page events need explicit forwarding.
-            if (string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
+            // A queued startup event is the exception: replay it even if its source page has
+            // since become authoritative, because no event consumer existed at arrival time.
+            if (!replayPending
+                && string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
-            // Preserve the physical source while dispatching through the logical authoritative
-            // CDP. CDPClient may use precise onConversationChange source evidence for command routing,
-            // but the bridge itself still never changes qn.CDP or opens/switches the visible chat.
             using (CDPClient.BeginForwardedInbound(item.SourceSession))
             {
                 target.DispatchInboundEvent(item.Type, item.Response);
             }
-            Log.Info("重复千牛CDP入站消息已转交权威会话: sellerRef=" + PrivacyToken("seller", item.Seller)
+            Log.Info("重复千牛CDP入站消息已按ShopKey转交权威会话: shopRef=" + PrivacyToken("shop", shopKey)
+                + ", sellerRef=" + PrivacyToken("seller", item.Seller)
                 + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
                 + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
                 + ", type=" + item.Type);
@@ -460,24 +506,15 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    var qn = QN.FindExistingBySellerNick(item.Seller);
-                    var target = qn == null ? null : qn.CDP;
-                    if (target == null || target.IsInvalidated)
+                    if (!TryDeliverLive(item, true))
                     {
-                        EnqueuePendingBounded(item, "retry_wait_authoritative_cdp");
+                        EnqueuePendingBounded(item, "retry_wait_shopkey_authoritative_cdp");
                         continue;
                     }
-
-                    // This item was queued specifically because no QN event consumer was ready at
-                    // arrival time. Replay even if that same source page later became authoritative.
-                    using (CDPClient.BeginForwardedInbound(item.SourceSession))
-                    {
-                        target.DispatchInboundEvent(item.Type, item.Response);
-                    }
-                    Log.Info("已补发初始化期间暂存的千牛入站消息: sellerRef="
-                        + PrivacyToken("seller", item.Seller)
+                    Log.Info("已补发初始化期间暂存的千牛入站消息: shopRef="
+                        + PrivacyToken("shop", item.ShopKey)
+                        + ", sellerRef=" + PrivacyToken("seller", item.Seller)
                         + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
-                        + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
                         + ", type=" + item.Type);
                 }
             }
