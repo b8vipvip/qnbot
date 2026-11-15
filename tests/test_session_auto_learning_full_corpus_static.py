@@ -325,3 +325,16 @@ def test_nonempty_history_page_without_any_valid_message_is_not_complete():
         method.index("if (oldest == null)"):
         method.index("var oldestTime")
     ]
+
+
+
+def test_explicit_server_end_takes_precedence_over_repeated_final_cursor():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    server_end = method.index("if (hasMoreKnown && hasMore == 0)")
+    cursor_stall = method.index('result.ErrorCode = "history_cursor_stalled"')
+    assert server_end < cursor_stall

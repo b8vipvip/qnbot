@@ -968,6 +968,16 @@ namespace Bot.ChromeNs
                             break;
                         }
 
+                        // An explicit server end is authoritative even if the last
+                        // page repeats its cursor; cursor-stall is only a failure while
+                        // the server may still have more pages.
+                        if (hasMoreKnown && hasMore == 0)
+                        {
+                            result.IsComplete = true;
+                            result.StopReason = "server_end";
+                            break;
+                        }
+
                         cursorId = oldest.mcode == null || string.IsNullOrWhiteSpace(oldest.mcode.messageId)
                             ? (oldest.ext == null ? "-1" : oldest.ext.ww_msgid.ToString(CultureInfo.InvariantCulture))
                             : oldest.mcode.messageId;
@@ -981,17 +991,6 @@ namespace Bot.ChromeNs
                             break;
                         }
                         previousCursor = cursor;
-
-                        // Only an explicit hasMore=false is authoritative. If the
-                        // field is absent/invalid, continue until an empty page or the
-                        // explicit page safety limit; never infer completion from a
-                        // short page with missing pagination metadata.
-                        if (hasMoreKnown && hasMore == 0)
-                        {
-                            result.IsComplete = true;
-                            result.StopReason = "server_end";
-                            break;
-                        }
                     }
 
                     if (!result.IsComplete && string.IsNullOrWhiteSpace(result.ErrorCode))
