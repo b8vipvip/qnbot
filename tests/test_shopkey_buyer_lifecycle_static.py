@@ -29,7 +29,7 @@ def test_qn_runtime_registry_uses_shopkey_not_nickname_or_display():
     assert "ResolveRuntimeBySellerNick(sellerNick)" in find_by_nick
     assert "ResolveRuntimeBySellerIdentity(DbEntity.LocalUser seller)" in locator
     assert "if (!context.HasStableSellerId)" in locator
-    assert "x.CDP != null && !x.CDP.IsShopIdentityRetired" in locator
+    assert "x.CDP != null && !x.CDP.IsInvalidated && !x.CDP.IsShopIdentityRetired" in locator
 
 
 def test_websocket_authoritative_session_registry_is_scoped_by_shopkey():
