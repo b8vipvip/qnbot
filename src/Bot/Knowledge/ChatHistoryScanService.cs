@@ -94,7 +94,8 @@ namespace Bot.Knowledge
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         internal static bool IsBuyerScanActive(string seller)
         {
-            return ActiveBuyerScans.ContainsKey((seller ?? string.Empty).Trim());
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+            return ActiveBuyerScans.ContainsKey(shop.ShopKey);
         }
 
         private const int PageSize = 100;
@@ -176,15 +177,23 @@ namespace Bot.Knowledge
             options = options ?? new ChatHistoryScanOptions();
             ValidateOptions(options);
             seller = (seller ?? string.Empty).Trim();
-            if (!ActiveBuyerScans.TryAdd(seller, 0))
+            if (seller.Length == 0)
+                throw new InvalidOperationException("缺少当前店铺客服身份，已阻止历史扫描。");
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+                throw new InvalidOperationException("当前店铺 ShopKey 不可用，已阻止历史扫描。");
+            var shopKey = shop.ShopKey;
+            if (!ActiveBuyerScans.TryAdd(shopKey, 0))
                 throw new InvalidOperationException("当前店铺已有历史扫描任务，不能同时切换同一千牛会话。");
 
             BuyerHistoryScanEvidenceSession evidence = null;
             BuyerHistoryScanCheckpoint checkpoint = null;
             string scanState = "failed";
             string phase = "initialization";
+            IDisposable shopScope = null;
             try
             {
+                shopScope = ShopSettingsScope.Enter(shop);
                 // Resume state is bound to ShopKey, Windows user and options.
                 // The private encrypted contact list is NEVER added to evidence ZIPs.
                 checkpoint = string.IsNullOrWhiteSpace(options.ResumeCheckpointId)
@@ -207,11 +216,14 @@ namespace Bot.Knowledge
                 Log.Info("[BuyerQuestions] history_scan_started run=" + evidence.Record.RunId
                     + ";checkpoint=" + checkpoint.Id
                     + ";maxContacts=" + options.MaxContacts);
-                var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null || qn.CDP == null || qn.Seller == null
-                    || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller,
-                        StringComparison.Ordinal))
-                    throw new InvalidOperationException("无法绑定当前店铺千牛会话，请登录店铺并打开聊天。");
+                // Never choose a live CDP page by seller nickname. The window's
+                // ShopKey must own the exact authoritative WebSocket session.
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
+                if (qn == null || qn.CDP == null || qn.Seller == null)
+                    throw new InvalidOperationException("无法绑定当前 ShopKey 的权威千牛会话，请登录该店铺并打开聊天。");
+                var boundShop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                if (boundShop == null || !string.Equals(boundShop.ShopKey, shopKey, StringComparison.Ordinal))
+                    throw new InvalidOperationException("千牛会话登录身份与扫描窗口 ShopKey 不一致，已阻止读取历史消息。");
                 var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
                 var diagnostics = new StringBuilder();
                 Report(progress, "正在搜集本店可访问的联系人", 0, 0, "", 0, 0, 0);
@@ -498,7 +510,8 @@ namespace Bot.Knowledge
                 {
                     Log.Info("[BuyerQuestions] scan_evidence_save_failed type=" + ex.GetType().Name);
                 }
-                byte ignored; ActiveBuyerScans.TryRemove(seller, out ignored);
+                if (shopScope != null) shopScope.Dispose();
+                byte ignored; ActiveBuyerScans.TryRemove(shopKey, out ignored);
             }
         }
 
