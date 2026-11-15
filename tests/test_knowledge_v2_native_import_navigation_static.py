@@ -12,7 +12,7 @@ def test_history_chat_is_a_left_navigation_page():
     history = read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller))' in ui
     assert "internal sealed class KnowledgeV2ChatHistoryPage : UserControl, IKnowledgeV2Refreshable" in history
-    assert "PromoteHistoryImport(_seller, scan.ImportResult)" in history
+    assert "PromoteHistoryImport(_seller, _shopKey, scan.ImportResult)" in history
 
 
 def test_smart_import_requests_current_v2_schema_directly():

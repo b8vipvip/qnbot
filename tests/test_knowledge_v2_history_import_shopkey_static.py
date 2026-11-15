@@ -43,4 +43,5 @@ def test_missing_history_import_reuses_explicit_shopkey_scope():
 
     assert "var shop = ResolveShop(seller, shopKey)" in method
     assert "using (ShopSettingsScope.Enter(shop))" in method
-    assert "PromoteHistoryImport(seller, shop.ShopKey," in method
+    assert "seller, shop.ShopKey," in method
+    assert "new KnowledgeImportResult { AddedItems = candidates, Added = candidates.Count }" in method
