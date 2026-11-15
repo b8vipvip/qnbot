@@ -226,3 +226,18 @@ def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
     assert "new InvalidDataException" in audit
     assert "entries = new List<ReceptionAuditEntry>();" in audit
     assert "catch { entries = new List<ReceptionAuditEntry>(); }" not in audit
+
+def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriting_current_config():
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    restore = config[
+        config.index("public static string RestoreLatestBackup"):
+        config.index("\n    }\n}")
+    ]
+    assert "OrderByDescending(x => x, StringComparer.Ordinal).ToList()" in restore
+    assert "foreach (var candidate in backups)" in restore
+    assert "Validate(File.ReadAllText(candidate, Encoding.UTF8))" in restore
+    assert "没有找到有效的店铺接待规则备份，当前配置未修改" in restore
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, original, 3, 50, out error)" in restore
+    assert "Guid.NewGuid().ToString(\"N\")" in restore
+
+
