@@ -309,9 +309,10 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 return seller.Length > 0
+                    && _activeShopKey.Length > 0
+                    && shopKey.Length > 0
                     && string.Equals(_activeSeller, seller, StringComparison.Ordinal)
-                    && (_activeShopKey.Length == 0 || shopKey.Length == 0
-                        || string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
+                    && string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
                     && (_activeSessionId.Length == 0
                         || string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal));
             }
@@ -321,18 +322,22 @@ namespace Bot.ChromeNs
         {
             if (qn == null || qn.Seller == null) return;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0) return;
+            var shopKey = ShopKey(qn);
+            if (seller.Length == 0 || shopKey.Length == 0) return;
             bool allow;
             lock (Sync)
             {
-                allow = _activeSeller.Length == 0
-                    || string.Equals(_activeSeller, seller, StringComparison.Ordinal)
-                    || (DateTime.UtcNow - _lastFocusProofUtc).TotalSeconds > 3;
+                // onChatDlgActive is a page event, not proof the WebView gained
+                // foreground focus. A background shop sharing the same nick
+                // must never replace the user-confirmed active ShopKey.
+                allow = _activeShopKey.Length == 0
+                    || (string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
+                        && string.Equals(_activeSeller, seller, StringComparison.Ordinal));
             }
             if (!allow)
             {
-                Log.Info("忽略后台/迟到的onChatDlgActive，不覆盖最近聚焦确认的店铺: candidate="
-                    + seller + ", activeSeller=" + GetActiveSellerNick());
+                Log.Info("忽略非前台证明的跨店onChatDlgActive: candidateShopKey="
+                    + shopKey + ", activeShopKey=" + GetActiveShopKey());
                 return;
             }
             Activate(qn, qn.CDP == null ? string.Empty : qn.CDP.SessionId,
@@ -362,12 +367,12 @@ namespace Bot.ChromeNs
                 if (_activeSeller.Length == 0) { reason = "尚未确认当前活动店铺"; return false; }
                 if (!string.Equals(_activeSeller, seller, StringComparison.Ordinal))
                 { reason = "活动seller不一致: active=" + _activeSeller + ", target=" + seller; return false; }
-                if (_activeShopKey.Length > 0 && shopKey.Length > 0
-                    && !string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
-                { reason = "ShopKey不一致"; return false; }
-                if (_activeSessionId.Length > 0 && sessionId.Length > 0
+                if (_activeShopKey.Length == 0 || shopKey.Length == 0
+                    || !string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal))
+                { reason = "ShopKey缺失或不一致"; return false; }
+                if (_activeSessionId.Length > 0
                     && !string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal))
-                { reason = "CDP会话不一致: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
+                { reason = "CDP会话缺失或不一致: activeSession=" + _activeSessionId + ", targetSession=" + sessionId; return false; }
                 return true;
             }
         }
@@ -415,6 +420,7 @@ namespace Bot.ChromeNs
             var seller = qn == null || qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return false;
             var shopKey = ShopKey(qn);
+            if (shopKey.Length == 0) return false;
             targetId = (targetId ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             string previousSeller;
