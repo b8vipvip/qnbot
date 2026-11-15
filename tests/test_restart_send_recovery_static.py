@@ -18,7 +18,7 @@ def test_websocket_server_keeps_one_authoritative_cdp_session_per_seller():
     assert "重复千牛CDP" in source or "重复千牛WebSocket" in source
     assert "ShouldRefreshStatusBinding" in source
     assert "var wasAuthoritative" in source
-    assert "千牛standby页面接管权威会话，强制重建客服/CDP绑定" in source
+    assert "千牛前台会话切换已提升standby为权威CDP" in source
 
     # Both assignment points must be protected by the authoritative-session claim.
     assert source.count("qn.CDP = cdp;") == 2
