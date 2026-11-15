@@ -75,9 +75,9 @@ namespace Bot.ChromeNs
             return Key(seller, buyer) + "#turn:" + detectedAt.Ticks;
         }
 
-        private static string DeliveryKey(string seller, string buyer, string answer)
+        private static string DeliveryKey(string seller, string buyer, string answer, string shopKey = null)
         {
-            return Key(seller, buyer) + "#"
+            return Key(seller, buyer, shopKey) + "#"
                 + Regex.Replace((answer ?? string.Empty).Trim(), @"\s+", string.Empty);
         }
 
@@ -276,10 +276,10 @@ namespace Bot.ChromeNs
             return control;
         }
 
-        public static void MarkDeliveryConfirmed(string seller, string buyer, string answer, string detail)
+        public static void MarkDeliveryConfirmed(string seller, string buyer, string answer, string detail, string shopKey = null)
         {
             DeliveryUiEntry ui;
-            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer), out ui)
+            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer, shopKey), out ui)
                 && ui != null && ui.Control != null)
             {
                 ui.Control.SetSendResult(true,
@@ -292,10 +292,10 @@ namespace Bot.ChromeNs
                 + ", buyer=" + buyer + ", detail=" + (detail ?? string.Empty));
         }
 
-        public static void MarkDeliveryTimedOut(string seller, string buyer, string answer, string detail)
+        public static void MarkDeliveryTimedOut(string seller, string buyer, string answer, string detail, string shopKey = null)
         {
             DeliveryUiEntry ui;
-            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer), out ui)
+            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer, shopKey), out ui)
                 && ui != null && ui.Control != null)
                 ui.Control.SetSendResult(false, "发送失败：" + (detail ?? string.Empty));
             MessageProcessingTraceService.RecordDelivery(seller, buyer, false, detail);
