@@ -440,11 +440,8 @@ namespace Bot.Knowledge
                     _all = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 800)
                         .Where(IsOptimizationHistory)
                         .ToList();
-                    _sessions = ConversationSessionLearningService.GetReports(1000)
-                        .Where(x => x != null
-                            && string.Equals(x.ShopKey, _shopKey, StringComparison.Ordinal)
-                            && string.Equals(x.Seller, _seller, StringComparison.Ordinal))
-                        .ToList();
+                    _sessions = ConversationSessionLearningService.GetReportsForShop(
+                        _shopKey, _seller, 1000);
                 }
                 ApplyFilter();
             }
