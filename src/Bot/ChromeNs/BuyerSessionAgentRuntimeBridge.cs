@@ -11,7 +11,7 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Feeds raw QN/CDP events into the shared BuyerSessionAgent before the independent reply/order
-    /// pipelines process them. This gives one ordered seller+buyer timeline for text, image, product,
+    /// pipelines process them. This gives one ordered ShopKey+seller+buyer timeline for text, image, product,
     /// order, withdrawal, system and seller reply events without replacing the existing stable send
     /// pipeline. Human seller replies are observational learning evidence and never cancel Bot work;
     /// explicit hard invalidation remains reserved for withdrawal/session/send safety paths.
