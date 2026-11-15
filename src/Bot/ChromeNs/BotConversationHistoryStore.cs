@@ -457,10 +457,12 @@ namespace Bot.ChromeNs
 
                     original.CorrectedSource = source;
                     original.CorrectedAtTicks = DateTime.Now.Ticks;
-                    DbHelper.Db.SaveOneRecord(original);
                     row.AnswerSource = source;
                     row.UpdatedAtTicks = DateTime.Now.Ticks;
-                    DbHelper.Db.SaveOneRecord(row);
+                    // The correction audit and the visible Bot history must be
+                    // one atomic change. Two separate SaveOneRecord calls could
+                    // leave the audit changed while the source row remained stale.
+                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { original, row });
                     return true;
                 }
             }
