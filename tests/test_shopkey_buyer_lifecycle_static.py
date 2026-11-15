@@ -176,7 +176,9 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
     qn = read("src/Bot/ChromeNs/QN.cs")
 
-    assert "ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shop.ShopKey)" in qn
+    assert "ResolveRuntimeBySeller(this).ShopKey" in qn
+    assert "ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey)" in qn
+    assert "ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey)" in qn
     assert "BeginAnswer(" in burst and "detectedAt, item.ShopKey" in burst
     assert "DateTime.Now, item.ShopKey" in burst
     assert "detectedAt,\n                answerReadyAt,\n                burst.ShopKey" in streaming
