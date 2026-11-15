@@ -169,6 +169,7 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     send_guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+    native_send = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     rpa = read("src/Bot/ChromeNs/QNRpa.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
@@ -203,6 +204,12 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "OpenAndSendText(buyer, text, shopKey)" in rpa
     assert "_qn.CDP.IsShopIdentityRetired" in send_guard
     assert "_qn.CDP.ShopKey" in send_guard
+    assert "await client.GetCurrentUser().ConfigureAwait(false)" in send_guard
+    assert "ResolveRuntimeBySellerIdentity(current.Result)" in send_guard
+    assert "TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart, string shopKey)" in native_send
+    assert "WaitForTextSubmissionAcceptedAsync(" in send_guard
+    assert "string method, int timeoutMs, string shopKey" in send_guard
+    assert "ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey)" in send_guard
 
 
 def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
