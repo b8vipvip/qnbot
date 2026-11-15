@@ -11,6 +11,7 @@ namespace Bot.Knowledge
     {
         private readonly Window _owner;
         private readonly string _seller;
+        private readonly string _shopKey;
         private RadioButton _all;
         private RadioButton _range;
         private DatePicker _start;
@@ -26,6 +27,7 @@ namespace Bot.Knowledge
         {
             _owner = owner;
             _seller = (seller ?? string.Empty).Trim();
+            _shopKey = KnowledgeCenterV2Context.ResolveShopKey(owner, _seller);
             Build();
             Unloaded += delegate
             {
@@ -157,9 +159,9 @@ namespace Bot.Knowledge
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
             if (_running) return;
-            if (string.IsNullOrWhiteSpace(_seller))
+            if (string.IsNullOrWhiteSpace(_seller) || string.IsNullOrWhiteSpace(_shopKey))
             {
-                MessageBox.Show(_owner, "当前未识别店铺，不能整理历史聊天到 Knowledge V2。", "历史聊天整理", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(_owner, "无法确认历史聊天所属店铺的 ShopKey，已阻止写入 Knowledge V2。", "历史聊天整理", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             var options = BuildOptions();
@@ -184,7 +186,7 @@ namespace Bot.Knowledge
                     _cts.Token);
 
                 _summary.Text = "聊天扫描完成，正在把整理结果标准化为当前 Knowledge V2...";
-                var promoted = KnowledgeV2LegacyDeltaImportService.PromoteHistoryImport(_seller, scan.ImportResult);
+                var promoted = KnowledgeV2LegacyDeltaImportService.PromoteHistoryImport(_seller, _shopKey, scan.ImportResult);
                 var sb = new StringBuilder();
                 sb.Append("整理完成：联系人 ").Append(scan.ScannedContacts).Append("/").Append(scan.ContactCount);
                 sb.Append("，有效聊天消息 ").Append(scan.MessageCount);
