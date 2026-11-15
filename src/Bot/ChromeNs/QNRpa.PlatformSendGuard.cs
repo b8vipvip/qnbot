@@ -1,4 +1,5 @@
 using BotLib;
+using Bot.ShopScope;
 using FlaUI.Core.AutomationElements;
 using System;
 using System.Collections.Generic;
@@ -31,6 +32,12 @@ namespace Bot.ChromeNs
         /// “继续发送” can turn a bad/repeated answer into a buyer complaint, as observed in the
         /// 2026-09-09 field incident.
         /// </summary>
+        private string ResolveShopKeyForDeliveryWatchdog()
+        {
+            try { return ShopContextLocator.ResolveRuntimeBySeller(_qn).ShopKey; }
+            catch { return string.Empty; }
+        }
+
         private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string expectedText, string stage)
         {
             var detected = await GetBoundedServiceAttitudeReadProbeAsync(buyer, stage).ConfigureAwait(false);
@@ -53,10 +60,12 @@ namespace Bot.ChromeNs
             // followed by misleading failure reports. Cancel every pending delivery for this exact
             // seller+buyer conversation; the platform reminder itself remains untouched for human
             // review and Bot still never clicks “继续发送”.
+            var shopKey = ResolveShopKeyForDeliveryWatchdog();
             var cancelledWatchdogs = SendDeliveryWatchdog.CancelConversation(
                 SellerNick,
                 buyer,
-                "platform_send_blocked:" + (stage ?? string.Empty));
+                "platform_send_blocked:" + (stage ?? string.Empty),
+                shopKey);
             if (cancelledWatchdogs > 0)
             {
                 Log.Info("平台发送拦截已同步取消发送回显监控，禁止把明确取消误报为发送异常: seller="
@@ -203,7 +212,9 @@ namespace Bot.ChromeNs
                             if (!await VerifyCurrentBuyerWithoutNavigationAsync(buyer, method + "提交后会话确认").ConfigureAwait(false)) return false;
                             ResetSendFailure();
                             var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
-                            SendDeliveryWatchdog.MarkSubmissionAccepted(SellerNick, buyer, text, submissionEvidence);
+                            var shopKey = ResolveShopKeyForDeliveryWatchdog();
+                            SendDeliveryWatchdog.MarkSubmissionAccepted(
+                                SellerNick, buyer, text, submissionEvidence, shopKey);
                             BotConnectionDiagnostics.RecordSendAttempt(true, method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
                             Log.Info(method + "发送提交确认成功：本次精确草稿在发送动作后稳定清空；禁止因实时回显缺失重新写入同一文本。buyer=" + buyer);
                             ArmLateServiceAttitudeContinuationWatch(buyer, text, method);
