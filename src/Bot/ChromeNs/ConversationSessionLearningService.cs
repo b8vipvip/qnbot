@@ -286,6 +286,40 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static List<ConversationSessionLearningReportView> GetReportsForShop(
+            string shopKey, string seller, int maxCount)
+        {
+            Initialize();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0)
+                return new List<ConversationSessionLearningReportView>();
+
+            var take = Math.Max(1, Math.Min(MaxReports, maxCount <= 0 ? 200 : maxCount));
+            try
+            {
+                lock (DbSync)
+                {
+                    // Apply the exact ShopKey filter before LIMIT. Filtering the
+                    // latest global 1,000 rows in the UI hid older records for
+                    // quiet shops and risked leaking cross-shop result counts.
+                    return (DbHelper.Db.Select(
+                        typeof(ConversationSessionLearningReportEntity),
+                        "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit " + take,
+                        shopKey, seller) ?? new List<object>())
+                        .OfType<ConversationSessionLearningReportEntity>()
+                        .Where(x => x != null)
+                        .Select(ToView)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取本店接待学习记录失败：" + ex.Message, 10);
+                return new List<ConversationSessionLearningReportView>();
+            }
+        }
+
         private static string BuildInputCoverageSummary(string json)
         {
             if (string.IsNullOrWhiteSpace(json)) return "尚无覆盖记录";
