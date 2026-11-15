@@ -276,18 +276,19 @@ namespace Bot.ChromeNs
             {
                 const string unstable = "发送前任务发生显式失效，答案已取消";
                 if (conversationCtl != null) conversationCtl.SetStatus(unstable, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable, burst.ShopKey);
                 return;
             }
 
             string relevanceReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason,
+                false, burst.ShopKey))
             {
                 var suppressed = "并发旧答案已抑制：" + relevanceReason;
                 lease.MarkCompleted("streaming_relevance_suppressed");
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
-                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed, burst.ShopKey);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
                 return;
             }
@@ -500,17 +501,17 @@ namespace Bot.ChromeNs
                 .Contains(value, StringComparer.OrdinalIgnoreCase);
         }
 
-        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason, bool trustedReviewedImageAnswer = false)
+        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason, bool trustedReviewedImageAnswer = false, string shopKey = null)
         {
             reason = string.Empty;
             try
             {
-                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24);
                 // Use the typed BuyerSessionAgent event stream, not every unmarked seller
                 // bubble: Qianniu's automatic shop greetings can lack [A], and must not
                 // be mistaken for an intentional human takeover.
                 // Order-ledger-authorized contractual messages use a separate sender.
-                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer);
+                var snapshot = new BuyerSessionAgent().GetSnapshot(seller, buyer, shopKey);
                 var newerHuman = snapshot != null
                     && snapshot.RecentEvents != null
                     && snapshot.RecentEvents.Any(x => x != null
