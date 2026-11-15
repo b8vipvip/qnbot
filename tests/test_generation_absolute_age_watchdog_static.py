@@ -51,6 +51,6 @@ def test_generation_watchdog_covers_all_non_terminal_states_and_drops_terminal_w
 def test_generation_watchdog_is_not_triggered_by_human_reply():
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "WatchSession(seller, buyer);" in source
+    assert "WatchSession(shopKey, seller, buyer);" in source
     assert "SellerHumanReply" in source
     assert "false);" in source
