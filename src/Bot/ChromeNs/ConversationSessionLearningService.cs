@@ -580,6 +580,9 @@ namespace Bot.ChromeNs
                     if (property.Name.StartsWith("knowledgeCorpus", StringComparison.Ordinal))
                         initialCoverage[property.Name] = property.Value.DeepClone();
                 }
+                // A restored checkpoint is reusable, but it is not yet complete for
+                // this resumed attempt until history and transcript fingerprints pass.
+                initialCoverage["knowledgeCorpusComplete"] = false;
                 report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
 

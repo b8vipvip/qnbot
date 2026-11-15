@@ -223,3 +223,17 @@ def test_checkpoint_candidates_restore_knowledge_and_evidence_provenance():
     assert 'CorpusBatchIndex = Math.Max(0, item.Value<int?>("corpus_batch_index") ?? 0)' in parser
     assert 'item["evidence_message_ids"] is JArray' in parser
     assert "Distinct(StringComparer.Ordinal).ToList()" in parser
+
+
+
+def test_restored_checkpoint_is_not_marked_complete_before_history_revalidation():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    preserve = finalize.index('property.Name.StartsWith("knowledgeCorpus", StringComparison.Ordinal)')
+    reset = finalize.index('initialCoverage["knowledgeCorpusComplete"] = false;')
+    save = finalize.index("report.InputCoverageJson = initialCoverage.ToString(Formatting.None)")
+    assert preserve < reset < save
