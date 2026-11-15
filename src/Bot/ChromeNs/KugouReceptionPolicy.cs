@@ -59,26 +59,60 @@ namespace Bot.ChromeNs
         internal const string FirstProduct = "1057505313937";
         internal const string SecondProduct = "1066362196568";
 
+        internal static ShopContext ResolveShopForSeller(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0)
+                throw new InvalidOperationException("卖家昵称为空，无法确定店铺作用域。");
+            var current = ShopSettingsScope.Current;
+            if (current != null)
+            {
+                if (!string.Equals((current.SellerNick ?? string.Empty).Trim(),
+                    seller, StringComparison.Ordinal))
+                    throw new InvalidOperationException("当前店铺作用域与卖家身份不一致，拒绝跨店读取接待规则。");
+                return current;
+            }
+            return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+        }
+
         public static bool Applies(string seller)
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return false;
+            ShopContext shop;
+            try
+            {
+                shop = ResolveShopForSeller(seller);
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("酷狗接待规则店铺身份无法唯一解析，保持原流程：" + ex.Message, 5);
+                return false;
+            }
+
+            // Seller nickname is display data and may be shared by multiple shops.
+            // Cache and knowledge lookup must always use the exact ShopKey scope.
+            var cacheKey = shop.ShopKey;
             ShopDetection cached;
-            if (Shops.TryGetValue(seller, out cached) && cached.ExpiresUtc > DateTime.UtcNow)
+            if (Shops.TryGetValue(cacheKey, out cached) && cached.ExpiresUtc > DateTime.UtcNow)
                 return cached.Match;
             var matched = false;
             try
             {
-                // Do not activate another merchant's flow on merely seeing "酷狗" in chat.
-                var records = KnowledgeEngineV2Repository.LoadAll(seller);
-                matched = records.Any(x => x != null && x.ProductIds != null
-                    && x.ProductIds.Any(id => id == FirstProduct));
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    // Do not activate another merchant's flow on merely seeing "酷狗" in chat.
+                    var records = KnowledgeEngineV2Repository.LoadAll(seller);
+                    matched = records.Any(x => x != null && x.ProductIds != null
+                        && x.ProductIds.Any(id => id == FirstProduct));
+                }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("酷狗接待规则店铺识别失败，保持原流程：" + ex.Message, 5);
             }
-            Shops[seller] = new ShopDetection
+            Shops[cacheKey] = new ShopDetection
             {
                 Match = matched,
                 ExpiresUtc = DateTime.UtcNow.AddMinutes(matched ? 10 : 2)
@@ -295,7 +329,7 @@ namespace Bot.ChromeNs
             if (!Applies(seller)) return "当前店铺尚未识别为该酷狗业务店铺，未启用专属接待审计。";
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                var shop = ResolveShopForSeller(seller);
                 if (shop == null) return "没有可用的店铺作用域，禁止跨店铺读取审计。";
                 using (ShopSettingsScope.Enter(shop))
                 {
@@ -322,7 +356,7 @@ namespace Bot.ChromeNs
             if (!Applies(seller)) return string.Empty;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                var shop = ResolveShopForSeller(seller);
                 if (shop == null) return string.Empty;
                 using (ShopSettingsScope.Enter(shop))
                 {
@@ -360,7 +394,7 @@ namespace Bot.ChromeNs
             if (!Applies(seller)) return;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                var shop = ResolveShopForSeller(seller);
                 if (shop == null) return;
                 using (ShopSettingsScope.Enter(shop))
                 {
