@@ -154,12 +154,16 @@ def test_native_desk_registry_uses_shopkey_for_window_and_composer_ownership():
     assert "BindResolvedSeller(Desk desk, string seller, string evidence, string shopKey)" in registry
     assert "ShopToHwnd.TryGetValue(shopKey, out hwnd)" in registry
     assert "ActiveShopByHwnd.TryGetValue(desk.Hwnd.Handle, out activeShopKey)" in registry
+    assert "desk.IsForeground" in registry
+    assert "bool allowRebind = false" in registry
+    assert "allowRebind: existing != null" in registry
     assert "Desk.FindExistingBySellerNick" not in registry
     assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in rpa_desk
     assert "_sellerDeskBoundShopKey" in rpa_desk
     assert "IsSellerForDesk(desk, seller, shopKey)" in rpa_desk
     assert "MarkActiveSeller(desk, seller, \"focused-webview\", shopKey)" in coordinator
     assert "focusProof && desk != null" in coordinator
+    assert "focusProof\n                ? DeskSellerBindingRegistry.BindForegroundSeller" in coordinator
     assert "FindSellerDesk(sellerNick, scopedShop.ShopKey)" in desk
     assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot_ui
     assert "DeskSellerBindingRegistry.IsSingleShopRuntime" in desk
