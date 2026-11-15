@@ -27,9 +27,9 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, bool> _initializing = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, bool> _connectedSessions = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, string> _lastStatusBindings = new ConcurrentDictionary<string, string>();
-        private readonly ConcurrentDictionary<string, string> _sellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, string> _sessionSellers = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, string> _duplicateSellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _shopSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _sessionShopKeys = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _duplicateShopSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, WebSocketSession> _liveSessions = new ConcurrentDictionary<string, WebSocketSession>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
@@ -37,7 +37,7 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, bool> _standbyLoggedSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
         private readonly object _webSocketStartSync = new object();
-        private const int MaxDuplicateSellerSessions = 3;
+        private const int MaxDuplicateShopSessions = 3;
         private const int WebSocketStartMaxAttempts = 5;
         private const int WebSocketStartRetryBaseDelayMs = 250;
         private static readonly TimeSpan DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4);
@@ -136,9 +136,9 @@ namespace Bot.ChromeNs
             });
         }
 
-        private void EnforceDuplicateSellerSessionCapLocked(string sellerNick)
+        private void EnforceDuplicateShopSessionCapLocked(string sellerNick)
         {
-            var active = _duplicateSellerSessions
+            var active = _duplicateShopSessions
                 .Where(x => string.Equals(x.Value, sellerNick, StringComparison.Ordinal)
                     && !_closingDuplicateSessions.ContainsKey(x.Key))
                 .Select(x => x.Key)
@@ -148,7 +148,7 @@ namespace Bot.ChromeNs
                     return _sessionLastActivityUtc.TryGetValue(x, out last) ? last : DateTime.MinValue;
                 })
                 .ToList();
-            var excess = active.Count - MaxDuplicateSellerSessions;
+            var excess = active.Count - MaxDuplicateShopSessions;
             if (excess <= 0) return;
 
             // Only v12+ pages explicitly advertise that they understand a bounded, recoverable
@@ -176,7 +176,7 @@ namespace Bot.ChromeNs
                         List<KeyValuePair<string, string>> stale;
                         lock (_sellerSessionSync)
                         {
-                            stale = _duplicateSellerSessions
+                            stale = _duplicateShopSessions
                                 .Where(x => !_closingDuplicateSessions.ContainsKey(x.Key))
                                 .Where(x =>
                                 {
@@ -196,7 +196,7 @@ namespace Bot.ChromeNs
             });
         }
 
-        private bool TryClaimSellerSession(string sellerNick, string sessionId)
+        private bool TryClaimShopSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
@@ -205,45 +205,45 @@ namespace Bot.ChromeNs
             lock (_sellerSessionSync)
             {
                 string owner;
-                if (_sellerSessions.TryGetValue(sellerNick, out owner))
+                if (_shopSessions.TryGetValue(sellerNick, out owner))
                 {
                     if (string.Equals(owner, sessionId, StringComparison.Ordinal))
                     {
-                        _sessionSellers[sessionId] = sellerNick;
+                        _sessionShopKeys[sessionId] = sellerNick;
                         string ignoredDuplicate;
-                        _duplicateSellerSessions.TryRemove(sessionId, out ignoredDuplicate);
-                        BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                        _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
+                        BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                         return true;
                     }
 
                     if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
                     {
-                        _duplicateSellerSessions[sessionId] = sellerNick;
-                        EnforceDuplicateSellerSessionCapLocked(sellerNick);
+                        _duplicateShopSessions[sessionId] = sellerNick;
+                        EnforceDuplicateShopSessionCapLocked(sellerNick);
                         return false;
                     }
 
                     string staleOwner;
-                    _sellerSessions.TryRemove(sellerNick, out staleOwner);
+                    _shopSessions.TryRemove(sellerNick, out staleOwner);
                     if (!string.IsNullOrWhiteSpace(staleOwner))
                     {
                         string staleSeller;
-                        _sessionSellers.TryRemove(staleOwner, out staleSeller);
+                        _sessionShopKeys.TryRemove(staleOwner, out staleSeller);
                     }
                 }
 
-                _sellerSessions[sellerNick] = sessionId;
-                _sessionSellers[sessionId] = sellerNick;
+                _shopSessions[sellerNick] = sessionId;
+                _sessionShopKeys[sessionId] = sellerNick;
                 string ignored;
-                _duplicateSellerSessions.TryRemove(sessionId, out ignored);
-                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                _duplicateShopSessions.TryRemove(sessionId, out ignored);
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                 Log.Info("已选定卖家权威千牛CDP会话: sellerRef=" + DiagnosticRef("seller", sellerNick)
                     + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 return true;
             }
         }
 
-        private bool TryPromoteDuplicateSellerSession(string sellerNick, WebSocketSession session, string reason)
+        private bool TryPromoteDuplicateShopSession(string sellerNick, WebSocketSession session, string reason)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             if (session == null || string.IsNullOrWhiteSpace(session.SessionID) || sellerNick.Length == 0) return false;
@@ -255,32 +255,32 @@ namespace Bot.ChromeNs
                 if (!_connectedSessions.ContainsKey(sessionId)) return false;
                 string duplicateSeller;
                 string mappedSeller;
-                var knownDuplicate = _duplicateSellerSessions.TryGetValue(sessionId, out duplicateSeller)
+                var knownDuplicate = _duplicateShopSessions.TryGetValue(sessionId, out duplicateSeller)
                     && string.Equals(duplicateSeller, sellerNick, StringComparison.Ordinal);
-                var knownSellerSession = _sessionSellers.TryGetValue(sessionId, out mappedSeller)
+                var knownSellerSession = _sessionShopKeys.TryGetValue(sessionId, out mappedSeller)
                     && string.Equals(mappedSeller, sellerNick, StringComparison.Ordinal);
                 if (!knownDuplicate && !knownSellerSession) return false;
 
-                _sellerSessions.TryGetValue(sellerNick, out previousOwner);
+                _shopSessions.TryGetValue(sellerNick, out previousOwner);
                 if (string.Equals(previousOwner, sessionId, StringComparison.Ordinal)) return true;
 
                 if (!string.IsNullOrWhiteSpace(previousOwner) && _connectedSessions.ContainsKey(previousOwner))
                 {
-                    _duplicateSellerSessions[previousOwner] = sellerNick;
-                    _sessionSellers[previousOwner] = sellerNick;
+                    _duplicateShopSessions[previousOwner] = sellerNick;
+                    _sessionShopKeys[previousOwner] = sellerNick;
                 }
 
-                _sellerSessions[sellerNick] = sessionId;
-                _sessionSellers[sessionId] = sellerNick;
+                _shopSessions[sellerNick] = sessionId;
+                _sessionShopKeys[sessionId] = sellerNick;
                 string ignored;
-                _duplicateSellerSessions.TryRemove(sessionId, out ignored);
+                _duplicateShopSessions.TryRemove(sessionId, out ignored);
                 _standbyLoggedSessions.TryRemove(sessionId, out _);
                 _sessionLastActivityUtc[sessionId] = DateTime.UtcNow;
                 // Authority promotion turns the previous owner into a duplicate. Reapply
                 // the per-seller cap here as well as on first claim, otherwise repeated
                 // foreground switches can grow the duplicate set beyond its configured bound.
-                EnforceDuplicateSellerSessionCapLocked(sellerNick);
-                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                EnforceDuplicateShopSessionCapLocked(sellerNick);
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
             }
 
             try
@@ -300,42 +300,42 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        internal bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
+        internal bool IsAuthoritativeShopSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
             if (sellerNick.Length == 0 || sessionId.Length == 0) return false;
             string owner;
-            return _sellerSessions.TryGetValue(sellerNick, out owner)
+            return _shopSessions.TryGetValue(sellerNick, out owner)
                 && string.Equals(owner, sessionId, StringComparison.Ordinal);
         }
 
-        private void ReleaseSellerSession(string sessionId)
+        private void ReleaseShopSession(string sessionId)
         {
             sessionId = (sessionId ?? string.Empty).Trim();
             if (sessionId.Length == 0) return;
             lock (_sellerSessionSync)
             {
                 string ignoredDuplicate;
-                _duplicateSellerSessions.TryRemove(sessionId, out ignoredDuplicate);
+                _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
                 string sellerNick;
-                if (!_sessionSellers.TryRemove(sessionId, out sellerNick)
+                if (!_sessionShopKeys.TryRemove(sessionId, out sellerNick)
                     || string.IsNullOrWhiteSpace(sellerNick))
                 {
-                    BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                    BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                     return;
                 }
 
                 string owner;
-                if (_sellerSessions.TryGetValue(sellerNick, out owner)
+                if (_shopSessions.TryGetValue(sellerNick, out owner)
                     && string.Equals(owner, sessionId, StringComparison.Ordinal))
                 {
                     string removed;
-                    _sellerSessions.TryRemove(sellerNick, out removed);
+                    _shopSessions.TryRemove(sellerNick, out removed);
                     Log.Info("卖家权威千牛CDP会话已释放，等待在线standby页面自动接管: sellerRef="
                         + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 }
-                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
             }
         }
 
@@ -391,7 +391,7 @@ namespace Bot.ChromeNs
                 }
 
                 var sellerNick = qn.Seller == null ? loginNick : qn.Seller.Nick;
-                if (!TryClaimSellerSession(sellerNick, session.SessionID))
+                if (!TryClaimShopSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
                     Log.Info("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: sellerRef="
@@ -430,7 +430,7 @@ namespace Bot.ChromeNs
                 }
 
                 var sellerNick = (user.Result.Nick ?? string.Empty).Trim();
-                if (!TryClaimSellerSession(sellerNick, session.SessionID))
+                if (!TryClaimShopSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
                     Log.Info("重复千牛CDP会话已完成识别但不接管卖家运行通道: sellerRef="
@@ -510,21 +510,21 @@ namespace Bot.ChromeNs
                 _lastStatusBindings.TryRemove(sessionId, out ignoredString);
                 _initialized.TryRemove(sessionId, out ignoredBool);
                 _initializing.TryRemove(sessionId, out ignoredBool);
-                _duplicateSellerSessions.TryRemove(sessionId, out ignoredString);
+                _duplicateShopSessions.TryRemove(sessionId, out ignoredString);
 
                 CDPClient removed;
                 _clients.TryRemove(sessionId, out removed);
                 CDPClient.ReleaseClosedSession(sessionId, reason, removed);
-                ReleaseSellerSession(sessionId);
+                ReleaseShopSession(sessionId);
                 BotConnectionDiagnostics.RecordWebSocketClose(sessionId);
                 WebSocketPageLifecycleGuard.ForgetClosedSession(sessionId);
             }
 
             lock (_sellerSessionSync)
             {
-                _sellerSessions.Clear();
-                _sessionSellers.Clear();
-                _duplicateSellerSessions.Clear();
+                _shopSessions.Clear();
+                _sessionShopKeys.Clear();
+                _duplicateShopSessions.Clear();
                 BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(0);
             }
         }
@@ -622,9 +622,9 @@ namespace Bot.ChromeNs
                                     {
                                         var wasInitialized = _initialized.ContainsKey(session.SessionID);
                                         var wasAuthoritative = !string.IsNullOrWhiteSpace(loginNick)
-                                            && IsAuthoritativeSellerSession(loginNick, session.SessionID);
+                                            && IsAuthoritativeShopSession(loginNick, session.SessionID);
                                         var authoritative = string.IsNullOrWhiteSpace(loginNick)
-                                            || TryClaimSellerSession(loginNick, session.SessionID);
+                                            || TryClaimShopSession(loginNick, session.SessionID);
                                         if (!authoritative)
                                         {
                                             // This page is useful as a lightweight raw inbound source but must
@@ -681,9 +681,9 @@ namespace Bot.ChromeNs
                             else if (wMsg.Type == "onChatDlgActive")
                             {
                                 string duplicateSeller;
-                                if (_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                                if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateSeller))
                                 {
-                                    if (TryPromoteDuplicateSellerSession(duplicateSeller, session, "onChatDlgActive"))
+                                    if (TryPromoteDuplicateShopSession(duplicateSeller, session, "onChatDlgActive"))
                                     {
                                         var activeSeller = duplicateSeller;
                                         var activeBuyer = string.Empty;
@@ -714,7 +714,7 @@ namespace Bot.ChromeNs
                             else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs")
                             {
                                 string duplicateSeller;
-                                if (!_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                                if (!_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateSeller))
                                 {
                                     Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));
                                 }
@@ -741,7 +741,7 @@ namespace Bot.ChromeNs
                         _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
                         _recoverableStandbySessions.TryRemove(session.SessionID, out ignoredCapability);
                         _standbyLoggedSessions.TryRemove(session.SessionID, out ignoredStandbyLog);
-                        ReleaseSellerSession(session.SessionID);
+                        ReleaseShopSession(session.SessionID);
                         BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
                         // Session-scoped lifecycle-guard dictionaries must not keep
                         // a strong reference to every old 12-second reconnect lease.
@@ -757,7 +757,7 @@ namespace Bot.ChromeNs
                         _initialized.TryRemove(session.SessionID, out b);
                         _initializing.TryRemove(session.SessionID, out b);
                         _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
-                        _duplicateSellerSessions.TryRemove(session.SessionID, out duplicateSeller);
+                        _duplicateShopSessions.TryRemove(session.SessionID, out duplicateSeller);
                     };
                     var config = new ServerConfig()
                     {
