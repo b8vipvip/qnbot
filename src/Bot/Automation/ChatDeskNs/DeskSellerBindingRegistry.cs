@@ -83,7 +83,7 @@ namespace Bot.Automation.ChatDeskNs
         {
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
-            if (desk == null || desk.Hwnd == null || seller.Length == 0
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null || seller.Length == 0
                 || shopKey.Length == 0 || !IsAuthenticatedShop(seller, shopKey))
                 return false;
 
@@ -102,7 +102,7 @@ namespace Bot.Automation.ChatDeskNs
         {
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
-            if (desk == null || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
                 || QnAccountFinder.IsGenericReceptionTitle(seller)
                 || !IsAuthenticatedShop(seller, shopKey)) return null;
 
@@ -179,7 +179,7 @@ namespace Bot.Automation.ChatDeskNs
         {
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
-            if (desk == null || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null || seller.Length == 0 || shopKey.Length == 0
                 || !IsAuthenticatedShop(seller, shopKey)) return false;
 
             RememberKnown(desk, seller, shopKey);
@@ -203,7 +203,7 @@ namespace Bot.Automation.ChatDeskNs
 
         private static void RememberKnown(Desk desk, string seller, string shopKey)
         {
-            if (desk == null || desk.Hwnd == null) return;
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null) return;
             seller = NormalizeSeller(seller);
             shopKey = NormalizeSeller(shopKey);
             if (seller.Length == 0 || shopKey.Length == 0
