@@ -356,7 +356,7 @@ namespace Bot.ChromeNs
                 // seller echoes can arrive after that mutable field already points at another segment.
                 // The delivery ledger knows the exact seller+buyer+answer that the Bot submitted and
                 // keeps a short known-answer record after confirmation for duplicate/recovered echoes.
-                var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text);
+                var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text, shopKey);
                 // A successful transport echo must be represented in the UI timeline
                 // immediately, including first-contact and fixed order segments.
                 // Historical refresh is a fallback, not the only writer. Keep the
