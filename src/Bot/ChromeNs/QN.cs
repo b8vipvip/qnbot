@@ -133,7 +133,8 @@ namespace Bot.ChromeNs
                     return false;
                 }
                 var client = CDP;
-                if (shop == null || client == null
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (shop == null || client == null || server == null
                     || !await rpa.VerifyShopIdentityBeforeSendAsync(shop.ShopKey).ConfigureAwait(false)
                     || !ReferenceEquals(CDP, client))
                 {
@@ -148,7 +149,7 @@ namespace Bot.ChromeNs
                     force: true, shopKey: shop.ShopKey);
                 try
                 {
-                    SendTimiMsg(buyer, text);
+                    client.SendTimiMsg(buyer, text);
                 }
                 catch (Exception ex)
                 {
@@ -159,7 +160,7 @@ namespace Bot.ChromeNs
                 }
 
                 if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
-                    || !MyWebSocketServer.WSocketSvrInst.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId))
+                    || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId))
                 {
                     SendDeliveryWatchdog.EnsurePending(seller, buyer, text, shop.ShopKey);
                     rpa.SetSendCancellation(
