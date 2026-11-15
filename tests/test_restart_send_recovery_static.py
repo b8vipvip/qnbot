@@ -8,7 +8,7 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_websocket_server_keeps_one_authoritative_cdp_session_per_seller():
+def test_websocket_server_keeps_one_authoritative_cdp_session_per_shopkey():
     source = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     assert "_shopSessions" in source
     assert "_sessionShopKeys" in source
@@ -18,7 +18,9 @@ def test_websocket_server_keeps_one_authoritative_cdp_session_per_seller():
     assert "重复千牛CDP" in source or "重复千牛WebSocket" in source
     assert "ShouldRefreshStatusBinding" in source
     assert "var wasAuthoritative" in source
-    assert "千牛前台会话切换已提升standby为权威CDP" in source
+    assert "已验证当前CDP登录身份并提升ShopKey standby为权威会话" in source
+    assert "TryPromoteDuplicateShopSessionAsync" in source
+    assert "await client.GetCurrentUser().ConfigureAwait(false)" in source
 
     # Both assignment points must be protected by the authoritative-session claim.
     assert source.count("qn.CDP = cdp;") == 2
