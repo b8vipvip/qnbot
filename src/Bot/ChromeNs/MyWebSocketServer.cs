@@ -275,6 +275,8 @@ namespace Bot.ChromeNs
                     Log.Info("千牛WebSocket身份变化时解绑旧QN实例失败: " + ex.Message);
                 }
                 CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);
+                string ignoredStatusBinding;
+                _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
                 Log.Info("检测到同一WebSocket切换了登录店铺身份，已解绑旧ShopKey并等待下一次状态事件重新绑定: oldShopRef="
                     + DiagnosticRef("shop", previousShopKey)
                     + ", newShopRef=" + DiagnosticRef("shop", shopKey)
