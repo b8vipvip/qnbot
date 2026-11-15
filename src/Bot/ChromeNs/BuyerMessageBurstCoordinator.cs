@@ -294,12 +294,12 @@ namespace Bot.ChromeNs
         {
             if (!Params.Robot.GetIsAutoReply()) return CanonicalPreMergeOutcome.Continue;
             var qn = QN.FindExistingByShopKey(item.ShopKey);
-            if (qn == null)
+            if (qn == null || qn.CDP == null)
             {
                 Log.ErrorWithMaxCount(
-                    "统一买家生命周期固定规则未发送：找不到客服运行实例。seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick, 20);
-                return CanonicalPreMergeOutcome.Continue;
+                    "统一买家生命周期固定规则未发送：找不到当前ShopKey的活动客服/CDP实例，已阻断普通AI链路。seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                return CanonicalPreMergeOutcome.Failed;
             }
 
             var question = (item.DisplayText ?? string.Empty).Trim();
