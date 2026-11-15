@@ -177,7 +177,8 @@ def test_structured_chat_timeout_exception_retries_instead_of_bypassing_batch_re
     ]
 
     assert "catch (OperationCanceledException ex)" in batch
-    assert "failed.Error = \"timeout:\"" in batch
+    assert 'var timeoutError = "timeout:" + Clean(ex.Message, 300);' in batch
+    assert "failed.Error = timeoutError;" in batch
     assert batch.index("catch (OperationCanceledException ex)") < batch.index(
         "if (raw == null || !raw.Success"
     )
