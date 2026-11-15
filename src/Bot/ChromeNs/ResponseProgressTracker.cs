@@ -281,6 +281,21 @@ namespace Bot.ChromeNs
 
         public static void MarkDeliveryConfirmed(string seller, string buyer, string answer, string detail, string shopKey = null)
         {
+            if (!string.IsNullOrWhiteSpace(shopKey))
+            {
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+                catch { return; }
+                using (ShopSettingsScope.Enter(shop))
+                    MarkDeliveryConfirmedCore(seller, buyer, answer, detail, shopKey);
+                return;
+            }
+            MarkDeliveryConfirmedCore(seller, buyer, answer, detail, shopKey);
+        }
+
+        private static void MarkDeliveryConfirmedCore(
+            string seller, string buyer, string answer, string detail, string shopKey)
+        {
             DeliveryUiEntry ui;
             if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer, shopKey), out ui)
                 && ui != null && ui.Control != null)
@@ -296,6 +311,21 @@ namespace Bot.ChromeNs
         }
 
         public static void MarkDeliveryTimedOut(string seller, string buyer, string answer, string detail, string shopKey = null)
+        {
+            if (!string.IsNullOrWhiteSpace(shopKey))
+            {
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+                catch { return; }
+                using (ShopSettingsScope.Enter(shop))
+                    MarkDeliveryTimedOutCore(seller, buyer, answer, detail, shopKey);
+                return;
+            }
+            MarkDeliveryTimedOutCore(seller, buyer, answer, detail, shopKey);
+        }
+
+        private static void MarkDeliveryTimedOutCore(
+            string seller, string buyer, string answer, string detail, string shopKey)
         {
             DeliveryUiEntry ui;
             if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer, shopKey), out ui)
