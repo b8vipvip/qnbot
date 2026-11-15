@@ -1162,8 +1162,7 @@ namespace Bot.ChromeNs
                 {
                     reports = (DbHelper.Db.Select(
                         typeof(ConversationSessionLearningReportEntity),
-                        "where CompletedAtTicks = 0 and LastBuyerAtTicks >= ? order by UpdatedAtTicks desc",
-                        DateTime.Now.AddDays(-1).Ticks) ?? new List<object>())
+                        "where CompletedAtTicks = 0 order by UpdatedAtTicks desc") ?? new List<object>())
                         .OfType<ConversationSessionLearningReportEntity>()
                         .ToList();
                 }
@@ -1171,6 +1170,33 @@ namespace Bot.ChromeNs
                 foreach (var report in reports)
                 {
                     if (report == null) continue;
+
+                    // Resume all unfinished reports, not only those whose buyer
+                    // activity happened in the last 24 hours. The old cutoff left
+                    // older crash-interrupted sessions permanently pending.
+                    var recoveryAnchor = FromTicks(report.LastActivityAtTicks);
+                    if (recoveryAnchor == DateTime.MinValue)
+                        recoveryAnchor = FromTicks(report.LastBuyerAtTicks);
+                    if (recoveryAnchor == DateTime.MinValue)
+                        recoveryAnchor = FromTicks(report.SessionStartedAtTicks);
+                    if (recoveryAnchor == DateTime.MinValue)
+                        recoveryAnchor = FromTicks(report.CreatedAtTicks);
+
+                    if (recoveryAnchor == DateTime.MinValue
+                        || recoveryAnchor < DateTime.Now.AddDays(-ReportRetentionDays))
+                    {
+                        report.Status = recoveryAnchor == DateTime.MinValue
+                            ? "待恢复记录缺少有效时间信息，已跳过"
+                            : "待恢复记录超过历史保留期，已跳过";
+                        report.Error = recoveryAnchor == DateTime.MinValue
+                            ? "pending_session_timestamp_missing"
+                            : "pending_session_exceeded_retention";
+                        report.CompletedAtTicks = DateTime.Now.Ticks;
+                        report.UpdatedAtTicks = DateTime.Now.Ticks;
+                        SaveReport(report);
+                        continue;
+                    }
+
                     if (string.IsNullOrWhiteSpace(report.ShopKey))
                     {
                         // Legacy reports did not persist ShopKey. Restore only when
