@@ -423,7 +423,8 @@ namespace Bot.ChromeNs
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                 if (File.Exists(path))
                 {
-                    var backup = path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff");
+                    var backup = path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N");
                     File.Copy(path, backup, false);
                 }
                 string error;
