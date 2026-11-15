@@ -547,6 +547,60 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized);
         }
 
+        internal static string ComputeCloudSyncFingerprint(IEnumerable<KnowledgeV2Record> records)
+        {
+            var projection=(records??Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x=>x!=null)
+                .Select(x=>new
+                {
+                    Id=x.Id??string.Empty,
+                    UpdatedAt=x.UpdatedAt,
+                    Enabled=x.Enabled,
+                    Status=x.Status??string.Empty,
+                    Title=x.Title??string.Empty,
+                    Answer=x.Answer??string.Empty
+                })
+                .OrderBy(x=>x.Id,StringComparer.Ordinal);
+            return KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty);
+        }
+
+        // Compare-and-replace for cloud replay. The expected fingerprint is checked while
+        // holding the same repository lock used by Save/ReplaceAll, so a concurrent local
+        // learning write cannot be silently erased by a stale cloud response.
+        internal static bool TryReplaceAllIfUnchanged(
+            string seller,string expectedFingerprint,IEnumerable<KnowledgeV2Record> records)
+        {
+            var shop=ResolveShopRequired(seller);
+            var state=GetState(shop);
+            EnsureMigrated(shop,state);
+            var normalized=(records??Enumerable.Empty<KnowledgeV2Record>())
+                .Where(x=>x!=null)
+                .Select(CloneAndNormalize)
+                .ToList();
+
+            lock(state.Sync)
+            {
+                var current=state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                    .Select(FromRow).Where(x=>x!=null).ToList();
+                var currentFingerprint=ComputeCloudSyncFingerprint(current);
+                if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty,StringComparison.Ordinal))
+                    return false;
+
+                state.Db.ClearTable(new List<Type>{typeof(KnowledgeV2RecordRow)});
+                if(normalized.Count>0)
+                    state.Db.SaveRecordsInTransaction(normalized.Select(x=>(object)ToRow(x)).ToList());
+                state.Db.SaveOneRecord(new KnowledgeV2MetaRow
+                {
+                    Key="schema_version",
+                    Value=KnowledgeEngineV2Constants.SchemaVersion.ToString()
+                });
+            }
+
+            MirrorAllToLegacy(shop,normalized);
+            KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized);
+            return true;
+        }
+
         public static string GetDatabasePath(string seller)
         {
             var shop = ResolveShopRequired(seller);

@@ -36,7 +36,7 @@ def test_windows_bridge_reuses_shop_repository_and_existing_cloud_credentials():
     assert '"/api/runtime/v1/bot-web/knowledge-v2-sync"' in s
     assert 'request.Headers.TryAddWithoutValidation("X-Shop-Key",shop.ShopKey)' in s
     assert "KnowledgeEngineV2Repository.LoadAll" in s
-    assert "KnowledgeEngineV2Repository.ReplaceAll" in s
+    assert "KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged" in s
     assert "ApiKey" not in s and "Cookie" not in s and "Password" not in s
     assert "KnowledgeV2CloudSyncService.cs" in read(PROPS)
 
@@ -53,3 +53,14 @@ def test_cloud_replay_preserves_record_updated_at_for_idempotent_poll():
     assert "var updatedAt = clone.UpdatedAt;" in part
     assert "clone.UpdatedAt = updatedAt;" in part
     assert "clone.LastVerifiedAt = verifiedAt;" in part
+
+
+def test_windows_v2_cloud_revision_and_fingerprint_survive_process_restart():
+    s=read(WINDOWS)
+    assert 'private const string RevisionKey = "KnowledgeV2CloudRevision"' in s
+    assert 'private const string FingerprintKey = "KnowledgeV2CloudFingerprint"' in s
+    assert "States.GetOrAdd(shop.ShopKey,_=>LoadState(shop))" in s
+    assert "new ShopScopedSettingsStore(shop,Paths)" in s
+    assert "store.TryGetString(RevisionKey,out revisionText)" in s
+    assert "store.SetString(RevisionKey,revision)" in s
+    assert "store.SetString(FingerprintKey,fingerprint)" in s
