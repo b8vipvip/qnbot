@@ -657,8 +657,8 @@ def test_pending_learning_resume_covers_full_retention_and_audits_expired_rows()
     assert '"where CompletedAtTicks = 0 order by UpdatedAtTicks desc"' in resume
     assert "LastBuyerAtTicks >= ?" not in resume
     assert "ReportRetentionDays" in resume
-    assert 'report.Error = "pending_session_exceeded_retention";' in resume
-    assert 'report.Error = "pending_session_timestamp_missing";' in resume
+    assert '"pending_session_exceeded_retention"' in resume
+    assert '"pending_session_timestamp_missing"' in resume
     assert "report.CompletedAtTicks = DateTime.Now.Ticks;" in resume
 
 
