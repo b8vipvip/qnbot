@@ -991,7 +991,7 @@ namespace Bot.ChromeNs
                 var matches = QNSet
                     .Where(q => q != null && q._seller != null)
                     .Select(q => new { Qn = q, ShopKey = TryGetShopKey(q._seller) })
-                    .Where(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal))
+                    .Where(x => string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
                     .ToList();
                 if (matches.Count > 1 && matches.Any(x =>
                     !ShopIdentityResolver.Resolve(x.Qn._seller).HasStableSellerId))
@@ -1062,7 +1062,7 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
-                return FindExistingByShopKey(shopKey);
+                return FindExistingByShopKey(shop.ShopKey);
             }
             catch
             {
