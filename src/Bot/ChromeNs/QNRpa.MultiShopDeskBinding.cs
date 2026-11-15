@@ -51,15 +51,13 @@ namespace Bot.ChromeNs
             // seller: both conditions remain fail-closed.
             var desks = Desk.Snapshot().Where(x => x != null && x.IsAlive).ToList();
             if (desks.Count != 1) return null;
+            if (!desks[0].IsForeground) return null;
 
             var shopKey = ResolveShopKey();
             if (string.IsNullOrWhiteSpace(shopKey)) return null;
             var desk = DeskSellerBindingRegistry.BindResolvedSeller(
                 desks[0], seller, "active-session-single-desk-recovery", shopKey);
-            if (desk == null) return null;
-
-            DeskSellerBindingRegistry.MarkActiveSeller(
-                desk, seller, "active-session-single-desk-recovery", shopKey);
+            if (!DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)) return null;
             Log.Info("多客服RPA已从活动ShopKey/CDP身份恢复共享千牛窗口绑定: seller=" + seller
                 + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
             return desk;

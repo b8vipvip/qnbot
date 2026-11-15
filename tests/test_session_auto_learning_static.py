@@ -397,11 +397,14 @@ def test_active_shop_reassert_uses_exact_shopkey_and_cdp_session():
     assert "QN.FindExistingBySellerNick(seller)" not in reassert
     assert "if (qn == null)" in reassert
     assert "QN.CurQN = null;" in reassert
-    assert "_activeSessionId.Length == 0" in is_active
+    assert "!string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in reassert
+    assert "!ReferenceEquals(QN.CurQN, current)" in reassert
+    assert "_activeSessionId.Length > 0" in is_active
+    assert "sessionId.Length > 0" in is_active
     assert "string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in is_active
     activate = coordinator[
         coordinator.index("private static bool Activate"):
-        coordinator.index("private static string ShopKey")
+        coordinator.index("private static bool OwnsAuthoritativeSession")
     ]
     assert "_activeSessionId = sessionId;" in activate
     assert "string.Equals((x.CDP.SessionId ?? string.Empty).Trim()," in connected
@@ -476,7 +479,7 @@ def test_desk_lookup_never_falls_back_across_explicit_shop_scope():
     ]
     assert "scopedShop.SellerNick" in scoped
     assert "FindConnectedQnByShopKey(scopedShop.ShopKey)" in scoped
-    assert "DeskSellerBindingRegistry.FindSellerDesk(sellerNick)" in scoped
+    assert "DeskSellerBindingRegistry.FindSellerDesk(sellerNick, scopedShop.ShopKey)" in scoped
     assert "scopedShop.DisplayName" not in scoped
     assert "return null;" in scoped
 
@@ -609,19 +612,30 @@ def test_native_send_requires_exact_shop_identity_and_background_events_cannot_s
         coordinator.index("internal static bool ValidateNativeSend"):
         coordinator.index("internal static void ReassertCurrent")
     ]
-    activate = coordinator[
-        coordinator.index("private static bool Activate(QN qn"):
-        coordinator.index("private static string ShopKey(QN qn)")
+    start = coordinator.index("private static bool Activate(QN qn")
+    activate = coordinator[start:coordinator.index("private static bool OwnsAuthoritativeSession", start)]
+    authority = coordinator[
+        coordinator.index("private static bool OwnsAuthoritativeSession", start):
+        coordinator.index("private static string ShopKey(QN qn)", start)
     ]
     assert "_activeShopKey.Length > 0" in active
     assert "shopKey.Length > 0" in active
     assert "string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)" in active
-    assert "string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)" in chat_event
+    assert "Activate(qn," in chat_event
+    assert "false, evidence" in chat_event
+    activation_guard = activate[activate.index("lock (Sync)"):activate.index("_activeShopKey = shopKey;")]
+    assert "!focusProof && _activeShopKey.Length > 0" in activation_guard
+    assert "!string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)" in activation_guard
+    assert "!string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal)" in activation_guard
     assert "DateTime.UtcNow - _lastFocusProofUtc" not in chat_event
     assert "_activeShopKey.Length == 0 || shopKey.Length == 0" in native
     assert 'reason = "ShopKey缺失或不一致"' in native
     assert "sessionId.Length > 0" not in native
     assert "if (shopKey.Length == 0) return false;" in activate
+    for path in (active, native, activate):
+        assert "OwnsAuthoritativeSession(qn, shopKey, sessionId)" in path
+    assert "!cdp.IsInvalidated && !cdp.IsShopIdentityRetired" in authority
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in authority
 
 def test_legacy_shop_backfill_is_once_per_verified_shop_not_on_every_history_read():
     history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")

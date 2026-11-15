@@ -16,13 +16,14 @@ def test_active_shop_can_recover_lost_shared_desk_mapping_without_guessing():
     assert "if (desks.Count != 1) return null;" in src
     assert '"active-session-single-desk-recovery"' in src
     assert "DeskSellerBindingRegistry.BindResolvedSeller" in src
-    assert "DeskSellerBindingRegistry.MarkActiveSeller" in src
+    assert "if (!desks[0].IsForeground) return null;" in src
+    assert "if (!DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)) return null;" in src
 
 
 def test_recovery_stays_fail_closed_for_background_or_ambiguous_windows():
     src = text(RPA)
     recovery = src[src.index("private Desk TryRecoverActiveSellerDesk"):src.index("internal bool EnsureSellerDeskBinding")]
-    assert "if (RuntimeSellerCount() <= 1) return null;" in recovery
+    assert "if (RuntimeShopCount() <= 1) return null;" in recovery
     assert "if (!ActiveShopSessionRegistry.ValidateNativeSend(_qn, out isolationReason)) return null;" in recovery
     assert "if (desks.Count != 1) return null;" in recovery
     assert "FirstOrDefault" not in recovery
