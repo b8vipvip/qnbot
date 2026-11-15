@@ -60,6 +60,7 @@ def test_cdp_preferred_runtime_routing_uses_shopkey_after_exact_login_identity()
     assert "cdp.ShopKey = shopKey;" in server
     assert "client.ShopKey = shopKey;" in server
     assert "CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId)" in server
+    assert "previousQn.CDP.IsShopIdentityRetired = true;" in server
     assert "previousQn.CDP = null;" in server
     assert "_lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding)" in server
     assert "!string.Equals(sessionShopKey, shopKey, StringComparison.Ordinal)" in cdp
