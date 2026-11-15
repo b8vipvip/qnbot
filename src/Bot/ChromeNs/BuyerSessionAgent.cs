@@ -781,14 +781,8 @@ namespace Bot.ChromeNs
             shopKey = Normalize(shopKey);
             if (shopKey.Length > 0) return shopKey;
 
-            var scopedShop = ShopSettingsScope.Current;
-            if (scopedShop != null)
-            {
-                return string.Equals(Normalize(scopedShop.SellerNick), Normalize(sellerNick), StringComparison.Ordinal)
-                    ? Normalize(scopedShop.ShopKey)
-                    : string.Empty;
-            }
-
+            // Legacy callers may resolve only a unique nickname. Do not trust an
+            // ambient AsyncLocal scope here: equal nicknames can belong to different shops.
             try { return Normalize(ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick).ShopKey); }
             catch { return string.Empty; }
         }
