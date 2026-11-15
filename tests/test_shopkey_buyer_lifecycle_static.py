@@ -146,6 +146,22 @@ def test_buyer_burst_and_deterministic_reply_require_exact_shopkey():
     assert "已阻断普通Knowledge/AI链路" in autoreply
 
 
+def test_seller_echo_runtime_monitor_and_learning_are_shopkey_scoped():
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    mirror = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+
+    assert "ResolveRuntimeBySeller(qn).ShopKey" in monitor
+    assert "ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey))" in monitor
+    assert "TryConfirmBotDelivery(seller, buyer, texts, shopKey)" in monitor
+    assert "BuyerOrderKey(seller, buyer, shopKey)" in monitor
+    assert "return shopKey + \"#\" + seller.ToLowerInvariant()" in monitor
+    assert "IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)" in learning
+    assert "RecordObservedSellerMessage(" in mirror
+    assert "ResolveShop(seller, shopKey)" in mirror
+    assert "ResolveRuntimeByShopKey(shopKey)" in mirror
+
+
 def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
     watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
