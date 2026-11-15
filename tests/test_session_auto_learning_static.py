@@ -95,8 +95,8 @@ def test_ai_history_exposes_existing_session_learning_reports():
     assert "ShopContextLocator.ResolveRuntimeByShopKey(_shopKey)" in ui
     assert "using (ShopSettingsScope.Enter(shop))" in ui
     assert "new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller, _shopKey)" in shell
-    assert "string.Equals(x.ShopKey, _shopKey, StringComparison.Ordinal)" in ui
-    assert "string.Equals(x.Seller, _seller, StringComparison.Ordinal)" in ui
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    assert '"where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "' in service
     assert '"会话自动学习"' in ui
     assert "x.AppliedCount" in ui and "x.SkippedCount" in ui
 
