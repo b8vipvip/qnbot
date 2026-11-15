@@ -10,6 +10,7 @@ def source(name):
 
 def test_seller_echo_enters_canonical_mirror_before_agent_event():
     bridge = source("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    store = source("src/Bot/ChromeNs/ConversationContextStore.cs")
     segment = bridge.split(
         "var botEcho = SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text, shopKey);", 1
     )[1].split("var result = Agent.RecordEvent(", 1)[0]
