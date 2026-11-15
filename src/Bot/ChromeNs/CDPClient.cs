@@ -493,8 +493,9 @@ namespace Bot.ChromeNs
                     {
                         string ignored;
                         PreferredShopSessions.TryRemove(pair.Key, out ignored);
-                        Log.Info("活动CDP会话失效，已撤销会话偏好并回退权威通道: seller="
-                            + pair.Key + ", session=" + sessionId);
+                        Log.Info("活动CDP会话失效，已撤销ShopKey会话偏好并回退权威通道: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", pair.Key)
+                            + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId));
                     }
                 }
             }
