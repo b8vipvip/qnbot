@@ -953,7 +953,8 @@ namespace Bot.ChromeNs
                         var oldest = messages.Where(x => x != null).OrderBy(GetSortValue).FirstOrDefault();
                         if (oldest == null)
                         {
-                            result.IsComplete = true;
+                            // A non-empty but unparseable page is not proof of server end.
+                            result.ErrorCode = "history_page_no_valid_messages";
                             result.StopReason = "no_valid_messages";
                             break;
                         }

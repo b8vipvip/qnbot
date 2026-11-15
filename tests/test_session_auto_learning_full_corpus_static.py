@@ -309,3 +309,19 @@ def test_remote_history_never_infers_end_from_missing_hasmore_or_empty_page_with
     assert "if (hasMore == 0 && messages.Count < LearningHistoryPageSize)" not in method
     assert "private static bool TryReadInt(JToken token, out int value)" in context
     assert "if (token == null || token.Type == JTokenType.Null) return false;" in context
+
+
+
+def test_nonempty_history_page_without_any_valid_message_is_not_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+
+    assert 'result.ErrorCode = "history_page_no_valid_messages"' in method
+    assert 'result.StopReason = "no_valid_messages"' in method
+    assert "result.IsComplete = true;" not in method[
+        method.index("if (oldest == null)"):
+        method.index("var oldestTime")
+    ]
