@@ -197,8 +197,12 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "ResolveShopKeyForDeliveryWatchdog()" in send_guard
     assert "MarkSubmissionAccepted(" in send_guard
     assert "CancelConversation(" in send_guard
-    assert "EnsurePending(" in rpa and "ResolveShopKeyForDeliveryWatchdog()" in rpa
-    assert "CancelPending(" in rpa and "ResolveShopKeyForDeliveryWatchdog()" in rpa
+    assert "EnsurePending(" in rpa and "shopKey" in rpa
+    assert "CancelPending(" in rpa and "shopKey" in rpa
+    assert "if (shopKey.Length == 0)" in rpa
+    assert "OpenAndSendText(buyer, text, shopKey)" in rpa
+    assert "_qn.CDP.IsShopIdentityRetired" in send_guard
+    assert "_qn.CDP.ShopKey" in send_guard
 
 
 def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
