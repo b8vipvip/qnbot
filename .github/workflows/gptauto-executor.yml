@@ -95,7 +95,10 @@ jobs:
           pr="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
           actual_head="$(jq -r '.head.sha' <<<"$pr")"
           [[ "$actual_head" == "$EXPECTED_HEAD" ]] || { echo "::error::PR head moved; refusing stale merge"; exit 1; }
-          [[ "$(jq -r '.draft' <<<"$pr")" == "false" ]] || { echo "::error::PR is draft"; exit 1; }
+          if [[ "$(jq -r '.draft' <<<"$pr")" == "true" ]]; then
+            echo "::notice::PR #$PR_NUMBER remains Draft; merge deferred until required real-client acceptance is recorded and the maintainer marks it Ready."
+            exit 0
+          fi
           [[ "$(jq -r '.mergeable' <<<"$pr")" != "false" ]] || { echo "::error::PR is not mergeable"; exit 1; }
 
           for attempt in $(seq 1 12); do
