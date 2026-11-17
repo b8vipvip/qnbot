@@ -347,7 +347,7 @@ namespace Bot.ChromeNs
             string buyer,
             ConversationContextTurn turn)
         {
-            if (state == null || turn == null || !state.MessageSyncEnabled) return string.Empty;
+            if (state == null || turn == null) return string.Empty;
             var role = string.Equals(turn.Role, "assistant", StringComparison.Ordinal)
                 ? "assistant"
                 : (string.Equals(turn.Role, "user", StringComparison.Ordinal) ? "user" : string.Empty);
@@ -376,14 +376,22 @@ namespace Bot.ChromeNs
 
             var signature = Hash(role + "|" + text + "|" + occurredAt.ToUniversalTime().Ticks
                 + "|" + turn.Withdrawn + "|" + isBot);
-            string previous;
-            if (state.CapturedMessageSignatures.TryGetValue(messageKey, out previous)
-                && string.Equals(previous, signature, StringComparison.Ordinal))
-                return messageKey;
+            lock (state.PendingMessagesSync)
+            {
+                // Serialize capture/signature updates with the remote disable transition.
+                // Otherwise a signature can be written after the disable path clears the queue,
+                // permanently suppressing retry when message sync is enabled again.
+                if (!state.MessageSyncEnabled) return string.Empty;
 
-            if (EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
-                messageKey, turn.Withdrawn, isBot))
-                state.CapturedMessageSignatures[messageKey] = signature;
+                string previous;
+                if (state.CapturedMessageSignatures.TryGetValue(messageKey, out previous)
+                    && string.Equals(previous, signature, StringComparison.Ordinal))
+                    return messageKey;
+
+                if (EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
+                    messageKey, turn.Withdrawn, isBot))
+                    state.CapturedMessageSignatures[messageKey] = signature;
+            }
             return messageKey;
         }
 
@@ -447,6 +455,10 @@ namespace Bot.ChromeNs
             // so the next sync cycle retries it after the current 500-message batch drains.
             lock (state.PendingMessagesSync)
             {
+                // Re-check after taking the lock: the sync switch may have changed
+                // after the fast-path check above.
+                if (!state.MessageSyncEnabled) return false;
+
                 WebMessage previous;
                 var exists = state.PendingMessages.TryGetValue(item.MessageKey, out previous);
                 var nextCount = state.PendingMessages.Count + (exists ? 0 : 1);
@@ -611,21 +623,25 @@ namespace Bot.ChromeNs
                         if (!response.IsSuccessStatusCode)
                             throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
                         var root = JObject.Parse(body);
+                        // The successful sync response acknowledges this exact snapshot.
+                        // Remove it before applying a remote disable command, so disabling
+                        // clears only still-unsent messages and does not cause acknowledged
+                        // messages to be replayed when sync is enabled again.
+                        lock (state.PendingMessagesSync)
+                        {
+                            foreach (var item in messageSnapshot)
+                            {
+                                if (((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
+                                    new KeyValuePair<string, WebMessage>(item.MessageKey, item)))
+                                    state.PendingMessageBytes = Math.Max(
+                                        0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
+                            }
+                        }
                         ApplyDesiredSettings(state, root["desired_settings"] as JObject);
                         await ApplyCommandsAsync(state, root["commands"] as JArray);
                     }
                 }
 
-                lock (state.PendingMessagesSync)
-                {
-                    foreach (var item in messageSnapshot)
-                    {
-                        if (((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
-                            new KeyValuePair<string, WebMessage>(item.MessageKey, item)))
-                            state.PendingMessageBytes = Math.Max(
-                                0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
-                    }
-                }
                 foreach (var pair in resultSnapshot)
                 {
                     JObject ignored;
@@ -764,14 +780,25 @@ namespace Bot.ChromeNs
             }
             if (state.MessageSyncEnabled != messageSync)
             {
-                state.MessageSyncEnabled = messageSync;
-                SaveBool(MessageSyncKey, messageSync);
-                if (!messageSync)
+                lock (state.PendingMessagesSync)
                 {
-                    lock (state.PendingMessagesSync)
+                    if (state.MessageSyncEnabled != messageSync)
                     {
-                        state.PendingMessages.Clear();
-                        state.PendingMessageBytes = 0;
+                        state.MessageSyncEnabled = messageSync;
+                        SaveBool(MessageSyncKey, messageSync);
+                        if (!messageSync)
+                        {
+                            // Only discard signatures for messages that were not acknowledged.
+                            // Retained signatures for already-sent messages prevent duplicates;
+                            // removed signatures let pending messages be recaptured after re-enable.
+                            foreach (var key in state.PendingMessages.Keys)
+                            {
+                                string ignored;
+                                state.CapturedMessageSignatures.TryRemove(key, out ignored);
+                            }
+                            state.PendingMessages.Clear();
+                            state.PendingMessageBytes = 0;
+                        }
                     }
                 }
             }
@@ -841,6 +868,7 @@ namespace Bot.ChromeNs
                 ["captured_at"] = DateTime.UtcNow.ToString("o"),
                 ["online_seller_count"] = qns.Count,
                 ["pending_message_count"] = state.PendingMessages.Count,
+                ["pending_message_bytes"] = GetPendingMessageBytes(state),
                 ["pending_command_result_count"] = state.PendingCommandResults.Count,
                 ["sync_in_progress"] = state.Syncing != 0,
                 ["message_sync_enabled"] = state.MessageSyncEnabled,

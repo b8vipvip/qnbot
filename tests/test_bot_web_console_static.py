@@ -181,3 +181,20 @@ def test_bot_web_sync_queue_enforces_per_shop_payload_byte_budget_and_exact_acco
     assert "state.PendingMessageBytes = 0;" in settings
     assert "pending_message_bytes" in sync
     assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
+
+
+def test_bot_web_message_sync_disable_preserves_retry_for_unacknowledged_messages():
+    sync = read(WINDOWS)
+    capture = sync[sync.index("private static string CaptureTurn"):sync.index("private static long PendingMessageSizeBytes")]
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+    flush = sync[sync.index("private static async Task SyncOnceAsync"):sync.index("private static JObject BuildStatus")]
+    settings = sync[sync.index("private static void ApplyDesiredSettings"):sync.index("private static async Task ApplyCommandsAsync")]
+
+    assert "lock (state.PendingMessagesSync)" in capture
+    assert "if (!state.MessageSyncEnabled) return string.Empty;" in capture
+    assert "if (!state.MessageSyncEnabled) return false;" in enqueue
+    assert "state.CapturedMessageSignatures.TryRemove(key, out ignored);" in settings
+    assert "state.PendingMessages.Clear();" in settings
+    assert "state.PendingMessageBytes = 0;" in settings
+    assert flush.index("PendingMessages).Remove(") < flush.index("ApplyDesiredSettings(state,")
+    assert "pending_message_bytes" in sync
