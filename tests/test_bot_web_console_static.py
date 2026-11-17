@@ -135,3 +135,29 @@ def test_admin_console_links_mobile_page_and_copy_extension():
     assert "/bot/" in index
     assert 'src="/static/client-token-copy.js"' in index
     assert "管理员可复制对应令牌" in index
+
+
+def test_bot_web_mirror_exports_full_retained_history_without_100_turn_or_200_buyer_caps():
+    context = read(ROOT / "src" / "Bot" / "ChromeNs" / "ConversationContextStore.cs")
+    sync = read(WINDOWS)
+
+    assert "var conversationLimit = maxConversations <= 0 ? int.MaxValue : maxConversations;" in context
+    assert "var turnLimit = maxTurns <= 0 ? int.MaxValue : maxTurns;" in context
+    assert "var take = maxTurns <= 0 ? int.MaxValue : maxTurns;" in context
+    assert "GetMirrorTurns(seller, buyer, int.MaxValue)" in sync
+    assert "GetMirrorConversationSnapshots(" in sync
+    assert "state.Shop.ShopKey, int.MaxValue, int.MaxValue" in sync
+    assert "Math.Min(100, maxTurns)" not in context
+    assert "Math.Min(256, maxConversations)" not in context
+
+
+def test_bot_web_sync_queue_uses_backpressure_instead_of_silently_evicting_unsent_messages():
+    sync = read(WINDOWS)
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+
+    assert "MaxPendingMessagesPerShop = 20000" in sync
+    assert "PendingMessagesSync" in enqueue
+    assert "state.PendingMessages.Count >= MaxPendingMessagesPerShop" in enqueue
+    assert "return false;" in enqueue
+    assert "等待后续同步" in enqueue
+    assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
