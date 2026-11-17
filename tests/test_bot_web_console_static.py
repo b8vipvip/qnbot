@@ -156,7 +156,7 @@ def test_bot_web_sync_queue_uses_backpressure_instead_of_silently_evicting_unsen
 
     assert "MaxPendingMessagesPerShop = 20000" in sync
     assert "PendingMessagesSync" in enqueue
-    assert "state.PendingMessages.Count >= MaxPendingMessagesPerShop" in enqueue
+    assert "nextCount > MaxPendingMessagesPerShop" in enqueue
     assert "return false;" in enqueue
     assert "等待后续同步" in enqueue
     assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
