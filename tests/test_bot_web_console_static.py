@@ -116,7 +116,7 @@ def test_bot_web_inbox_uses_the_desktop_message_mirror():
     assert "GetMirrorConversationSnapshots" in context
     assert '["is_bot"]' in sync
     assert '["withdrawn"]' in sync
-    assert "_public_message(row)" in api
+    assert "project_conversation_message(row)" in api
     assert "build_bot_qa_messages" not in api
     assert 'record_scope": "conversation"' in api
     assert "已撤回一条消息" in script
@@ -126,8 +126,6 @@ def test_admin_console_links_mobile_page_and_copy_extension():
     index = read(INDEX)
     assert "Bot Web端" not in index
     assert 'href="/bot/"' not in index
-    assert "手机 Web 端" in index
-    assert "/bot/" in index
     assert "手机 Web 端" in index
     assert "/bot/" in index
     assert 'src="/static/client-token-copy.js"' in index
