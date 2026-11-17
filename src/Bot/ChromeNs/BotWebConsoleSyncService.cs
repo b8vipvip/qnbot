@@ -420,7 +420,7 @@ namespace Bot.ChromeNs
                 OccurredAt = occurredAt
             };
             state.PendingMessages[item.MessageKey] = item;
-            if (state.PendingMessages.Count > 1500)
+            if (state.PendingMessages.Count > 20000)
             {
                 foreach (var old in state.PendingMessages.Values
                     .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 20000))
@@ -576,8 +576,8 @@ namespace Bot.ChromeNs
 
                 foreach (var item in messageSnapshot)
                 {
-                    WebMessage ignored;
-                    state.PendingMessages.TryRemove(item.MessageKey, out ignored);
+                    ((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
+                        new KeyValuePair<string, WebMessage>(item.MessageKey, item));
                 }
                 foreach (var pair in resultSnapshot)
                 {
