@@ -31,6 +31,7 @@ on:
     # no PR to merge and no user-facing work item.
     paths-ignore:
       - '.github/workflows/gptauto-*.yml'
+      - '.github/gptauto/**'
       - 'tests/test_gptauto_workflow_ingress_static.py'
   workflow_run:
     workflows: [CI, API control plane CI, Windows x64 release build]
@@ -252,17 +253,36 @@ jobs:
 
             if [[ -n "$PR_HEAD_SHA" ]]; then
               pr_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
-              pr_ci_row="$(jq -c '
-                ([.workflow_runs[] | select(.name == "API control plane CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
-                // ([.workflow_runs[] | select(.name == "CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
-                // ([.workflow_runs[] | select(.name == "Windows x64 release build" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
-                // {}
+              # Aggregate every exact-head product validation workflow. The gate is
+              # complete only after all workflows that actually ran have finished.
+              # This status/conclusion fingerprint changes when the same run ID
+              # moves from queued/in_progress to completed, waking the Executor.
+              pr_gate_rows="$(jq -c '
+                [.workflow_runs[]
+                  | select(.event == "pull_request")
+                  | select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")]
+                | sort_by([.name, .created_at, .id])
+                | group_by(.name)
+                | map(last)
               ' <<<"$pr_runs")"
-              PR_CI_RUN_ID="$(jq -r '.id // empty' <<<"$pr_ci_row")"
-              PR_CI_STATUS="$(jq -r '.status // empty' <<<"$pr_ci_row")"
-              PR_CI_CONCLUSION="$(jq -r '.conclusion // empty' <<<"$pr_ci_row")"
-              PR_CI_ACTOR="$(jq -r '.actor.login // empty' <<<"$pr_ci_row")"
-              PR_CI_RUN_ATTEMPT="$(jq -r '.run_attempt // empty' <<<"$pr_ci_row")"
+              PR_CI_RUN_ID="$(jq -r '[.[].id | tostring] | join(",")' <<<"$pr_gate_rows")"
+              PR_CI_RUN_ATTEMPT="$(jq -r '[.[].run_attempt // 1 | tostring] | join(",")' <<<"$pr_gate_rows")"
+              PR_CI_ACTOR="$(jq -r '.[-1].actor.login // empty' <<<"$pr_gate_rows")"
+              if [[ "$(jq 'length' <<<"$pr_gate_rows")" -gt 0 ]]; then
+                if [[ "$(jq '[.[] | select(.conclusion == "action_required")] | length' <<<"$pr_gate_rows")" != "0" ]]; then
+                  PR_CI_STATUS="completed"
+                  PR_CI_CONCLUSION="action_required"
+                elif [[ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$pr_gate_rows")" != "0" ]]; then
+                  PR_CI_STATUS="in_progress"
+                else
+                  PR_CI_STATUS="completed"
+                  if [[ "$(jq '[.[] | select(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")] | length' <<<"$pr_gate_rows")" == "0" ]]; then
+                    PR_CI_CONCLUSION="success"
+                  else
+                    PR_CI_CONCLUSION="failure"
+                  fi
+                fi
+              fi
               if [[ "$PR_CI_CONCLUSION" == "action_required" ]]; then
                 BLOCKED_REASON="workflow_approval_required"
               fi
