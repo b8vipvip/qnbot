@@ -96,7 +96,7 @@ def test_sensitive_command_state_is_per_shop_idempotent_and_not_persisted_in_ser
     assert "state.ProcessedCommands" in source
     assert "ShopSettingsScope.Enter(state.Shop)" in source
     assert "UNIQUE(client_id, message_key)" in server
-    assert "INSERT OR IGNORE INTO bot_messages" in server
+    assert "ON CONFLICT(client_id,message_key) DO UPDATE SET" in server
     assert "payload_json" in server
     assert "print(" not in server
 
