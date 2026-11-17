@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
+from bot_web_bot_qa_logic import project_conversation_message
 
 
 router = APIRouter()
@@ -16,32 +17,6 @@ def install(control_plane: Any) -> None:
     # routes. The inbox is a projection of the desktop Bot message mirror, not a
     # Bot-Q&A-only feed.
     control_plane.app.include_router(router)
-
-
-def _public_message(row: Any) -> Dict[str, Any]:
-    item = dict(row)
-    text = str(item.get("text") or "")
-    role = str(item.get("role") or "").lower()
-    message_type = str(item.get("message_type") or "").lower()
-    withdrawn = bool(item.get("withdrawn"))
-    is_bot = bool(item.get("is_bot")) or message_type in {"bot_answer", "ai_answer", "bot_reply"}
-
-    if not withdrawn and role == "assistant":
-        for marker in ("[A]", "[AI]"):
-            if text.rstrip().lower().endswith(marker.lower()):
-                text = text.rstrip()[:-len(marker)].rstrip()
-                is_bot = True
-                break
-
-    if withdrawn:
-        is_bot = False
-    if withdrawn and not text.strip():
-        text = "已撤回一条消息"
-
-    item["text"] = text
-    item["is_bot"] = is_bot
-    item["withdrawn"] = withdrawn
-    return item
 
 
 def _group_all_messages(client_id: int) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
@@ -59,7 +34,7 @@ def _group_all_messages(client_id: int) -> Dict[Tuple[str, str], List[Dict[str, 
         ).fetchall()
     grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for row in rows:
-        item = _public_message(row)
+        item = project_conversation_message(row)
         key = (str(item.get("seller") or ""), str(item.get("buyer") or ""))
         grouped.setdefault(key, []).append(item)
     return grouped
@@ -162,7 +137,7 @@ def web_bot_qa_messages(
             """,
             (client_id, seller.strip(), buyer.strip()),
         ).fetchall()
-    messages = [_public_message(row) for row in rows]
+    messages = [project_conversation_message(row) for row in rows]
 
     if before_id > 0:
         cursor = next(
