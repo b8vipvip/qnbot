@@ -12,9 +12,8 @@ def test_observer_wakes_on_the_actual_pr_validation_workflows():
 
     assert "workflows: [CI, API control plane CI, Windows x64 release build]" in observer
     assert 'if [[ "$WORKFLOW_NAME" == "CI" || "$WORKFLOW_NAME" == "API control plane CI" || "$WORKFLOW_NAME" == "Windows x64 release build" ]]; then' in observer
-    assert 'select(.name == "API control plane CI" and .event == "pull_request")' in observer
-    assert 'select(.name == "CI" and .event == "pull_request")' in observer
-    assert 'select(.name == "Windows x64 release build" and .event == "pull_request")' in observer
+    assert 'select(.event == "pull_request")' in observer
+    assert 'select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")' in observer
 
 
 def test_gptauto_workflow_only_master_commits_do_not_create_orphan_observer_tasks():
