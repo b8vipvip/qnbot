@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+import types
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,29 +37,62 @@ class FakeControlPlane:
 
 @contextmanager
 def loaded_modules():
-    previous_core = sys.modules.get("bot_web_console")
-    core_spec = importlib.util.spec_from_file_location(
-        "bot_web_console", API / "bot_web_console.py"
-    )
-    core = importlib.util.module_from_spec(core_spec)
-    assert core_spec and core_spec.loader
-    sys.modules["bot_web_console"] = core
-    core_spec.loader.exec_module(core)
+    module_names = ("fastapi", "fastapi.responses", "pydantic", "bot_web_console")
+    previous = {name: sys.modules.get(name) for name in module_names}
 
-    conversation_spec = importlib.util.spec_from_file_location(
-        "bot_web_conversation_knowledge_under_test",
-        API / "bot_web_conversation_knowledge.py",
-    )
-    conversations = importlib.util.module_from_spec(conversation_spec)
-    assert conversation_spec and conversation_spec.loader
-    conversation_spec.loader.exec_module(conversations)
+    class DummyRouter:
+        def get(self, *args, **kwargs):
+            return lambda fn: fn
+
+        post = put = delete = get
+
+    class DummyStatus:
+        def __getattr__(self, name):
+            return 200
+
+    fastapi = types.ModuleType("fastapi")
+    fastapi.__path__ = []
+    fastapi.APIRouter = DummyRouter
+    fastapi.Depends = lambda *args, **kwargs: None
+    fastapi.HTTPException = type("HTTPException", (Exception,), {})
+    fastapi.Query = lambda default=None, **kwargs: default
+    fastapi.Request = type("Request", (), {})
+    fastapi.status = DummyStatus()
+
+    responses = types.ModuleType("fastapi.responses")
+    responses.FileResponse = type("FileResponse", (), {})
+    responses.RedirectResponse = type("RedirectResponse", (), {})
+    pydantic = types.ModuleType("pydantic")
+    pydantic.BaseModel = type("BaseModel", (), {})
+    pydantic.Field = lambda default=None, **kwargs: default
+
+    sys.modules["fastapi"] = fastapi
+    sys.modules["fastapi.responses"] = responses
+    sys.modules["pydantic"] = pydantic
+
     try:
+        core_spec = importlib.util.spec_from_file_location(
+            "bot_web_console", API / "bot_web_console.py"
+        )
+        core = importlib.util.module_from_spec(core_spec)
+        assert core_spec and core_spec.loader
+        sys.modules["bot_web_console"] = core
+        core_spec.loader.exec_module(core)
+
+        conversation_spec = importlib.util.spec_from_file_location(
+            "bot_web_conversation_knowledge_under_test",
+            API / "bot_web_conversation_knowledge.py",
+        )
+        conversations = importlib.util.module_from_spec(conversation_spec)
+        assert conversation_spec and conversation_spec.loader
+        conversation_spec.loader.exec_module(conversations)
         yield core, conversations
     finally:
-        if previous_core is None:
-            sys.modules.pop("bot_web_console", None)
-        else:
-            sys.modules["bot_web_console"] = previous_core
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 def create_message_schema(cp: FakeControlPlane) -> None:
