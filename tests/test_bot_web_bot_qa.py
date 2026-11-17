@@ -10,7 +10,6 @@ if str(CONTROL) not in sys.path:
     sys.path.insert(0, str(CONTROL))
 
 import bot_web_bot_qa_logic
-import bot_web_bot_qa
 
 
 def message(
@@ -112,7 +111,7 @@ def test_mobile_inbox_preserves_the_full_desktop_message_timeline():
     ]
     rows[3]["withdrawn"] = 1
 
-    result = [bot_web_bot_qa._public_message(row) for row in rows]
+    result = [bot_web_bot_qa_logic.project_conversation_message(row) for row in rows]
 
     assert len(result) == 4
     assert result[0]["text"] == "您好，我是人工客服。"
