@@ -47,6 +47,8 @@ namespace Bot.ChromeNs
             public string Role;
             public string Text;
             public string MessageType;
+            public bool IsBot;
+            public bool Withdrawn;
             public DateTime OccurredAt;
         }
 
@@ -55,6 +57,8 @@ namespace Bot.ChromeNs
             public ShopContext Shop;
             public readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
                 new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
+            public readonly ConcurrentDictionary<string, string> CapturedMessageSignatures =
+                new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
             public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
                 new ConcurrentDictionary<long, JObject>();
             public readonly object ProcessedSync = new object();
@@ -278,34 +282,104 @@ namespace Bot.ChromeNs
 
         private static void CaptureConversation(ShopWebState state, BuyerMessageBurst burst)
         {
-            if (!state.MessageSyncEnabled || burst == null) return;
+            if (state == null || !state.MessageSyncEnabled || burst == null) return;
             var seller = (burst.SellerNick ?? string.Empty).Trim();
             var buyer = (burst.BuyerNick ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return;
             try
             {
-                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+                var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
                 foreach (var turn in turns)
-                {
-                    if (turn == null || turn.Withdrawn || string.IsNullOrWhiteSpace(turn.Text)) continue;
-                    EnqueueMessage(state, seller, buyer, turn.Role, turn.Text, "text",
-                        turn.Timestamp == DateTime.MinValue ? DateTime.Now : turn.Timestamp,
-                        turn.MessageKey);
-                }
-                if (!string.IsNullOrWhiteSpace(burst.CombinedQuestion))
-                {
-                    var at = burst.Items == null
-                        ? DateTime.Now
-                        : burst.Items.Where(x => x != null)
-                            .Select(x => x.ReceivedAt == DateTime.MinValue ? DateTime.Now : x.ReceivedAt)
-                            .DefaultIfEmpty(DateTime.Now).Max();
-                    EnqueueMessage(state, seller, buyer, "user", burst.CombinedQuestion, "text", at, string.Empty);
-                }
+                    CaptureTurn(state, seller, buyer, turn);
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("收集本店 Bot Web 会话消息失败：" + Safe(ex.Message, 260), 10);
             }
+        }
+
+        private static void CaptureRecentConversations(ShopWebState state)
+        {
+            if (state == null || !state.MessageSyncEnabled || state.Shop == null) return;
+            try
+            {
+                var snapshots = ConversationContextStore.GetMirrorConversationSnapshots(
+                    state.Shop.ShopKey, 200, 100);
+                var liveKeys = state.CapturedMessageSignatures.Count > 30000
+                    ? new HashSet<string>(StringComparer.Ordinal)
+                    : null;
+
+                foreach (var snapshot in snapshots)
+                {
+                    if (snapshot == null || snapshot.Turns == null) continue;
+                    foreach (var turn in snapshot.Turns)
+                    {
+                        var key = CaptureTurn(state, snapshot.Seller, snapshot.Buyer, turn);
+                        if (liveKeys != null && !string.IsNullOrWhiteSpace(key))
+                            liveKeys.Add(key);
+                    }
+                }
+
+                if (liveKeys != null)
+                {
+                    foreach (var key in state.CapturedMessageSignatures.Keys)
+                    {
+                        if (liveKeys.Contains(key) || state.PendingMessages.ContainsKey(key)) continue;
+                        string ignored;
+                        state.CapturedMessageSignatures.TryRemove(key, out ignored);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("收集本店 Bot Web 买家会话快照失败：" + Safe(ex.Message, 260), 10);
+            }
+        }
+
+        private static string CaptureTurn(
+            ShopWebState state,
+            string seller,
+            string buyer,
+            ConversationContextTurn turn)
+        {
+            if (state == null || turn == null || !state.MessageSyncEnabled) return string.Empty;
+            var role = string.Equals(turn.Role, "assistant", StringComparison.Ordinal)
+                ? "assistant"
+                : (string.Equals(turn.Role, "user", StringComparison.Ordinal) ? "user" : string.Empty);
+            if (role.Length == 0) return string.Empty;
+
+            var text = (turn.Text ?? string.Empty).Replace("\0", string.Empty).Trim();
+            var isBot = false;
+            const string botEchoMarker = "[A]";
+            if (!turn.Withdrawn && role == "assistant"
+                && text.EndsWith(botEchoMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                text = text.Substring(0, text.Length - botEchoMarker.Length).TrimEnd();
+                isBot = text.Length > 0;
+            }
+            if (turn.Withdrawn && string.IsNullOrWhiteSpace(text))
+                text = "已撤回一条消息";
+            if (text.Length == 0) return string.Empty;
+
+            var occurredAt = turn.Timestamp == DateTime.MinValue ? DateTime.Now : turn.Timestamp;
+            var messageKey = (turn.MessageKey ?? string.Empty).Trim();
+            if (messageKey.Length == 0)
+                messageKey = Hash(state.Shop.ShopKey + "|" + seller + "|" + buyer + "|"
+                    + role + "|" + occurredAt.ToUniversalTime().Ticks + "|" + text);
+            else if (messageKey.Length > 200)
+                messageKey = Hash(messageKey);
+
+            var signature = Hash(role + "|" + text + "|" + occurredAt.ToUniversalTime().Ticks
+                + "|" + turn.Withdrawn + "|" + isBot);
+            string previous;
+            if (state.CapturedMessageSignatures.TryGetValue(messageKey, out previous)
+                && string.Equals(previous, signature, StringComparison.Ordinal))
+                return messageKey;
+
+            state.CapturedMessageSignatures[messageKey] = signature;
+            EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
+                messageKey, turn.Withdrawn, isBot);
+            return messageKey;
         }
 
         private static void EnqueueMessage(
@@ -316,7 +390,9 @@ namespace Bot.ChromeNs
             string text,
             string messageType,
             DateTime occurredAt,
-            string messageKey)
+            string messageKey,
+            bool withdrawn = false,
+            bool isBot = false)
         {
             if (state == null || !state.MessageSyncEnabled) return;
             seller = Safe(seller, 120);
@@ -339,16 +415,22 @@ namespace Bot.ChromeNs
                 Role = role,
                 Text = text,
                 MessageType = Safe(messageType, 50),
+                IsBot = isBot,
+                Withdrawn = withdrawn,
                 OccurredAt = occurredAt
             };
             state.PendingMessages[item.MessageKey] = item;
             if (state.PendingMessages.Count > 1500)
             {
                 foreach (var old in state.PendingMessages.Values
-                    .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 1200))
+                    .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 20000))
                 {
                     WebMessage ignored;
-                    state.PendingMessages.TryRemove(old.MessageKey, out ignored);
+                    if (state.PendingMessages.TryRemove(old.MessageKey, out ignored))
+                    {
+                        string ignoredSignature;
+                        state.CapturedMessageSignatures.TryRemove(old.MessageKey, out ignoredSignature);
+                    }
                 }
             }
         }
@@ -448,6 +530,7 @@ namespace Bot.ChromeNs
                     || string.IsNullOrWhiteSpace(serverUrl)
                     || string.IsNullOrWhiteSpace(token)) return;
 
+                CaptureRecentConversations(state);
                 var messageSnapshot = state.MessageSyncEnabled
                     ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
                     : new List<WebMessage>();
@@ -604,6 +687,8 @@ namespace Bot.ChromeNs
                 ["role"] = item.Role,
                 ["text"] = item.Text,
                 ["message_type"] = item.MessageType,
+                ["is_bot"] = item.IsBot,
+                ["withdrawn"] = item.Withdrawn,
                 ["occurred_at"] = item.OccurredAt.ToUniversalTime().ToString("o")
             };
         }
