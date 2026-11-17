@@ -137,17 +137,16 @@ def test_admin_console_links_mobile_page_and_copy_extension():
     assert "管理员可复制对应令牌" in index
 
 
-def test_bot_web_mirror_exports_full_retained_history_without_100_turn_or_200_buyer_caps():
+def test_bot_web_mirror_exports_all_buyers_and_matches_desktop_100_turn_window():
     context = read(ROOT / "src" / "Bot" / "ChromeNs" / "ConversationContextStore.cs")
     sync = read(WINDOWS)
 
     assert "var conversationLimit = maxConversations <= 0 ? int.MaxValue : maxConversations;" in context
-    assert "var turnLimit = maxTurns <= 0 ? int.MaxValue : maxTurns;" in context
-    assert "var take = maxTurns <= 0 ? int.MaxValue : maxTurns;" in context
-    assert "GetMirrorTurns(seller, buyer, int.MaxValue)" in sync
+    assert "var turnLimit = Math.Max(10, Math.Min(100, maxTurns));" in context
+    assert "var take = Math.Max(10, Math.Min(100, maxTurns));" in context
+    assert "GetMirrorTurns(seller, buyer, 100)" in sync
     assert "GetMirrorConversationSnapshots(" in sync
-    assert "state.Shop.ShopKey, int.MaxValue, int.MaxValue" in sync
-    assert "Math.Min(100, maxTurns)" not in context
+    assert "state.Shop.ShopKey, int.MaxValue, 100" in sync
     assert "Math.Min(256, maxConversations)" not in context
 
 
