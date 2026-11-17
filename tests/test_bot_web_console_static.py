@@ -160,3 +160,7 @@ def test_bot_web_sync_queue_uses_backpressure_instead_of_silently_evicting_unsen
     assert "return false;" in enqueue
     assert "等待后续同步" in enqueue
     assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
+
+    capture = sync[sync.index("private static string CaptureTurn"):sync.index("private static bool EnqueueMessage")]
+    assert "if (EnqueueMessage(" in capture
+    assert "state.CapturedMessageSignatures[messageKey] = signature;" in capture
