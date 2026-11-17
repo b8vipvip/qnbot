@@ -131,7 +131,11 @@ def next_action(task: Task) -> dict:
             task,
             {
                 "action": "user_action_required",
-                "reason": "GitHub workflow requires maintainer approval or another explicit user action",
+                "reason": (
+                    "Draft PR requires real-client acceptance evidence before it can be marked Ready"
+                    if str(meta.get("blocked_reason") or "") == "draft_pr_requires_real_client_acceptance"
+                    else "GitHub workflow requires maintainer approval or another explicit user action"
+                ),
                 "task_id": task.task_id,
                 "pr_number": str(meta.get("pr_number") or ""),
                 "run_id": str(meta.get("run_id") or meta.get("pr_ci_run_id") or ""),

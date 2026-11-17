@@ -51,3 +51,21 @@ def test_observer_ignores_all_gptauto_control_plane_self_commits():
     observer = read(".github/workflows/gptauto-observer.yml")
 
     assert "- '.github/gptauto/**'" in observer
+
+
+def test_draft_pr_becomes_explicit_user_action_after_all_ci_passes():
+    workflow = read(".github/workflows/gptauto-observer.yml")
+    observer = read(".github/gptauto/observer.py")
+    orchestrator = read(".github/gptauto/orchestrator.py")
+    executor = read(".github/gptauto/executor.py")
+    executor_workflow = read(".github/workflows/gptauto-executor.yml")
+
+    assert "PR_DRAFT=" in workflow
+    assert '--pr-draft "$PR_DRAFT"' in workflow
+    assert "draft_requires_action = bool(pr_number) and not merged and draft and pr_ci_done" in observer
+    assert "if (approval_required or draft_requires_action) and pr_number and not merged:" in observer
+    assert "if task.state == State.BLOCKED:" in orchestrator
+    assert orchestrator.index("if task.state == State.BLOCKED:") < orchestrator.index("merge = _step(task, Gate.MERGE)")
+    assert "draft_pr_requires_real_client_acceptance" in executor
+    assert 'blocked-reason=$(jq -r' in executor_workflow
+    assert "Complete the required Windows/千牛 real-client acceptance" in executor_workflow

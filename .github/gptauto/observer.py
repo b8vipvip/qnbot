@@ -120,6 +120,7 @@ def capture(
     pr_ci_status="",
     pr_ci_actor="",
     pr_ci_run_attempt="",
+    pr_draft="false",
     blocked_reason="",
 ):
     tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
@@ -132,6 +133,7 @@ def capture(
     pr_ci_conclusion_lc = str(pr_ci_conclusion or "").lower()
     pr_ci_status_lc = str(pr_ci_status or "").lower()
     approval_required = workflow_conclusion_lc == "action_required" or pr_ci_conclusion_lc == "action_required"
+    draft = str(pr_draft).lower() == "true"
     effective_blocked_reason = str(blocked_reason or "")
     if approval_required and not effective_blocked_reason:
         effective_blocked_reason = "workflow_approval_required"
@@ -164,6 +166,11 @@ def capture(
         and branch != default_branch
         and not _release_workflow(workflow_name)
     )
+    # A Draft PR is a deliberate maintainer hold. Require real-client evidence
+    # only after all exact-head validation workflows have completed successfully.
+    draft_requires_action = bool(pr_number) and not merged and draft and pr_ci_done
+    if draft_requires_action and not effective_blocked_reason:
+        effective_blocked_reason = "draft_pr_requires_real_client_acceptance"
 
     effective_pr_ci_run_id = str(pr_ci_run_id or "")
     effective_main_ci_run_id = str(main_ci_run_id or "")
@@ -259,7 +266,7 @@ def capture(
                 )
             )
 
-    if approval_required and pr_number and not merged:
+    if (approval_required or draft_requires_action) and pr_number and not merged:
         state = State.BLOCKED
     elif pr_number and not merged:
         state = State.EXECUTE
@@ -294,6 +301,8 @@ def capture(
             "event_head_sha": head_sha,
             "current_pr_head_sha": current_pr_head_sha or head_sha,
             "pr_number": pr_number,
+            "pr_draft": draft,
+            "draft_requires_action": draft_requires_action,
             "merge_sha": merge_sha,
             "run_id": run_id,
             "artifact_name": "gptauto-" + tid,
@@ -428,6 +437,7 @@ def main():
         "pr-body",
         "pr-state",
         "pr-merged",
+        "pr-draft",
         "merge-sha",
         "run-id",
         "actor",
@@ -487,6 +497,7 @@ def main():
                 pr_ci_status=a.pr_ci_status,
                 pr_ci_actor=a.pr_ci_actor,
                 pr_ci_run_attempt=a.pr_ci_run_attempt,
+                pr_draft=a.pr_draft,
                 blocked_reason=a.blocked_reason,
             ),
             ensure_ascii=False,
