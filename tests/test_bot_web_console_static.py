@@ -107,7 +107,12 @@ def test_bot_web_inbox_uses_the_desktop_message_mirror():
     sync = read(WINDOWS)
     context = read(ROOT / "src" / "Bot" / "ChromeNs" / "ConversationContextStore.cs")
     api = read(ROOT / "services" / "api-control-plane" / "bot_web_bot_qa.py")
+    server = read(SERVICE)
 
+    assert "is_bot INTEGER NOT NULL DEFAULT 0" in server
+    assert "withdrawn INTEGER NOT NULL DEFAULT 0" in server
+    assert "ALTER TABLE bot_messages ADD COLUMN is_bot" in server
+    assert "ALTER TABLE bot_messages ADD COLUMN withdrawn" in server
     assert '<button data-page="messages"><span>▤</span>消息</button>' in page
     assert "仅显示买家问题与 Bot 自动回答" not in page
     assert "同步 Windows Bot 已采集的买家与客服消息" in page
