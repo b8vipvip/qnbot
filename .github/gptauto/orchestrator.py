@@ -41,6 +41,10 @@ def canonical_phase(task: Task) -> str:
     if failed or current_failure or current_pr_ci_failure:
         return "REPAIR_REQUIRED"
 
+    # Explicit maintainer/user gates take precedence over a pending merge gate.
+    if task.state == State.BLOCKED:
+        return "USER_ACTION_REQUIRED"
+
     merge = _step(task, Gate.MERGE)
     main_ci = _step(task, Gate.MAIN_CI)
     release = _step(task, Gate.RELEASE)
