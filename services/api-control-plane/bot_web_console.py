@@ -102,6 +102,8 @@ def init_bot_web_db() -> None:
                 role TEXT NOT NULL DEFAULT 'system',
                 text TEXT NOT NULL DEFAULT '',
                 message_type TEXT NOT NULL DEFAULT 'text',
+                is_bot INTEGER NOT NULL DEFAULT 0,
+                withdrawn INTEGER NOT NULL DEFAULT 0,
                 occurred_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(client_id, message_key),
@@ -126,6 +128,13 @@ def init_bot_web_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_bot_commands_pending ON bot_commands(client_id, status, id ASC);
             """
         )
+        message_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(bot_messages)").fetchall()
+        }
+        if "is_bot" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
+        if "withdrawn" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0")
 
 
 def _bearer(request: Request) -> str:
@@ -251,8 +260,12 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     if role not in {"user", "assistant", "system"}:
         role = "system"
     text = str(item.get("text") or "").replace("\x00", "").strip()
-    if not text:
+    withdrawn = 1 if bool(item.get("withdrawn")) else 0
+    is_bot = 1 if bool(item.get("is_bot")) else 0
+    if not text and not withdrawn:
         return
+    if not text and withdrawn:
+        text = "已撤回一条消息"
     text = text[:6000]
     occurred = str(item.get("occurred_at") or _now())[:64]
     message_type = _safe(item.get("message_type") or "text", 50)
@@ -263,11 +276,23 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     with _cp.db() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO bot_messages(
-                client_id,message_key,seller,buyer,role,text,message_type,occurred_at,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO bot_messages(
+                client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,occurred_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(client_id,message_key) DO UPDATE SET
+                seller=excluded.seller,
+                buyer=excluded.buyer,
+                role=excluded.role,
+                text=excluded.text,
+                message_type=excluded.message_type,
+                is_bot=excluded.is_bot,
+                withdrawn=excluded.withdrawn,
+                occurred_at=excluded.occurred_at
             """,
-            (client_id, message_key, seller, buyer, role, text, message_type, occurred, _now()),
+            (
+                client_id, message_key, seller, buyer, role, text, message_type,
+                is_bot, withdrawn, occurred, _now(),
+            ),
         )
 
 
