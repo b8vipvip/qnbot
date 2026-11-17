@@ -70,7 +70,7 @@ for ($attempt = 0; $attempt -lt 5; $attempt++) {
         [System.IO.File]::WriteAllText(
             $marker,
             ((Get-Date).ToString('o') + ' manual-stop'),
-            (New-Object System.Text.UTF8Encoding($false)))
+            (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false))
 
         $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
         if ($null -eq $process) { continue }
