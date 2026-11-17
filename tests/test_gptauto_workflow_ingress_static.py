@@ -69,3 +69,4 @@ def test_draft_pr_becomes_explicit_user_action_after_all_ci_passes():
     assert "draft_pr_requires_real_client_acceptance" in executor
     assert 'blocked-reason=$(jq -r' in executor_workflow
     assert "Complete the required Windows/千牛 real-client acceptance" in executor_workflow
+    assert 'elif [[ "$BLOCKED_REASON" == "draft_pr_requires_real_client_acceptance" ]]; then' in executor_workflow
