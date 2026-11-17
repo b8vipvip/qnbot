@@ -52,6 +52,9 @@ namespace Bot.ChromeNs
         public const int RecentReferenceWindowSeconds = 90;
         private const int MaxCacheFiles = 300;
         private const long MaxCacheBytes = 512L * 1024L * 1024L;
+        private const int MaxCacheRecords = 512;
+        private const int MaxConcurrentDownloads = 2;
+        private const int RecentMessageReferenceRetentionMinutes = 6;
         private const int DefaultMaxImageSizeMb = 5;
         private const int DefaultTimeoutSeconds = 45;
 
@@ -63,7 +66,12 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, CacheRecord> Records =
             new ConcurrentDictionary<string, CacheRecord>(StringComparer.Ordinal);
         internal static int CachedRecordCount { get { return Records.Count; } }
+        private static readonly object RecordAdmissionSync = new object();
         private static readonly object CleanupSync = new object();
+        private static readonly SemaphoreSlim DownloadSlots =
+            new SemaphoreSlim(MaxConcurrentDownloads, MaxConcurrentDownloads);
+        private static Timer _cleanupTimer;
+        private static int _cleanupTimerStarted;
         private static DateTime _lastCleanup = DateTime.MinValue;
 
         internal static string CacheDirectory
@@ -86,36 +94,87 @@ namespace Bot.ChromeNs
                 var url = VisionImageResolver.ExtractUrl(message);
                 if (string.IsNullOrWhiteSpace(url)) return;
 
+                EnsureCleanupTimer();
                 var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
                 var endpoint = endpoints == null ? null : endpoints.FirstOrDefault();
                 var seller = GetSellerNick(message);
                 var buyer = GetBuyerNick(message, seller);
                 var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
                 var key = BuildKey(messageKey, url);
+                CacheRecord record;
+                var created = false;
 
-                Records.GetOrAdd(key, _ =>
+                // A locked admission path prevents ConcurrentDictionary value factories from
+                // starting duplicate downloads under contention and keeps retained records bounded.
+                lock (RecordAdmissionSync)
                 {
-                    var record = new CacheRecord
+                    if (!Records.TryGetValue(key, out record))
                     {
-                        Key = key,
-                        SellerNick = seller,
-                        BuyerNick = buyer,
-                        MessageKey = messageKey,
-                        Url = url,
-                        Message = message,
-                        ObservedAt = GetObservedAt(message)
-                    };
-                    record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
+                        TrimCompletedRecordsForAdmission(DateTime.Now);
+                        if (Records.Count >= MaxCacheRecords)
+                        {
+                            Log.ErrorWithMaxCount(
+                                "买家图片缓存达到记录上限，暂缓建立新图片缓存任务: records="
+                                + Records.Count + ", limit=" + MaxCacheRecords,
+                                10);
+                            return;
+                        }
+
+                        record = new CacheRecord
+                        {
+                            Key = key,
+                            SellerNick = seller,
+                            BuyerNick = buyer,
+                            MessageKey = messageKey,
+                            Url = url,
+                            Message = message,
+                            ObservedAt = GetObservedAt(message)
+                        };
+                        record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
+                        created = Records.TryAdd(key, record);
+                    }
+                }
+
+                if (created)
+                {
                     Log.Info("买家图片本地缓存已启动: seller=" + seller
                         + ", buyer=" + buyer
                         + ", messageKey=" + Short(messageKey, 100));
-                    return record;
-                });
+                }
                 CleanupIfNeeded();
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("启动买家图片本地缓存失败：" + ex.Message, 20);
+            }
+        }
+
+        private static void EnsureCleanupTimer()
+        {
+            if (Interlocked.CompareExchange(ref _cleanupTimerStarted, 1, 0) != 0) return;
+            _cleanupTimer = new Timer(
+                _ => CleanupIfNeeded(),
+                null,
+                TimeSpan.FromMinutes(1),
+                TimeSpan.FromMinutes(1));
+        }
+
+        private static void TrimCompletedRecordsForAdmission(DateTime now)
+        {
+            var recentCutoff = now.AddMinutes(-RecentMessageReferenceRetentionMinutes);
+            var exactEntries = (ICollection<KeyValuePair<string, CacheRecord>>)Records;
+            var candidates = Records
+                .Where(x => x.Value == null
+                    || (x.Value.ObservedAt < recentCutoff
+                        && x.Value.DownloadTask != null
+                        && x.Value.DownloadTask.IsCompleted))
+                .OrderBy(x => x.Value == null ? DateTime.MinValue : x.Value.ObservedAt)
+                .ToArray();
+
+            foreach (var pair in candidates)
+            {
+                if (Records.Count < MaxCacheRecords) break;
+                exactEntries.Remove(pair);
             }
         }
 
@@ -296,78 +355,90 @@ namespace Bot.ChromeNs
                 var configuredMb = endpoint == null ? DefaultMaxImageSizeMb : endpoint.MaxImageSizeMb;
                 var configuredTimeout = endpoint == null ? DefaultTimeoutSeconds : endpoint.VisionTimeoutSeconds;
                 var maxBytes = Math.Max(1, Math.Min(20, configuredMb)) * 1024L * 1024L;
-                using (var http = new HttpClient())
                 using (var timeout = new CancellationTokenSource(
                     TimeSpan.FromSeconds(Math.Max(10, Math.Min(180, configuredTimeout)))))
-                using (var response = await http.GetAsync(
-                    uri,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    timeout.Token))
                 {
-                    if (!response.IsSuccessStatusCode)
+                    // Image downloads are a native-memory and LOH pressure source. Keep only
+                    // two downloads active; waiting requests remain bounded by MaxCacheRecords.
+                    await DownloadSlots.WaitAsync(timeout.Token);
+                    try
                     {
-                        result.Error = "图片下载失败：HTTP " + (int)response.StatusCode;
-                        return result;
-                    }
-                    if (response.Content.Headers.ContentLength.HasValue
-                        && response.Content.Headers.ContentLength.Value > maxBytes)
-                    {
-                        result.Error = "图片超过大小限制";
-                        return result;
-                    }
+                        using (var http = new HttpClient())
+                        using (var response = await http.GetAsync(
+                            uri,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            timeout.Token))
+                        {
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                result.Error = "图片下载失败：HTTP " + (int)response.StatusCode;
+                                return result;
+                            }
+                            if (response.Content.Headers.ContentLength.HasValue
+                                && response.Content.Headers.ContentLength.Value > maxBytes)
+                            {
+                                result.Error = "图片超过大小限制";
+                                return result;
+                            }
 
-                    var bytes = await ReadWithLimitAsync(response.Content, maxBytes, timeout.Token);
-                    if (bytes == null)
-                    {
-                        result.Error = "图片超过大小限制或下载不完整";
-                        return result;
-                    }
-                    var mime = VisionImageResolver.DetectMime(bytes);
-                    if (string.IsNullOrWhiteSpace(mime)
-                        || !AllowedMimeTypes.Contains(mime, StringComparer.OrdinalIgnoreCase))
-                    {
-                        result.Error = "图片数据损坏或格式不支持";
-                        return result;
-                    }
+                            var bytes = await ReadWithLimitAsync(response.Content, maxBytes, timeout.Token);
+                            if (bytes == null)
+                            {
+                                result.Error = "图片超过大小限制或下载不完整";
+                                return result;
+                            }
+                            var mime = VisionImageResolver.DetectMime(bytes);
+                            if (string.IsNullOrWhiteSpace(mime)
+                                || !AllowedMimeTypes.Contains(mime, StringComparer.OrdinalIgnoreCase))
+                            {
+                                result.Error = "图片数据损坏或格式不支持";
+                                return result;
+                            }
 
-                    var headerMime = response.Content.Headers.ContentType == null
-                        ? string.Empty
-                        : (response.Content.Headers.ContentType.MediaType ?? string.Empty).ToLowerInvariant();
-                    if (!string.IsNullOrWhiteSpace(headerMime)
-                        && !AllowedMimeTypes.Contains(headerMime, StringComparer.OrdinalIgnoreCase))
-                    {
-                        result.Error = "图片 MIME 类型不支持";
-                        return result;
-                    }
-                    if (!string.IsNullOrWhiteSpace(headerMime)
-                        && !string.Equals(headerMime, mime, StringComparison.OrdinalIgnoreCase))
-                    {
-                        result.Error = "图片 MIME 与实际内容不一致";
-                        return result;
-                    }
+                            var headerMime = response.Content.Headers.ContentType == null
+                                ? string.Empty
+                                : (response.Content.Headers.ContentType.MediaType ?? string.Empty).ToLowerInvariant();
+                            if (!string.IsNullOrWhiteSpace(headerMime)
+                                && !AllowedMimeTypes.Contains(headerMime, StringComparer.OrdinalIgnoreCase))
+                            {
+                                result.Error = "图片 MIME 类型不支持";
+                                return result;
+                            }
+                            if (!string.IsNullOrWhiteSpace(headerMime)
+                                && !string.Equals(headerMime, mime, StringComparison.OrdinalIgnoreCase))
+                            {
+                                result.Error = "图片 MIME 与实际内容不一致";
+                                return result;
+                            }
 
-                    Directory.CreateDirectory(CacheDirectory);
-                    var path = Path.Combine(
-                        CacheDirectory,
-                        Sha256(record.Key + "|" + record.Url) + ExtensionForMime(mime));
-                    var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
-                    File.WriteAllBytes(temp, bytes);
-                    if (File.Exists(path)) File.Delete(path);
-                    File.Move(temp, path);
+                            Directory.CreateDirectory(CacheDirectory);
+                            var path = Path.Combine(
+                                CacheDirectory,
+                                Sha256(record.Key + "|" + record.Url) + ExtensionForMime(mime));
+                            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+                            File.WriteAllBytes(temp, bytes);
+                            if (File.Exists(path)) File.Delete(path);
+                            File.Move(temp, path);
 
-                    result.Success = true;
-                    result.FilePath = path;
-                    result.MimeType = mime;
-                    result.Bytes = bytes.LongLength;
-                    Log.Info("买家图片已完整缓存到本地: seller=" + record.SellerNick
-                        + ", buyer=" + record.BuyerNick
-                        + ", bytes=" + result.Bytes
-                        + ", path=" + path);
-                    CleanupIfNeeded();
-                    return result;
+                            result.Success = true;
+                            result.FilePath = path;
+                            result.MimeType = mime;
+                            result.Bytes = bytes.LongLength;
+                            Log.Info("买家图片已完整缓存到本地: seller=" + record.SellerNick
+                                + ", buyer=" + record.BuyerNick
+                                + ", bytes=" + result.Bytes
+                                + ", path=" + path);
+                            CleanupIfNeeded();
+                            return result;
+                        }
+                    }
+                    finally
+                    {
+                        DownloadSlots.Release();
+                    }
                 }
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
                 result.Error = "图片本地缓存超时";
                 return result;
@@ -451,12 +522,33 @@ namespace Bot.ChromeNs
                         }
                     }
 
-                    var recordCutoff = DateTime.Now.AddHours(-CacheRetentionHours);
-                    foreach (var pair in Records.Where(x => x.Value == null || x.Value.ObservedAt < recordCutoff).ToList())
+                    var now = DateTime.Now;
+                    var messageCutoff = now.AddMinutes(-RecentMessageReferenceRetentionMinutes);
+                    var exactEntries = (ICollection<KeyValuePair<string, CacheRecord>>)Records;
+                    foreach (var pair in Records.ToArray())
                     {
-                        CacheRecord ignored;
-                        Records.TryRemove(pair.Key, out ignored);
+                        var record = pair.Value;
+                        if (record == null)
+                        {
+                            exactEntries.Remove(pair);
+                            continue;
+                        }
+
+                        // Follow-up image context is only consumed within the five-minute
+                        // manual-learning window. Release the original message object after
+                        // a one-minute safety margin; keep the small withdrawal/cache metadata.
+                        if (record.Message != null && record.ObservedAt < messageCutoff)
+                            Interlocked.Exchange(ref record.Message, null);
                     }
+
+                    var recordCutoff = now.AddHours(-CacheRetentionHours);
+                    foreach (var pair in Records.ToArray())
+                    {
+                        if (pair.Value == null || pair.Value.ObservedAt < recordCutoff)
+                            exactEntries.Remove(pair);
+                    }
+
+                    TrimCompletedRecordsForAdmission(now);
                 }
                 catch (Exception ex)
                 {
