@@ -376,13 +376,13 @@ namespace Bot.ChromeNs
                 && string.Equals(previous, signature, StringComparison.Ordinal))
                 return messageKey;
 
-            state.CapturedMessageSignatures[messageKey] = signature;
-            EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
-                messageKey, turn.Withdrawn, isBot);
+            if (EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
+                messageKey, turn.Withdrawn, isBot))
+                state.CapturedMessageSignatures[messageKey] = signature;
             return messageKey;
         }
 
-        private static void EnqueueMessage(
+        private static bool EnqueueMessage(
             ShopWebState state,
             string seller,
             string buyer,
@@ -394,7 +394,7 @@ namespace Bot.ChromeNs
             bool withdrawn = false,
             bool isBot = false)
         {
-            if (state == null || !state.MessageSyncEnabled) return;
+            if (state == null || !state.MessageSyncEnabled) return false;
             seller = Safe(seller, 120);
             buyer = Safe(buyer, 120);
             role = string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase)
@@ -433,6 +433,7 @@ namespace Bot.ChromeNs
                     }
                 }
             }
+            return true;
         }
 
         private static void QueueDueSyncs()
