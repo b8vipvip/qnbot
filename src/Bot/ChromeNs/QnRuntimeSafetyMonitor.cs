@@ -478,7 +478,8 @@ namespace Bot.ChromeNs
         {
             var previousTicks = Interlocked.Read(ref _lastBuyerSourceSortSweepUtcTicks);
             if (previousTicks != 0
-                && now.Ticks - previousTicks < LatestBuyerSourceSortSweepInterval.Ticks)
+                && now.Ticks - previousTicks < LatestBuyerSourceSortSweepInterval.Ticks
+                && LatestBuyerSourceSort.Count <= MaxLatestBuyerSourceSortEntries)
             {
                 return;
             }
