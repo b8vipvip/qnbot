@@ -271,7 +271,7 @@ namespace Bot.ChromeNs
             if (!(root["stages"] is JObject)) throw new Exception("运行策略缺少 stages 对象。");
 
             var patterns = (JObject)root["patterns"];
-            if (patterns.Properties().Count() > MaxPolicyPatternCount)
+            if (patterns.Count > MaxPolicyPatternCount)
                 throw new Exception("patterns 项目数量超过限制。");
             foreach (var property in patterns.Properties())
             {

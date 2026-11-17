@@ -200,7 +200,7 @@ def test_custom_policy_regexes_and_handoff_overrides_have_hard_size_limits():
     assert "MaxPolicyRegexLength = 1000" in service
     assert "MaxPolicyPatternCount = 100" in service
     assert "MaxHandoffOverrides = 100" in service
-    assert "patterns.Properties().Count() > MaxPolicyPatternCount" in service
+    assert "patterns.Count > MaxPolicyPatternCount" in service
     assert 'property.Value.Type != JTokenType.String' in service
     assert 'ReadPolicyString(obj, "keyword", 128, true)' in service
     assert 'ReadPolicyString(obj, "fixedReply", 2000, false)' in service
