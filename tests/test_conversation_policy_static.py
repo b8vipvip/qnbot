@@ -15,8 +15,8 @@ def test_same_buyer_timeline_is_loaded_and_time_ordered():
     assert 'OrderBy(GetSortValue)' in store
     assert 'GetRecentTurns' in store
     assert 'yyyy-MM-dd HH:mm:ss' in store
-    assert 'seller + "#" + buyer' not in store  # null-safe Key() is required
-    assert 'Key(seller, buyer)' in store
+    assert 'var shopKey = ScopeKey(seller);' in store
+    assert 'var key = shopKey + "#" + seller + "#" + buyer;' in store
 
 
 def test_short_buyer_replies_use_recent_manual_agent_context():
