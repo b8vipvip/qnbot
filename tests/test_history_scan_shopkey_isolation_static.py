@@ -41,7 +41,10 @@ def test_current_shop_scope_resolver_remains_fail_closed_for_legacy_ambiguous_ni
     ]
 
     assert "ShopSettingsScope.Current" in helper
-    assert "if (current != null) return current;" in helper
+    assert "if (current != null)" in helper
+    assert "return current;" in helper
+    assert "IsQianniuShopKey(sellerNick)" in helper
+    assert "ResolveRuntimeByShopKey(sellerNick)" in helper
     assert "return ResolveBySellerNick(sellerNick);" in helper
 
 
