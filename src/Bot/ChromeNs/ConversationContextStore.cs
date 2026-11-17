@@ -28,6 +28,14 @@ namespace Bot.ChromeNs
         public bool SeenHistory { get; set; }
     }
 
+    internal sealed class ConversationMirrorSnapshot
+    {
+        public string Seller { get; set; }
+        public string Buyer { get; set; }
+        public DateTime LastActivityUtc { get; set; }
+        public List<ConversationContextTurn> Turns { get; set; }
+    }
+
     internal sealed class ConversationHistoryRefreshResult
     {
         public bool IsComplete { get; set; }
@@ -59,6 +67,9 @@ namespace Bot.ChromeNs
             public DateTime LastRemoteRefresh = DateTime.MinValue;
             // Activity time, not message time: remote history may contain old timestamps.
             public DateTime LastTouchedUtc = DateTime.UtcNow;
+            public string ShopKey = string.Empty;
+            public string Seller = string.Empty;
+            public string Buyer = string.Empty;
             public PendingPresetReply PendingPreset;
         }
 
@@ -368,6 +379,65 @@ namespace Bot.ChromeNs
                     .Select(CloneTurn)
                     .ToList();
             }
+        }
+
+        public static List<ConversationMirrorSnapshot> GetMirrorConversationSnapshots(
+            string shopKey,
+            int maxConversations,
+            int maxTurns)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return new List<ConversationMirrorSnapshot>();
+
+            var conversationLimit = Math.Max(1, Math.Min(256, maxConversations));
+            var turnLimit = Math.Max(10, Math.Min(100, maxTurns));
+            var now = DateTime.Now;
+            var result = new List<ConversationMirrorSnapshot>();
+
+            foreach (var state in States.Values)
+            {
+                if (state == null) continue;
+                lock (state.Sync)
+                {
+                    if (!string.Equals(state.ShopKey, shopKey, StringComparison.Ordinal))
+                        continue;
+
+                    Cleanup(state, now);
+                    var eligible = state.Turns
+                        .Where(t => t != null
+                            && (t.Role == "user" || t.Role == "assistant")
+                            && (!string.IsNullOrWhiteSpace(t.Text) || t.Withdrawn))
+                        .OrderBy(t => t.Timestamp)
+                        .ToList();
+                    if (eligible.Count == 0
+                        || string.IsNullOrWhiteSpace(state.Seller)
+                        || string.IsNullOrWhiteSpace(state.Buyer))
+                        continue;
+
+                    var turns = eligible
+                        .Skip(Math.Max(0, eligible.Count - turnLimit))
+                        .Select(CloneTurn)
+                        .ToList();
+                    var latest = turns[turns.Count - 1];
+                    var activityUtc = latest.Timestamp == DateTime.MinValue
+                        ? state.LastTouchedUtc
+                        : latest.Timestamp.ToUniversalTime();
+                    result.Add(new ConversationMirrorSnapshot
+                    {
+                        Seller = state.Seller,
+                        Buyer = state.Buyer,
+                        LastActivityUtc = activityUtc,
+                        Turns = turns
+                    });
+                }
+            }
+
+            return result
+                .OrderByDescending(x => x.LastActivityUtc)
+                .ThenBy(x => x.Seller, StringComparer.Ordinal)
+                .ThenBy(x => x.Buyer, StringComparer.Ordinal)
+                .Take(conversationLimit)
+                .ToList();
         }
 
         public static List<ConversationContextTurn> GetMirrorTurns(
@@ -1086,8 +1156,23 @@ namespace Bot.ChromeNs
 
         private static TimelineState GetState(string seller, string buyer)
         {
-            var state = States.GetOrAdd(Key(seller, buyer), _ => new TimelineState());
-            lock (state.Sync) state.LastTouchedUtc = DateTime.UtcNow;
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            var shopKey = ScopeKey(seller);
+            var key = shopKey + "#" + seller + "#" + buyer;
+            var state = States.GetOrAdd(key, _ => new TimelineState
+            {
+                ShopKey = shopKey,
+                Seller = seller,
+                Buyer = buyer
+            });
+            lock (state.Sync)
+            {
+                if (string.IsNullOrWhiteSpace(state.ShopKey)) state.ShopKey = shopKey;
+                if (string.IsNullOrWhiteSpace(state.Seller)) state.Seller = seller;
+                if (string.IsNullOrWhiteSpace(state.Buyer)) state.Buyer = buyer;
+                state.LastTouchedUtc = DateTime.UtcNow;
+            }
             SweepInactiveTimelinesIfDue();
             return state;
         }

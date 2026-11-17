@@ -117,6 +117,34 @@ def _public_message(row: Dict[str, Any], message_type: str) -> Dict[str, Any]:
     return item
 
 
+def project_conversation_message(row: Any) -> Dict[str, Any]:
+    """Normalize one desktop-mirrored message for the mobile inbox."""
+    item = dict(row)
+    text = str(item.get("text") or "")
+    role = str(item.get("role") or "").lower()
+    message_type = str(item.get("message_type") or "").lower()
+    withdrawn = bool(item.get("withdrawn"))
+    is_bot = bool(item.get("is_bot")) or message_type in _BOT_ANSWER_TYPES
+
+    if not withdrawn and role == "assistant":
+        for marker in ("[A]", "[AI]"):
+            if text.rstrip().lower().endswith(marker.lower()):
+                text = text.rstrip()[:-len(marker)].rstrip()
+                is_bot = True
+                break
+
+    if withdrawn:
+        is_bot = False
+    if withdrawn and not text.strip():
+        text = "已撤回一条消息"
+
+    item["text"] = text
+    item["is_bot"] = is_bot
+    item["withdrawn"] = withdrawn
+    return item
+
+
+
 def build_bot_qa_messages(
     rows: Iterable[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
