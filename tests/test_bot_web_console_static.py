@@ -212,3 +212,17 @@ def test_bot_web_server_retention_covers_the_complete_visible_buyer_window():
     assert "(client_id, client_id, MAX_MESSAGES_PER_CLIENT)" in service
     assert 'limit=600&query=' in script
     assert "limit:\"120\"" in script
+
+
+def test_bot_web_message_history_survives_polling_and_buyer_switches():
+    script = read(SCRIPT)
+    assert "historyLoaded:false,messageLoadToken:0" in script
+    assert "function mergeMessageHistory(existing,incoming)" in script
+    assert "state.messages=mergeMessageHistory(state.messages,incoming)" in script
+    assert "state.historyLoaded=true" in script
+    assert "state.historyLoaded=false;state.messageLoadToken++" in script
+    assert "requestToken!==state.messageLoadToken" in script
+    assert "conversationKey(state.active)!==activeKey" in script
+    assert "list.scrollTop=previousTop+list.scrollHeight-previousHeight" in script
+    assert "renderConversations();renderMessages(false);await loadActiveMessages(true)" in script
+    assert "await loadActiveMessages(true);await markRead()" not in script
