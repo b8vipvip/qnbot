@@ -496,3 +496,24 @@ def test_startup_restores_latest_unexpired_circuit_before_scheduling_all_session
     assert recovery.index("TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey") < recovery.index(
         "Schedule(session, due);"
     )
+
+
+def test_corpus_retry_classifier_recognizes_dotnet_transport_failures():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    retry = service[
+        service.index("private static bool IsRetryableKnowledgeCorpusError"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+
+    for phrase in (
+        "error occurred while sending",
+        "underlying connection was closed",
+        "connection reset",
+        "connection refused",
+        "no such host",
+        "bad gateway",
+        "service unavailable",
+        "基础连接已经关闭",
+        "远程名称无法解析",
+    ):
+        assert 'error.Contains("' + phrase + '")' in retry
