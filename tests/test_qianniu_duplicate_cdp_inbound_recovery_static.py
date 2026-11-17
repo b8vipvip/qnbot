@@ -455,3 +455,17 @@ def test_direct_cdpcclient_dispatch_cannot_bypass_shopkey_identity_transition_ga
     assert socket_dispatch.index('if (e.Type == "execute")') < socket_dispatch.index(
         "DispatchInboundEvent(e.Type, response)"
     )
+
+
+def test_duplicate_cdp_bridge_drops_events_without_verified_source_shopkey():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    capture = bridge[
+        bridge.index("private static void OnWebSocketMessage"):
+        bridge.index("private static bool IsRecoverableInboundType")
+    ]
+
+    assert "var shopKey = server.GetShopKeyForSession(sessionId);" in capture
+    assert "if (shopKey.Length == 0)" in capture
+    assert "缺少来源稳定ShopKey，拒绝跨会话暂存" in capture
+    assert capture.index("if (shopKey.Length == 0)") < capture.index("var item = new PendingInboundEvent")
+    assert "seller.Length == 0 && shopKey.Length == 0" not in capture
