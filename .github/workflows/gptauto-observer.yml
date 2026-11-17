@@ -26,8 +26,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, closed]
   push:
     branches: [main, master]
+    # Do not observe commits that only update GPTAuto's own workflows; CI still
+    # validates these changes, but a self-observation would create a lease with
+    # no PR to merge and no user-facing work item.
+    paths-ignore:
+      - '.github/workflows/gptauto-*.yml'
   workflow_run:
-    workflows: [CI]
+    workflows: [CI, API control plane CI, Windows x64 release build]
     types: [completed]
   release:
     types: [published]
@@ -121,7 +126,7 @@ jobs:
               [[ "$ACTOR" != "github-actions[bot]" ]] && actionable=true
               ;;
             workflow_run)
-              if [[ "$WORKFLOW_NAME" == "CI" ]]; then
+              if [[ "$WORKFLOW_NAME" == "CI" || "$WORKFLOW_NAME" == "API control plane CI" || "$WORKFLOW_NAME" == "Windows x64 release build" ]]; then
                 if [[ -n "$PR_BASE_REF" && "$PR_BASE_REF" != "$DEFAULT_BRANCH" ]]; then
                   actionable=false
                 elif [[ "$WORKFLOW_STATUS" == "completed" && "$WORKFLOW_CONCLUSION" != "cancelled" ]]; then
@@ -246,7 +251,12 @@ jobs:
 
             if [[ -n "$PR_HEAD_SHA" ]]; then
               pr_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
-              pr_ci_row="$(jq -c '[.workflow_runs[] | select(.name == "CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last // {}' <<<"$pr_runs")"
+              pr_ci_row="$(jq -c '
+                ([.workflow_runs[] | select(.name == "API control plane CI" and .event == "pull_request)] | sort_by(.created_at, .id) | last)
+                // ([.workflow_runs[] | select(.name == "CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
+                // ([.workflow_runs[] | select(.name == "Windows x64 release build" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
+                // {}
+              ' <<<"$pr_runs")"
               PR_CI_RUN_ID="$(jq -r '.id // empty' <<<"$pr_ci_row")"
               PR_CI_STATUS="$(jq -r '.status // empty' <<<"$pr_ci_row")"
               PR_CI_CONCLUSION="$(jq -r '.conclusion // empty' <<<"$pr_ci_row")"
