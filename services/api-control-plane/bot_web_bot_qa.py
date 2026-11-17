@@ -6,17 +6,40 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
-from bot_web_bot_qa_logic import build_bot_qa_messages
 
 
 router = APIRouter()
 
 
 def install(control_plane: Any) -> None:
-    # These routes must be registered before the legacy all-chat conversation
-    # routes. Starlette resolves the first matching route, so the Web page sees
-    # Bot Q&A records while the older knowledge routes remain available.
+    # Register the mobile inbox routes before the legacy knowledge conversation
+    # routes. The inbox is a projection of the desktop Bot message mirror, not a
+    # Bot-Q&A-only feed.
     control_plane.app.include_router(router)
+
+
+def _public_message(row: Any) -> Dict[str, Any]:
+    item = dict(row)
+    text = str(item.get("text") or "")
+    role = str(item.get("role") or "").lower()
+    message_type = str(item.get("message_type") or "").lower()
+    is_bot = bool(item.get("is_bot")) or message_type in {"bot_answer", "ai_answer", "bot_reply"}
+
+    if role == "assistant":
+        for marker in ("[A]", "[AI]"):
+            if text.rstrip().lower().endswith(marker.lower()):
+                text = text.rstrip()[:-len(marker)].rstrip()
+                is_bot = True
+                break
+
+    withdrawn = bool(item.get("withdrawn"))
+    if withdrawn and not text.strip():
+        text = "已撤回一条消息"
+
+    item["text"] = text
+    item["is_bot"] = is_bot
+    item["withdrawn"] = withdrawn
+    return item
 
 
 def _group_all_messages(client_id: int) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
@@ -24,16 +47,17 @@ def _group_all_messages(client_id: int) -> Dict[Tuple[str, str], List[Dict[str, 
     with cp.db() as conn:
         rows = conn.execute(
             """
-            SELECT id,client_id,message_key,seller,buyer,role,text,message_type,occurred_at,created_at
+            SELECT id,client_id,message_key,seller,buyer,role,text,message_type,
+                   is_bot,withdrawn,occurred_at,created_at
             FROM bot_messages
             WHERE client_id=? AND buyer<>''
-            ORDER BY seller ASC,buyer ASC,id ASC
+            ORDER BY seller ASC,buyer ASC,occurred_at ASC,id ASC
             """,
             (client_id,),
         ).fetchall()
     grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for row in rows:
-        item = dict(row)
+        item = _public_message(row)
         key = (str(item.get("seller") or ""), str(item.get("buyer") or ""))
         grouped.setdefault(key, []).append(item)
     return grouped
@@ -70,8 +94,7 @@ def web_bot_qa_conversations(
     needle = query.strip().lower()
     conversations: List[Dict[str, Any]] = []
 
-    for (seller, buyer), raw_rows in grouped.items():
-        messages = build_bot_qa_messages(raw_rows)
+    for (seller, buyer), messages in grouped.items():
         if not messages:
             continue
         searchable = " ".join(
@@ -85,7 +108,7 @@ def web_bot_qa_conversations(
         unread = sum(
             1
             for message in messages
-            if message.get("message_type") == "bot_question"
+            if message.get("role") == "user"
             and int(message.get("id") or 0) > last_read
         )
         conversations.append(
@@ -96,10 +119,12 @@ def web_bot_qa_conversations(
                 "role": last.get("role"),
                 "text": last.get("text"),
                 "message_type": last.get("message_type"),
+                "is_bot": bool(last.get("is_bot")),
+                "withdrawn": bool(last.get("withdrawn")),
                 "occurred_at": last.get("occurred_at"),
                 "last_read_message_id": last_read,
                 "unread_count": unread,
-                "record_scope": "bot_qa",
+                "record_scope": "conversation",
             }
         )
 
@@ -110,7 +135,7 @@ def web_bot_qa_conversations(
     return {
         "conversations": conversations[:limit],
         "server_time": core._now(),
-        "record_scope": "bot_qa",
+        "record_scope": "conversation",
     }
 
 
@@ -127,21 +152,44 @@ def web_bot_qa_messages(
     with cp.db() as conn:
         rows = conn.execute(
             """
-            SELECT id,client_id,message_key,seller,buyer,role,text,message_type,occurred_at,created_at
+            SELECT id,client_id,message_key,seller,buyer,role,text,message_type,
+                   is_bot,withdrawn,occurred_at,created_at
             FROM bot_messages
             WHERE client_id=? AND seller=? AND buyer=?
-            ORDER BY id ASC
+            ORDER BY occurred_at ASC,id ASC
             """,
             (client_id, seller.strip(), buyer.strip()),
         ).fetchall()
-    messages = build_bot_qa_messages(dict(row) for row in rows)
+    messages = [_public_message(row) for row in rows]
+
     if before_id > 0:
-        messages = [message for message in messages if int(message.get("id") or 0) < before_id]
+        cursor = next(
+            (message for message in messages if int(message.get("id") or 0) == before_id),
+            None,
+        )
+        if cursor:
+            cursor_key = (
+                str(cursor.get("occurred_at") or ""),
+                int(cursor.get("id") or 0),
+            )
+            messages = [
+                message for message in messages
+                if (
+                    str(message.get("occurred_at") or ""),
+                    int(message.get("id") or 0),
+                ) < cursor_key
+            ]
+        else:
+            messages = [
+                message for message in messages
+                if int(message.get("id") or 0) < before_id
+            ]
+
     has_more = len(messages) > limit
     return {
         "messages": messages[-limit:],
         "has_more": has_more,
-        "record_scope": "bot_qa",
+        "record_scope": "conversation",
     }
 
 
@@ -155,17 +203,15 @@ def web_mark_bot_qa_read(
     message_id = int(data.message_id or 0)
     if message_id < 1:
         with cp.db() as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """
-                SELECT id,client_id,message_key,seller,buyer,role,text,message_type,occurred_at,created_at
+                SELECT MAX(id) AS last_id
                 FROM bot_messages
                 WHERE client_id=? AND seller=? AND buyer=?
-                ORDER BY id ASC
                 """,
                 (client_id, data.seller.strip(), data.buyer.strip()),
-            ).fetchall()
-        messages = build_bot_qa_messages(dict(row) for row in rows)
-        message_id = max((int(message.get("id") or 0) for message in messages), default=0)
+            ).fetchone()
+        message_id = int(row["last_id"] or 0) if row else 0
 
     with cp.db() as conn:
         conn.execute(
@@ -178,4 +224,4 @@ def web_mark_bot_qa_read(
             """,
             (client_id, data.seller.strip(), data.buyer.strip(), message_id, core._now()),
         )
-    return {"ok": True, "last_read_message_id": message_id, "record_scope": "bot_qa"}
+    return {"ok": True, "last_read_message_id": message_id, "record_scope": "conversation"}
