@@ -99,7 +99,9 @@ namespace Bot.Options
                 shopBinding = new ShopBindingOptionsControl(Seller);
                 _featureSettings = new FeatureSettingsOptionsControl(Seller);
                 autoDelivery = new AutoDeliveryOptionsControl(Seller);
-                shopStrategy = new ShopStrategyOptionsControl(Seller);
+                // Scheduled refreshes outlive the UI scope; keep a stable ShopKey
+                // instead of a nickname/display label for background catalog work.
+                shopStrategy = new ShopStrategyOptionsControl(_shop.ShopKey);
                 dataManagement = new CtlDataManagement();
                 aboutUpdate = new BotUpdateOptionsControl();
             });
