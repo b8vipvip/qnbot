@@ -426,11 +426,7 @@ namespace Bot.ChromeNs
                     .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 20000))
                 {
                     WebMessage ignored;
-                    if (state.PendingMessages.TryRemove(old.MessageKey, out ignored))
-                    {
-                        string ignoredSignature;
-                        state.CapturedMessageSignatures.TryRemove(old.MessageKey, out ignoredSignature);
-                    }
+                    state.PendingMessages.TryRemove(old.MessageKey, out ignored);
                 }
             }
             return true;
