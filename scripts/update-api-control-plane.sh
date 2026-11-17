@@ -87,8 +87,52 @@ check_free_kib() {
   log "${stage}磁盘空间检查通过: $path 可用 $((available_kib / 1024)) MiB"
 }
 
+docker_build_storage_path() {
+  local docker_root
+  docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  if [[ -n "$docker_root" && -d "$docker_root" ]]; then
+    printf '%s' "$docker_root"
+  else
+    printf '%s' "$SERVICE_DIR"
+  fi
+}
+
 check_space_before_build() {
-  check_free_kib "$SERVICE_DIR" "$(( MIN_FREE_BEFORE_BUILD_MIB * 1024 ))" "构建前"
+  local build_storage
+  build_storage="$(docker_build_storage_path)"
+  check_free_kib "$build_storage" "$(( MIN_FREE_BEFORE_BUILD_MIB * 1024 ))" "构建前"
+}
+
+reclaim_docker_build_space() {
+  local build_storage required_kib available_kib
+  build_storage="$(docker_build_storage_path)"
+  required_kib=$(( MIN_FREE_BEFORE_BUILD_MIB * 1024 ))
+  available_kib="$(df -Pk "$build_storage" | awk 'END { print $4 }')"
+  [[ "$available_kib" =~ ^[0-9]+$ ]] || die "无法读取 Docker 构建存储可用空间: $build_storage"
+
+  if (( available_kib >= required_kib )); then
+    check_space_before_build
+    return 0
+  fi
+
+  warn "Docker 构建存储空间不足，尝试安全回收可重建缓存: $build_storage 当前 $((available_kib / 1024)) MiB，要求至少 $((MIN_FREE_BEFORE_BUILD_MIB)) MiB。"
+  if docker info >/dev/null 2>&1; then
+    log "优先清理 7 天前未使用的 BuildKit 缓存和悬空镜像；不删除容器、数据卷或带标签镜像"
+    docker builder prune --filter "until=168h" --force || warn "清理过期 BuildKit 缓存失败，继续检查剩余空间。"
+    docker image prune --force || warn "清理悬空镜像失败，继续检查剩余空间。"
+
+    available_kib="$(df -Pk "$build_storage" | awk 'END { print $4 }')"
+    [[ "$available_kib" =~ ^[0-9]+$ ]] || die "无法重新读取 Docker 构建存储可用空间: $build_storage"
+    if (( available_kib < required_kib )); then
+      warn "过期缓存清理后仍不足，继续回收全部未使用的 BuildKit 构建缓存和悬空镜像；不会清理数据卷、容器或带标签镜像。"
+      docker builder prune --force || warn "清理全部 BuildKit 缓存失败。"
+      docker image prune --force || warn "再次清理悬空镜像失败。"
+    fi
+  else
+    warn "Docker daemon 当前不可用，无法回收构建缓存。"
+  fi
+
+  check_space_before_build
 }
 
 check_space_before_backup() {
@@ -525,7 +569,7 @@ if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLO
   exit 12
 fi
 log "GPTAuto 智能判断：正式构建模式 $SMART_MODE"
-check_space_before_build
+reclaim_docker_build_space
 
 # These probes are diagnostic only. A transient probe failure must not take production down.
 probe_url "腾讯云 PyPI" "${CONTROL_PLANE_BUILD_PIP_INDEX_URL%/}/pip/" || true
