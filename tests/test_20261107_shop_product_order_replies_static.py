@@ -23,7 +23,7 @@ def test_shop_cache_fail_closed_and_seven_day_refresh():
     service = source("src/Bot/ChromeNs/ShopProductCatalogService.cs")
     assert "TimeSpan.FromDays(7)" in service
     assert "TimeSpan.FromHours(1)" in service
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in service
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in service
     assert "QN.FindExistingBySellerNick(seller)" in service
     assert "ShopCatalogMtopReader.FetchAsync(qn.CDP)" in service
     assert "fetched.Products == null || fetched.Products.Count == 0" in service
