@@ -108,6 +108,7 @@ def test_buyer_ordering_cache_has_a_ttl_and_hard_count_bound():
     assert "LatestBuyerSourceSortRetention = TimeSpan.FromHours(6);" in monitor
     assert "LatestBuyerSourceSortSweepInterval = TimeSpan.FromMinutes(5);" in monitor
     assert "SweepLatestBuyerSourceSortIfDue(now);" in monitor
+    assert "LatestBuyerSourceSort.Count <= MaxLatestBuyerSourceSortEntries" in monitor
     assert "exactEntries.Remove(pair);" in monitor
     assert "buyerState.LastSeenUtc" in monitor
 
