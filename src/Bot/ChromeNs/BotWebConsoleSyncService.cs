@@ -38,6 +38,8 @@ namespace Bot.ChromeNs
         private const string ManualReplyKey = "BotWebAllowManualReply";
         private const string IntervalKey = "BotWebSyncIntervalSeconds";
         private const string ProcessedCommandsKey = "BotWebProcessedCommandIds";
+        private const int MaxPendingMessagesPerShop = 20000;
+        private static long _pendingMessageBackpressureCount;
 
         private sealed class WebMessage
         {
@@ -57,6 +59,7 @@ namespace Bot.ChromeNs
             public ShopContext Shop;
             public readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
                 new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
+            public readonly object PendingMessagesSync = new object();
             public readonly ConcurrentDictionary<string, string> CapturedMessageSignatures =
                 new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
             public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
@@ -288,7 +291,7 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || buyer.Length == 0) return;
             try
             {
-                var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
+                var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, int.MaxValue);
                 foreach (var turn in turns)
                     CaptureTurn(state, seller, buyer, turn);
             }
@@ -304,7 +307,7 @@ namespace Bot.ChromeNs
             try
             {
                 var snapshots = ConversationContextStore.GetMirrorConversationSnapshots(
-                    state.Shop.ShopKey, 200, 100);
+                    state.Shop.ShopKey, int.MaxValue, int.MaxValue);
                 var liveKeys = state.CapturedMessageSignatures.Count > 30000
                     ? new HashSet<string>(StringComparer.Ordinal)
                     : null;
@@ -419,15 +422,25 @@ namespace Bot.ChromeNs
                 Withdrawn = withdrawn,
                 OccurredAt = occurredAt
             };
-            state.PendingMessages[item.MessageKey] = item;
-            if (state.PendingMessages.Count > 20000)
+            // Apply backpressure instead of evicting the oldest unsent messages.
+            // A rejected item is deliberately not marked in CapturedMessageSignatures,
+            // so the next sync cycle retries it after the current 500-message batch drains.
+            lock (state.PendingMessagesSync)
             {
-                foreach (var old in state.PendingMessages.Values
-                    .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 20000))
+                if (!state.PendingMessages.ContainsKey(item.MessageKey)
+                    && state.PendingMessages.Count >= MaxPendingMessagesPerShop)
                 {
-                    WebMessage ignored;
-                    state.PendingMessages.TryRemove(old.MessageKey, out ignored);
+                    var total = Interlocked.Increment(ref _pendingMessageBackpressureCount);
+                    if (total <= 3 || total % 100 == 0)
+                    {
+                        Log.Info("Bot Web消息同步队列达到容量上限，未入队消息保留在桌面镜像中等待后续同步: "
+                            + "backpressureEvents=" + total
+                            + ", pending=" + state.PendingMessages.Count
+                            + ", limit=" + MaxPendingMessagesPerShop);
+                    }
+                    return false;
                 }
+                state.PendingMessages[item.MessageKey] = item;
             }
             return true;
         }
