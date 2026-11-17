@@ -10,6 +10,7 @@ if str(CONTROL) not in sys.path:
     sys.path.insert(0, str(CONTROL))
 
 import bot_web_bot_qa_logic
+import bot_web_bot_qa
 
 
 def message(
@@ -102,6 +103,34 @@ def test_bot_answer_message_type_is_supported_without_ai_suffix():
     assert result[-1]["text"] == "请发设备酷狗账号界面确认。"
 
 
+def test_mobile_inbox_preserves_the_full_desktop_message_timeline():
+    rows = [
+        message(40, "assistant", "您好，我是人工客服。", "2026-08-02T06:00:00+00:00"),
+        message(41, "user", "这个功能怎么使用？", "2026-08-02T06:00:05+00:00"),
+        message(42, "assistant", "请在设置页面开启同步。[A]", "2026-08-02T06:00:10+00:00"),
+        message(43, "assistant", "这条消息后来撤回。[A]", "2026-08-02T06:00:15+00:00"),
+    ]
+    rows[3]["withdrawn"] = 1
+
+    result = [bot_web_bot_qa._public_message(row) for row in rows]
+
+    assert len(result) == 4
+    assert result[0]["text"] == "您好，我是人工客服。"
+    assert result[0]["is_bot"] is False
+    assert result[2]["text"] == "请在设置页面开启同步。"
+    assert result[2]["is_bot"] is True
+    assert result[3]["withdrawn"] is True
+    assert result[3]["is_bot"] is False
+
+
+def test_mobile_inbox_api_does_not_filter_out_manual_seller_messages():
+    source = (CONTROL / "bot_web_bot_qa.py").read_text(encoding="utf-8-sig")
+    assert "build_bot_qa_messages" not in source
+    assert 'record_scope": "conversation"' in source
+    assert "ORDER BY occurred_at ASC,id ASC" in source
+
+
+
 def test_bootstrap_registers_bot_qa_routes_before_legacy_conversation_routes():
     bootstrap = (CONTROL / "bootstrap.py").read_text(encoding="utf-8-sig")
     assert bootstrap.index("bot_web_bot_qa.install(control_plane)") < bootstrap.index(
@@ -112,8 +141,8 @@ def test_bootstrap_registers_bot_qa_routes_before_legacy_conversation_routes():
     assert "bot_web_bot_qa_logic.py" in dockerfile
 
 
-def test_web_page_explicitly_labels_records_as_bot_qa_only():
+def test_web_page_uses_buyer_message_inbox_labels():
     page = (CONTROL / "static" / "bot-web.html").read_text(encoding="utf-8-sig")
-    assert "Bot 问答会话" in page
-    assert "仅显示买家问题与 Bot 自动回答" in page
-    assert "不展示普通人工客服聊天" in page
+    assert "买家消息" in page
+    assert "仅显示买家问题与 Bot 自动回答" not in page
+    assert "同步 Windows Bot 已采集的买家与客服消息" in page
