@@ -43,13 +43,15 @@ sudo bash scripts/update-api-control-plane.sh
 2. 拒绝覆盖服务器上未提交的已跟踪代码修改；
 3. 兼容旧的 `/opt/qianniu-api-control-plane` ZIP 部署；
 4. 保留并迁移原 `.env` 和 `data/`；
-5. 在停止旧服务前先构建新 Docker 镜像，尽量减少停机时间；
-6. 停止旧容器后对 `.env` 和整个 `data/` 做冷备份；
-7. 使用 `docker-compose.bt.yml` 重建并启动服务；
-8. 验证容器实际运行 `bootstrap.py`；
-9. 验证本机 `http://127.0.0.1:18081/healthz`；
-10. 验证公网 `https://<CONTROL_PLANE_HOST>/healthz`；
-11. 本机启动失败时自动尝试回滚旧代码和冷备份数据。
+5. 在停止旧服务前先构建新 Docker 镜像，尽量减少停机时间；构建前以 Docker `DockerRootDir` 所在文件系统为准检查至少 4096 MiB 可用空间；
+6. 空间不足时自动先回收 7 天前未使用的 BuildKit 缓存和悬空镜像，仍不足再回收全部未使用的 BuildKit 缓存及悬空镜像；不会删除容器、数据卷或带标签镜像，也不会执行 `docker system prune`；
+7. 清理后仍达不到空间门槛则失败关闭，旧服务继续运行；需要扩容磁盘或由管理员进一步检查后再重试；
+8. 停止旧容器后对 `.env` 和整个 `data/` 做冷备份；
+9. 使用 `docker-compose.bt.yml` 重建并启动服务；
+10. 验证容器实际运行 `bootstrap.py`；
+11. 验证本机 `http://127.0.0.1:18081/healthz`；
+12. 验证公网 `https://<CONTROL_PLANE_HOST>/healthz`；
+13. 本机启动失败时自动尝试回滚旧代码和冷备份数据。
 
 备份默认保存在：
 
