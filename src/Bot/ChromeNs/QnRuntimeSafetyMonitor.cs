@@ -7,6 +7,7 @@ using DbEntity.Response;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -29,8 +30,26 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<QN, byte>();
         private static readonly ConcurrentDictionary<QN, int> ConsecutiveProbeFailures =
             new ConcurrentDictionary<QN, int>();
-        private static readonly ConcurrentDictionary<string, long> LatestBuyerSourceSort =
-            new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        private sealed class BuyerSourceSortState
+        {
+            public readonly long Sort;
+            public readonly DateTime LastSeenUtc;
+
+            public BuyerSourceSortState(long sort, DateTime lastSeenUtc)
+            {
+                Sort = sort;
+                LastSeenUtc = lastSeenUtc;
+            }
+        }
+
+        // Ordering evidence is only needed to reject delayed seller echoes. Retain a
+        // bounded recent window instead of one permanent key for every buyer ever seen.
+        private const int MaxLatestBuyerSourceSortEntries = 10000;
+        private static readonly TimeSpan LatestBuyerSourceSortRetention = TimeSpan.FromHours(6);
+        private static readonly TimeSpan LatestBuyerSourceSortSweepInterval = TimeSpan.FromMinutes(5);
+        private static readonly ConcurrentDictionary<string, BuyerSourceSortState> LatestBuyerSourceSort =
+            new ConcurrentDictionary<string, BuyerSourceSortState>(StringComparer.Ordinal);
+        private static long _lastBuyerSourceSortSweepUtcTicks;
 
         private static Timer _timer;
         private static int _started;
@@ -318,7 +337,8 @@ namespace Bot.ChromeNs
                             + ", shopRegistryWrites=" + Bot.ShopScope.ShopProfileStore.RegistryWriteCount
                             + ", shopSnapshotHits=" + BotWebConsoleSyncService.ShopSnapshotCacheHits
                             + ", shopSnapshotRefreshes=" + BotWebConsoleSyncService.ShopSnapshotRefreshes
-                            + ", aliasUiNoopSkips=" + BuyerIdentityAliasUiBridge.UnchangedAliasMergeSkips);
+                            + ", aliasUiNoopSkips=" + BuyerIdentityAliasUiBridge.UnchangedAliasMergeSkips
+                            + ", buyerSortEntries=" + LatestBuyerSourceSort.Count);
                     }
                 }
                 catch (Exception metricsError)
@@ -443,7 +463,56 @@ namespace Bot.ChromeNs
             var sort = IncomingMessageSafety.GetSortValue(message);
             if (sort <= 0) return;
             var key = BuyerOrderKey(seller, buyer, shopKey);
-            LatestBuyerSourceSort.AddOrUpdate(key, sort, (_, previous) => Math.Max(previous, sort));
+            var now = DateTime.UtcNow;
+            LatestBuyerSourceSort.AddOrUpdate(
+                key,
+                _ => new BuyerSourceSortState(sort, now),
+                (_, previous) => new BuyerSourceSortState(
+                    Math.Max(previous == null ? 0 : previous.Sort, sort),
+                    now));
+            SweepLatestBuyerSourceSortIfDue(now);
+        }
+
+        private static void SweepLatestBuyerSourceSortIfDue(DateTime now)
+        {
+            var previousTicks = Interlocked.Read(ref _lastBuyerSourceSortSweepUtcTicks);
+            if (previousTicks != 0
+                && now.Ticks - previousTicks < LatestBuyerSourceSortSweepInterval.Ticks)
+            {
+                return;
+            }
+            if (Interlocked.CompareExchange(
+                    ref _lastBuyerSourceSortSweepUtcTicks,
+                    now.Ticks,
+                    previousTicks) != previousTicks)
+            {
+                return;
+            }
+
+            var exactEntries = (ICollection<KeyValuePair<string, BuyerSourceSortState>>)LatestBuyerSourceSort;
+            var snapshot = LatestBuyerSourceSort.ToArray();
+            foreach (var pair in snapshot)
+            {
+                if (pair.Value != null
+                    && now - pair.Value.LastSeenUtc <= LatestBuyerSourceSortRetention)
+                {
+                    continue;
+                }
+                // ICollection.Remove compares both key and value, so a concurrent refresh
+                // cannot be removed using an older sweep snapshot.
+                exactEntries.Remove(pair);
+            }
+
+            if (LatestBuyerSourceSort.Count <= MaxLatestBuyerSourceSortEntries) return;
+            snapshot = LatestBuyerSourceSort.ToArray();
+            var excess = snapshot.Length - (MaxLatestBuyerSourceSortEntries * 3 / 4);
+            foreach (var pair in snapshot
+                .Where(x => x.Value != null)
+                .OrderBy(x => x.Value.LastSeenUtc)
+                .Take(Math.Max(0, excess)))
+            {
+                exactEntries.Remove(pair);
+            }
         }
 
         private static bool IsSellerReplyOlderThanLatestBuyerTurn(
@@ -455,12 +524,17 @@ namespace Bot.ChromeNs
             var sellerSort = IncomingMessageSafety.GetSortValue(sellerMessage);
             if (sellerSort <= 0) return false;
 
-            long buyerSort;
-            if (!LatestBuyerSourceSort.TryGetValue(BuyerOrderKey(seller, buyer, shopKey), out buyerSort)
-                || buyerSort <= 0)
+            BuyerSourceSortState buyerState;
+            if (!LatestBuyerSourceSort.TryGetValue(
+                    BuyerOrderKey(seller, buyer, shopKey),
+                    out buyerState)
+                || buyerState == null
+                || buyerState.Sort <= 0
+                || DateTime.UtcNow - buyerState.LastSeenUtc > LatestBuyerSourceSortRetention)
             {
                 return false;
             }
+            var buyerSort = buyerState.Sort;
             return buyerSort > sellerSort;
         }
 
