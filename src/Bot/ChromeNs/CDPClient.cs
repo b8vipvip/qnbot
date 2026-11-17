@@ -333,11 +333,21 @@ namespace Bot.ChromeNs
             var server = MyWebSocketServer.WSocketSvrInst;
             return shopKey.Length > 0
                 && server != null
+                && server.IsWebSocketSessionConnected(sessionId)
                 && server.IsAuthoritativeShopSession(shopKey, sessionId);
         }
 
         private bool CanDispatchInboundEvent(string type)
         {
+            // Even diagnostic status frames must belong to a live physical socket.
+            // A late frame after close must not restart identity discovery or touch QN state.
+            var sessionId = SessionId;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (string.IsNullOrWhiteSpace(sessionId)
+                || server == null
+                || !server.IsWebSocketSessionConnected(sessionId))
+                return false;
+
             // Status is diagnostic/identity-discovery traffic only. Business events
             // must come from the current authoritative ShopKey session.
             if (string.Equals(type, "qnbotStatus", StringComparison.Ordinal)) return true;

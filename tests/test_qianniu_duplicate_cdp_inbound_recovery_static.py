@@ -436,6 +436,8 @@ def test_direct_cdpcclient_dispatch_cannot_bypass_shopkey_identity_transition_ga
     assert "IsInvalidated" in authority
     assert "IsShopIdentityRetired" in authority
     assert "DuplicateCdpInboundRecoveryBridge.IsSessionIdentityTransitioning(sessionId)" in authority
+    assert "server.IsWebSocketSessionConnected(sessionId)" in authority
+    assert "server.IsWebSocketSessionConnected(sessionId)" in gate
     assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in authority
     assert "internal static bool IsSessionIdentityTransitioning(string sessionId)" in bridge
 
