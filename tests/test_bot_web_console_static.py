@@ -8,7 +8,7 @@ BOOTSTRAP = ROOT / "services" / "api-control-plane" / "bootstrap.py"
 DOCKERFILE = ROOT / "services" / "api-control-plane" / "Dockerfile"
 INDEX = ROOT / "services" / "api-control-plane" / "static" / "index.html"
 PAGE = ROOT / "services" / "api-control-plane" / "static" / "bot-web.html"
-SCRIPT = ROOT / "services" / "api-control-plane" / "static" / "bot-web.js"
+SCRIPT = ROOT / "services" / "api-control-plane" / "static" / "bot-web-v2.js"
 ADMIN_SCRIPT = ROOT / "services" / "api-control-plane" / "static" / "client-token-copy.js"
 WINDOWS = ROOT / "src" / "Bot" / "ChromeNs" / "BotWebConsoleSyncService.cs"
 PROPS = ROOT / "src" / "Directory.Build.props"
@@ -73,7 +73,9 @@ def test_windows_client_syncs_per_shop_state_and_recent_conversation_without_log
     assert "BotWebConsoleSyncService.cs" in props
     assert "InitializeForApp" in source
     assert '"/api/runtime/v1/bot-web/sync"' in source
-    assert "ConversationContextStore.GetRecentTurns" in source
+    assert "ConversationContextStore.GetMirrorTurns" in source
+    assert "ConversationContextStore.GetMirrorConversationSnapshots" in source
+    assert "CapturedMessageSignatures" in source
     assert "effective_auto_reply_enabled" in source
     assert "ApplyDesiredSettings" in source
     assert "ExecuteSendTextAsync" in source
@@ -99,9 +101,33 @@ def test_sensitive_command_state_is_per_shop_idempotent_and_not_persisted_in_ser
     assert "print(" not in server
 
 
+def test_bot_web_inbox_uses_the_desktop_message_mirror():
+    page = read(PAGE)
+    script = read(SCRIPT)
+    sync = read(WINDOWS)
+    context = read(ROOT / "src" / "Bot" / "ChromeNs" / "ConversationContextStore.cs")
+    api = read(ROOT / "services" / "api-control-plane" / "bot_web_bot_qa.py")
+
+    assert '<button data-page="messages"><span>▤</span>消息</button>' in page
+    assert "仅显示买家问题与 Bot 自动回答" not in page
+    assert "同步 Windows Bot 已采集的买家与客服消息" in page
+    assert "ConversationContextStore.GetMirrorTurns" in sync
+    assert "ConversationContextStore.GetMirrorConversationSnapshots" in sync
+    assert "GetMirrorConversationSnapshots" in context
+    assert '["is_bot"]' in sync
+    assert '["withdrawn"]' in sync
+    assert "_public_message(row)" in api
+    assert "build_bot_qa_messages" not in api
+    assert 'record_scope": "conversation"' in api
+    assert "已撤回一条消息" in script
+
+
 def test_admin_console_links_mobile_page_and_copy_extension():
     index = read(INDEX)
     assert 'href="/bot/"' in index
-    assert "Bot Web端" in index
+    assert "Bot Web端" not in index
+    assert 'href="/bot/"' not in index
+    assert "手机 Web 端" in index
+    assert "/bot/" in index
     assert 'src="/static/client-token-copy.js"' in index
     assert "管理员可复制对应令牌" in index
