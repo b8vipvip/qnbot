@@ -126,9 +126,14 @@ namespace Bot.ChromeNs
             var shopKey = server.GetShopKeyForSession(sessionId);
             var seller = ResolveSeller(sessionId, e.Type, response);
             if (seller.Length > 0) TouchSessionSeller(sessionId, seller, DateTime.Now);
-            if (seller.Length == 0 && shopKey.Length == 0)
+            if (shopKey.Length == 0)
             {
-                Log.Info("重复CDP入站消息暂无法确定ShopKey，等待正常通道处理: sessionRef="
+                // A seller nickname is diagnostic only, not a stable routing identity.
+                // If this physical socket has no verified ShopKey at event arrival,
+                // do not queue a payload that could later be rebound to another shop.
+                // The authoritative page/history recovery remains responsible for reconciliation.
+                Log.Info("重复CDP入站消息缺少来源稳定ShopKey，拒绝跨会话暂存: sellerRef="
+                    + PrivacyToken("seller", seller) + ", sessionRef="
                     + PrivacyToken("session", sessionId) + ", type=" + e.Type);
                 return;
             }
