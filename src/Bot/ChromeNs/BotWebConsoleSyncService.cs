@@ -39,6 +39,7 @@ namespace Bot.ChromeNs
         private const string IntervalKey = "BotWebSyncIntervalSeconds";
         private const string ProcessedCommandsKey = "BotWebProcessedCommandIds";
         private const int MaxPendingMessagesPerShop = 20000;
+        private const long MaxPendingMessageBytesPerShop = 64L * 1024 * 1024;
         private static long _pendingMessageBackpressureCount;
 
         private sealed class WebMessage
@@ -60,6 +61,7 @@ namespace Bot.ChromeNs
             public readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
                 new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
             public readonly object PendingMessagesSync = new object();
+            public long PendingMessageBytes;
             public readonly ConcurrentDictionary<string, string> CapturedMessageSignatures =
                 new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
             public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
@@ -385,6 +387,24 @@ namespace Bot.ChromeNs
             return messageKey;
         }
 
+        private static long PendingMessageSizeBytes(WebMessage item)
+        {
+            if (item == null) return 0;
+            return 256L
+                + Encoding.UTF8.GetByteCount(item.MessageKey ?? string.Empty)
+                + Encoding.UTF8.GetByteCount(item.Seller ?? string.Empty)
+                + Encoding.UTF8.GetByteCount(item.Buyer ?? string.Empty)
+                + Encoding.UTF8.GetByteCount(item.Role ?? string.Empty)
+                + Encoding.UTF8.GetByteCount(item.Text ?? string.Empty)
+                + Encoding.UTF8.GetByteCount(item.MessageType ?? string.Empty);
+        }
+
+        private static long GetPendingMessageBytes(ShopWebState state)
+        {
+            if (state == null) return 0;
+            lock (state.PendingMessagesSync) return state.PendingMessageBytes;
+        }
+
         private static bool EnqueueMessage(
             ShopWebState state,
             string seller,
@@ -422,13 +442,18 @@ namespace Bot.ChromeNs
                 Withdrawn = withdrawn,
                 OccurredAt = occurredAt
             };
-            // Apply backpressure instead of evicting the oldest unsent messages.
+            // Apply count and byte backpressure instead of evicting unsent messages.
             // A rejected item is deliberately not marked in CapturedMessageSignatures,
             // so the next sync cycle retries it after the current 500-message batch drains.
             lock (state.PendingMessagesSync)
             {
-                if (!state.PendingMessages.ContainsKey(item.MessageKey)
-                    && state.PendingMessages.Count >= MaxPendingMessagesPerShop)
+                WebMessage previous;
+                var exists = state.PendingMessages.TryGetValue(item.MessageKey, out previous);
+                var nextCount = state.PendingMessages.Count + (exists ? 0 : 1);
+                var previousBytes = exists ? PendingMessageSizeBytes(previous) : 0;
+                var nextBytes = Math.Max(0, state.PendingMessageBytes - previousBytes)
+                    + PendingMessageSizeBytes(item);
+                if (nextCount > MaxPendingMessagesPerShop || nextBytes > MaxPendingMessageBytesPerShop)
                 {
                     var total = Interlocked.Increment(ref _pendingMessageBackpressureCount);
                     if (total <= 3 || total % 100 == 0)
@@ -436,11 +461,14 @@ namespace Bot.ChromeNs
                         Log.Info("Bot Web消息同步队列达到容量上限，未入队消息保留在桌面镜像中等待后续同步: "
                             + "backpressureEvents=" + total
                             + ", pending=" + state.PendingMessages.Count
-                            + ", limit=" + MaxPendingMessagesPerShop);
+                            + ", pendingBytes=" + state.PendingMessageBytes
+                            + ", countLimit=" + MaxPendingMessagesPerShop
+                            + ", byteLimit=" + MaxPendingMessageBytesPerShop);
                     }
                     return false;
                 }
                 state.PendingMessages[item.MessageKey] = item;
+                state.PendingMessageBytes = nextBytes;
             }
             return true;
         }
@@ -541,9 +569,13 @@ namespace Bot.ChromeNs
                     || string.IsNullOrWhiteSpace(token)) return;
 
                 CaptureRecentConversations(state);
-                var messageSnapshot = state.MessageSyncEnabled
-                    ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
-                    : new List<WebMessage>();
+                List<WebMessage> messageSnapshot;
+                lock (state.PendingMessagesSync)
+                {
+                    messageSnapshot = state.MessageSyncEnabled
+                        ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
+                        : new List<WebMessage>();
+                }
                 var resultSnapshot = state.PendingCommandResults.ToArray();
                 var payload = new JObject
                 {
@@ -584,10 +616,15 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                foreach (var item in messageSnapshot)
+                lock (state.PendingMessagesSync)
                 {
-                    ((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
-                        new KeyValuePair<string, WebMessage>(item.MessageKey, item));
+                    foreach (var item in messageSnapshot)
+                    {
+                        if (((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
+                            new KeyValuePair<string, WebMessage>(item.MessageKey, item)))
+                            state.PendingMessageBytes = Math.Max(
+                                0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
+                    }
                 }
                 foreach (var pair in resultSnapshot)
                 {
@@ -636,12 +673,14 @@ namespace Bot.ChromeNs
                 ["message_sync_enabled"] = state.MessageSyncEnabled,
                 ["allow_web_manual_reply"] = state.AllowManualReply,
                 ["pending_message_count"] = state.PendingMessages.Count,
+                ["pending_message_bytes"] = GetPendingMessageBytes(state),
                 ["authorization"] = authorization,
                 ["diagnostics"] = new JObject
                 {
                     ["shop_key"] = state.Shop.ShopKey,
                     ["online_seller_count"] = sellers.Count,
                     ["pending_message_count"] = state.PendingMessages.Count,
+                    ["pending_message_bytes"] = GetPendingMessageBytes(state),
                     ["pending_command_result_count"] = state.PendingCommandResults.Count,
                     ["sync_in_progress"] = state.Syncing != 0,
                     ["message_sync_enabled"] = state.MessageSyncEnabled,
@@ -727,7 +766,14 @@ namespace Bot.ChromeNs
             {
                 state.MessageSyncEnabled = messageSync;
                 SaveBool(MessageSyncKey, messageSync);
-                if (!messageSync) state.PendingMessages.Clear();
+                if (!messageSync)
+                {
+                    lock (state.PendingMessagesSync)
+                    {
+                        state.PendingMessages.Clear();
+                        state.PendingMessageBytes = 0;
+                    }
+                }
             }
             if (state.AllowManualReply != manual)
             {

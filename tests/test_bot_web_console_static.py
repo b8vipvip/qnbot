@@ -164,3 +164,20 @@ def test_bot_web_sync_queue_uses_backpressure_instead_of_silently_evicting_unsen
     capture = sync[sync.index("private static string CaptureTurn"):sync.index("private static bool EnqueueMessage")]
     assert "if (EnqueueMessage(" in capture
     assert "state.CapturedMessageSignatures[messageKey] = signature;" in capture
+
+
+def test_bot_web_sync_queue_enforces_per_shop_payload_byte_budget_and_exact_accounting():
+    sync = read(WINDOWS)
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+    flush = sync[sync.index("private static async Task SyncOnceAsync"):sync.index("private static JObject BuildStatus")]
+    settings = sync[sync.index("private static void ApplyDesiredSettings"):sync.index("private static async Task ApplyCommandsAsync")]
+
+    assert "MaxPendingMessageBytesPerShop = 64L * 1024 * 1024" in sync
+    assert "public long PendingMessageBytes;" in sync
+    assert "PendingMessageSizeBytes(item)" in enqueue
+    assert "nextBytes > MaxPendingMessageBytesPerShop" in enqueue
+    assert "state.PendingMessageBytes = nextBytes;" in enqueue
+    assert "state.PendingMessageBytes - PendingMessageSizeBytes(item)" in flush
+    assert "state.PendingMessageBytes = 0;" in settings
+    assert "pending_message_bytes" in sync
+    assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
