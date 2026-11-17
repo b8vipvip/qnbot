@@ -292,6 +292,7 @@ namespace Bot.ChromeNs
             }
             if (Interlocked.CompareExchange(ref _lastHeartbeatUtcTicks, nowTicks, previous) != previous) return;
 
+            SweepLatestBuyerSourceSortIfDue(DateTime.UtcNow);
             try
             {
                 var snapshot = BotConnectionDiagnostics.GetSnapshot();
