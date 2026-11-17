@@ -18,6 +18,11 @@ _cp: Any = None
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: Dict[str, List[float]] = {}
 
+# The Web inbox requests up to 600 buyer conversations and the desktop mirror
+# exports up to 100 turns per buyer. Keep enough rows for that complete window.
+MAX_MESSAGES_PER_CLIENT = 600 * 100
+
+
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_reply_enabled": True,
     "message_sync_enabled": True,
@@ -335,14 +340,14 @@ def _cleanup_messages(client_id: int, retention_days: int) -> None:
     with _cp.db() as conn:
         conn.execute("DELETE FROM bot_messages WHERE client_id=? AND occurred_at<?", (client_id, threshold))
         count = conn.execute("SELECT COUNT(*) c FROM bot_messages WHERE client_id=?", (client_id,)).fetchone()["c"]
-        if count > 20000:
+        if count > MAX_MESSAGES_PER_CLIENT:
             conn.execute(
                 """
                 DELETE FROM bot_messages WHERE client_id=? AND id NOT IN (
-                    SELECT id FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT 20000
+                    SELECT id FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT ?
                 )
                 """,
-                (client_id, client_id),
+                (client_id, client_id, MAX_MESSAGES_PER_CLIENT),
             )
 
 

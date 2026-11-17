@@ -198,3 +198,17 @@ def test_bot_web_message_sync_disable_preserves_retry_for_unacknowledged_message
     assert "state.PendingMessageBytes = 0;" in settings
     assert flush.index("PendingMessages).Remove(") < flush.index("ApplyDesiredSettings(state,")
     assert "pending_message_bytes" in sync
+
+
+def test_bot_web_server_retention_covers_the_complete_visible_buyer_window():
+    service = read(SERVICE)
+    script = read(SCRIPT)
+
+    # The inbox renders up to 600 buyers; each desktop mirror contributes 100 turns.
+    # A 20,000-row server cap silently reduced the effective inbox to about 200 buyers.
+    assert "MAX_MESSAGES_PER_CLIENT = 600 * 100" in service
+    assert "if count > MAX_MESSAGES_PER_CLIENT:" in service
+    assert "ORDER BY id DESC LIMIT ?" in service
+    assert "(client_id, client_id, MAX_MESSAGES_PER_CLIENT)" in service
+    assert 'limit=600&query=' in script
+    assert "limit:\"120\"" in script
