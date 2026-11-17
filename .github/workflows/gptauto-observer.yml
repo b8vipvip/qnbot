@@ -220,6 +220,7 @@ jobs:
           PR_CI_RUN_ID=""
           PR_CI_ACTOR=""
           PR_CI_RUN_ATTEMPT=""
+          PR_DRAFT="false"
           MAIN_CI_CONCLUSION=""
           MAIN_CI_RUN_ID=""
           RELEASE_CONCLUSION=""
@@ -245,6 +246,7 @@ jobs:
             MERGE_SHA="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
             PR_HEAD_SHA="$(jq -r '.head.sha // ""' <<<"$pr_json")"
             PR_BASE_REF="$(jq -r '.base.ref // ""' <<<"$pr_json")"
+            PR_DRAFT="$(jq -r '.draft // false | tostring' <<<"$pr_json")"
 
             if [[ -n "$PR_BASE_REF" && "$PR_BASE_REF" != "$DEFAULT_BRANCH" ]]; then
               EXECUTOR_ELIGIBLE=false
@@ -314,7 +316,7 @@ jobs:
             --workflow-name "$WORKFLOW_NAME" --workflow-conclusion "$WORKFLOW_CONCLUSION" \
             --release-tag "$RELEASE_TAG" --release-state "$RELEASE_STATE" \
             --pr-ci-status "$PR_CI_STATUS" --pr-ci-conclusion "$PR_CI_CONCLUSION" --pr-ci-run-id "$PR_CI_RUN_ID" \
-            --pr-ci-actor "$PR_CI_ACTOR" --pr-ci-run-attempt "$PR_CI_RUN_ATTEMPT" \
+            --pr-ci-actor "$PR_CI_ACTOR" --pr-ci-run-attempt "$PR_CI_RUN_ATTEMPT" --pr-draft "$PR_DRAFT" \
             --main-ci-conclusion "$MAIN_CI_CONCLUSION" --main-ci-run-id "$MAIN_CI_RUN_ID" \
             --release-conclusion "$RELEASE_CONCLUSION" --release-run-id "$RELEASE_RUN_ID" \
             --current-pr-head-sha "$PR_HEAD_SHA" --blocked-reason "$BLOCKED_REASON" > observer-result.json
