@@ -23,16 +23,18 @@ def _public_message(row: Any) -> Dict[str, Any]:
     text = str(item.get("text") or "")
     role = str(item.get("role") or "").lower()
     message_type = str(item.get("message_type") or "").lower()
+    withdrawn = bool(item.get("withdrawn"))
     is_bot = bool(item.get("is_bot")) or message_type in {"bot_answer", "ai_answer", "bot_reply"}
 
-    if role == "assistant":
+    if not withdrawn and role == "assistant":
         for marker in ("[A]", "[AI]"):
             if text.rstrip().lower().endswith(marker.lower()):
                 text = text.rstrip()[:-len(marker)].rstrip()
                 is_bot = True
                 break
 
-    withdrawn = bool(item.get("withdrawn"))
+    if withdrawn:
+        is_bot = False
     if withdrawn and not text.strip():
         text = "已撤回一条消息"
 
