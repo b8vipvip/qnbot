@@ -112,3 +112,22 @@ def test_handoff_strategy_is_built_directly_not_only_by_loaded_runtime_patch():
     assert "在构造阶段将“启用转人工规则”及关键词/话术移动到“转人工策略”" in feature
 
     assert "HandoffSettingsUiBridge" in legacy_bridge
+
+
+def test_manual_stop_helper_marks_expected_exit_before_terminating_bot():
+    stop = read("scripts/Stop-QnBot.ps1")
+    watchdog = read("src/Bot/Update/BotUpdateProcessWatchdog.Fast.cs")
+
+    marker = stop.index("[System.IO.File]::WriteAllText(")
+    graceful = stop.index("$process.CloseMainWindow()")
+    forced = stop.index("Stop-Process -Id $pidValue -Force")
+    assert marker < graceful < forced
+    assert "'expected-exit-' + $pidValue + '.marker'" in stop
+    assert "' manual-stop'" in stop
+    assert "Get-TargetProcesses" in stop
+    assert "qianniu-bot-x64" in stop
+    assert "ExpectedExitMarker" in watchdog
+    assert "expected exit pid=" in watchdog
+    assert "no restart" in watchdog
+    assert "Set-Service" not in stop
+    assert "sc.exe" not in stop
