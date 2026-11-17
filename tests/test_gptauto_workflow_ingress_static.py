@@ -22,6 +22,7 @@ def test_gptauto_workflow_only_master_commits_do_not_create_orphan_observer_task
 
     assert "paths-ignore:" in observer
     assert "- '.github/workflows/gptauto-*.yml'" in observer
+    assert "- 'tests/test_gptauto_workflow_ingress_static.py'" in observer
 
 
 def test_executor_defers_draft_prs_without_failing_or_bypassing_the_merge_gate():

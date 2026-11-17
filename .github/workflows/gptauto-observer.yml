@@ -253,7 +253,7 @@ jobs:
             if [[ -n "$PR_HEAD_SHA" ]]; then
               pr_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$PR_HEAD_SHA&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')"
               pr_ci_row="$(jq -c '
-                ([.workflow_runs[] | select(.name == "API control plane CI" and .event == "pull_request)] | sort_by(.created_at, .id) | last)
+                ([.workflow_runs[] | select(.name == "API control plane CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
                 // ([.workflow_runs[] | select(.name == "CI" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
                 // ([.workflow_runs[] | select(.name == "Windows x64 release build" and .event == "pull_request")] | sort_by(.created_at, .id) | last)
                 // {}
