@@ -31,6 +31,7 @@ on:
     # no PR to merge and no user-facing work item.
     paths-ignore:
       - '.github/workflows/gptauto-*.yml'
+      - 'tests/test_gptauto_workflow_ingress_static.py'
   workflow_run:
     workflows: [CI, API control plane CI, Windows x64 release build]
     types: [completed]
