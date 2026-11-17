@@ -124,9 +124,10 @@ def test_bot_web_inbox_uses_the_desktop_message_mirror():
 
 def test_admin_console_links_mobile_page_and_copy_extension():
     index = read(INDEX)
-    assert 'href="/bot/"' in index
     assert "Bot Web端" not in index
     assert 'href="/bot/"' not in index
+    assert "手机 Web 端" in index
+    assert "/bot/" in index
     assert "手机 Web 端" in index
     assert "/bot/" in index
     assert 'src="/static/client-token-copy.js"' in index
