@@ -45,6 +45,8 @@ jobs:
           action="$(PYTHONPATH=.github python -m gptauto.executor "$state")"
           echo "$action" | tee /tmp/gptauto-action.json
           echo "action=$(jq -r '.action' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "action-reason=$(jq -r '.reason // ""' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "blocked-reason=$(jq -r '.completion_lease.host_control.blocked_reason // ""' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "task-id=$(jq -r '.task_id' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "pr-number=$(jq -r '.pr_number // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "head-sha=$(jq -r '.head_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
@@ -295,11 +297,21 @@ jobs:
           PR_NUMBER: ${{ steps.state.outputs.pr-number }}
           TASK_ID: ${{ steps.state.outputs.task-id }}
           RUN_ID: ${{ steps.state.outputs.run-id }}
+          ACTION_REASON: ${{ steps.state.outputs.action-reason }}
+          BLOCKED_REASON: ${{ steps.state.outputs.blocked-reason }}
         shell: bash
         run: |
           marker="<!-- gptauto-user-action:$TASK_ID -->"
-          body="$marker
+          if [[ "$BLOCKED_REASON" == "workflow_approval_required" ]]; then
+            body="$marker
           GPTAuto USER ACTION REQUIRED: GitHub reports action_required for workflow run $RUN_ID. Approve the workflow in this PR if GitHub is awaiting maintainer approval. This is not a code failure and no repair generation will be started. GPTAuto will resume on workflow in_progress/completed or by the watchdog."
+          elif [[ "$BLOCKED_REASON" == "draft_pr_requires_real_client_acceptance" ]]; then
+            body="$marker
+          GPTAuto USER ACTION REQUIRED: $ACTION_REASON. Complete the required Windows/千牛 real-client acceptance, attach redacted evidence to this PR, and mark it Ready for Review. This is a maintainer acceptance gate, not a code failure. GPTAuto will resume on the ready_for_review event."
+          else
+            body="$marker
+          GPTAuto USER ACTION REQUIRED: $ACTION_REASON. Complete the requested maintainer action, then resume this same task. No code repair will be started."
+          fi
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
           grep -Fq "$marker" <<<"$comments" || gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$body"
 
