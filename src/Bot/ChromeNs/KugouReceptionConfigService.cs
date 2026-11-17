@@ -177,6 +177,8 @@ namespace Bot.ChromeNs
             RequireBoolean(obj, "enabled");
             RequireBoolean(obj, "enable_auto_guidance");
             RequireBoolean(obj, "enable_phone_wait");
+            RequireBoolean(obj, "manual_review_required");
+            RequireBoolean(obj, "automatic_recharge_enabled");
             if (obj.Value<bool?>("manual_review_required") != true)
                 throw new InvalidOperationException("不能关闭业务知识人工审核。");
             if (obj.Value<bool?>("automatic_recharge_enabled") != false)
@@ -187,11 +189,10 @@ namespace Bot.ChromeNs
             foreach (var id in productIds.Concat(quarantineIds))
                 if (!SafeId.IsMatch(id)) throw new InvalidOperationException("商品ID或知识ID包含非法字符。");
 
-            var guideUrl = Convert.ToString(obj["guide_url"]) ?? string.Empty;
+            var guideUrl = ReadStringField(obj, "guide_url", 2048, true);
             if (!string.IsNullOrWhiteSpace(guideUrl) && !IsHttpsUrl(guideUrl))
                 throw new InvalidOperationException("教程地址必须是有效 HTTPS URL，且不能包含用户名或密码。");
-            var prompt = Convert.ToString(obj["policy_prompt"]) ?? string.Empty;
-            if (prompt.Length > 12000) throw new InvalidOperationException("policy_prompt 超过 12000 字符。");
+            var prompt = ReadStringField(obj, "policy_prompt", 12000, true);
 
             var quarantinePatterns = ReadStringArray(obj["quarantine_text_patterns"], "quarantine_text_patterns", 100);
             var blockedPatterns = ReadStringArray(obj["blocked_outgoing_patterns"], "blocked_outgoing_patterns", 100);
@@ -199,22 +200,26 @@ namespace Bot.ChromeNs
             foreach (var pattern in quarantinePatterns.Concat(blockedPatterns).Concat(uncertainPatterns))
                 CompilePattern(pattern);
 
-            var uncertainReply = Convert.ToString(obj["visual_uncertain_reply"]) ?? string.Empty;
+            var uncertainReply = ReadStringField(obj, "visual_uncertain_reply", 2000, true);
             if (uncertainPatterns.Count > 0 && string.IsNullOrWhiteSpace(uncertainReply))
                 throw new InvalidOperationException("配置 visual_uncertain_patterns 时必须提供 visual_uncertain_reply。");
 
             var visualRules = obj["visual_rules"] as JArray;
             if (visualRules == null || visualRules.Count > 32)
                 throw new InvalidOperationException("visual_rules 必须是最多32条规则的数组。");
-            foreach (var token in visualRules) ValidateVisualRule(token, guideUrl);
+            var visualRuleIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var token in visualRules)
+                if (!visualRuleIds.Add(ValidateVisualRule(token, guideUrl)))
+                    throw new InvalidOperationException("visual_rules 不允许重复 id。");
 
             var allCues = ReadStringArray(obj["photo_instruction_all_cues"], "photo_instruction_all_cues", 30);
             var anyCues = ReadStringArray(obj["photo_instruction_any_cues"], "photo_instruction_any_cues", 30);
             var excludedCues = ReadStringArray(obj["photo_instruction_excluded_cues"], "photo_instruction_excluded_cues", 30);
             var screenshotCues = ReadStringArray(obj["screenshot_question_cues"], "screenshot_question_cues", 30);
-            var screenshotPattern = Convert.ToString(obj["screenshot_reply_pattern"]) ?? string.Empty;
+            var screenshotPattern = ReadStringField(obj, "screenshot_reply_pattern", 1000, true);
             if (!string.IsNullOrWhiteSpace(screenshotPattern)) CompilePattern(screenshotPattern);
-            var waitReason = Convert.ToString(obj["phone_wait_reason"]) ?? string.Empty;
+            var waitReason = ReadStringField(obj, "phone_wait_reason", 500, true);
+            ReadStringField(obj, "notes", 2000, false);
 
             if (obj.Value<bool>("enabled"))
             {
@@ -251,6 +256,22 @@ namespace Bot.ChromeNs
         {
             if (obj[name] == null || obj[name].Type != JTokenType.Boolean)
                 throw new InvalidOperationException(name + " 必须为布尔值。");
+        }
+
+        private static string ReadStringField(JObject obj, string name, int maxLength, bool required)
+        {
+            var token = obj == null ? null : obj[name];
+            if (token == null)
+            {
+                if (required) throw new InvalidOperationException(name + " 必须是字符串。");
+                return string.Empty;
+            }
+            if (token.Type != JTokenType.String)
+                throw new InvalidOperationException(name + " 必须是字符串。");
+            var value = Convert.ToString(token) ?? string.Empty;
+            if (value.Length > maxLength)
+                throw new InvalidOperationException(name + " 超过 " + maxLength + " 字符。");
+            return value;
         }
 
         private static List<string> ReadStringArray(JToken token, string name, int max)
@@ -296,14 +317,16 @@ namespace Bot.ChromeNs
             catch (Exception ex) { throw new InvalidOperationException("正则表达式无效：" + ex.Message); }
         }
 
-        private static void ValidateVisualRule(JToken token, string guideUrl)
+        private static string ValidateVisualRule(JToken token, string guideUrl)
         {
             var rule = token as JObject;
             if (rule == null) throw new InvalidOperationException("visual_rules 项必须是对象。");
-            var id = Convert.ToString(rule["id"]);
-            var reply = Convert.ToString(rule["reply"]);
-            var reason = Convert.ToString(rule["reason"]);
-            var stage = Convert.ToString(rule["stage"]);
+            var id = ReadStringField(rule, "id", 80, true);
+            var reply = ReadStringField(rule, "reply", 2000, true);
+            var reason = ReadStringField(rule, "reason", 120, true);
+            var stage = ReadStringField(rule, "stage", 120, true);
+            if (!SafeId.IsMatch(id))
+                throw new InvalidOperationException("视觉规则 id 只能包含字母、数字、下划线和连字符。");
             if (string.IsNullOrWhiteSpace(id) || id.Length > 80
                 || string.IsNullOrWhiteSpace(reply) || reply.Length > 2000
                 || string.IsNullOrWhiteSpace(reason) || reason.Length > 120
@@ -325,6 +348,7 @@ namespace Bot.ChromeNs
             };
             var unknown = rule.Properties().FirstOrDefault(p => !allowed.Contains(p.Name, StringComparer.Ordinal));
             if (unknown != null) throw new InvalidOperationException("视觉规则包含未知字段：" + unknown.Name);
+            return id;
         }
 
         private static KugouReceptionConfig ToConfig(JObject obj)

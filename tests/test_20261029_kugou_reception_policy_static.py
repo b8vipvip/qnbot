@@ -251,3 +251,16 @@ def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
     assert "File.Copy(path, backup, false);" in save
 
 
+
+
+def test_private_profile_string_fields_and_visual_rule_ids_are_strictly_bounded():
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    assert "private static string ReadStringField(JObject obj, string name, int maxLength, bool required)" in config
+    assert 'ReadStringField(obj, "policy_prompt", 12000, true)' in config
+    assert 'ReadStringField(obj, "visual_uncertain_reply", 2000, true)' in config
+    assert 'ReadStringField(obj, "screenshot_reply_pattern", 1000, true)' in config
+    assert 'ReadStringField(obj, "phone_wait_reason", 500, true)' in config
+    assert 'ReadStringField(obj, "notes", 2000, false)' in config
+    assert 'if (!SafeId.IsMatch(id))' in config
+    assert 'visualRuleIds.Add(ValidateVisualRule(token, guideUrl))' in config
+    assert 'RequireBoolean(obj, "automatic_recharge_enabled")' in config
