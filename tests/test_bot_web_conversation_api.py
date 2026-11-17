@@ -131,8 +131,9 @@ def test_buyer_inbox_and_message_history_api_page_without_dropping_messages(tmp_
     rows = []
     for i in range(130):
         occurred = (start + timedelta(seconds=i)).isoformat(timespec="seconds")
+        role = "user" if i % 2 == 0 else "assistant"
         rows.append(
-            (1, f"buyer-a-{i}", "seller", "buyer-a", "user",
+            (1, f"buyer-a-{i}", "seller", "buyer-a", role,
              f"buyer A message {i}", "text", 0, 0, occurred, occurred)
         )
     occurred = (start + timedelta(minutes=10)).isoformat(timespec="seconds")
