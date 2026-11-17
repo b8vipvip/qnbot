@@ -39,18 +39,18 @@
     <section id="page-messages" class="page messages-page">
       <div id="chatShell" class="chat-shell">
         <aside id="conversationPane" class="conversation-pane">
-          <div class="conversation-head"><strong>Bot 问答会话</strong><span id="conversationCount">0</span></div>
-          <div class="search-row"><input id="conversationSearch" placeholder="搜索买家昵称或 Bot 问答"><button id="refreshConversationsBtn">刷新</button></div>
-          <div id="conversationList" class="conversation-list"><div class="empty">暂无 Bot 问答记录</div></div>
+          <div class="conversation-head"><strong>买家消息</strong><span id="conversationCount">0</span></div>
+          <div class="search-row"><input id="conversationSearch" placeholder="搜索买家昵称或消息内容"><button id="refreshConversationsBtn">刷新</button></div>
+          <div id="conversationList" class="conversation-list"><div class="empty">暂无同步的买家消息</div></div>
         </aside>
         <section id="chatDetailPane" class="chat-detail hidden-mobile">
           <div class="chat-detail-head">
             <button id="backConversationBtn" class="back-button">‹</button>
-            <div><strong id="chatBuyerName">请选择买家</strong><small id="chatSellerName">仅显示买家问题与 Bot 自动回答</small></div>
+            <div><strong id="chatBuyerName">请选择买家</strong><small id="chatSellerName">桌面消息镜像：买家、客服与 Bot 的完整消息时间线</small></div>
             <button id="refreshChatBtn" class="text-button">刷新</button>
           </div>
-          <button id="loadOlderBtn" class="load-older hidden">加载更早问答</button>
-          <div id="chatMessageList" class="message-list"><div class="empty">从左侧选择一个 Bot 问答会话</div></div>
+          <button id="loadOlderBtn" class="load-older hidden">加载更早消息</button>
+          <div id="chatMessageList" class="message-list"><div class="empty">从左侧选择一位买家</div></div>
           <form id="replyForm" class="reply-box hidden">
             <textarea id="replyText" maxlength="2000" rows="2" placeholder="通过 Windows Bot 发送人工回复"></textarea>
             <button id="sendReplyBtn" class="primary" type="submit">发送</button>
@@ -80,7 +80,7 @@
         <h3>远程控制</h3>
         <label class="switch-row"><span><strong>启用 Bot</strong><small id="botEnabledHint">控制当前店铺的 Bot 总开关；关闭后 Bot 不再参与消息处理。</small></span><input id="botEnabled" type="checkbox"></label>
         <label class="switch-row"><span><strong>智能自动回复</strong><small>关闭后不再进入智能回复流程，但仍保留 Bot 其他功能。</small></span><input id="autoReplyEnabled" type="checkbox"></label>
-        <label class="switch-row"><span><strong>同步 Bot 问答到 Web</strong><small>Web 端只展示触发 Bot 回复的买家问题与 Bot 自动答案，不展示普通人工客服聊天。</small></span><input id="messageSyncEnabled" type="checkbox"></label>
+        <label class="switch-row"><span><strong>同步买家聊天消息到 Web</strong><small>同步 Windows Bot 已采集的买家与客服消息，Web 端按买家聚合展示。</small></span><input id="messageSyncEnabled" type="checkbox"></label>
         <label class="switch-row"><span><strong>允许手机人工回复</strong><small>允许从手机页面向买家发送文本。</small></span><input id="manualReplyEnabled" type="checkbox"></label>
         <label class="field-row"><span>同步间隔</span><select id="syncInterval"><option value="2">2 秒</option><option value="3">3 秒</option><option value="5">5 秒</option><option value="10">10 秒</option><option value="30">30 秒</option></select></label>
         <label class="field-row"><span>消息保留</span><select id="retentionDays"><option value="1">1 天</option><option value="3">3 天</option><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select></label>
@@ -121,7 +121,7 @@
 
   <nav class="bottom-nav">
     <button data-page="status" class="active"><span>●</span>状态</button>
-    <button data-page="messages"><span>▤</span>问答</button>
+    <button data-page="messages"><span>▤</span>消息</button>
     <button data-page="knowledge"><span>◆</span>知识库</button>
     <button data-page="settings"><span>⚙</span>设置</button>
   </nav>
