@@ -18,7 +18,7 @@ def test_disk_preflight_refuses_insufficient_space_before_git_fetch_or_build():
 
     preflight = script.index('\ncheck_free_kib "$REPO_DIR" "$(( 512 * 1024 ))" "Git 同步前"\n')
     fetch = script.index("\ngithub_fetch_with_retry\n", preflight)
-    full_capacity = script.index("\ncheck_space_before_build\n", fetch)
+    full_capacity = script.index("\nreclaim_docker_build_space\n", fetch)
     build = script.index("\nbuild_new_image\n", full_capacity)
     stop_service = script.index('log "停止旧控制面并创建冷备份"', build)
     assert preflight < fetch < full_capacity < build < stop_service
@@ -45,3 +45,22 @@ def test_bt_compose_keeps_bounded_json_logs_across_server_updates():
     assert 'max-size: "20m"' in compose
     assert 'max-file: "3"' in compose
     assert './data:/data' in compose
+
+def test_build_preflight_reclaims_only_rebuildable_docker_cache_without_touching_production_data():
+    script = UPDATER.read_text(encoding="utf-8")
+
+    assert "docker info --format '{{.DockerRootDir}}'" in script
+    assert 'docker builder prune --filter "until=168h" --force' in script
+    assert "docker builder prune --force" in script
+    assert "docker image prune --force" in script
+    assert "docker volume prune" not in script
+    assert "docker container prune" not in script
+    assert "docker system prune" not in script
+    assert "docker image prune --all" not in script
+    assert "docker image prune -a" not in script
+
+    reclaim = script.split("reclaim_docker_build_space() {", 1)[1].split("\n}", 1)[0]
+    assert reclaim.index('docker builder prune --filter "until=168h" --force') < reclaim.index(
+        "docker builder prune --force"
+    )
+    assert "check_space_before_build" in reclaim
