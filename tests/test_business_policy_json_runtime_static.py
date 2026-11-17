@@ -193,3 +193,16 @@ def test_runtime_policy_editor_requires_and_enters_exact_store_prompt_shop_scope
     assert "阻止打开全局运行策略配置" in handler
     assert "using (ShopSettingsScope.Enter(shop))" in handler
     assert "ShopScopedUiBridge.Attach(editor, shop);" in handler
+
+
+def test_custom_policy_regexes_and_handoff_overrides_have_hard_size_limits():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    assert "MaxPolicyRegexLength = 1000" in service
+    assert "MaxPolicyPatternCount = 100" in service
+    assert "MaxHandoffOverrides = 100" in service
+    assert "patterns.Properties().Count() > MaxPolicyPatternCount" in service
+    assert 'property.Value.Type != JTokenType.String' in service
+    assert 'ReadPolicyString(obj, "keyword", 128, true)' in service
+    assert 'ReadPolicyString(obj, "fixedReply", 2000, false)' in service
+    assert 'if (pattern.Length > MaxPolicyRegexLength)' in service
+    assert 'TimeSpan.FromMilliseconds(100)' in service

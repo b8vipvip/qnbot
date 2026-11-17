@@ -17,6 +17,9 @@ namespace Bot.ChromeNs
     {
         private const string Schema = "qnbot.business-policy";
         private static readonly string LegacySchema = "qianniu" + "-ai-bot.business-policy";
+        private const int MaxPolicyRegexLength = 1000;
+        private const int MaxPolicyPatternCount = 100;
+        private const int MaxHandoffOverrides = 100;
         private static readonly Regex NeverRegex = new Regex("(?!)", RegexOptions.Compiled);
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
@@ -267,29 +270,64 @@ namespace Bot.ChromeNs
             if (!(root["patterns"] is JObject)) throw new Exception("运行策略缺少 patterns 对象。");
             if (!(root["stages"] is JObject)) throw new Exception("运行策略缺少 stages 对象。");
 
-            foreach (var property in ((JObject)root["patterns"]).Properties())
+            var patterns = (JObject)root["patterns"];
+            if (patterns.Properties().Count() > MaxPolicyPatternCount)
+                throw new Exception("patterns 项目数量超过限制。");
+            foreach (var property in patterns.Properties())
             {
+                if (property.Value == null || property.Value.Type != JTokenType.String)
+                    throw new Exception("patterns." + property.Name + " 必须是字符串。");
                 var pattern = Convert.ToString(property.Value);
                 if (!string.IsNullOrWhiteSpace(pattern))
                     CompileOptional(pattern);
             }
+            if (root["handoffOverrides"] != null && !(root["handoffOverrides"] is JArray))
+                throw new Exception("handoffOverrides 必须是对象数组。");
             var overrides = root["handoffOverrides"] as JArray;
             if (overrides != null)
             {
+                if (overrides.Count > MaxHandoffOverrides)
+                    throw new Exception("handoffOverrides 项目数量超过限制。");
                 foreach (var item in overrides)
                 {
                     var obj = item as JObject;
                     if (obj == null) throw new Exception("handoffOverrides 必须是对象数组。");
-                    foreach (var name in new[] { "strongRiskPattern", "allowAiPattern", "fixedReplyPattern" })
-                        CompileOptional(Convert.ToString(obj[name]));
+                    ReadPolicyString(obj, "keyword", 128, true);
+                    var strong = ReadPolicyString(obj, "strongRiskPattern", MaxPolicyRegexLength, false);
+                    var allowAi = ReadPolicyString(obj, "allowAiPattern", MaxPolicyRegexLength, false);
+                    var fixedPattern = ReadPolicyString(obj, "fixedReplyPattern", MaxPolicyRegexLength, false);
+                    var fixedReply = ReadPolicyString(obj, "fixedReply", 2000, false);
+                    CompileOptional(strong);
+                    CompileOptional(allowAi);
+                    CompileOptional(fixedPattern);
+                    if (!string.IsNullOrWhiteSpace(fixedPattern) && string.IsNullOrWhiteSpace(fixedReply))
+                        throw new Exception("handoffOverrides.fixedReplyPattern 非空时必须提供 fixedReply。");
                 }
             }
             return root;
         }
 
+        private static string ReadPolicyString(JObject obj, string name, int maxLength, bool required)
+        {
+            var token = obj == null ? null : obj[name];
+            if (token == null)
+            {
+                if (required) throw new Exception(name + " 必须是字符串。");
+                return string.Empty;
+            }
+            if (token.Type != JTokenType.String)
+                throw new Exception(name + " 必须是字符串。");
+            var value = Convert.ToString(token) ?? string.Empty;
+            if (value.Length > maxLength)
+                throw new Exception(name + " 超过 " + maxLength + " 字符。");
+            return value;
+        }
+
         private static Regex CompileOptional(string pattern)
         {
             if (string.IsNullOrWhiteSpace(pattern)) return NeverRegex;
+            if (pattern.Length > MaxPolicyRegexLength)
+                throw new Exception("运行策略正则表达式超过 " + MaxPolicyRegexLength + " 字符。");
             try { return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)); }
             catch (Exception ex) { throw new Exception("正则表达式无效：" + ex.Message); }
         }
