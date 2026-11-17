@@ -288,11 +288,14 @@ namespace Bot.ChromeNs
             {
                 if (overrides.Count > MaxHandoffOverrides)
                     throw new Exception("handoffOverrides 项目数量超过限制。");
+                var handoffKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var item in overrides)
                 {
                     var obj = item as JObject;
                     if (obj == null) throw new Exception("handoffOverrides 必须是对象数组。");
-                    ReadPolicyString(obj, "keyword", 128, true);
+                    var keyword = ReadPolicyString(obj, "keyword", 128, true).Trim();
+                    if (!handoffKeywords.Add(keyword))
+                        throw new Exception("handoffOverrides 不允许重复 keyword。");
                     var strong = ReadPolicyString(obj, "strongRiskPattern", MaxPolicyRegexLength, false);
                     var allowAi = ReadPolicyString(obj, "allowAiPattern", MaxPolicyRegexLength, false);
                     var fixedPattern = ReadPolicyString(obj, "fixedReplyPattern", MaxPolicyRegexLength, false);
@@ -318,6 +321,8 @@ namespace Bot.ChromeNs
             if (token.Type != JTokenType.String)
                 throw new Exception(name + " 必须是字符串。");
             var value = Convert.ToString(token) ?? string.Empty;
+            if (required && string.IsNullOrWhiteSpace(value))
+                throw new Exception(name + " 不能为空。");
             if (value.Length > maxLength)
                 throw new Exception(name + " 超过 " + maxLength + " 字符。");
             return value;

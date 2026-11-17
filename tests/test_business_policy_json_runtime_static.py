@@ -206,3 +206,7 @@ def test_custom_policy_regexes_and_handoff_overrides_have_hard_size_limits():
     assert 'ReadPolicyString(obj, "fixedReply", 2000, false)' in service
     assert 'if (pattern.Length > MaxPolicyRegexLength)' in service
     assert 'TimeSpan.FromMilliseconds(100)' in service
+
+    assert "handoffKeywords.Add(keyword)" in service
+    assert "handoffOverrides 不允许重复 keyword" in service
+    assert "required && string.IsNullOrWhiteSpace(value)" in service
