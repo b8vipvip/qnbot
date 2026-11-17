@@ -76,14 +76,14 @@ namespace Bot.ChromeNs
 
         private static string CachePath(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
             return Path.Combine(Paths.GetCacheRoot(shop), "shop-products-v1.json");
         }
 
         private static ShopScopedSettingsStore RuleStore(string seller)
         {
             return new ShopScopedSettingsStore(
-                ShopContextLocator.ResolveRuntimeBySellerNick(seller), Paths);
+                ShopContextLocator.ResolveCurrentOrBySellerNick(seller), Paths);
         }
 
         internal static ShopCatalogSnapshot Load(string seller)
