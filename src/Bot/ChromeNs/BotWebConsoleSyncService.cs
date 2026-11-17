@@ -291,7 +291,7 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || buyer.Length == 0) return;
             try
             {
-                var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, int.MaxValue);
+                var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
                 foreach (var turn in turns)
                     CaptureTurn(state, seller, buyer, turn);
             }
@@ -307,7 +307,7 @@ namespace Bot.ChromeNs
             try
             {
                 var snapshots = ConversationContextStore.GetMirrorConversationSnapshots(
-                    state.Shop.ShopKey, int.MaxValue, int.MaxValue);
+                    state.Shop.ShopKey, int.MaxValue, 100);
                 var liveKeys = state.CapturedMessageSignatures.Count > 30000
                     ? new HashSet<string>(StringComparer.Ordinal)
                     : null;
