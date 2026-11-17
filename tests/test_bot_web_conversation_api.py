@@ -34,7 +34,9 @@ class FakeControlPlane:
         return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def load_modules():
+@contextmanager
+def loaded_modules():
+    previous_core = sys.modules.get("bot_web_console")
     core_spec = importlib.util.spec_from_file_location(
         "bot_web_console", API / "bot_web_console.py"
     )
@@ -50,7 +52,13 @@ def load_modules():
     conversations = importlib.util.module_from_spec(conversation_spec)
     assert conversation_spec and conversation_spec.loader
     conversation_spec.loader.exec_module(conversations)
-    return core, conversations
+    try:
+        yield core, conversations
+    finally:
+        if previous_core is None:
+            sys.modules.pop("bot_web_console", None)
+        else:
+            sys.modules["bot_web_console"] = previous_core
 
 
 def create_message_schema(cp: FakeControlPlane) -> None:
@@ -87,103 +95,103 @@ def create_message_schema(cp: FakeControlPlane) -> None:
 
 
 def test_server_retention_keeps_the_full_visible_buyer_history_window(tmp_path):
-    core, _ = load_modules()
-    cp = FakeControlPlane(tmp_path / "messages.db")
-    core._cp = cp
-    create_message_schema(cp)
+    with loaded_modules() as (core, _):
+        cp = FakeControlPlane(tmp_path / "messages.db")
+        core._cp = cp
+        create_message_schema(cp)
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with cp.db() as conn:
-        conn.executemany(
-            """
-            INSERT INTO bot_messages(
-                client_id,message_key,seller,buyer,role,text,message_type,
-                is_bot,withdrawn,occurred_at,created_at
-            ) VALUES(1,?,?,?,?,?,'text',0,0,?,?)
-            """,
-            [
-                (f"message-{i}", "seller", f"buyer-{i % 600}", "user",
-                 f"message {i}", now, now)
-                for i in range(60001)
-            ],
-        )
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with cp.db() as conn:
+            conn.executemany(
+                """
+                INSERT INTO bot_messages(
+                    client_id,message_key,seller,buyer,role,text,message_type,
+                    is_bot,withdrawn,occurred_at,created_at
+                ) VALUES(1,?,?,?,?,?,'text',0,0,?,?)
+                """,
+                [
+                    (f"message-{i}", "seller", f"buyer-{i % 600}", "user",
+                     f"message {i}", now, now)
+                    for i in range(60001)
+                ],
+            )
 
-    core._cleanup_messages(1, 7)
+        core._cleanup_messages(1, 7)
 
-    with cp.db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS count, MIN(id) AS oldest, MAX(id) AS newest "
-            "FROM bot_messages WHERE client_id=1"
-        ).fetchone()
-    assert core.MAX_MESSAGES_PER_CLIENT == 60000
-    assert row["count"] == 60000
-    assert row["oldest"] == 2
-    assert row["newest"] == 60001
+        with cp.db() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count, MIN(id) AS oldest, MAX(id) AS newest "
+                "FROM bot_messages WHERE client_id=1"
+            ).fetchone()
+        assert core.MAX_MESSAGES_PER_CLIENT == 60000
+        assert row["count"] == 60000
+        assert row["oldest"] == 2
+        assert row["newest"] == 60001
 
 
 def test_buyer_inbox_and_message_history_api_page_without_dropping_messages(tmp_path):
-    core, conversations = load_modules()
-    cp = FakeControlPlane(tmp_path / "conversation-api.db")
-    core._cp = cp
-    create_message_schema(cp)
+    with loaded_modules() as (core, conversations):
+        cp = FakeControlPlane(tmp_path / "conversation-api.db")
+        core._cp = cp
+        create_message_schema(cp)
 
-    start = datetime.now(timezone.utc) - timedelta(minutes=5)
-    rows = []
-    for i in range(130):
-        occurred = (start + timedelta(seconds=i)).isoformat(timespec="seconds")
-        role = "user" if i % 2 == 0 else "assistant"
+        start = datetime.now(timezone.utc) - timedelta(minutes=5)
+        rows = []
+        for i in range(130):
+            occurred = (start + timedelta(seconds=i)).isoformat(timespec="seconds")
+            role = "user" if i % 2 == 0 else "assistant"
+            rows.append(
+                (1, f"buyer-a-{i}", "seller", "buyer-a", role,
+                 f"buyer A message {i}", "text", 0, 0, occurred, occurred)
+            )
+        occurred = (start + timedelta(minutes=10)).isoformat(timespec="seconds")
         rows.append(
-            (1, f"buyer-a-{i}", "seller", "buyer-a", role,
-             f"buyer A message {i}", "text", 0, 0, occurred, occurred)
+            (1, "buyer-b-1", "seller", "buyer-b", "user",
+             "buyer B latest message", "text", 0, 0, occurred, occurred)
         )
-    occurred = (start + timedelta(minutes=10)).isoformat(timespec="seconds")
-    rows.append(
-        (1, "buyer-b-1", "seller", "buyer-b", "user",
-         "buyer B latest message", "text", 0, 0, occurred, occurred)
-    )
-    with cp.db() as conn:
-        conn.executemany(
-            """
-            INSERT INTO bot_messages(
-                client_id,message_key,seller,buyer,role,text,message_type,
-                is_bot,withdrawn,occurred_at,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            rows,
+        with cp.db() as conn:
+            conn.executemany(
+                """
+                INSERT INTO bot_messages(
+                    client_id,message_key,seller,buyer,role,text,message_type,
+                    is_bot,withdrawn,occurred_at,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                rows,
+            )
+            conn.execute(
+                """
+                INSERT INTO bot_conversation_reads(
+                    client_id,seller,buyer,last_read_message_id,updated_at
+                ) VALUES(1,'seller','buyer-a',120,?)
+                """,
+                (cp.iso_now(),),
+            )
+
+        client = {"id": 1}
+        inbox = conversations.web_conversations(query="", limit=600, client=client)
+        assert {item["buyer"] for item in inbox["conversations"]} == {"buyer-a", "buyer-b"}
+        buyer_a = next(x for x in inbox["conversations"] if x["buyer"] == "buyer-a")
+        assert buyer_a["text"] == "buyer A message 129"
+        assert buyer_a["unread_count"] == 5
+
+        latest = conversations.web_conversation_messages(
+            seller="seller", buyer="buyer-a", before_id=0, limit=120, client=client
         )
-        conn.execute(
-            """
-            INSERT INTO bot_conversation_reads(
-                client_id,seller,buyer,last_read_message_id,updated_at
-            ) VALUES(1,'seller','buyer-a',120,?)
-            """,
-            (cp.iso_now(),),
+        assert latest["has_more"] is True
+        assert len(latest["messages"]) == 120
+        assert latest["messages"][0]["text"] == "buyer A message 10"
+        assert latest["messages"][-1]["text"] == "buyer A message 129"
+
+        older = conversations.web_conversation_messages(
+            seller="seller",
+            buyer="buyer-a",
+            before_id=latest["messages"][0]["id"],
+            limit=120,
+            client=client,
         )
-
-    client = {"id": 1}
-    inbox = conversations.web_conversations(query="", limit=600, client=client)
-    assert {item["buyer"] for item in inbox["conversations"]} == {"buyer-a", "buyer-b"}
-    buyer_a = next(x for x in inbox["conversations"] if x["buyer"] == "buyer-a")
-    assert buyer_a["text"] == "buyer A message 129"
-    assert buyer_a["unread_count"] == 5
-
-    latest = conversations.web_conversation_messages(
-        seller="seller", buyer="buyer-a", before_id=0, limit=120, client=client
-    )
-    assert latest["has_more"] is True
-    assert len(latest["messages"]) == 120
-    assert latest["messages"][0]["text"] == "buyer A message 10"
-    assert latest["messages"][-1]["text"] == "buyer A message 129"
-
-    older = conversations.web_conversation_messages(
-        seller="seller",
-        buyer="buyer-a",
-        before_id=latest["messages"][0]["id"],
-        limit=120,
-        client=client,
-    )
-    assert older["has_more"] is False
-    assert len(older["messages"]) == 10
-    merged_ids = [x["id"] for x in older["messages"] + latest["messages"]]
-    assert len(merged_ids) == 130
-    assert len(set(merged_ids)) == 130
+        assert older["has_more"] is False
+        assert len(older["messages"]) == 10
+        merged_ids = [x["id"] for x in older["messages"] + latest["messages"]]
+        assert len(merged_ids) == 130
+        assert len(set(merged_ids)) == 130
