@@ -116,6 +116,7 @@ def _public_message(row: Dict[str, Any], message_type: str) -> Dict[str, Any]:
         item["text"] = str(item.get("text") or "").strip()
     return item
 
+
 def project_conversation_message(row: Any) -> Dict[str, Any]:
     """Normalize one desktop-mirrored message for the mobile inbox."""
     item = dict(row)
