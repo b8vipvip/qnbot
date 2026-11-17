@@ -401,7 +401,7 @@ namespace Bot.ChromeNs
                 ? "assistant"
                 : (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase) ? "user" : "system");
             text = (text ?? string.Empty).Replace("\0", string.Empty).Trim();
-            if (text.Length == 0) return;
+            if (text.Length == 0) return false;
             if (text.Length > 6000) text = text.Substring(0, 6000);
             if (occurredAt == DateTime.MinValue) occurredAt = DateTime.Now;
             if (string.IsNullOrWhiteSpace(messageKey))
