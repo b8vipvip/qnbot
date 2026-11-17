@@ -58,6 +58,8 @@ def observation_dispatch_key(task: Task, phase: str) -> str:
         "phase": phase,
         "pr_ci_run_id": m.get("pr_ci_run_id") or "",
         "pr_ci_run_attempt": str(m.get("pr_ci_run_attempt") or ""),
+        "pr_ci_status": m.get("pr_ci_status") or "",
+        "pr_ci_conclusion": m.get("pr_ci_conclusion") or "",
         "main_ci_run_id": m.get("main_ci_run_id") or "",
         "release_run_id": m.get("release_run_id") or "",
         "release_published": bool(m.get("release_published")),
