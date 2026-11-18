@@ -57,9 +57,9 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
     assert "if (nativeBotConversation == null)" in mirror
     assert "usedNativeBotConversations.Add(nativeBotConversation);" in mirror
     assert "BuildMessageMirrorBubble(" in mirror
-    assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
+    assert "turn, seller, buyerDisplay, botAnswer, nativeBotConversation" in mirror
     assert "messageElement = nativeBotConversation;" not in mirror
-    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in mirror
 
     # Bot bubbles retain their original actions even though the old Q/A card
     # is no longer the rendered element.
@@ -112,4 +112,15 @@ def test_message_mirror_resolves_live_ccode_and_canonical_buyer_identity():
     # the display alias, so all timeline reads must use the canonical identity.
     assert "ResolveInternalNick(seller, buyerDisplay)" in mirror
     assert "GetMirrorTurns(seller, internalBuyer, 100)" in mirror
+
+def test_message_mirror_keeps_display_alias_separate_from_canonical_action_identity():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    assert "RenderMessageMirror(seller, buyerLabel, buyer, turns, keepBottom);" in mirror
+    assert "string buyerDisplay,\n            string buyerIdentity," in mirror
+    assert "FindMessageMirrorActionConversation(\n                        seller,\n                        buyerIdentity," in mirror
+    assert "BotConversationHistoryStore.RecordBotEcho(\n                        seller, buyerIdentity," in mirror
+    assert "BuildMessageMirrorBubble(\n                        turn, seller, buyerDisplay, botAnswer" in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in mirror
+    assert "LoadRecent(shopKey, seller, buyerIdentity, 200)" in mirror
+    assert '"\\n买家：" + buyerDisplay' in mirror
 
