@@ -122,5 +122,7 @@ def test_message_mirror_keeps_display_alias_separate_from_canonical_action_ident
     assert "BuildMessageMirrorBubble(\n                        turn, seller, buyerDisplay, botAnswer" in mirror
     assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in mirror
     assert "LoadRecent(shopKey, seller, buyerIdentity, 200)" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" not in mirror
     assert '"\\n买家：" + buyerDisplay' in mirror
 
