@@ -155,11 +155,19 @@ namespace Bot.AssistWindow.Widget.Robot
             _messageMirrorLastRemoteRefresh = DateTime.Now;
             try
             {
-                // SetActiveConversationByNick creates a lightweight Conversation snapshot
-                // containing Nick/Display but no CCode. Resolve the live CDP conversation
-                // instead of silently skipping the initial history request.
-                var response = await qn.GetCurrentConversationID();
-                var current = response == null ? null : response.Result;
+                // Reuse the active QN conversation's CCode when it is already known.
+                // SetActiveConversationByNick may create a lightweight Nick/Display-only
+                // snapshot; only that case needs an extra live CDP identity read.
+                var current = qn.Buyer;
+                var ccode = current != null
+                    && BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)
+                    ? (current.Ccode ?? string.Empty).Trim()
+                    : string.Empty;
+                if (ccode.Length == 0)
+                {
+                    var response = await qn.GetCurrentConversationIDForHistory();
+                    current = response == null ? null : response.Result;
+                }
                 if (current == null || string.IsNullOrWhiteSpace(current.Nick))
                 {
                     Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：无法读取当前会话身份，等待重试。", 10);
@@ -179,7 +187,7 @@ namespace Bot.AssistWindow.Widget.Robot
                         return;
                     }
 
-                    var ccode = (current.Ccode ?? string.Empty).Trim();
+                    if (ccode.Length == 0) ccode = (current.Ccode ?? string.Empty).Trim();
                     if (ccode.Length == 0
                         && BuyerIdentityAliasService.AreEquivalent(seller, qn.Buyer.Nick, current.Nick))
                     {

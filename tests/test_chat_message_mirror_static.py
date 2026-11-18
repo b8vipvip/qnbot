@@ -102,7 +102,8 @@ def test_message_mirror_resolves_live_ccode_and_canonical_buyer_identity():
 
     # qnbotStatus creates a lightweight Conversation snapshot without CCode.
     # The mirror must query the live current conversation before fetching history.
-    assert "await qn.GetCurrentConversationID()" in request
+    assert "await qn.GetCurrentConversationIDForHistory()" in request
+    assert "var current = qn.Buyer;" in request
     assert "current.Ccode" in request
     assert "BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)" in request
     assert "ConversationContextStore.RequestMirrorRemoteRefresh(seller, internalBuyer, ccode)" in request
@@ -126,3 +127,21 @@ def test_message_mirror_keeps_display_alias_separate_from_canonical_action_ident
     assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" not in mirror
     assert '"\\n买家：" + buyerDisplay' in mirror
 
+
+
+def test_message_mirror_history_reads_survive_cdp_contention_and_are_coalesced():
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+
+    assert "HistoryGateWaitTimeoutMs = 10000" in cdp
+    assert "InvokeForHistory<T>" in cdp
+    assert "await _executeGate.WaitAsync(effectiveGateWaitTimeoutMs).ConfigureAwait(false)" in cdp
+    assert "GetCurrentConversationIDForHistory" in cdp
+    assert "RemoteHistoryInFlight" in context
+    assert "RemoteHistoryLoaded" in context
+    assert "TimeSpan.FromSeconds(5)" in context
+    assert "TimeSpan.FromSeconds(30)" in context
+    assert 'InvokeForHistory<JObject>("im.singlemsg.GetRemoteHisMsg"' in context
+    assert "千牛镜像历史同步完成" in context
+    assert "qn.Buyer.Ccode" in mirror

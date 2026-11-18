@@ -65,6 +65,8 @@ namespace Bot.ChromeNs
             public readonly Dictionary<string, DateTime> WithdrawnAnswers =
                 new Dictionary<string, DateTime>(StringComparer.Ordinal);
             public DateTime LastRemoteRefresh = DateTime.MinValue;
+            public bool RemoteHistoryInFlight;
+            public bool RemoteHistoryLoaded;
             // Activity time, not message time: remote history may contain old timestamps.
             public DateTime LastTouchedUtc = DateTime.UtcNow;
             public string ShopKey = string.Empty;
@@ -571,15 +573,23 @@ namespace Bot.ChromeNs
         {
             lock (state.Sync)
             {
-                if (DateTime.Now - state.LastRemoteRefresh < TimeSpan.FromMilliseconds(750)) return;
+                if (state.RemoteHistoryInFlight) return;
+                // A failed first fetch retries after five seconds. Once the API has
+                // returned a valid message array, live events maintain the timeline and
+                // a slower 30-second reconciliation is sufficient.
+                var minimumInterval = state.RemoteHistoryLoaded
+                    ? TimeSpan.FromSeconds(30)
+                    : TimeSpan.FromSeconds(5);
+                if (DateTime.Now - state.LastRemoteRefresh < minimumInterval) return;
                 state.LastRemoteRefresh = DateTime.Now;
+                state.RemoteHistoryInFlight = true;
             }
 
             try
             {
                 var qn = FindQn(shop, seller);
                 if (qn == null || qn.CDP == null) return;
-                var response = qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+                var response = qn.CDP.InvokeForHistory<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
                     cid = new { ccode = ccode, type = 1 },
                     count = Math.Max(20, Math.Min(100, requestedCount)),
@@ -590,16 +600,34 @@ namespace Bot.ChromeNs
                 var messages = response == null
                     ? null
                     : response["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
-                if (messages == null) return;
+                if (messages == null)
+                {
+                    Log.Info("千牛镜像历史读取未返回有效消息列表: shop="
+                        + (shop == null ? "unknown" : shop.ShopKey));
+                    return;
+                }
+
+                var merged = 0;
                 foreach (var item in messages.Where(m => m != null).OrderBy(GetSortValue))
                 {
-                    RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true);
+                    if (!string.IsNullOrWhiteSpace(
+                        RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true)))
+                        merged++;
                 }
+                lock (state.Sync) state.RemoteHistoryLoaded = true;
+                Log.Info("千牛镜像历史同步完成: shop="
+                    + (shop == null ? "unknown" : shop.ShopKey)
+                    + ", fetched=" + messages.Count
+                    + ", merged=" + merged);
             }
             catch (Exception ex)
             {
                 Log.Info("读取本店会话上下文失败: shop=" + (shop == null ? "unknown" : shop.ShopKey)
                     + ", seller=" + seller + ", buyer=" + buyer + ", error=" + SafeLog(ex.Message));
+            }
+            finally
+            {
+                lock (state.Sync) state.RemoteHistoryInFlight = false;
             }
         }
 
