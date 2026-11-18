@@ -331,3 +331,43 @@ def test_shop_scoped_catalog_and_reply_preferences_do_not_re_resolve_shopkey_as_
     reply = read("src/Bot/ChromeNs/ReplyModeService.cs")
     assert "ResolveCurrentOrBySellerNick(seller)" in reply
     assert "ShopSettingsScope.Current == null" in reply
+
+def test_portable_import_preserves_local_sensitive_settings_and_nested_api_keys():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert "PreserveLocalSensitiveSettings(shop, plan)" in source
+    assert "MergeSensitiveJsonProperties(imported, pair.Value)" in source
+    assert "FindSensitiveMergeMatch(incomingItem, currentArray)" in source
+    assert "!IsBotClientTokenSettingName(currentProperty.Name)" in source
+    assert "IsBotClientTokenSettingName(pair.Key)" in source
+    assert "当前设备已有 API Key/密码等敏感凭据" in read("src/Bot/Options/ShopBindingOptionsControl.cs")
+
+
+def test_local_token_reset_uses_a_secret_preserving_dpapi_rollback():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert "localRollback: true" in source
+    assert "ExportLocalRollbackSettings(shop)" in source
+    assert "ClearLocalConfigurationFiles(shop)" in source
+    assert "RestoreZip(shop, plain)" in source
+    assert "ShouldExcludeLocalRollback(relative)" in source
+    assert "DataProtectionScope.CurrentUser" in source
+    assert "ClearPortableFiles(shop);" in source  # portable imports still preserve local credentials
+
+
+def test_portable_import_honors_the_documented_128mb_single_file_limit():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    reader = source[source.index("private static byte[] ReadPortableEntry"):source.index("private static byte[] SanitizePortableJsonFile")]
+    assert "total > MaxPortableSingleFileBytes" in reader
+    assert "total > MaxSingleFileBytes" not in reader
+    assert "超过128MB的文件" in reader
+
+
+def test_portable_export_excludes_sensitive_directory_components_and_credential_formats():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    predicate = source[source.index("private static bool IsSensitiveSettingName"):source.index("private static bool ShouldExcludePortable")]
+    filter_source = source[source.index("private static bool ShouldExcludePortable"):source.index("private static bool IsSafePortableRelativePath")]
+    assert 'compact.Contains("cookie")' in predicate
+    assert 'compact.Contains("bearer")' in predicate
+    assert 'compact.Contains("jwt")' in predicate
+    assert "parts.Any(IsSensitiveSettingName)" in filter_source
+    assert 'string.Equals(extension, ".pem"' in filter_source
+    assert 'string.Equals(extension, ".pfx"' in filter_source

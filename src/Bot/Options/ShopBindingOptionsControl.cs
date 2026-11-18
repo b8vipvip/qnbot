@@ -758,7 +758,7 @@ namespace Bot.Options
             if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
             if (MessageBox.Show(
                 "将用备份文件完整覆盖当前店铺的本地配置、知识库、规则和本店业务数据。\n\n"
-                    + "导入前会自动生成本机加密回滚包；当前 Bot 令牌、店铺身份、其他店铺数据不会被覆盖。"
+                    + "导入前会自动生成本机加密回滚包；当前 Bot 令牌、店铺身份、当前设备已有 API Key/密码等敏感凭据、其他店铺数据不会被覆盖。"
                     + "\n备份必须属于当前 ShopKey。导入成功后客户端自动重启。\n\n是否继续？",
                 "导入全店信息",
                 MessageBoxButton.YesNo,
