@@ -74,16 +74,32 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, Timer> Pollers =
             new ConcurrentDictionary<string, Timer>(StringComparer.Ordinal);
 
+        private static ShopContext ResolveShopForSeller(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            var current = ShopSettingsScope.Current;
+            if (current != null
+                && !string.IsNullOrWhiteSpace(current.ShopKey)
+                && (string.IsNullOrWhiteSpace(seller)
+                    || string.Equals(
+                        (current.SellerNick ?? string.Empty).Trim(),
+                        seller,
+                        StringComparison.Ordinal)))
+                return current;
+
+            return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+        }
+
         private static string CachePath(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var shop = ResolveShopForSeller(seller);
             return Path.Combine(Paths.GetCacheRoot(shop), "shop-products-v1.json");
         }
 
         private static ShopScopedSettingsStore RuleStore(string seller)
         {
             return new ShopScopedSettingsStore(
-                ShopContextLocator.ResolveRuntimeBySellerNick(seller), Paths);
+                ResolveShopForSeller(seller), Paths);
         }
 
         internal static ShopCatalogSnapshot Load(string seller)

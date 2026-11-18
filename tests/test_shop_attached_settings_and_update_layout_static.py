@@ -87,3 +87,13 @@ def test_status_bar_uses_shop_control_plane_status_not_legacy_local_ai_endpoint_
     assert "_statsTimer.Interval = TimeSpan.FromSeconds(10)" in status
     assert "AiEndpointStore.GetEnabledEndpoints" in legacy  # old data-desk metric remains compatibility-only
     assert "CtlRobot.ControlPlaneStatus.cs" in props
+
+
+
+def test_settings_optional_feature_failure_cannot_block_shop_binding_page():
+    window = read("src/Bot/Options/WndOption.xaml.cs")
+    build = window[window.index("private void BuildSettingsPages()"):window.index("private void AddPage")]
+    assert "shopBinding = new ShopBindingOptionsControl(Seller);" in build
+    assert "_featureSettings = null;" in build
+    assert "if (_featureSettings != null)" in build
+    assert "店铺绑定" in build

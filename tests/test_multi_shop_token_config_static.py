@@ -264,3 +264,13 @@ def test_tray_help_menu_exposes_validated_persistent_server_configuration():
     assert '"/healthz"' in menu
     assert "ControlPlaneUrlOverride" in store
     assert "后续请求将使用新地址" in menu
+
+
+
+def test_shop_binding_reuses_the_exact_current_scope_when_available():
+    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    init = ui[ui.index("public void InitUI(string seller)"):ui.index("public void Save(string seller)")]
+    assert "ShopSettingsScope.Current" in init
+    assert "current.ShopKey" not in init
+    assert "scoped.ShopKey" in init
+    assert "ShopContextLocator.ResolveBySellerNick(_seller)" in init

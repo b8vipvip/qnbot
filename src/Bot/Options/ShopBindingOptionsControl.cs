@@ -49,7 +49,16 @@ namespace Bot.Options
             _seller = (seller ?? string.Empty).Trim();
             try
             {
-                _shop = ShopContextLocator.ResolveBySellerNick(_seller);
+                var scoped = ShopSettingsScope.Current;
+                if (scoped != null
+                    && !string.IsNullOrWhiteSpace(scoped.ShopKey)
+                    && string.Equals(
+                        (scoped.SellerNick ?? string.Empty).Trim(),
+                        _seller,
+                        StringComparison.Ordinal))
+                    _shop = scoped;
+                else
+                    _shop = ShopContextLocator.ResolveBySellerNick(_seller);
                 _connection = new ShopControlPlaneConnectionStore(_shop, _paths);
                 _serverUrl.Text = _connection.GetServerUrl();
                 _token.Password = string.Empty;
