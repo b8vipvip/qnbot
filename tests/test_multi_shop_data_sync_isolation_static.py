@@ -91,7 +91,10 @@ def test_cloud_backup_is_shop_portable_and_rejects_cross_shop_restore():
     assert "settings.json" in source
     assert "control-plane-token.json" in source
     assert "PathEx.DataDir" not in source
-    assert "params.db" not in source
+    assert 'lower == "params.db"' in source
+    assert "portableExport ? ShouldExcludePortable(relative) : ShouldExclude(relative)" in source
+    assert "ExportPortable" in source
+    assert "ImportPortable" in source
 
 
 def test_wecom_notifications_and_reply_claims_are_shop_bound():

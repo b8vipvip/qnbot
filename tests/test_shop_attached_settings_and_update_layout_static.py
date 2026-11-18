@@ -59,7 +59,10 @@ def test_shop_binding_page_replaces_ai_service_navigation_and_can_pull_cloud_kno
     assert "Bot 服务端（程序内置）" in binding
     assert "本店 Bot 服务端地址" not in binding
     assert "本店 Bot 客户端令牌" in binding
-    assert "保存令牌并立即同步知识库" in binding
+    assert "管理令牌" in binding
+    assert "导出全店信息" in binding and "导入全店信息" in binding
+    assert "立即同步知识库" in binding
+    assert "保存令牌并立即同步知识库" not in binding
     assert "await KnowledgeCloudSyncService.SyncNowAsync(_shop)" in binding
     assert "internal static async Task SyncNowAsync(ShopContext shop)" in sync
 

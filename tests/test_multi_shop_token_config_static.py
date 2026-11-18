@@ -65,21 +65,54 @@ def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_mig
     assert 'CurrentBuiltInHost = "qn.numbot.cn"' in connection
 
 
-def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url():
+def test_shop_binding_page_owns_token_management_and_portable_shop_transfer():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
     assert 'Label("Bot 服务端（程序内置）")' in ui
     assert 'Label("本店 Bot 服务端地址")' not in ui
     assert "_connection.SetServerUrl" not in ui
     assert 'Label("本店 Bot 客户端令牌")' in ui
+    assert "管理令牌" in ui
     assert "一个令牌只能绑定一个 ShopKey" in ui
+    assert "class ShopTokenManagementWindow" in ui
+    assert "显示令牌" in ui
+    assert "保存令牌" in ui
+    assert "ClearRequested" in ui
+    assert "是否保留本地原配置信息（包括知识库" in ui
+    assert "选择“是”：保留全部本地配置和知识库" in ui
+    assert "ClientDataCloudBackupService.ResetLocalConfiguration(_shop)" in ui
+    assert "ClientDataCloudBackupService.RestorePortableRollback(_shop, rollbackPath)" in ui
+    assert "导出全店信息" in ui and "导入全店信息" in ui
+    assert "ExportPortable(_shop, dialog.FileName)" in ui
+    assert "ImportPortable(_shop, dialog.FileName)" in ui
     assert "启用本店知识库云同步" in ui
-    assert "保存令牌并立即同步知识库" in ui
+    assert "立即同步知识库" in ui
+    assert "保存令牌并立即同步知识库" not in ui
+    assert "_token" not in ui
     assert "KnowledgeCloudSyncService.SyncNowAsync(_shop)" in ui
     assert "KnowledgeCloudSyncService.SetEnabledForShop" in ui
     assert "IsEnabledForShop" in sync
     assert "SyncNowAsync" in sync
     assert "ShopSettingsScope.Enter(shop)" in sync
+
+
+def test_portable_shop_export_excludes_tokens_and_imports_with_shopkey_rollback():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert 'PortableExportSchema = "qnbot.shop-data-export"' in source
+    assert "ExportPortable(ShopContext shop, string destinationPath)" in source
+    assert "ImportPortable(ShopContext shop, string sourcePath)" in source
+    assert "ShouldExcludePortable(relative)" in source
+    assert "IsSensitiveSettingName" in source
+    assert "RemoveSensitiveJsonProperties" in source
+    assert "control-plane-token.json" in source
+    assert 'lower == "params.db"' in source
+    assert "ProtectedData.Protect" in source
+    assert "ProtectedData.Unprotect" in source
+    assert "ReadPortableArchive(shop, archive)" in source
+    assert "备份 ShopKey 与当前店铺不匹配" in source
+    assert "ClearPortableFiles(shop)" in source
+    assert "ReplaceValues(plan.Settings)" in source
+    assert "RestoreProtectedPortableRollback" in source
 
 
 def test_token_binding_conflict_is_checked_before_new_token_is_saved():
