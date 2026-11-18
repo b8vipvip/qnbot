@@ -38,7 +38,8 @@ def test_legacy_global_token_requires_explicit_ui_import():
     assert "GetLegacyGlobalToken" in connection
     assert 'MakeButton("导入旧全局令牌"' in ui
     assert "ImportLegacy_Click" in ui
-    assert "才会写入本店 DPAPI 令牌文件" in ui
+    assert "OpenTokenManagement(legacy)" in ui
+    assert "class ShopTokenManagementWindow" in ui
     assert "_connection.SaveToken(candidate)" in ui
 
 

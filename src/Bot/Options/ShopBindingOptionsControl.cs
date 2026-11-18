@@ -106,7 +106,7 @@ namespace Bot.Options
                     queueCloudSync);
 
                 RefreshTokenStatus(false);
-                _status.Text = "本店设置已保存。令牌由“管理令牌”单独管理；本店配置、知识库和规则继续按 ShopKey 隔离。";
+                _status.Text = "本店设置已保存。Bot 服务端地址由程序统一配置；令牌由“管理令牌”单独管理；本店 Token、知识库、规则、消息状态和云数据继续按 ShopKey 隔离。";
                 _status.Foreground = Brushes.SeaGreen;
                 Log.Info("店铺绑定设置已保存: shopKey=" + _shop.ShopKey
                     + ", stable=" + _shop.HasStableSellerId
@@ -610,7 +610,7 @@ namespace Bot.Options
             if (!_shop.HasStableSellerId && _allowNicknameFallback.IsChecked != true)
             {
                 MessageBox.Show(
-                    "当前千牛身份没有稳定 TargetId。若必须临时使用昵称绑定，请先勾选下方的昵称回退确认。",
+                    "当前千牛身份没有 TargetId（没有稳定 TargetId）。若必须临时使用昵称绑定，请先勾选下方的昵称回退确认。",
                     "店铺身份确认", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }

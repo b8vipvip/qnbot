@@ -411,9 +411,7 @@ namespace Bot.Knowledge
                                         skipped.Add(relative + "（清理敏感字段后总数据超过" + (portableExport ? "256MB" : "48MB") + "）");
                                         continue;
                                     }
-                                    var entry = zip.CreateEntry(
-                                        "files/" + relative.Replace('\\', '/'),
-                                        CompressionLevel.Optimal);
+                                    var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
                                     using (var output = entry.Open())
                                         output.Write(sanitized, 0, sanitized.Length);
                                     dataBytes += sanitized.Length;
@@ -422,9 +420,7 @@ namespace Bot.Knowledge
                             }
                             else
                             {
-                                var entry = zip.CreateEntry(
-                                    "files/" + relative.Replace('\\', '/'),
-                                    CompressionLevel.Optimal);
+                                var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
                                 using (var input = new FileStream(source, FileMode.Open, FileAccess.Read,
                                     FileShare.ReadWrite | FileShare.Delete))
                                 using (var output = entry.Open()) input.CopyTo(output);
