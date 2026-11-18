@@ -92,7 +92,7 @@ def test_cloud_backup_is_shop_portable_and_rejects_cross_shop_restore():
     assert "control-plane-token.json" in source
     assert "PathEx.DataDir" not in source
     assert 'lower == "params.db"' in source
-    assert "portableExport ? ShouldExcludePortable(relative) : ShouldExclude(relative)" in source
+    assert "portableExport ? ShouldExcludePortable(relative) : localRollback ? ShouldExcludeLocalRollback(relative) : ShouldExclude(relative)" in source
     assert "ExportPortable" in source
     assert "ImportPortable" in source
 
