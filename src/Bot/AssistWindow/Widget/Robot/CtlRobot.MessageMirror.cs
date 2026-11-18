@@ -471,7 +471,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     var botEchoRecordId = BotConversationHistoryStore.RecordBotEcho(
                         seller, buyerIdentity, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
                     var operatorCorrection = BotConversationHistoryStore.GetManualSource(
-                        ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId);
+                        ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId);
                     if (!string.IsNullOrWhiteSpace(operatorCorrection))
                     {
                         // An explicit correction is more authoritative than a
