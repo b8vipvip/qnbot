@@ -72,7 +72,7 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
         assert f'Header = "{label}"' in mirror
 
     # Human seller and buyer messages follow the same bubble layout.
-    assert "messageElement = BuildMessageMirrorBubble(turn, seller, buyer);" in mirror
+    assert "messageElement = BuildMessageMirrorBubble(\n                        turn, seller, buyerDisplay, null, null, null, null, buyerIdentity);" in mirror
 
 
 def test_mirror_renderer_is_wired_into_windows_build():
