@@ -619,7 +619,7 @@ if [[ -z "$VERIFY_URL" ]]; then
   elif [[ -n "$CONTROL_PLANE_DOMAIN" ]]; then
     VERIFY_URL="https://${CONTROL_PLANE_DOMAIN}/healthz"
   else
-    VERIFY_URL="https://aboter.mv3.cn/healthz"
+    VERIFY_URL="https://qn.numbot.cn/healthz"
   fi
 fi
 

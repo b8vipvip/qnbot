@@ -429,8 +429,10 @@ def test_settings_and_diagnostic_actions_never_resolve_shop_by_display_name():
         diagnostic.index("private static async Task<ShopApiDiagnosticReport> SendDiagnosticAnswerAsync"):
         diagnostic.index("private static ShopApiDiagnosticReport Failure")
     ]
-    assert "Seller = (shop.SellerNick ?? string.Empty).Trim();" in constructor
     assert "FindConnectedQnByShopKey(shop.ShopKey)" in constructor
+    assert "liveSellerNick" in constructor
+    assert "savedSellerNick" in constructor
+    assert "string.Equals(savedSellerNick, shop.ShopKey, StringComparison.Ordinal)" in constructor
     assert "shop.DisplayName, seller" not in show
     assert "string.Equals(activeSeller, seller, StringComparison.Ordinal)" in show
     assert "FindConnectedQnByShopKey(shop.ShopKey)" in send
