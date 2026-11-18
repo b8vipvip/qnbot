@@ -65,5 +65,7 @@ def test_catalog_resolution_prefers_the_exact_current_shop_scope():
     helper = service[service.index("private static ShopContext ResolveShopForSeller"):service.index("private static string CachePath", service.index("private static ShopContext ResolveShopForSeller"))]
     assert "ShopSettingsScope.Current" in helper
     assert "current.ShopKey" in helper
-    assert "current.SellerNick" in helper
+    assert "if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))" in helper
+    assert "return current;" in helper
+    assert "current.SellerNick" not in helper
     assert "ResolveRuntimeBySellerNick(seller)" in helper
