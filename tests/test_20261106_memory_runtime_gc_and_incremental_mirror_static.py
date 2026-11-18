@@ -54,7 +54,7 @@ def test_buyer_only_append_preserves_bot_source_and_fallback_rendering():
     assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in mirror
     assert "|| turn.Withdrawn" in mirror
     assert "stkDialog.Children.Add(BuildMessageMirrorBubble(turn, seller, buyer));" in mirror
-    assert "RenderMessageMirror(seller, buyerLabel, turns, keepBottom);" in mirror
+    assert "RenderMessageMirror(seller, buyerLabel, buyer, turns, keepBottom);" in mirror
     assert "BotConversationHistoryStore.RecordBotEcho(" in mirror
     assert "BotConversationHistoryStore.GetManualSource(" in mirror
     assert "BuildMessageMirrorBotContextMenu(" in mirror
