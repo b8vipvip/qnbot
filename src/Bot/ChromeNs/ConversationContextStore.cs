@@ -610,8 +610,7 @@ namespace Bot.ChromeNs
                 var merged = 0;
                 foreach (var item in messages.Where(m => m != null).OrderBy(GetSortValue))
                 {
-                    var recordedKey = RecordMessage(
-                        state, seller, buyer, item, ExtractMessageText(item), true);
+                    var recordedKey = RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true);
                     if (!string.IsNullOrWhiteSpace(recordedKey)) merged++;
                 }
                 lock (state.Sync) state.RemoteHistoryLoaded = true;
