@@ -27,11 +27,11 @@ namespace Bot.ChromeNs
         public static BotReplyMode GetMode(string seller)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return BotReplyMode.AiFirst;
+            if (seller.Length == 0 && ShopSettingsScope.Current == null) return BotReplyMode.AiFirst;
 
             try
             {
-                var shop = ShopContextLocator.ResolveBySellerNick(seller);
+                var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
                 var store = new ShopScopedSettingsStore(shop, Paths);
                 string value;
                 if (!store.TryGetString(SettingsKey, out value)) return BotReplyMode.AiFirst;
@@ -52,9 +52,10 @@ namespace Bot.ChromeNs
         public static void Save(string seller, BotReplyMode mode)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) throw new ArgumentException("保存回复模式需要卖家身份。", nameof(seller));
+            if (seller.Length == 0 && ShopSettingsScope.Current == null)
+                throw new ArgumentException("保存回复模式需要卖家身份或显式店铺作用域。", nameof(seller));
 
-            var shop = ShopContextLocator.ResolveBySellerNick(seller);
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
             store.SetString(SettingsKey, Serialize(mode));
             Log.Info("回复模式已保存: seller=" + seller + ", mode=" + GetDisplayName(mode));
@@ -93,11 +94,11 @@ namespace Bot.ChromeNs
         public static string GetSuffix(string seller)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return DefaultSuffix;
+            if (seller.Length == 0 && ShopSettingsScope.Current == null) return DefaultSuffix;
 
             try
             {
-                var shop = ShopContextLocator.ResolveBySellerNick(seller);
+                var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
                 return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
             }
             catch (Exception ex)
@@ -125,10 +126,11 @@ namespace Bot.ChromeNs
         public static void Save(string seller, string suffix)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) throw new ArgumentException("保存Bot消息后缀需要卖家身份。", nameof(seller));
+            if (seller.Length == 0 && ShopSettingsScope.Current == null)
+                throw new ArgumentException("保存Bot消息后缀需要卖家身份或显式店铺作用域。", nameof(seller));
 
             var normalized = Normalize(suffix);
-            var shop = ShopContextLocator.ResolveBySellerNick(seller);
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
             var store = new ShopScopedSettingsStore(shop, Paths);
             store.SetString(SettingsKey, normalized);
             Log.Info("Bot消息后缀已保存: seller=" + seller + ", suffix=" + normalized);

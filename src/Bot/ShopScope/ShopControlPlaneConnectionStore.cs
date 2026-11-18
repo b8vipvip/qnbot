@@ -8,12 +8,14 @@ namespace Bot.ShopScope
     {
         private const string LegacyScope = "ai-control-plane";
         private const string UrlKey = "ControlPlaneUrl";
+        private const string UrlOverrideKey = "ControlPlaneUrlOverride";
         private const string LegacyTokenKey = "ControlPlaneClientToken";
         private const string DefaultUrlSettingKey = "BotControlPlaneDefaultUrl";
         private const string ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL";
-        private const string BuiltInDefaultServerUrl = "http://aboter.mv3.cn";
+        private const string BuiltInDefaultServerUrl = "https://qn.numbot.cn";
         private const string ObsoleteBuiltInHost = "botserver.mv3.cn";
-        private const string CurrentBuiltInHost = "aboter.mv3.cn";
+        private const string LegacyBuiltInHost = "aboter.mv3.cn";
+        private const string CurrentBuiltInHost = "qn.numbot.cn";
 
         private readonly ShopContext _shop;
         private readonly ShopTokenStore _tokens;
@@ -108,17 +110,27 @@ namespace Bot.ShopScope
 
         public static string GetProgramServerUrl()
         {
+            // An explicit tray-menu choice is a per-install operator override and must
+            // take precedence over inherited machine/user environment variables.
+            var uiOverride = NormalizeUrl(
+                PersistentParams.GetParam2Key(UrlOverrideKey, LegacyScope, string.Empty));
+            if (!string.IsNullOrWhiteSpace(uiOverride)) return uiOverride;
+
             var environment = NormalizeUrl(Environment.GetEnvironmentVariable(ServerUrlEnvironmentKey));
             if (!string.IsNullOrWhiteSpace(environment)) return environment;
 
+            // Keep the previous global setting as a migration fallback for older installs.
             return NormalizeUrl(PersistentParams.GetParam2Key(UrlKey, LegacyScope, string.Empty));
         }
 
         public static void SaveProgramServerUrl(string serverUrl)
         {
-            var normalized = NormalizeUrl(serverUrl);
-            if (string.IsNullOrWhiteSpace(normalized)) return;
-            PersistentParams.TrySaveParam2Key(UrlKey, LegacyScope, normalized);
+            string normalized;
+            string error;
+            if (!TryNormalizeServerUrl(serverUrl, out normalized, out error))
+                throw new ArgumentException(error, nameof(serverUrl));
+
+            PersistentParams.TrySaveParam2Key(UrlOverrideKey, LegacyScope, normalized);
         }
 
         public static string GetBuiltInServerUrl()
@@ -132,25 +144,80 @@ namespace Bot.ShopScope
             return NormalizeUrl(BuiltInDefaultServerUrl);
         }
 
-        public static string NormalizeUrl(string serverUrl)
+        public static bool TryNormalizeServerUrl(string serverUrl, out string normalized, out string error)
         {
-            serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
-            if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-                serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
+            normalized = NormalizeUrl(serverUrl);
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                error = "请输入服务端域名或完整地址。";
+                return false;
+            }
 
             Uri parsed;
-            if (Uri.TryCreate(serverUrl, UriKind.Absolute, out parsed)
-                && string.Equals(parsed.Host, ObsoleteBuiltInHost, StringComparison.OrdinalIgnoreCase))
+            if (!Uri.TryCreate(normalized, UriKind.Absolute, out parsed))
+            {
+                error = "服务端地址格式无效，请输入域名或 http(s):// 开头的完整地址。";
+                return false;
+            }
+
+            if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                error = "服务端地址仅支持 HTTP 或 HTTPS。";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(parsed.Host) || !string.IsNullOrEmpty(parsed.UserInfo))
+            {
+                error = "服务端地址必须包含有效主机名，且不能包含用户名或密码。";
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment))
+            {
+                error = "服务端地址不能包含查询参数或片段。";
+                return false;
+            }
+
+            normalized = parsed.GetLeftPart(UriPartial.Authority) + parsed.AbsolutePath.TrimEnd('/');
+            if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized.Substring(0, normalized.Length - 3).TrimEnd('/');
+            return true;
+        }
+
+        public static string NormalizeUrl(string serverUrl)
+        {
+            var value = (serverUrl ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+            // A bare domain is accepted by the tray editor and defaults to HTTPS.
+            if (value.IndexOf("://", StringComparison.Ordinal) < 0)
+                value = "https://" + value;
+
+            value = value.TrimEnd('/');
+            if (value.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(0, value.Length - 3).TrimEnd('/');
+
+            Uri parsed;
+            if (Uri.TryCreate(value, UriKind.Absolute, out parsed)
+                && (string.Equals(parsed.Host, ObsoleteBuiltInHost, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(parsed.Host, LegacyBuiltInHost, StringComparison.OrdinalIgnoreCase)))
             {
                 try
                 {
-                    var builder = new UriBuilder(parsed) { Host = CurrentBuiltInHost };
-                    serverUrl = builder.Uri.AbsoluteUri.TrimEnd('/');
+                    var builder = new UriBuilder(parsed)
+                    {
+                        Host = CurrentBuiltInHost,
+                        Scheme = Uri.UriSchemeHttps,
+                        Port = -1
+                    };
+                    value = builder.Uri.AbsoluteUri.TrimEnd('/');
                 }
                 catch { }
             }
 
-            return serverUrl;
+            return value.TrimEnd('/');
         }
     }
 }
