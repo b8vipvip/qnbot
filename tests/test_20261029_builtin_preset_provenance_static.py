@@ -28,7 +28,7 @@ def test_confirmed_bot_echo_stamps_own_source_or_marks_unknown():
 
 def test_view_source_edit_and_reverse_lookup_available_on_bot_bubble():
     mirror=src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
-    assert "ResolveMirrorBotSource(seller, buyer, question, action, messageText)" in mirror
+    assert "ResolveMirrorBotSource(seller, buyerIdentity, question, action, messageText)" in mirror
     assert 'turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")' in mirror
     assert '发送者：Bot' in mirror
     assert 'Header = "知识库检索问题"' in mirror
