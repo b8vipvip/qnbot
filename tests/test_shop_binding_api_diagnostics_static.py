@@ -15,7 +15,8 @@ def test_shop_binding_exposes_api_and_ai_answer_chain_diagnostics():
     assert "RunDiagnosticAsync(false)" in ui
     assert "RunDiagnosticAsync(true)" in ui
     assert "GetSavedTokenForDiagnostics" in ui
-    assert "尚未保存的内容" in ui
+    assert "管理令牌" in ui
+    assert "_token" not in ui
     assert "当前千牛会话真实发送" in ui or "正式千牛发送链路" in ui
     assert "可手动撤回" in ui
     assert "ShopApiDiagnosticsService.TestConnectionAsync" in ui

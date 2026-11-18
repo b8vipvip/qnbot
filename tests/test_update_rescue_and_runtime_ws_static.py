@@ -19,7 +19,9 @@ def test_rescue_updater_bypasses_broken_legacy_client_bootstrap():
     assert "Get-FileHash" in rescue
     assert "release-info.json" in rescue
     assert "绕过旧 Bot 更新器执行救援安装" in rescue
-    assert "Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru -Wait" in rescue
+    assert "Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru" in rescue
+    assert "$installer.WaitForExit()" in rescue
+    assert "$installer.WaitForExit()" in rescue
     assert "ExpectedVersion" in rescue
     assert "ExpectedSha256" in rescue
     assert "-Verb RunAs" in rescue
@@ -29,7 +31,7 @@ def test_rescue_updater_prefers_control_plane_and_does_not_require_manifest_down
     rescue = read("scripts/qianniu-bot-rescue-update.ps1")
 
     assert 'ControlPlaneUrl = ""' in rescue
-    assert "$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'" in rescue
+    assert "$BuiltInControlPlaneUrl = 'https://qn.numbot.cn'" in rescue
     assert "/api/public/v1/bot-update/latest" in rescue
     assert "Resolve-LatestFromControlPlane" in rescue
     assert "return Resolve-LatestFromGitHub" in rescue
@@ -49,7 +51,8 @@ def test_rescue_updater_autodetects_installed_control_plane_and_migrates_old_hos
     assert "Bin\\Bot.exe.config" in rescue
     assert "BotControlPlaneDefaultUrl" in rescue
     assert "$ObsoleteControlPlaneHost = 'botserver.mv3.cn'" in rescue
-    assert "$CurrentControlPlaneHost = 'aboter.mv3.cn'" in rescue
+    assert "$LegacyControlPlaneHost = 'aboter.mv3.cn'" in rescue
+    assert "$CurrentControlPlaneHost = 'qn.numbot.cn'" in rescue
     assert "$ControlPlaneUrl = Resolve-ControlPlaneUrl $InstallDir" in rescue
 
 
@@ -58,13 +61,17 @@ def test_client_update_endpoint_uses_correct_default_and_preserves_dynamic_overr
     store = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
     network = read("src/Bot/Update/BotUpdateService.Network.Fast.cs")
 
-    assert 'BotControlPlaneDefaultUrl" value="http://aboter.mv3.cn"' in app_config
-    assert 'BuiltInDefaultServerUrl = "http://aboter.mv3.cn"' in store
+    assert 'BotControlPlaneDefaultUrl" value="https://qn.numbot.cn"' in app_config
+    assert 'BuiltInDefaultServerUrl = "https://qn.numbot.cn"' in store
     assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in store
+    assert 'UrlOverrideKey = "ControlPlaneUrlOverride"' in store
     assert "GetProgramServerUrl()" in store
+    assert "PersistentParams.GetParam2Key(UrlOverrideKey, LegacyScope" in store
     assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in store
     assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in store
-    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in store
+    assert 'LegacyBuiltInHost = "aboter.mv3.cn"' in store
+    assert 'CurrentBuiltInHost = "qn.numbot.cn"' in store
+    assert "TryNormalizeServerUrl" in store
     assert "Uri.TryCreate" in store
     assert "GetConfiguredControlPlaneUrls" in network
     assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network
@@ -157,3 +164,44 @@ def test_post_update_recovery_preserves_qianniu_and_never_handles_login_ui():
     assert "Mouse.Click" not in repair
     assert "保持原千牛进程与登录态" in repair
     assert "不重启千牛、不操作登录界面" in repair
+
+
+def test_rescue_updater_reuses_a_verified_local_package_before_downloading():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "Find-VerifiedLocalPackage" in rescue
+    assert "Downloads\\qianniu-bot-x64.zip" in rescue
+    assert "qianniu-bot-x64.zip" in rescue
+    assert "Get-FileHash -LiteralPath $candidate -Algorithm SHA256" in rescue
+    assert "跳过重新下载" in rescue
+    assert "$downloadRequired = $false" in rescue
+    assert "if ($downloadRequired) {" in rescue
+
+
+def test_rescue_updater_rejects_stale_local_package_and_falls_back_to_download():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "本地安装包但 SHA-256 不匹配，忽略" in rescue
+    assert "Download-VerifiedPackage $packageUrls $PackagePath $ExpectedSha256" in rescue
+    assert "qianniu-bot-x64-$ExpectedVersion.zip" in rescue
+
+
+def test_rescue_control_plane_timeout_fails_fast_to_github():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "[int]$MaxAttempts = 3" in rescue
+    assert "$attempts = [Math]::Max(1, $MaxAttempts)" in rescue
+    assert "Invoke-JsonRequest $url" in rescue
+    assert "} 3 1" in rescue
+    assert "GitHub 是权威回退" in rescue or "GitHub is the authoritative fallback" in rescue
+
+
+def test_rescue_wrapper_waits_for_updater_process_without_waiting_for_bot_descendants():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+    launch = rescue[rescue.index("# Wait for the updater process itself only."):rescue.index("$installedInfoPath = Join-Path $InstallDir")]
+
+    assert "Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru" in launch
+    assert "$installer.WaitForExit()" in launch
+    assert "$installer.Refresh()" in launch
+    assert "$installer.ExitCode" in launch
+    assert "-PassThru -Wait" not in launch

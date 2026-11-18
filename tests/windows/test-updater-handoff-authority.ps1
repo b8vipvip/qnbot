@@ -18,6 +18,16 @@ if (@($errors).Count -gt 0) {
     throw 'BotAutoUpdater.ps1 has parser errors.'
 }
 
+$listenerAst = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-LoopbackPortListenerState'
+}, $true)
+if ($null -eq $listenerAst) {
+    throw 'Get-LoopbackPortListenerState was not found.'
+}
+Invoke-Expression $listenerAst.Extent.Text
+
 $authorityAst = $ast.Find({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -27,6 +37,45 @@ if ($null -eq $authorityAst) {
     throw 'Get-BotWebSocketHandoffState was not found.'
 }
 Invoke-Expression $authorityAst.Extent.Text
+
+function Assert-True([bool]$Value, [string]$Message) {
+    if (-not $Value) { throw "ASSERT TRUE FAILED: $Message" }
+}
+function Assert-False([bool]$Value, [string]$Message) {
+    if ($Value) { throw "ASSERT FALSE FAILED: $Message" }
+}
+
+$script:MockConnections = @()
+$script:MockConnectionFailure = $false
+function Get-NetTCPConnection {
+    [CmdletBinding()]
+    param()
+    if ($script:MockConnectionFailure) { throw 'mock CIM provider failure' }
+    return @($script:MockConnections)
+}
+
+# Regression: a port with no matching listener is a known empty state.
+$script:MockConnections = @(
+    [pscustomobject]@{ LocalPort = 41011; State = 'Listen'; LocalAddress = '127.0.0.1'; OwningProcess = 1001 },
+    [pscustomobject]@{ LocalPort = 41010; State = 'Established'; LocalAddress = '127.0.0.1'; OwningProcess = 1002 }
+)
+$listener = Get-LoopbackPortListenerState 41010
+Assert-True ([bool]$listener.Known) 'no LISTEN row for the target port must be a known sensor state'
+Assert-True (@($listener.Listeners).Count -eq 0) 'no LISTEN row must return an empty listener collection'
+
+# A real listener on the target port is still reported.
+$script:MockConnections += [pscustomobject]@{
+    LocalPort = 41010; State = 'Listen'; LocalAddress = '127.0.0.1'; OwningProcess = 1003
+}
+$listener = Get-LoopbackPortListenerState 41010
+Assert-True ([bool]$listener.Known) 'listener query with a target listener must be known'
+Assert-True (@($listener.Listeners).Count -eq 1) 'target listener must be returned'
+
+# Provider failures remain unknown and fail closed.
+$script:MockConnectionFailure = $true
+$listener = Get-LoopbackPortListenerState 41010
+Assert-False ([bool]$listener.Known) 'a real provider failure must remain unknown'
+$script:MockConnectionFailure = $false
 
 $script:InstallState = $null
 $script:WatchdogState = $null
@@ -43,12 +92,6 @@ function Get-LiveProcessStateById([int]$ProcessId) {
 }
 function Test-LoopbackPortBindable([int]$Port) { return [bool]$script:StrictBindable }
 
-function Assert-True([bool]$Value, [string]$Message) {
-    if (-not $Value) { throw "ASSERT TRUE FAILED: $Message" }
-}
-function Assert-False([bool]$Value, [string]$Message) {
-    if ($Value) { throw "ASSERT FALSE FAILED: $Message" }
-}
 function Reset-State {
     $script:InstallState = [pscustomobject]@{ Known = $true; Processes = @(); Error = '' }
     $script:WatchdogState = [pscustomobject]@{ Known = $true; Processes = @(); Error = '' }

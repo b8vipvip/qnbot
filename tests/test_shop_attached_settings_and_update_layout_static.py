@@ -30,6 +30,8 @@ def test_each_attached_settings_window_uses_its_bound_desk_seller_shopkey():
     assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" not in entry
     assert "ShopContextLocator.ResolveBySellerNick(seller)" in window
     assert "ShopKey：" in window
+    assert "Application.Current.Windows.OfType<WndOption>()" in window
+    assert "ShowSameNickOneInstance<WndOption>" not in window
     assert "using (ShopSettingsScope.Enter(_shop))" in window
 
 
@@ -57,7 +59,10 @@ def test_shop_binding_page_replaces_ai_service_navigation_and_can_pull_cloud_kno
     assert "Bot 服务端（程序内置）" in binding
     assert "本店 Bot 服务端地址" not in binding
     assert "本店 Bot 客户端令牌" in binding
-    assert "保存令牌并立即同步知识库" in binding
+    assert "管理令牌" in binding
+    assert "导出全店信息" in binding and "导入全店信息" in binding
+    assert "立即同步知识库" in binding
+    assert "保存令牌并立即同步知识库" not in binding
     assert "await KnowledgeCloudSyncService.SyncNowAsync(_shop)" in binding
     assert "internal static async Task SyncNowAsync(ShopContext shop)" in sync
 
@@ -88,25 +93,36 @@ def test_status_bar_uses_shop_control_plane_status_not_legacy_local_ai_endpoint_
     assert "AiEndpointStore.GetEnabledEndpoints" in legacy  # old data-desk metric remains compatibility-only
     assert "CtlRobot.ControlPlaneStatus.cs" in props
 
+
+
+def test_settings_optional_feature_failure_cannot_block_shop_binding_page():
+    window = read("src/Bot/Options/WndOption.xaml.cs")
+    build = window[window.index("private void BuildSettingsPages()"):window.index("private void AddPage")]
+    assert "shopBinding = new ShopBindingOptionsControl(Seller);" in build
+    assert "_featureSettings = null;" in build
+    assert "if (_featureSettings != null)" in build
+    assert "店铺绑定" in build
+
 def test_shop_product_catalog_uses_the_bound_scope_and_stable_shopkey_outside_ui_scope():
     catalog = read("src/Bot/ChromeNs/ShopProductCatalogService.cs")
     locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
     window = read("src/Bot/Options/WndOption.xaml.cs")
 
+    resolver = catalog.split("private static ShopContext ResolveShopForSeller", 1)[1].split(
+        "private static string CachePath", 1
+    )[0]
     cache_path = catalog.split("private static string CachePath", 1)[1].split(
         "private static ShopScopedSettingsStore RuleStore", 1
     )[0]
     rule_store = catalog.split("private static ShopScopedSettingsStore RuleStore", 1)[1].split(
         "internal static ShopCatalogSnapshot Load", 1
     )[0]
-    resolver = locator.split("public static ShopContext ResolveCurrentOrBySellerNick", 1)[1].split(
-        "// Resolve from the exact QN instance", 1
-    )[0]
 
-    assert "ResolveCurrentOrBySellerNick(seller)" in cache_path
-    assert "ResolveCurrentOrBySellerNick(seller)" in rule_store
+    assert "ResolveShopForSeller(seller)" in cache_path
+    assert "ResolveShopForSeller(seller)" in rule_store
     assert "ShopSettingsScope.Current" in resolver
-    assert "ResolveRuntimeByShopKey(sellerNick)" in resolver
-    assert "IsQianniuShopKey(sellerNick)" in resolver
-    assert "请求的ShopKey与当前店铺作用域不一致" in resolver
+    assert "current.ShopKey" in resolver
+    assert "ResolveCurrentOrBySellerNick(seller)" in resolver
+    assert "ResolveRuntimeByShopKey(sellerNick)" in locator
+    assert "IsQianniuShopKey(sellerNick)" in locator
     assert "shopStrategy = new ShopStrategyOptionsControl(_shop.ShopKey);" in window

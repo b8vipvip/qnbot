@@ -48,3 +48,16 @@ def test_updater_authority_runtime_on_windows_powershell_51():
         + "\n"
         + completed.stderr
     )
+
+
+
+def test_updater_listener_sensor_treats_no_matching_listener_as_known_empty():
+    text = UPDATER.read_text(encoding="utf-8-sig")
+    sensor = text.split("function Get-LoopbackPortListenerState", 1)[1].split(
+        "# Known=true/Exists=false", 1
+    )[0]
+    # Avoid a server-side CIM query whose no-match result throws on Windows.
+    assert "Get-NetTCPConnection -ErrorAction Stop" in sensor
+    assert "-LocalPort $Port -State Listen" not in sensor
+    assert "[int]$_.LocalPort -eq [int]$Port" in sensor
+    assert "[string]$_.State -eq 'Listen'" in sensor
