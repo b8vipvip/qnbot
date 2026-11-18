@@ -326,6 +326,38 @@ function Resolve-LatestRelease([string]$ServerUrl) {
     return Resolve-LatestFromGitHub
 }
 
+function Find-VerifiedLocalPackage([string]$ExpectedHash, [string]$RescueRoot) {
+    $candidates = New-Object System.Collections.ArrayList
+
+    $cwdPackage = Join-Path ([IO.Path]::GetFullPath((Get-Location).Path)) 'qianniu-bot-x64.zip'
+    $downloadPackage = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\qianniu-bot-x64.zip'
+    $scriptPackage = Join-Path $PSScriptRoot 'qianniu-bot-x64.zip'
+    $cachePackage = Join-Path $RescueRoot 'qianniu-bot-x64.zip'
+
+    foreach ($candidate in @($cwdPackage, $downloadPackage, $scriptPackage, $cachePackage)) {
+        if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $full = [IO.Path]::GetFullPath($candidate)
+        if (@($candidates) -notcontains $full) { [void]$candidates.Add($full) }
+    }
+
+    foreach ($candidate in @($candidates)) {
+        try {
+            $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actual -eq $ExpectedHash) {
+                Write-Host "检测到本地已存在并通过 SHA-256 校验的安装包，跳过重新下载：$candidate" -ForegroundColor Green
+                return $candidate
+            }
+            Write-Host "发现本地安装包但 SHA-256 不匹配，忽略：$candidate" -ForegroundColor Yellow
+        }
+        catch {
+            Write-Host "检查本地安装包失败，忽略：$candidate；$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    return ''
+}
+
 function Download-One([string]$Uri, [string]$Destination) {
     $lastError = ''
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
@@ -422,6 +454,15 @@ if (-not (Test-Sha256 $ExpectedSha256)) { throw 'ExpectedSha256 必须是 64 位
 
 $root = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\rescue'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+if ($downloadRequired) {
+    $localPackage = Find-VerifiedLocalPackage $ExpectedSha256 $root
+    if (-not [string]::IsNullOrWhiteSpace($localPackage)) {
+        $PackagePath = $localPackage
+        $downloadRequired = $false
+    }
+}
+
 $partialPath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip.partial")
 $updaterPath = Join-Path $root ("BotAutoUpdater-$ExpectedVersion-" + [Guid]::NewGuid().ToString('N') + '.ps1')
 if ($downloadRequired) { $PackagePath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip") }

@@ -162,3 +162,23 @@ def test_post_update_recovery_preserves_qianniu_and_never_handles_login_ui():
     assert "Mouse.Click" not in repair
     assert "保持原千牛进程与登录态" in repair
     assert "不重启千牛、不操作登录界面" in repair
+
+
+def test_rescue_updater_reuses_a_verified_local_package_before_downloading():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "Find-VerifiedLocalPackage" in rescue
+    assert "Downloads\\qianniu-bot-x64.zip" in rescue
+    assert "qianniu-bot-x64.zip" in rescue
+    assert "Get-FileHash -LiteralPath $candidate -Algorithm SHA256" in rescue
+    assert "跳过重新下载" in rescue
+    assert "$downloadRequired = $false" in rescue
+    assert "if ($downloadRequired) {" in rescue
+
+
+def test_rescue_updater_rejects_stale_local_package_and_falls_back_to_download():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "本地安装包但 SHA-256 不匹配，忽略" in rescue
+    assert "Download-VerifiedPackage $packageUrls $PackagePath $ExpectedSha256" in rescue
+    assert "qianniu-bot-x64-$ExpectedVersion.zip" in rescue
