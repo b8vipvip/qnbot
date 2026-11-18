@@ -315,11 +315,23 @@ function Get-LoopbackPortListenerState([int]$Port) {
         if ($null -eq $command) {
             return [pscustomobject]@{ Known = $false; Listeners = @(); Error = 'Get-NetTCPConnection unavailable' }
         }
-        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Where-Object {
-            $_.LocalAddress -eq '127.0.0.1' -or
-            $_.LocalAddress -eq '0.0.0.0' -or
-            $_.LocalAddress -eq '::1' -or
-            $_.LocalAddress -eq '::'
+
+        # Do not push LocalPort/State filters into the CIM provider. On Windows,
+        # Get-NetTCPConnection -LocalPort <unused-port> -State Listen throws
+        # "No MSFT_NetTCPConnection objects found matching query" instead of
+        # returning an empty collection. That is a normal no-listener state,
+        # not an unknown sensor state. Enumerate once and filter locally so an
+        # unused Bot WebSocket port is represented as Known=true, Listeners=[].
+        $connections = @(Get-NetTCPConnection -ErrorAction Stop)
+        $listeners = @($connections | Where-Object {
+            [int]$_.LocalPort -eq [int]$Port -and
+            [string]$_.State -eq 'Listen' -and
+            (
+                $_.LocalAddress -eq '127.0.0.1' -or
+                $_.LocalAddress -eq '0.0.0.0' -or
+                $_.LocalAddress -eq '::1' -or
+                $_.LocalAddress -eq '::'
+            )
         })
         return [pscustomobject]@{ Known = $true; Listeners = @($listeners); Error = '' }
     }

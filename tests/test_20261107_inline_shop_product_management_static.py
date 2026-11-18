@@ -57,3 +57,15 @@ def test_editing_bot_catalog_never_changes_live_taobao_inventory():
     assert "public void Save(string seller)" in view
     assert "RuleStore(seller).SetString(ManagedProductsKey" in service
     assert 'RuleStore(seller).SetString(RulesKey' in service  # separate reply-store path
+
+
+
+def test_catalog_resolution_prefers_the_exact_current_shop_scope():
+    service = source("src/Bot/ChromeNs/ShopProductCatalogService.cs")
+    helper = service[service.index("private static ShopContext ResolveShopForSeller"):service.index("private static string CachePath", service.index("private static ShopContext ResolveShopForSeller"))]
+    assert "ShopSettingsScope.Current" in helper
+    assert "current.ShopKey" in helper
+    assert "if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))" in helper
+    assert "return current;" in helper
+    assert "current.SellerNick" not in helper
+    assert "ResolveRuntimeBySellerNick(seller)" in helper

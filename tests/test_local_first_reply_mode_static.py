@@ -15,7 +15,8 @@ def test_reply_mode_is_shop_scoped_and_defaults_to_ai_first():
     assert 'SettingsKey = "message.reply_mode"' in service
     assert 'AiFirstValue = "ai_first"' in service
     assert 'LocalFirstValue = "local_first"' in service
-    assert "ShopContextLocator.ResolveBySellerNick" in service
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick" in service
+    assert "ShopSettingsScope.Current" in service
     assert "ShopScopedSettingsStore" in service
     assert "return BotReplyMode.AiFirst;" in service
     assert 'GetDisplayName(BotReplyMode mode)' in service
