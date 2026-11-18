@@ -331,6 +331,9 @@ namespace Bot.Options
             }
 
             ShopScopedUiBridge.Attach(wndOp, shop);
+            Log.Info("设置窗口按ShopKey绑定完成: shopKey=" + shop.ShopKey
+                + ", sellerFieldIsShopKey="
+                + string.Equals(wndOp.Seller, shop.ShopKey, StringComparison.Ordinal));
             if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
             if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
         }
