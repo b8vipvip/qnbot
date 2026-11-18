@@ -372,9 +372,8 @@ function Find-VerifiedLocalPackage([string]$ExpectedVersion, [string]$ExpectedHa
     $cwdPackage = Join-Path $cwdDir 'qianniu-bot-x64.zip'
     $cwdVersionedPackage = Join-Path $cwdDir ("qianniu-bot-x64-$ExpectedVersion.zip")
 
-    $downloadDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads'
-    $downloadPackage = Join-Path $downloadDir 'qianniu-bot-x64.zip'
-    $downloadVersionedPackage = Join-Path $downloadDir ("qianniu-bot-x64-$ExpectedVersion.zip")
+    $downloadPackage = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\qianniu-bot-x64.zip'
+    $downloadVersionedPackage = Join-Path ([Environment]::GetFolderPath('UserProfile')) ("Downloads\qianniu-bot-x64-$ExpectedVersion.zip")
 
     $cachePackage = Join-Path $RescueRoot 'qianniu-bot-x64.zip'
     $cacheVersionedPackage = Join-Path $RescueRoot ("qianniu-bot-x64-$ExpectedVersion.zip")
