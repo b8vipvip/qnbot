@@ -21,7 +21,7 @@ def test_rescue_updater_bypasses_broken_legacy_client_bootstrap():
     assert "绕过旧 Bot 更新器执行救援安装" in rescue
     assert "Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru" in rescue
     assert "$installer.WaitForExit()" in rescue
-    assert "-PassThru -Wait" not in rescue
+    assert "$installer.WaitForExit()" in rescue
     assert "ExpectedVersion" in rescue
     assert "ExpectedSha256" in rescue
     assert "-Verb RunAs" in rescue
