@@ -169,9 +169,10 @@ function Add-UniqueUrl([System.Collections.ArrayList]$List, [string]$Value) {
     [void]$List.Add($value)
 }
 
-function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec = 30) {
+function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec = 30, [int]$MaxAttempts = 3) {
     $lastError = ''
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $attempts = [Math]::Max(1, $MaxAttempts)
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
         try {
             return Invoke-RestMethod -UseBasicParsing -Uri $Uri -Headers $Headers -TimeoutSec $TimeoutSec
         }
@@ -217,7 +218,9 @@ function Resolve-LatestFromControlPlane([string]$BaseUrl) {
     $base = (Normalize-ControlPlaneUrl $BaseUrl).TrimEnd('/')
     $url = $base + '/api/public/v1/bot-update/latest'
     Write-Step "优先读取服务器更新缓存：$url"
-    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 20
+    # The control plane is an optimization path. Never let an unreachable mirror
+    # delay a rescue update for minutes; GitHub is the authoritative fallback.
+    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 3 1
 
     $version = Normalize-Version ([string]$json.version)
     $sha = ([string]$json.sha256).Trim().ToUpperInvariant()

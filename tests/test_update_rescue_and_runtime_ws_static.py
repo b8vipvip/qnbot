@@ -182,3 +182,13 @@ def test_rescue_updater_rejects_stale_local_package_and_falls_back_to_download()
     assert "本地安装包但 SHA-256 不匹配，忽略" in rescue
     assert "Download-VerifiedPackage $packageUrls $PackagePath $ExpectedSha256" in rescue
     assert "qianniu-bot-x64-$ExpectedVersion.zip" in rescue
+
+
+def test_rescue_control_plane_timeout_fails_fast_to_github():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "[int]$MaxAttempts = 3" in rescue
+    assert "$attempts = [Math]::Max(1, $MaxAttempts)" in rescue
+    assert "Invoke-JsonRequest $url" in rescue
+    assert "} 3 1" in rescue
+    assert "GitHub 是权威回退" in rescue or "GitHub is the authoritative fallback" in rescue
