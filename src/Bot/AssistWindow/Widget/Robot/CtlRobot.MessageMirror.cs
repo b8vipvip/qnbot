@@ -165,7 +165,12 @@ namespace Bot.AssistWindow.Widget.Robot
                     : string.Empty;
                 if (ccode.Length == 0)
                 {
-                    var response = await qn.GetCurrentConversationIDForHistory();
+                    if (qn.CDP == null)
+                    {
+                        Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：当前千牛CDP通道尚未就绪，等待重试。", 10);
+                        return;
+                    }
+                    var response = await qn.CDP.GetCurrentConversationIDForHistory();
                     current = response == null ? null : response.Result;
                 }
                 if (current == null || string.IsNullOrWhiteSpace(current.Nick))

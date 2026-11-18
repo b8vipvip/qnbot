@@ -102,7 +102,7 @@ def test_message_mirror_resolves_live_ccode_and_canonical_buyer_identity():
 
     # qnbotStatus creates a lightweight Conversation snapshot without CCode.
     # The mirror must query the live current conversation before fetching history.
-    assert "await qn.GetCurrentConversationIDForHistory()" in request
+    assert "await qn.CDP.GetCurrentConversationIDForHistory()" in request
     assert "var current = qn.Buyer;" in request
     assert "current.Ccode" in request
     assert "BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)" in request
