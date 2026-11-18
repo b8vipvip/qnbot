@@ -40,14 +40,19 @@ namespace Bot.Options
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
             _shop = shop;
-            Seller = (shop.SellerNick ?? string.Empty).Trim();
-            if (Seller.Length == 0)
-            {
-                var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
-                Seller = exactQn == null || exactQn.Seller == null
+            // The live QN session is the authoritative source for the display/login
+            // nickname. A persisted profile can contain an older nickname, while the
+            // ShopKey remains stable across account-label changes.
+            var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+            var liveSellerNick = exactQn == null || exactQn.Seller == null
+                ? string.Empty
+                : (exactQn.Seller.Nick ?? string.Empty).Trim();
+            var savedSellerNick = (shop.SellerNick ?? string.Empty).Trim();
+            Seller = liveSellerNick.Length > 0
+                ? liveSellerNick
+                : (string.Equals(savedSellerNick, shop.ShopKey, StringComparison.Ordinal)
                     ? string.Empty
-                    : (exactQn.Seller.Nick ?? string.Empty).Trim();
-            }
+                    : savedSellerNick);
             // For a stable, explicitly supplied ShopKey, DisplayName is acceptable
             // as a UI label when an offline legacy profile has no saved seller nick.
             // It is never used to resolve or switch the shop identity.
@@ -302,11 +307,29 @@ namespace Bot.Options
             OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
-            var windowKey = shop.ShopKey;
-            var wndOp = ShowSameNickOneInstance<WndOption>(windowKey, delegate
+
+            // ShopKey identifies the window instance, but EtWindow.Seller is consumed
+            // by legacy settings/services as a seller nickname. ShowSameNickOneInstance
+            // calls FirstShow(shopKey), overwriting Seller with the ShopKey and causing
+            // every scoped editor to resolve that hash as a Qianniu nickname.
+            var wndOp = Application.Current == null
+                ? null
+                : Application.Current.Windows.OfType<WndOption>().FirstOrDefault(x =>
+                    x._shop != null
+                    && string.Equals(x._shop.ShopKey, shop.ShopKey, StringComparison.Ordinal));
+            if (wndOp == null)
             {
-                return new WndOption(shop);
-            }, owner, true);
+                wndOp = new WndOption(shop);
+                wndOp.FirstShow(wndOp.Seller, owner, null, true);
+            }
+            else
+            {
+                if (wndOp.WindowState == WindowState.Minimized)
+                    wndOp.WindowState = WindowState.Normal;
+                wndOp.Show();
+                wndOp.Activate();
+            }
+
             ShopScopedUiBridge.Attach(wndOp, shop);
             if (uiCallback != null) wndOp.Closed += delegate { uiCallback(); };
             if (showPage > OptionEnum.Unknown) wndOp.ShowPage(showPage);
@@ -323,15 +346,15 @@ namespace Bot.Options
                 ShopContext shop = owner == null ? null : ShopScopedUiBridge.Get(owner);
                 if (shop != null)
                 {
-                    var attachedSeller = (shop.SellerNick ?? string.Empty).Trim();
-                    if (attachedSeller.Length == 0)
-                    {
-                        var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
-                        attachedSeller = exactQn == null || exactQn.Seller == null
-                            ? string.Empty
-                            : (exactQn.Seller.Nick ?? string.Empty).Trim();
-                    }
-                    var sellerMatches = string.Equals(attachedSeller, seller, StringComparison.Ordinal);
+                    var exactQn = ShopContextLocator.FindConnectedQnByShopKey(shop.ShopKey);
+                    var attachedSeller = exactQn == null || exactQn.Seller == null
+                        ? (shop.SellerNick ?? string.Empty).Trim()
+                        : (exactQn.Seller.Nick ?? string.Empty).Trim();
+                    // An attached ShopContext is an exact identity. Accept either its
+                    // live seller nickname or the exact ShopKey supplied by a scoped
+                    // caller; never re-resolve that ShopKey as a nickname.
+                    var sellerMatches = string.Equals(attachedSeller, seller, StringComparison.Ordinal)
+                        || string.Equals(shop.ShopKey, seller, StringComparison.Ordinal);
                     if (!sellerMatches && !shop.HasStableSellerId && attachedSeller.Length > 0)
                         sellerMatches = string.Equals(
                             ShopKeyGenerator.NormalizeFallbackNickname(attachedSeller),
@@ -343,9 +366,9 @@ namespace Bot.Options
                 {
                     var activeSeller = ActiveShopSessionRegistry.GetActiveSellerNick();
                     var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
-                    if (!string.IsNullOrWhiteSpace(activeSeller)
-                        && !string.IsNullOrWhiteSpace(activeShopKey)
-                        && string.Equals(activeSeller, seller, StringComparison.Ordinal))
+                    if (!string.IsNullOrWhiteSpace(activeShopKey)
+                        && (string.Equals(activeSeller, seller, StringComparison.Ordinal)
+                            || string.Equals(activeShopKey, seller, StringComparison.Ordinal)))
                     {
                         Log.Info("打开设置时使用活动店铺的精确ShopKey: requestedSeller="
                             + seller + ", activeSeller=" + activeSeller);

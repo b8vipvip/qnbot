@@ -30,6 +30,8 @@ def test_each_attached_settings_window_uses_its_bound_desk_seller_shopkey():
     assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" not in entry
     assert "ShopContextLocator.ResolveBySellerNick(seller)" in window
     assert "ShopKey：" in window
+    assert "Application.Current.Windows.OfType<WndOption>()" in window
+    assert "ShowSameNickOneInstance<WndOption>" not in window
     assert "using (ShopSettingsScope.Enter(_shop))" in window
 
 

@@ -271,6 +271,29 @@ def test_shop_binding_reuses_the_exact_current_scope_when_available():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     init = ui[ui.index("public void InitUI(string seller)"):ui.index("public void Save(string seller)")]
     assert "ShopSettingsScope.Current" in init
-    assert "current.ShopKey" not in init
     assert "scoped.ShopKey" in init
-    assert "ShopContextLocator.ResolveBySellerNick(_seller)" in init
+    assert "_shop = scoped;" in init
+    assert init.index("_shop = scoped;") < init.index("ShopContextLocator.ResolveBySellerNick(_seller)")
+    assert "authoritative" in init
+
+
+def test_shopkey_is_used_for_settings_window_identity_without_overwriting_seller_nick():
+    window = read("src/Bot/Options/WndOption.xaml.cs")
+    show = window[window.index("internal static void MyShow(ShopContext shop"):window.index("public static void MyShow(string seller")]
+    assert "Application.Current.Windows.OfType<WndOption>()" in show
+    assert "x._shop.ShopKey" in show
+    assert "FirstShow(wndOp.Seller" in show
+    assert "ShowSameNickOneInstance<WndOption>" not in show
+    ctor = window[window.index("private WndOption(ShopContext shop)"):window.index("private WndOption(string seller)")]
+    assert "FindConnectedQnByShopKey(shop.ShopKey)" in ctor
+    assert "liveSellerNick" in ctor
+
+
+def test_shop_scoped_catalog_and_reply_preferences_do_not_re_resolve_shopkey_as_nickname():
+    catalog = read("src/Bot/ChromeNs/ShopProductCatalogService.cs")
+    resolver = catalog[catalog.index("private static ShopContext ResolveShopForSeller"):catalog.index("private static string CachePath")]
+    assert "if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))" in resolver
+    assert "return current;" in resolver
+    reply = read("src/Bot/ChromeNs/ReplyModeService.cs")
+    assert "ResolveCurrentOrBySellerNick(seller)" in reply
+    assert "ShopSettingsScope.Current == null" in reply

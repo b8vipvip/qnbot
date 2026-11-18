@@ -50,12 +50,11 @@ namespace Bot.Options
             try
             {
                 var scoped = ShopSettingsScope.Current;
-                if (scoped != null
-                    && !string.IsNullOrWhiteSpace(scoped.ShopKey)
-                    && string.Equals(
-                        (scoped.SellerNick ?? string.Empty).Trim(),
-                        _seller,
-                        StringComparison.Ordinal))
+                // WndOption enters this control with the exact ShopContext already
+                // resolved from the owning desk/ShopKey. That scope is authoritative;
+                // comparing a legacy seller label to it can turn a valid ShopKey into
+                // a nickname lookup and disable every token-editing control.
+                if (scoped != null && !string.IsNullOrWhiteSpace(scoped.ShopKey))
                     _shop = scoped;
                 else
                     _shop = ShopContextLocator.ResolveBySellerNick(_seller);

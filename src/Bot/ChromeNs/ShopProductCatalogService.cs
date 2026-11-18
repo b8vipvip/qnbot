@@ -78,13 +78,10 @@ namespace Bot.ChromeNs
         {
             seller = (seller ?? string.Empty).Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null
-                && !string.IsNullOrWhiteSpace(current.ShopKey)
-                && (string.IsNullOrWhiteSpace(seller)
-                    || string.Equals(
-                        (current.SellerNick ?? string.Empty).Trim(),
-                        seller,
-                        StringComparison.Ordinal)))
+            // An explicit operation scope is the authoritative identity. Legacy
+            // callers may pass a ShopKey or stale display nickname; neither may
+            // override or invalidate the exact ShopContext carried by the scope.
+            if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))
                 return current;
 
             return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
