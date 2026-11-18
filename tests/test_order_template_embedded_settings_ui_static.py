@@ -55,3 +55,14 @@ def test_generic_copy_ui_does_not_compete_with_embedded_order_hint():
     assert "OrderTemplateRequiredFieldsV2.InitializeForApp();" in app
     assert "SelectableSettingsText.Initialize();" in app
     assert "if (IsOrderTemplateHint(source.Text)) return false;" in app
+
+
+
+def test_product_rule_selector_failure_does_not_abort_the_feature_settings_shell():
+    ui = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    segment = ui[ui.index("var orderReply ="):ui.index("private List<UIElement> BuildDeterministicRuleControls")]
+    assert "try" in segment
+    assert "new ShopOrderProductRulesUi(Seller, orderReply, orderMode)" in segment
+    assert "_orderProductRulesUi = null" in segment
+    assert "Log.Exception(ex)" in segment
+    assert "if (_orderProductRulesUi != null)" in segment

@@ -30,7 +30,7 @@ def test_server_updater_preserves_data_uses_master_and_verifies_baota_domain():
     assert "old-git-commit.txt" in script
     assert "docker-compose.bt.yml" in script
     assert "bootstrap.py" in script
-    assert "https://aboter.mv3.cn/healthz" in script
+    assert "https://qn.numbot.cn/healthz" in script
     assert "rollback" in script
 
 

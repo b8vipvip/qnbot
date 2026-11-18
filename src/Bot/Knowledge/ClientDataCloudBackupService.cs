@@ -227,14 +227,147 @@ namespace Bot.Knowledge
             finally { Array.Clear(plain, 0, plain.Length); }
         }
 
+        private const string PortableExportSchema = "qnbot.shop-data-export";
+        private const int PortableExportVersion = 1;
+        private const int MaxPortableFiles = 2000;
+        private const long MaxPortableSingleFileBytes = 128L * 1024 * 1024;
+        private const long MaxPortableDataBytes = 256L * 1024 * 1024;
+        private const long MaxPortableArchiveBytes = 320L * 1024 * 1024;
+
+        internal static PortableDataExportResult ExportPortable(ShopContext shop, string destinationPath)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            if (string.IsNullOrWhiteSpace(destinationPath))
+                throw new ArgumentException("请选择全店信息导出位置。", nameof(destinationPath));
+
+            var createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            int fileCount;
+            long dataBytes;
+            var settings = ExportPortableSettings(shop, true);
+            var archive = BuildPlainBackup(shop, createdAt, out fileCount, out dataBytes, true);
+            try
+            {
+                if (archive.Length > MaxPortableArchiveBytes)
+                    throw new InvalidDataException("全店信息导出包超过320MB限制，请先清理不需要的本店数据。");
+                var skippedCount = ReadPortableSkippedCount(archive);
+                var fullPath = Path.GetFullPath(destinationPath);
+                var directory = Path.GetDirectoryName(fullPath);
+                if (string.IsNullOrWhiteSpace(directory))
+                    throw new InvalidOperationException("导出目录无效。");
+                Directory.CreateDirectory(directory);
+                using (var output = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    output.Write(archive, 0, archive.Length);
+
+                return new PortableDataExportResult
+                {
+                    FileCount = fileCount,
+                    DataBytes = dataBytes,
+                    SettingCount = settings.Count,
+                    SkippedCount = skippedCount,
+                    ArchiveBytes = archive.Length
+                };
+            }
+            finally { Array.Clear(archive, 0, archive.Length); }
+        }
+
+        internal static RestoreResult ImportPortable(ShopContext shop, string sourcePath)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+                throw new FileNotFoundException("请选择有效的全店信息备份文件。", sourcePath);
+
+            var info = new FileInfo(sourcePath);
+            if (info.Length <= 0 || info.Length > MaxPortableArchiveBytes)
+                throw new InvalidDataException("全店信息备份文件为空或超过320MB限制。");
+
+            var archive = File.ReadAllBytes(sourcePath);
+            PortableArchivePlan plan = null;
+            try
+            {
+                // Validate every entry and the target ShopKey before touching local data.
+                plan = ReadPortableArchive(shop, archive);
+                PreserveLocalSensitiveSettings(shop, plan);
+                var rollbackPath = CreateProtectedPortableRollback(shop);
+                try
+                {
+                    var result = ApplyPortableArchive(shop, plan);
+                    result.RollbackPath = rollbackPath;
+                    return result;
+                }
+                catch (Exception importError)
+                {
+                    try
+                    {
+                        RestoreProtectedPortableRollback(shop, rollbackPath);
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        throw new AggregateException(
+                            "全店信息导入失败，且自动回滚也失败。请保留回滚文件：" + rollbackPath,
+                            importError,
+                            rollbackError);
+                    }
+                    throw new InvalidOperationException(
+                        "全店信息导入失败，已自动恢复导入前的本地配置：" + importError.Message,
+                        importError);
+                }
+            }
+            finally
+            {
+                Array.Clear(archive, 0, archive.Length);
+                if (plan != null)
+                    foreach (var file in plan.Files)
+                        if (file.Content != null) Array.Clear(file.Content, 0, file.Content.Length);
+            }
+        }
+
+        internal static string ResetLocalConfiguration(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            var rollbackPath = CreateProtectedPortableRollback(shop);
+            try
+            {
+                ClearLocalConfigurationFiles(shop);
+                new ShopScopedSettingsStore(shop, Paths)
+                    .ReplaceValues(new Dictionary<string, string>(StringComparer.Ordinal));
+                return rollbackPath;
+            }
+            catch (Exception resetError)
+            {
+                try { RestoreProtectedPortableRollback(shop, rollbackPath); }
+                catch (Exception rollbackError)
+                {
+                    throw new AggregateException(
+                        "本地配置重置失败，自动回滚也失败。请保留回滚文件：" + rollbackPath,
+                        resetError,
+                        rollbackError);
+                }
+                throw new InvalidOperationException(
+                    "本地配置重置失败，已恢复原配置：" + resetError.Message,
+                    resetError);
+            }
+        }
+
+        internal static void RestorePortableRollback(ShopContext shop, string rollbackPath)
+        {
+            RestoreProtectedPortableRollback(shop, rollbackPath);
+        }
+
         private static byte[] BuildPlainBackup(
             ShopContext shop,
             string createdAt,
             out int fileCount,
-            out long dataBytes)
+            out long dataBytes,
+            bool portableExport = false,
+            bool localRollback = false)
         {
+            var largeArchive = portableExport || localRollback;
             var skipped = new List<string>();
-            var settings = ExportPortableSettings(shop);
+            var settings = localRollback
+                ? ExportLocalRollbackSettings(shop)
+                : ExportPortableSettings(shop, portableExport);
+            var maxSingleFileBytes = largeArchive ? MaxPortableSingleFileBytes : MaxSingleFileBytes;
+            var maxDataBytes = largeArchive ? MaxPortableDataBytes : MaxDataBytes;
             fileCount = 0;
             dataBytes = 0;
             using (var memory = new MemoryStream())
@@ -242,38 +375,70 @@ namespace Bot.Knowledge
                 using (var zip = new ZipArchive(memory, ZipArchiveMode.Create, true, Encoding.UTF8))
                 {
                     WriteTextEntry(zip, "settings.json", JsonConvert.SerializeObject(settings, Formatting.Indented));
-                    foreach (var source in EnumerateShopFiles(shop))
+                    foreach (var source in (largeArchive ? EnumerateShopFilesStrict(shop) : EnumerateShopFiles(shop)))
                     {
                         var relative = RelativeShopPath(shop, source);
-                        if (ShouldExclude(relative)) continue;
+                        if (portableExport ? ShouldExcludePortable(relative) : localRollback ? ShouldExcludeLocalRollback(relative) : ShouldExclude(relative)) continue;
+                        if (largeArchive && fileCount >= MaxPortableFiles)
+                        {
+                            skipped.Add(relative + "（全店信息文件数量超过2000）");
+                            continue;
+                        }
                         long length;
                         try { length = new FileInfo(source).Length; }
                         catch { skipped.Add(relative + "（无法读取大小）"); continue; }
-                        if (length > MaxSingleFileBytes)
+                        if (length > maxSingleFileBytes)
                         {
-                            skipped.Add(relative + "（单文件超过32MB）");
+                            skipped.Add(relative + "（单文件超过" + (largeArchive ? "128MB" : "32MB") + "）");
                             continue;
                         }
-                        if (dataBytes + length > MaxDataBytes)
+                        if (dataBytes + length > maxDataBytes)
                         {
-                            skipped.Add(relative + "（总数据超过48MB）");
+                            skipped.Add(relative + "（总数据超过" + (largeArchive ? "256MB" : "48MB") + "）");
                             continue;
                         }
                         try
                         {
-                            var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
-                            using (var input = new FileStream(source, FileMode.Open, FileAccess.Read,
-                                FileShare.ReadWrite | FileShare.Delete))
-                            using (var output = entry.Open()) input.CopyTo(output);
-                            dataBytes += length;
+                            if (portableExport
+                                && string.Equals(Path.GetExtension(relative), ".json", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var original = File.ReadAllBytes(source);
+                                var sanitized = SanitizePortableJsonFile(original);
+                                try
+                                {
+                                    if (sanitized.Length > maxSingleFileBytes)
+                                    {
+                                        skipped.Add(relative + "（清理敏感字段后单文件超过" + (portableExport ? "128MB" : "32MB") + "）");
+                                        continue;
+                                    }
+                                    if (dataBytes + sanitized.Length > maxDataBytes)
+                                    {
+                                        skipped.Add(relative + "（清理敏感字段后总数据超过" + (portableExport ? "256MB" : "48MB") + "）");
+                                        continue;
+                                    }
+                                    var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
+                                    using (var output = entry.Open())
+                                        output.Write(sanitized, 0, sanitized.Length);
+                                    dataBytes += sanitized.Length;
+                                }
+                                finally { Array.Clear(sanitized, 0, sanitized.Length); }
+                            }
+                            else
+                            {
+                                var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
+                                using (var input = new FileStream(source, FileMode.Open, FileAccess.Read,
+                                    FileShare.ReadWrite | FileShare.Delete))
+                                using (var output = entry.Open()) input.CopyTo(output);
+                                dataBytes += length;
+                            }
                             fileCount++;
                         }
                         catch (Exception ex) { skipped.Add(relative + "（" + Safe(ex.Message, 80) + "）"); }
                     }
                     var manifest = new JObject
                     {
-                        ["schema"] = "qnbot.shop-data-backup",
-                        ["version"] = 2,
+                        ["schema"] = portableExport ? PortableExportSchema : "qnbot.shop-data-backup",
+                        ["version"] = portableExport ? PortableExportVersion : 2,
                         ["shopKey"] = shop.ShopKey,
                         ["platform"] = shop.Platform,
                         ["sellerId"] = shop.SellerId,
@@ -283,12 +448,20 @@ namespace Bot.Knowledge
                         ["fileCount"] = fileCount,
                         ["dataBytes"] = dataBytes,
                         ["settingCount"] = settings.Count,
-                        ["excluded"] = new JArray(
-                            "本店 Bot 客户端令牌",
-                            "DPAPI settings.json（改为逻辑设置导出）",
-                            "profile.json 和全局 shops.json",
-                            "logs/backup/cache 与临时文件",
-                            "云同步 revision/hash、远程暂停和已处理命令"),
+                        ["skippedFileCount"] = skipped.Count,
+                        ["excluded"] = portableExport
+                            ? new JArray(
+                                "本店 Bot 客户端令牌及其他 Token/API Key/Secret/Password/Credential",
+                                "DPAPI settings.json（改为逻辑设置导出）",
+                                "profile.json 和全局 shops.json",
+                                "logs/backup/cache 与临时文件",
+                                "params.db、云同步 revision/hash、远程暂停和已处理命令")
+                            : new JArray(
+                                "本店 Bot 客户端令牌",
+                                "DPAPI settings.json（改为逻辑设置导出）",
+                                "profile.json 和全局 shops.json",
+                                "logs/backup/cache 与临时文件",
+                                "云同步 revision/hash、远程暂停和已处理命令"),
                         ["skippedFiles"] = JArray.FromObject(skipped.Take(200).ToList())
                     };
                     WriteTextEntry(zip, "manifest.json", manifest.ToString(Formatting.Indented));
@@ -299,14 +472,499 @@ namespace Bot.Knowledge
 
         private static Dictionary<string, string> ExportPortableSettings(ShopContext shop)
         {
+            return ExportPortableSettings(shop, false);
+        }
+
+        private static Dictionary<string, string> ExportPortableSettings(ShopContext shop, bool stripSecrets)
+        {
             var source = new ShopScopedSettingsStore(shop, Paths).ExportValues();
             var result = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var pair in source)
             {
                 if (IsTransientSetting(pair.Key)) continue;
+                if (stripSecrets && IsSensitiveSettingName(pair.Key)) continue;
+                result[pair.Key] = stripSecrets
+                    ? StripSensitiveJsonProperties(pair.Value)
+                    : pair.Value ?? string.Empty;
+            }
+            return result;
+        }
+
+        private static Dictionary<string, string> ExportLocalRollbackSettings(ShopContext shop)
+        {
+            var source = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var pair in source)
+            {
+                if (IsTransientSetting(pair.Key) || IsBotClientTokenSettingName(pair.Key)) continue;
                 result[pair.Key] = pair.Value ?? string.Empty;
             }
             return result;
+        }
+
+        private static string StripSensitiveJsonProperties(string value)
+        {
+            value = value ?? string.Empty;
+            if (value.Length == 0) return value;
+            try
+            {
+                var token = JToken.Parse(value);
+                RemoveSensitiveJsonProperties(token);
+                return token.ToString(Formatting.None);
+            }
+            catch
+            {
+                var trimmed = value.TrimStart();
+                return trimmed.StartsWith("{", StringComparison.Ordinal)
+                    || trimmed.StartsWith("[", StringComparison.Ordinal)
+                    ? string.Empty
+                    : value;
+            }
+        }
+
+        private static void RemoveSensitiveJsonProperties(JToken token)
+        {
+            var obj = token as JObject;
+            if (obj != null)
+            {
+                foreach (var property in obj.Properties().ToList())
+                {
+                    if (IsSensitiveSettingName(property.Name)) property.Remove();
+                    else RemoveSensitiveJsonProperties(property.Value);
+                }
+                return;
+            }
+
+            var array = token as JArray;
+            if (array != null)
+                foreach (var item in array) RemoveSensitiveJsonProperties(item);
+        }
+
+        private static bool IsSensitiveSettingName(string value)
+        {
+            var compact = new string((value ?? string.Empty)
+                .Where(char.IsLetterOrDigit)
+                .Select(char.ToLowerInvariant)
+                .ToArray());
+            return compact.Contains("token")
+                || compact.Contains("apikey")
+                || compact.Contains("secret")
+                || compact.Contains("password")
+                || compact.Contains("credential")
+                || compact.Contains("authorization")
+                || compact.Contains("accesskey")
+                || compact.Contains("privatekey")
+                || compact.Contains("licensekey")
+                || compact.Contains("cookie")
+                || compact.Contains("bearer")
+                || compact.Contains("jwt");
+        }
+        private static bool IsBotClientTokenSettingName(string value)
+        {
+            var compact = new string((value ?? string.Empty)
+                .Where(char.IsLetterOrDigit)
+                .Select(char.ToLowerInvariant)
+                .ToArray());
+            return (compact.Contains("controlplane") && compact.Contains("token"))
+                || compact == "botclienttoken"
+                || compact == "botservicetoken"
+                || compact == "bottoken";
+        }
+
+        private static void PreserveLocalSensitiveSettings(ShopContext shop, PortableArchivePlan plan)
+        {
+            var current = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+            foreach (var pair in current)
+            {
+                if (IsTransientSetting(pair.Key) || IsBotClientTokenSettingName(pair.Key)) continue;
+                if (IsSensitiveSettingName(pair.Key))
+                {
+                    if (!plan.Settings.ContainsKey(pair.Key))
+                        plan.Settings[pair.Key] = pair.Value ?? string.Empty;
+                    continue;
+                }
+
+                string imported;
+                if (plan.Settings.TryGetValue(pair.Key, out imported))
+                    plan.Settings[pair.Key] = MergeSensitiveJsonProperties(imported, pair.Value);
+            }
+        }
+
+        private static string MergeSensitiveJsonProperties(string imported, string existing)
+        {
+            if (string.IsNullOrWhiteSpace(imported) || string.IsNullOrWhiteSpace(existing))
+                return imported ?? string.Empty;
+            try
+            {
+                var incoming = JToken.Parse(imported);
+                var current = JToken.Parse(existing);
+                MergeSensitiveJsonProperties(incoming, current);
+                return incoming.ToString(Formatting.None);
+            }
+            catch
+            {
+                return imported;
+            }
+        }
+
+        private static void MergeSensitiveJsonProperties(JToken incoming, JToken current)
+        {
+            var incomingObject = incoming as JObject;
+            var currentObject = current as JObject;
+            if (incomingObject != null && currentObject != null)
+            {
+                foreach (var currentProperty in currentObject.Properties())
+                {
+                    var incomingProperty = incomingObject.Properties().FirstOrDefault(
+                        x => string.Equals(x.Name, currentProperty.Name, StringComparison.OrdinalIgnoreCase));
+                    if (IsSensitiveSettingName(currentProperty.Name))
+                    {
+                        if (!IsBotClientTokenSettingName(currentProperty.Name) && incomingProperty == null)
+                            incomingObject.Add(currentProperty.Name, currentProperty.Value.DeepClone());
+                    }
+                    else if (incomingProperty != null)
+                    {
+                        MergeSensitiveJsonProperties(incomingProperty.Value, currentProperty.Value);
+                    }
+                }
+                return;
+            }
+
+            var incomingArray = incoming as JArray;
+            var currentArray = current as JArray;
+            if (incomingArray == null || currentArray == null) return;
+            foreach (var incomingItem in incomingArray.OfType<JObject>())
+            {
+                var currentItem = FindSensitiveMergeMatch(incomingItem, currentArray);
+                if (currentItem != null)
+                    MergeSensitiveJsonProperties(incomingItem, currentItem);
+            }
+        }
+
+        private static JObject FindSensitiveMergeMatch(JObject incoming, JArray current)
+        {
+            var identityNames = new[] { "id", "key", "guid", "name", "baseurl" };
+            foreach (var identityName in identityNames)
+            {
+                var incomingIdentity = incoming.Properties().FirstOrDefault(
+                    x => string.Equals(x.Name, identityName, StringComparison.OrdinalIgnoreCase));
+                if (incomingIdentity == null || string.IsNullOrWhiteSpace(incomingIdentity.Value.ToString()))
+                    continue;
+                foreach (var candidate in current.OfType<JObject>())
+                {
+                    var currentIdentity = candidate.Properties().FirstOrDefault(
+                        x => string.Equals(x.Name, identityName, StringComparison.OrdinalIgnoreCase));
+                    if (currentIdentity != null
+                        && string.Equals(currentIdentity.Value.ToString(), incomingIdentity.Value.ToString(), StringComparison.Ordinal))
+                        return candidate;
+                }
+            }
+            return null;
+        }
+
+
+        private static bool ShouldExcludePortable(string relative)
+        {
+            if (ShouldExclude(relative)) return true;
+            var normalized = (relative ?? string.Empty).Replace('/', '\\');
+            var parts = normalized.Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Any(IsSensitiveSettingName)) return true;
+            var name = Path.GetFileName(normalized);
+            var lower = (name ?? string.Empty).ToLowerInvariant();
+            var extension = Path.GetExtension(relative);
+            return lower == "params.db"
+                || lower.StartsWith("params.db-", StringComparison.Ordinal)
+                || IsSensitiveSettingName(Path.GetFileNameWithoutExtension(name))
+                || lower.StartsWith(".env", StringComparison.Ordinal)
+                || string.Equals(extension, ".qbr", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".qnbot", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".pem", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".key", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".pfx", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".p12", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".jks", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSafePortableRelativePath(string relative)
+        {
+            if (string.IsNullOrWhiteSpace(relative)) return false;
+            var normalized = relative.Replace('/', '\\');
+            if (Path.IsPathRooted(normalized)
+                || normalized.StartsWith("\\", StringComparison.Ordinal)
+                || normalized.IndexOf(':') >= 0)
+                return false;
+
+            var parts = normalized.Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return false;
+            foreach (var part in parts)
+            {
+                if (part == "." || part == ".."
+                    || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                    return false;
+            }
+            return true;
+        }
+
+        private static PortableArchivePlan ReadPortableArchive(ShopContext shop, byte[] archive)
+        {
+            var plan = new PortableArchivePlan
+            {
+                Settings = new Dictionary<string, string>(StringComparer.Ordinal),
+                Files = new List<PortableArchiveFile>()
+            };
+            try
+            {
+                using (var stream = new MemoryStream(archive, false))
+                using (var zip = new ZipArchive(stream, ZipArchiveMode.Read, false, Encoding.UTF8))
+                {
+                    if (zip.Entries.Count > MaxPortableFiles + 2)
+                        throw new InvalidDataException("全店信息备份包含过多文件。");
+
+                    var manifestEntry = zip.GetEntry("manifest.json");
+                    var settingsEntry = zip.GetEntry("settings.json");
+                    if (manifestEntry == null || settingsEntry == null)
+                        throw new InvalidDataException("全店信息备份缺少 manifest.json 或 settings.json。");
+                    if (manifestEntry.Length > 1024 * 1024 || settingsEntry.Length > 8L * 1024 * 1024)
+                        throw new InvalidDataException("全店信息备份的清单或设置数据超过大小限制。");
+
+                    var manifest = JObject.Parse(ReadTextEntry(manifestEntry));
+                    if (!string.Equals(Convert.ToString(manifest["schema"]), PortableExportSchema, StringComparison.Ordinal)
+                        || (manifest.Value<int?>("version") ?? 0) != PortableExportVersion)
+                        throw new InvalidDataException("文件格式不是受支持的 QnBot 全店信息导出包。");
+                    if (!string.Equals(Convert.ToString(manifest["shopKey"]), shop.ShopKey, StringComparison.Ordinal))
+                        throw new InvalidDataException("备份 ShopKey 与当前店铺不匹配，已阻止跨店导入。");
+                    if (!string.Equals(Convert.ToString(manifest["platform"]), shop.Platform ?? string.Empty, StringComparison.Ordinal)
+                        || !string.Equals(Convert.ToString(manifest["sellerId"]), shop.SellerId ?? string.Empty, StringComparison.Ordinal))
+                        throw new InvalidDataException("备份中的店铺身份与当前店铺不一致，已阻止导入。");
+
+                    var rawSettings = JsonConvert.DeserializeObject<Dictionary<string, string>>(
+                        ReadTextEntry(settingsEntry)) ?? new Dictionary<string, string>();
+                    foreach (var pair in rawSettings)
+                    {
+                        if (IsTransientSetting(pair.Key) || IsSensitiveSettingName(pair.Key)) continue;
+                        plan.Settings[pair.Key] = StripSensitiveJsonProperties(pair.Value);
+                    }
+
+                    var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    long totalBytes = 0;
+                    foreach (var entry in zip.Entries)
+                    {
+                        if (!entry.FullName.StartsWith("files/", StringComparison.Ordinal)) continue;
+                        var relative = entry.FullName.Substring("files/".Length);
+                        if (string.IsNullOrWhiteSpace(relative) || relative.EndsWith("/", StringComparison.Ordinal)) continue;
+                        if (!IsSafePortableRelativePath(relative))
+                            throw new InvalidDataException("备份中包含不安全路径：" + relative);
+                        if (ShouldExcludePortable(relative))
+                            throw new InvalidDataException("备份中包含不允许导入的令牌、敏感文件或运行缓存：" + relative);
+                        if (!seenPaths.Add(relative))
+                            throw new InvalidDataException("备份中包含重复文件路径：" + relative);
+                        if (entry.Length > MaxPortableSingleFileBytes || totalBytes + entry.Length > MaxPortableDataBytes)
+                            throw new InvalidDataException("备份文件超过单文件或总数据大小限制。");
+
+                        var content = ReadPortableEntry(entry);
+                        if (string.Equals(Path.GetExtension(relative), ".json", StringComparison.OrdinalIgnoreCase))
+                            content = SanitizePortableJsonFile(content);
+                        if (content.Length > MaxPortableSingleFileBytes
+                            || totalBytes + content.Length > MaxPortableDataBytes)
+                        {
+                            Array.Clear(content, 0, content.Length);
+                            throw new InvalidDataException("清理敏感字段后的备份文件超过大小限制。");
+                        }
+                        totalBytes += content.Length;
+                        plan.Files.Add(new PortableArchiveFile { RelativePath = relative, Content = content });
+                    }
+
+                    plan.CreatedAt = Convert.ToString(manifest["createdAt"] ?? string.Empty);
+                    plan.SourceDevice = Convert.ToString(manifest["deviceName"] ?? string.Empty);
+                }
+                return plan;
+            }
+            catch
+            {
+                foreach (var file in plan.Files)
+                    if (file.Content != null) Array.Clear(file.Content, 0, file.Content.Length);
+                throw;
+            }
+        }
+
+        private static int ReadPortableSkippedCount(byte[] archive)
+        {
+            using (var stream = new MemoryStream(archive, false))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read, false, Encoding.UTF8))
+            {
+                var manifestEntry = zip.GetEntry("manifest.json");
+                if (manifestEntry == null) return 0;
+                var manifest = JObject.Parse(ReadTextEntry(manifestEntry));
+                var declared = manifest.Value<int?>("skippedFileCount");
+                if (declared.HasValue) return declared.Value;
+                var skipped = manifest["skippedFiles"] as JArray;
+                return skipped == null ? 0 : skipped.Count;
+            }
+        }
+
+        private static byte[] ReadPortableEntry(ZipArchiveEntry entry)
+        {
+            using (var input = entry.Open())
+            using (var output = new MemoryStream())
+            {
+                var buffer = new byte[81920];
+                int read;
+                long total = 0;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    total += read;
+                    if (total > MaxPortableSingleFileBytes)
+                        throw new InvalidDataException("备份中包含超过128MB的文件。");
+                    output.Write(buffer, 0, read);
+                }
+                return output.ToArray();
+            }
+        }
+
+        private static byte[] SanitizePortableJsonFile(byte[] content)
+        {
+            try
+            {
+                var json = Encoding.UTF8.GetString(content);
+                if (json.Length > 0 && json[0] == '\uFEFF') json = json.Substring(1);
+                var token = JToken.Parse(json);
+                RemoveSensitiveJsonProperties(token);
+                var sanitized = Encoding.UTF8.GetBytes(token.ToString(Formatting.Indented));
+                Array.Clear(content, 0, content.Length);
+                return sanitized;
+            }
+            catch
+            {
+                if (content != null) Array.Clear(content, 0, content.Length);
+                throw new InvalidDataException(
+                    "无法验证 JSON 文件中的敏感字段，已阻止导出或导入该文件。");
+            }
+        }
+
+        private static RestoreResult ApplyPortableArchive(ShopContext shop, PortableArchivePlan plan)
+        {
+            ClearPortableFiles(shop);
+            new ShopScopedSettingsStore(shop, Paths).ReplaceValues(plan.Settings);
+
+            var result = new RestoreResult
+            {
+                ParamCount = plan.Settings.Count,
+                CreatedAt = plan.CreatedAt,
+                SourceDevice = plan.SourceDevice
+            };
+            var root = EnsureTrailing(Path.GetFullPath(Paths.GetShopRoot(shop)));
+            foreach (var file in plan.Files)
+            {
+                var target = Path.GetFullPath(Path.Combine(root, file.RelativePath));
+                if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("备份中包含不安全路径：" + file.RelativePath);
+                var directory = Path.GetDirectoryName(target);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None))
+                    output.Write(file.Content, 0, file.Content.Length);
+                result.FileCount++;
+            }
+            return result;
+        }
+
+        private static void ClearPortableFiles(ShopContext shop)
+        {
+            foreach (var source in EnumerateShopFilesStrict(shop))
+            {
+                var relative = RelativeShopPath(shop, source);
+                if (ShouldExcludePortable(relative)) continue;
+                File.Delete(source);
+            }
+        }
+
+        private static void ClearLocalConfigurationFiles(ShopContext shop)
+        {
+            foreach (var source in EnumerateShopFilesStrict(shop))
+            {
+                var relative = RelativeShopPath(shop, source);
+                if (ShouldExcludeLocalRollback(relative)) continue;
+                File.Delete(source);
+            }
+        }
+
+        private static bool ShouldExcludeLocalRollback(string relative)
+        {
+            if (ShouldExclude(relative)) return true;
+            var name = Path.GetFileName((relative ?? string.Empty).Replace('/', '\\'));
+            var compact = new string((name ?? string.Empty)
+                .Where(char.IsLetterOrDigit)
+                .Select(char.ToLowerInvariant)
+                .ToArray());
+            return compact.Contains("controlplanetoken")
+                || compact == "botclienttoken"
+                || compact == "botservicetoken"
+                || compact == "bottoken";
+        }
+
+        private static string CreateProtectedPortableRollback(ShopContext shop)
+        {
+            int fileCount;
+            long dataBytes;
+            var plain = BuildPlainBackup(
+                shop, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), out fileCount, out dataBytes,
+                portableExport: false, localRollback: true);
+            byte[] protectedBytes = null;
+            try
+            {
+                protectedBytes = ProtectedData.Protect(
+                    plain,
+                    Encoding.UTF8.GetBytes("qnbot|portable-local-rollback|" + shop.ShopKey),
+                    DataProtectionScope.CurrentUser);
+                var path = Path.Combine(
+                    Paths.GetBackupRoot(shop),
+                    "portable-config-before-change-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".qbr");
+                File.WriteAllBytes(path, protectedBytes);
+                return path;
+            }
+            finally
+            {
+                Array.Clear(plain, 0, plain.Length);
+                if (protectedBytes != null) Array.Clear(protectedBytes, 0, protectedBytes.Length);
+            }
+        }
+
+        private static void RestoreProtectedPortableRollback(ShopContext shop, string rollbackPath)
+        {
+            if (string.IsNullOrWhiteSpace(rollbackPath) || !File.Exists(rollbackPath))
+                throw new FileNotFoundException("本地配置回滚包不存在。", rollbackPath);
+            var protectedBytes = File.ReadAllBytes(rollbackPath);
+            byte[] plain = null;
+            try
+            {
+                plain = ProtectedData.Unprotect(
+                    protectedBytes,
+                    Encoding.UTF8.GetBytes("qnbot|portable-local-rollback|" + shop.ShopKey),
+                    DataProtectionScope.CurrentUser);
+                ClearLocalConfigurationFiles(shop);
+                new ShopScopedSettingsStore(shop, Paths)
+                    .ReplaceValues(new Dictionary<string, string>(StringComparer.Ordinal));
+                RestoreZip(shop, plain);
+            }
+            finally
+            {
+                Array.Clear(protectedBytes, 0, protectedBytes.Length);
+                if (plain != null) Array.Clear(plain, 0, plain.Length);
+            }
+        }
+
+        private sealed class PortableArchivePlan
+        {
+            public Dictionary<string, string> Settings { get; set; }
+            public List<PortableArchiveFile> Files { get; set; }
+            public string CreatedAt { get; set; }
+            public string SourceDevice { get; set; }
+        }
+
+        private sealed class PortableArchiveFile
+        {
+            public string RelativePath { get; set; }
+            public byte[] Content { get; set; }
         }
 
         private static bool IsTransientSetting(string key)
@@ -324,6 +982,13 @@ namespace Bot.Knowledge
             if (!Directory.Exists(root)) return Enumerable.Empty<string>();
             try { return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToList(); }
             catch { return Enumerable.Empty<string>(); }
+        }
+
+        private static IEnumerable<string> EnumerateShopFilesStrict(ShopContext shop)
+        {
+            var root = Paths.GetShopRoot(shop);
+            if (!Directory.Exists(root)) return Enumerable.Empty<string>();
+            return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToList();
         }
 
         private static string RelativeShopPath(ShopContext shop, string fullPath)
@@ -642,6 +1307,15 @@ namespace Bot.Knowledge
         public string CreatedAt { get; set; }
         public string SourceDevice { get; set; }
         public string RollbackPath { get; set; }
+    }
+
+    internal sealed class PortableDataExportResult
+    {
+        public int FileCount { get; set; }
+        public long DataBytes { get; set; }
+        public int SettingCount { get; set; }
+        public int SkippedCount { get; set; }
+        public long ArchiveBytes { get; set; }
     }
 
     internal sealed class ClientDataBackupWindow : Window

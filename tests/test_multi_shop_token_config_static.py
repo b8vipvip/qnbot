@@ -38,7 +38,8 @@ def test_legacy_global_token_requires_explicit_ui_import():
     assert "GetLegacyGlobalToken" in connection
     assert 'MakeButton("导入旧全局令牌"' in ui
     assert "ImportLegacy_Click" in ui
-    assert "才会写入本店 DPAPI 令牌文件" in ui
+    assert "OpenTokenManagement(legacy)" in ui
+    assert "class ShopTokenManagementWindow" in ui
     assert "_connection.SaveToken(candidate)" in ui
 
 
@@ -47,32 +48,72 @@ def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_mig
     config = read("src/Bot/App.config")
     assert 'DefaultUrlSettingKey = "BotControlPlaneDefaultUrl"' in connection
     assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in connection
+    assert 'UrlOverrideKey = "ControlPlaneUrlOverride"' in connection
     assert "GetProgramServerUrl" in connection
     assert "SaveProgramServerUrl" in connection
+    assert "TryNormalizeServerUrl" in connection
+    assert "PersistentParams.GetParam2Key(UrlOverrideKey, LegacyScope" in connection
     assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in connection
+    assert connection.index("PersistentParams.GetParam2Key(UrlOverrideKey") < connection.index("Environment.GetEnvironmentVariable")
+    assert connection.index("Environment.GetEnvironmentVariable") < connection.index("PersistentParams.GetParam2Key(UrlKey")
     assert "_settings.TryGetString(UrlKey" in connection  # one-time migration from PR #89
     assert "_settings.SetString(UrlKey" not in connection
     assert 'key="BotControlPlaneDefaultUrl"' in config
-    assert 'value="http://aboter.mv3.cn"' in config
+    assert 'value="https://qn.numbot.cn"' in config
+    assert 'BuiltInDefaultServerUrl = "https://qn.numbot.cn"' in connection
     assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in connection
-    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in connection
+    assert 'LegacyBuiltInHost = "aboter.mv3.cn"' in connection
+    assert 'CurrentBuiltInHost = "qn.numbot.cn"' in connection
 
 
-def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url():
+def test_shop_binding_page_owns_token_management_and_portable_shop_transfer():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
     assert 'Label("Bot 服务端（程序内置）")' in ui
     assert 'Label("本店 Bot 服务端地址")' not in ui
     assert "_connection.SetServerUrl" not in ui
     assert 'Label("本店 Bot 客户端令牌")' in ui
+    assert "管理令牌" in ui
     assert "一个令牌只能绑定一个 ShopKey" in ui
+    assert "class ShopTokenManagementWindow" in ui
+    assert "显示令牌" in ui
+    assert "保存令牌" in ui
+    assert "ClearRequested" in ui
+    assert "是否保留本地原配置信息（包括知识库" in ui
+    assert "选择“是”：保留全部本地配置和知识库" in ui
+    assert "ClientDataCloudBackupService.ResetLocalConfiguration(_shop)" in ui
+    assert "ClientDataCloudBackupService.RestorePortableRollback(_shop, rollbackPath)" in ui
+    assert "导出全店信息" in ui and "导入全店信息" in ui
+    assert "ExportPortable(_shop, dialog.FileName)" in ui
+    assert "ImportPortable(_shop, dialog.FileName)" in ui
     assert "启用本店知识库云同步" in ui
-    assert "保存令牌并立即同步知识库" in ui
+    assert "立即同步知识库" in ui
+    assert "保存令牌并立即同步知识库" not in ui
+    assert "_token" not in ui
     assert "KnowledgeCloudSyncService.SyncNowAsync(_shop)" in ui
     assert "KnowledgeCloudSyncService.SetEnabledForShop" in ui
     assert "IsEnabledForShop" in sync
     assert "SyncNowAsync" in sync
     assert "ShopSettingsScope.Enter(shop)" in sync
+
+
+def test_portable_shop_export_excludes_tokens_and_imports_with_shopkey_rollback():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert 'PortableExportSchema = "qnbot.shop-data-export"' in source
+    assert "ExportPortable(ShopContext shop, string destinationPath)" in source
+    assert "ImportPortable(ShopContext shop, string sourcePath)" in source
+    assert "ShouldExcludePortable(relative)" in source
+    assert "IsSensitiveSettingName" in source
+    assert "RemoveSensitiveJsonProperties" in source
+    assert "control-plane-token.json" in source
+    assert 'lower == "params.db"' in source
+    assert "ProtectedData.Protect" in source
+    assert "ProtectedData.Unprotect" in source
+    assert "ReadPortableArchive(shop, archive)" in source
+    assert "备份 ShopKey 与当前店铺不匹配" in source
+    assert "ClearPortableFiles(shop)" in source
+    assert "ReplaceValues(plan.Settings)" in source
+    assert "RestoreProtectedPortableRollback" in source
 
 
 def test_token_binding_conflict_is_checked_before_new_token_is_saved():
@@ -244,3 +285,89 @@ def test_runtime_connection_status_surfaces_explicit_unauthorized():
     assert 'state.LastError.IndexOf("HTTP 401", StringComparison.OrdinalIgnoreCase)' in segment
     assert 'return "令牌已失效";' in segment
     assert segment.index('return "令牌已失效";') < segment.index('return "已连接";')
+
+
+
+def test_tray_help_menu_exposes_validated_persistent_server_configuration():
+    menu = read("src/Bot/AssistWindow/NotifyIcon/MenuCreator/HelpMenuCreator.cs")
+    store = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
+    assert 'CreateItem("服务端配置", OnServerConfigClicked)' in menu
+    assert "GetLegacyGlobalServerUrl()" in menu
+    assert "TryNormalizeServerUrl" in menu
+    assert "SaveProgramServerUrl" in menu
+    assert '"/healthz"' in menu
+    assert "ControlPlaneUrlOverride" in store
+    assert "后续请求将使用新地址" in menu
+
+
+
+def test_shop_binding_reuses_the_exact_current_scope_when_available():
+    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    init = ui[ui.index("public void InitUI(string seller)"):ui.index("public void Save(string seller)")]
+    assert "ShopSettingsScope.Current" in init
+    assert "scoped.ShopKey" in init
+    assert "_shop = scoped;" in init
+    assert init.index("_shop = scoped;") < init.index("ShopContextLocator.ResolveBySellerNick(_seller)")
+    assert "authoritative" in init
+
+
+def test_shopkey_is_used_for_settings_window_identity_without_overwriting_seller_nick():
+    window = read("src/Bot/Options/WndOption.xaml.cs")
+    show = window[window.index("internal static void MyShow(ShopContext shop"):window.index("public static void MyShow(string seller")]
+    assert "Application.Current.Windows.OfType<WndOption>()" in show
+    assert "x._shop.ShopKey" in show
+    assert "FirstShow(wndOp.Seller" in show
+    assert "ShowSameNickOneInstance<WndOption>" not in show
+    ctor = window[window.index("private WndOption(ShopContext shop)"):window.index("private WndOption(string seller)")]
+    assert "FindConnectedQnByShopKey(shop.ShopKey)" in ctor
+    assert "liveSellerNick" in ctor
+
+
+def test_shop_scoped_catalog_and_reply_preferences_do_not_re_resolve_shopkey_as_nickname():
+    catalog = read("src/Bot/ChromeNs/ShopProductCatalogService.cs")
+    resolver = catalog[catalog.index("private static ShopContext ResolveShopForSeller"):catalog.index("private static string CachePath")]
+    assert "if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))" in resolver
+    assert "return current;" in resolver
+    reply = read("src/Bot/ChromeNs/ReplyModeService.cs")
+    assert "ResolveCurrentOrBySellerNick(seller)" in reply
+    assert "ShopSettingsScope.Current == null" in reply
+
+def test_portable_import_preserves_local_sensitive_settings_and_nested_api_keys():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert "PreserveLocalSensitiveSettings(shop, plan)" in source
+    assert "MergeSensitiveJsonProperties(imported, pair.Value)" in source
+    assert "FindSensitiveMergeMatch(incomingItem, currentArray)" in source
+    assert "!IsBotClientTokenSettingName(currentProperty.Name)" in source
+    assert "IsBotClientTokenSettingName(pair.Key)" in source
+    assert "当前设备已有 API Key/密码等敏感凭据" in read("src/Bot/Options/ShopBindingOptionsControl.cs")
+
+
+def test_local_token_reset_uses_a_secret_preserving_dpapi_rollback():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    assert "localRollback: true" in source
+    assert "ExportLocalRollbackSettings(shop)" in source
+    assert "ClearLocalConfigurationFiles(shop)" in source
+    assert "RestoreZip(shop, plain)" in source
+    assert "ShouldExcludeLocalRollback(relative)" in source
+    assert "DataProtectionScope.CurrentUser" in source
+    assert "ClearPortableFiles(shop);" in source  # portable imports still preserve local credentials
+
+
+def test_portable_import_honors_the_documented_128mb_single_file_limit():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    reader = source[source.index("private static byte[] ReadPortableEntry"):source.index("private static byte[] SanitizePortableJsonFile")]
+    assert "total > MaxPortableSingleFileBytes" in reader
+    assert "total > MaxSingleFileBytes" not in reader
+    assert "超过128MB的文件" in reader
+
+
+def test_portable_export_excludes_sensitive_directory_components_and_credential_formats():
+    source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    predicate = source[source.index("private static bool IsSensitiveSettingName"):source.index("private static bool ShouldExcludePortable")]
+    filter_source = source[source.index("private static bool ShouldExcludePortable"):source.index("private static bool IsSafePortableRelativePath")]
+    assert 'compact.Contains("cookie")' in predicate
+    assert 'compact.Contains("bearer")' in predicate
+    assert 'compact.Contains("jwt")' in predicate
+    assert "parts.Any(IsSensitiveSettingName)" in filter_source
+    assert 'string.Equals(extension, ".pem"' in filter_source
+    assert 'string.Equals(extension, ".pfx"' in filter_source

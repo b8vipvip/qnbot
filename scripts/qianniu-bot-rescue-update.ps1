@@ -13,10 +13,11 @@ $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'
+$BuiltInControlPlaneUrl = 'https://qn.numbot.cn'
 $ServerUrlEnvironmentKey = 'QIANNIU_BOT_SERVER_URL'
 $ObsoleteControlPlaneHost = 'botserver.mv3.cn'
-$CurrentControlPlaneHost = 'aboter.mv3.cn'
+$LegacyControlPlaneHost = 'aboter.mv3.cn'
+$CurrentControlPlaneHost = 'qn.numbot.cn'
 
 function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
@@ -44,21 +45,28 @@ function Normalize-Version([string]$Value) {
 }
 
 function Normalize-ControlPlaneUrl([string]$Value) {
-    $value = ([string]$Value).Trim().TrimEnd('/')
+    $value = ([string]$Value).Trim()
     if ([string]::IsNullOrWhiteSpace($value)) { return '' }
+    if ($value -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') {
+        $value = 'https://' + $value
+    }
+    $value = $value.TrimEnd('/')
     if ($value.EndsWith('/v1', [StringComparison]::OrdinalIgnoreCase)) {
         $value = $value.Substring(0, $value.Length - 3).TrimEnd('/')
     }
 
     $parsed = $null
     if ([Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$parsed)) {
-        if ([string]::Equals($parsed.Host, $ObsoleteControlPlaneHost, [StringComparison]::OrdinalIgnoreCase)) {
+        if ([string]::Equals($parsed.Host, $ObsoleteControlPlaneHost, [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($parsed.Host, $LegacyControlPlaneHost, [StringComparison]::OrdinalIgnoreCase)) {
             $builder = New-Object System.UriBuilder -ArgumentList $parsed.AbsoluteUri
+            $builder.Scheme = 'https'
             $builder.Host = $CurrentControlPlaneHost
+            $builder.Port = -1
             $value = $builder.Uri.AbsoluteUri.TrimEnd('/')
         }
     }
-    return $value
+    return $value.TrimEnd('/')
 }
 
 function Resolve-InstallDir([string]$Requested) {
@@ -161,9 +169,10 @@ function Add-UniqueUrl([System.Collections.ArrayList]$List, [string]$Value) {
     [void]$List.Add($value)
 }
 
-function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec = 30) {
+function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec = 30, [int]$MaxAttempts = 3) {
     $lastError = ''
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $attempts = [Math]::Max(1, $MaxAttempts)
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
         try {
             return Invoke-RestMethod -UseBasicParsing -Uri $Uri -Headers $Headers -TimeoutSec $TimeoutSec
         }
@@ -209,7 +218,9 @@ function Resolve-LatestFromControlPlane([string]$BaseUrl) {
     $base = (Normalize-ControlPlaneUrl $BaseUrl).TrimEnd('/')
     $url = $base + '/api/public/v1/bot-update/latest'
     Write-Step "优先读取服务器更新缓存：$url"
-    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 20
+    # The control plane is an optimization path. Never let an unreachable mirror
+    # delay a rescue update for minutes; GitHub is the authoritative fallback.
+    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 3 1
 
     $version = Normalize-Version ([string]$json.version)
     $sha = ([string]$json.sha256).Trim().ToUpperInvariant()
@@ -318,6 +329,38 @@ function Resolve-LatestRelease([string]$ServerUrl) {
     return Resolve-LatestFromGitHub
 }
 
+function Find-VerifiedLocalPackage([string]$ExpectedHash, [string]$RescueRoot) {
+    $candidates = New-Object System.Collections.ArrayList
+
+    $cwdPackage = Join-Path ([IO.Path]::GetFullPath((Get-Location).Path)) 'qianniu-bot-x64.zip'
+    $downloadPackage = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\qianniu-bot-x64.zip'
+    $scriptPackage = Join-Path $PSScriptRoot 'qianniu-bot-x64.zip'
+    $cachePackage = Join-Path $RescueRoot 'qianniu-bot-x64.zip'
+
+    foreach ($candidate in @($cwdPackage, $downloadPackage, $scriptPackage, $cachePackage)) {
+        if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $full = [IO.Path]::GetFullPath($candidate)
+        if (@($candidates) -notcontains $full) { [void]$candidates.Add($full) }
+    }
+
+    foreach ($candidate in @($candidates)) {
+        try {
+            $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actual -eq $ExpectedHash) {
+                Write-Host "检测到本地已存在并通过 SHA-256 校验的安装包，跳过重新下载：$candidate" -ForegroundColor Green
+                return $candidate
+            }
+            Write-Host "发现本地安装包但 SHA-256 不匹配，忽略：$candidate" -ForegroundColor Yellow
+        }
+        catch {
+            Write-Host "检查本地安装包失败，忽略：$candidate；$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    return ''
+}
+
 function Download-One([string]$Uri, [string]$Destination) {
     $lastError = ''
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
@@ -414,6 +457,15 @@ if (-not (Test-Sha256 $ExpectedSha256)) { throw 'ExpectedSha256 必须是 64 位
 
 $root = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\rescue'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
+
+if ($downloadRequired) {
+    $localPackage = Find-VerifiedLocalPackage $ExpectedSha256 $root
+    if (-not [string]::IsNullOrWhiteSpace($localPackage)) {
+        $PackagePath = $localPackage
+        $downloadRequired = $false
+    }
+}
+
 $partialPath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip.partial")
 $updaterPath = Join-Path $root ("BotAutoUpdater-$ExpectedVersion-" + [Guid]::NewGuid().ToString('N') + '.ps1')
 if ($downloadRequired) { $PackagePath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip") }
@@ -462,7 +514,13 @@ try {
     $args += ' -ExpectedSha256 ' + (Quote-Arg $ExpectedSha256)
     $args += ' -ExpectedVersion ' + (Quote-Arg $ExpectedVersion)
     $args += ' -CurrentPid ' + $currentPid
-    $installer = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru -Wait
+    # Wait for the updater process itself only. Start-Process -Wait also waits for
+    # descendant processes; the updater launches the long-running Bot.exe, so
+    # that option leaves this rescue wrapper open for the entire Bot session.
+    $installer = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru
+    if ($null -eq $installer) { throw '无法启动目标版本更新器。' }
+    $installer.WaitForExit()
+    $installer.Refresh()
     if ($installer.ExitCode -ne 0) { throw "目标更新器执行失败，exitCode=$($installer.ExitCode)。目标更新器会按事务备份自动回滚。" }
 
     $installedInfoPath = Join-Path $InstallDir 'release-info.json'

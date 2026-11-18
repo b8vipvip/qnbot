@@ -322,7 +322,19 @@ namespace Bot.Options
             var orderEnabled = GetPrivateField<CheckBox>(_legacyWindow, "_orderPlacedReplyEnabled");
             if (legacyStack == null || orderEnabled == null || !legacyStack.Children.Contains(orderEnabled))
                 throw new InvalidOperationException("原“买家下单后自动发送”布局未找到，拒绝创建重复的商品回复配置。");
-            _orderProductRulesUi = new ShopOrderProductRulesUi(Seller, orderReply, orderMode);
+            try
+            {
+                _orderProductRulesUi = new ShopOrderProductRulesUi(Seller, orderReply, orderMode);
+            }
+            catch (Exception ex)
+            {
+                // Product-specific rules are optional for opening the settings shell.
+                // A missing/offline QN identity must never prevent users from reaching
+                // the Shop Binding page and replacing an expired client token.
+                _orderProductRulesUi = null;
+                Log.Exception(ex);
+            }
+
             if (legacyStack != null)
             {
                 for (var i = inserted.Count - 1; i >= 0; i--)
@@ -330,7 +342,8 @@ namespace Bot.Options
                     legacyStack.Children.Insert(0, inserted[i]);
                 }
                 var orderIndex = legacyStack.Children.IndexOf(orderEnabled);
-                legacyStack.Children.Insert(orderIndex + 1, _orderProductRulesUi);
+                if (_orderProductRulesUi != null)
+                    legacyStack.Children.Insert(orderIndex + 1, _orderProductRulesUi);
                 autoReplyTab.Content = new ScrollViewer
                 {
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
