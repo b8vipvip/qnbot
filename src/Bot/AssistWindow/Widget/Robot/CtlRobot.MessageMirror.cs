@@ -107,10 +107,12 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
-                var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-                if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
                 using (ShopSettingsScope.Enter(shop))
+                {
+                    var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                    if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
                     return ConversationContextStore.GetMirrorTurns(seller, internalBuyer, 100);
+                }
             }
             catch (Exception ex)
             {
@@ -135,8 +137,12 @@ namespace Bot.AssistWindow.Widget.Robot
             }
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
 
-            var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-            if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+            string internalBuyer;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+            }
             var requestKey = BuildConversationKey(shop.ShopKey, seller, internalBuyer);
 
             if (!force && _messageMirrorLastRemoteRefresh != DateTime.MinValue
@@ -160,43 +166,45 @@ namespace Bot.AssistWindow.Widget.Robot
                     return;
                 }
 
-                BuyerIdentityAliasService.Observe(
-                    seller,
-                    current.Nick,
-                    current.Display,
-                    current.TargetId);
-                if (!BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
-                {
-                    Log.Info("千牛镜像历史刷新已取消：当前会话已切换，避免跨买家历史串入。");
-                    return;
-                }
-
-                var ccode = (current.Ccode ?? string.Empty).Trim();
-                if (ccode.Length == 0
-                    && BuyerIdentityAliasService.AreEquivalent(seller, qn.Buyer.Nick, current.Nick))
-                {
-                    // Use a cached CCode only after the live endpoint confirms the same buyer.
-                    ccode = (qn.Buyer.Ccode ?? string.Empty).Trim();
-                }
-                if (ccode.Length == 0)
-                {
-                    Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：当前会话尚未提供可用 CCode，等待重试。", 10);
-                    return;
-                }
-
-                var activeQn = ResolveMessageMirrorQn();
-                if (activeQn == null || activeQn.Seller == null || activeQn.Buyer == null) return;
-                var activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
-                if (!string.Equals(activeShopKey, shop.ShopKey, StringComparison.Ordinal)
-                    || !BuyerIdentityAliasService.AreEquivalent(seller, activeQn.Buyer.Nick, buyer))
-                {
-                    return;
-                }
-
-                internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
-                if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
                 using (ShopSettingsScope.Enter(shop))
+                {
+                    BuyerIdentityAliasService.Observe(
+                        seller,
+                        current.Nick,
+                        current.Display,
+                        current.TargetId);
+                    if (!BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+                    {
+                        Log.Info("千牛镜像历史刷新已取消：当前会话已切换，避免跨买家历史串入。");
+                        return;
+                    }
+
+                    var ccode = (current.Ccode ?? string.Empty).Trim();
+                    if (ccode.Length == 0
+                        && BuyerIdentityAliasService.AreEquivalent(seller, qn.Buyer.Nick, current.Nick))
+                    {
+                        // Use a cached CCode only after the live endpoint confirms the same buyer.
+                        ccode = (qn.Buyer.Ccode ?? string.Empty).Trim();
+                    }
+                    if (ccode.Length == 0)
+                    {
+                        Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：当前会话尚未提供可用 CCode，等待重试。", 10);
+                        return;
+                    }
+
+                    var activeQn = ResolveMessageMirrorQn();
+                    if (activeQn == null || activeQn.Seller == null || activeQn.Buyer == null) return;
+                    var activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
+                    if (!string.Equals(activeShopKey, shop.ShopKey, StringComparison.Ordinal)
+                        || !BuyerIdentityAliasService.AreEquivalent(seller, activeQn.Buyer.Nick, buyer))
+                    {
+                        return;
+                    }
+
+                    internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
+                    if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
                     ConversationContextStore.RequestMirrorRemoteRefresh(seller, internalBuyer, ccode);
+                }
             }
             catch (Exception ex)
             {
