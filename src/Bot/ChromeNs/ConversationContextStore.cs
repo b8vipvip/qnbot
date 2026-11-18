@@ -610,9 +610,9 @@ namespace Bot.ChromeNs
                 var merged = 0;
                 foreach (var item in messages.Where(m => m != null).OrderBy(GetSortValue))
                 {
-                    if (!string.IsNullOrWhiteSpace(
-                        RecordMessage(state, seller, buyer, item, ExtractMessageText(item), true)))
-                        merged++;
+                    var recordedKey = RecordMessage(
+                        state, seller, buyer, item, ExtractMessageText(item), true);
+                    if (!string.IsNullOrWhiteSpace(recordedKey)) merged++;
                 }
                 lock (state.Sync) state.RemoteHistoryLoaded = true;
                 Log.Info("千牛镜像历史同步完成: shop="
