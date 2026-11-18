@@ -93,3 +93,23 @@ def test_message_mirror_identity_and_reads_include_shop_key():
     assert "LoadMessageMirrorTurns(QN qn, string seller, string buyer)" in mirror
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in mirror
     assert "using (ShopSettingsScope.Enter(shop))" in mirror
+
+def test_message_mirror_resolves_live_ccode_and_canonical_buyer_identity():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    request = mirror.split(
+        "private async void RequestMessageMirrorHistory(", 1
+    )[1].split("private void RefreshMessageMirror(", 1)[0]
+
+    # qnbotStatus creates a lightweight Conversation snapshot without CCode.
+    # The mirror must query the live current conversation before fetching history.
+    assert "await qn.GetCurrentConversationID()" in request
+    assert "current.Ccode" in request
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)" in request
+    assert "ConversationContextStore.RequestMirrorRemoteRefresh(seller, internalBuyer, ccode)" in request
+    assert "_messageMirrorHistoryRequests.TryAdd(requestKey, 0)" in request
+
+    # Raw chat events are keyed by the internal buyer nick; the panel may show
+    # the display alias, so all timeline reads must use the canonical identity.
+    assert "ResolveInternalNick(seller, buyerDisplay)" in mirror
+    assert "GetMirrorTurns(seller, internalBuyer, 100)" in mirror
+
