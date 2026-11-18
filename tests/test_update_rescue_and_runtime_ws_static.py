@@ -220,7 +220,7 @@ def test_rescue_updater_prefers_script_directory_and_requires_exact_embedded_ver
     assert "function Find-VerifiedLocalPackage([string]$ExpectedVersion, [string]$ExpectedHash" in lookup
     assert lookup.index("$scriptPackage") < lookup.index("$cwdPackage")
     assert lookup.index("$cwdPackage") < lookup.index("$downloadPackage")
-    assert "Downloads\\\\qianniu-bot-x64.zip" in rescue
+    assert "Downloads\\qianniu-bot-x64.zip" in rescue
     assert "qianniu-bot-x64-$ExpectedVersion.zip" in lookup
     assert "本地安装包版本不匹配，忽略" in lookup
     assert "Get-FileHash -LiteralPath $candidate -Algorithm SHA256" in lookup
