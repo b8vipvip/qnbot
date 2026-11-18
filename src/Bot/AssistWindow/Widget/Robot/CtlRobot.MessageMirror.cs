@@ -5,6 +5,7 @@ using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -24,6 +25,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _messageMirrorSignature = string.Empty;
         private List<ConversationContextTurn> _messageMirrorRenderedTurns;
         private DateTime _messageMirrorLastRemoteRefresh = DateTime.MinValue;
+        private readonly ConcurrentDictionary<string, byte> _messageMirrorHistoryRequests =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private bool _buyerDirectAnswerSaveInProgress;
 
         private void StartMessageMirror()
@@ -105,7 +108,11 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
                 using (ShopSettingsScope.Enter(shop))
-                    return ConversationContextStore.GetMirrorTurns(seller, buyer, 100);
+                {
+                    var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                    if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+                    return ConversationContextStore.GetMirrorTurns(seller, internalBuyer, 100);
+                }
             }
             catch (Exception ex)
             {
@@ -114,28 +121,99 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
-        private void RequestMessageMirrorHistory(QN qn, string seller, string buyer, bool force)
+        private async void RequestMessageMirrorHistory(QN qn, string seller, string buyer, bool force)
         {
             if (qn == null || qn.Buyer == null) return;
-            var ccode = (qn.Buyer.Ccode ?? string.Empty).Trim();
-            if (ccode.Length == 0) return;
+
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("请求千牛镜像历史刷新失败：未能确认ShopKey: " + ex.Message, 10);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+
+            string internalBuyer;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+            }
+            var requestKey = BuildConversationKey(shop.ShopKey, seller, internalBuyer);
 
             if (!force && _messageMirrorLastRemoteRefresh != DateTime.MinValue
                 && DateTime.Now - _messageMirrorLastRemoteRefresh < TimeSpan.FromSeconds(5))
             {
                 return;
             }
+            if (!_messageMirrorHistoryRequests.TryAdd(requestKey, 0)) return;
 
             _messageMirrorLastRemoteRefresh = DateTime.Now;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                // SetActiveConversationByNick creates a lightweight Conversation snapshot
+                // containing Nick/Display but no CCode. Resolve the live CDP conversation
+                // instead of silently skipping the initial history request.
+                var response = await qn.GetCurrentConversationID();
+                var current = response == null ? null : response.Result;
+                if (current == null || string.IsNullOrWhiteSpace(current.Nick))
+                {
+                    Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：无法读取当前会话身份，等待重试。", 10);
+                    return;
+                }
+
                 using (ShopSettingsScope.Enter(shop))
-                    ConversationContextStore.RequestMirrorRemoteRefresh(seller, buyer, ccode);
+                {
+                    BuyerIdentityAliasService.Observe(
+                        seller,
+                        current.Nick,
+                        current.Display,
+                        current.TargetId);
+                    if (!BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+                    {
+                        Log.Info("千牛镜像历史刷新已取消：当前会话已切换，避免跨买家历史串入。");
+                        return;
+                    }
+
+                    var ccode = (current.Ccode ?? string.Empty).Trim();
+                    if (ccode.Length == 0
+                        && BuyerIdentityAliasService.AreEquivalent(seller, qn.Buyer.Nick, current.Nick))
+                    {
+                        // Use a cached CCode only after the live endpoint confirms the same buyer.
+                        ccode = (qn.Buyer.Ccode ?? string.Empty).Trim();
+                    }
+                    if (ccode.Length == 0)
+                    {
+                        Log.ErrorWithMaxCount("千牛镜像历史刷新暂缓：当前会话尚未提供可用 CCode，等待重试。", 10);
+                        return;
+                    }
+
+                    var activeQn = ResolveMessageMirrorQn();
+                    if (activeQn == null || activeQn.Seller == null || activeQn.Buyer == null) return;
+                    var activeShopKey = ShopIdentityResolver.Resolve(activeQn.Seller).ShopKey;
+                    if (!string.Equals(activeShopKey, shop.ShopKey, StringComparison.Ordinal)
+                        || !BuyerIdentityAliasService.AreEquivalent(seller, activeQn.Buyer.Nick, buyer))
+                    {
+                        return;
+                    }
+
+                    internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
+                    if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+                    ConversationContextStore.RequestMirrorRemoteRefresh(seller, internalBuyer, ccode);
+                }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("请求千牛镜像历史刷新失败：未能确认ShopKey: " + ex.Message, 10);
+                Log.ErrorWithMaxCount("请求千牛镜像历史刷新失败：" + ex.Message, 10);
+            }
+            finally
+            {
+                byte ignored;
+                _messageMirrorHistoryRequests.TryRemove(requestKey, out ignored);
             }
         }
 
@@ -154,7 +232,12 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
 
                 var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                var buyer = (qn.Buyer.Nick ?? string.Empty).Trim();
+                var buyerDisplay = (qn.Buyer.Nick ?? string.Empty).Trim();
+                var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyerDisplay);
+                if (string.IsNullOrWhiteSpace(buyer)) buyer = buyerDisplay;
+                var buyerLabel = BuyerIdentityAliasService.ResolveDisplay(seller, buyer);
+                if (string.IsNullOrWhiteSpace(buyerLabel)) buyerLabel = buyerDisplay;
+
                 var shopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey;
                 var identityChanged = !string.Equals(_messageMirrorShopKey, shopKey, StringComparison.Ordinal)
                     || !string.Equals(_messageMirrorSeller, seller, StringComparison.Ordinal)
@@ -186,7 +269,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 var keepBottom = force || identityChanged
                     || scvBody.ScrollableHeight - scvBody.VerticalOffset < 48;
                 if (!force && !identityChanged
-                    && TryAppendBuyerMessages(seller, buyer, turns, keepBottom))
+                    && TryAppendBuyerMessages(seller, buyerLabel, turns, keepBottom))
                 {
                     _messageMirrorSignature = signature;
                     _messageMirrorRenderedTurns = turns;
@@ -194,7 +277,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
 
                 _messageMirrorSignature = signature;
-                RenderMessageMirror(seller, buyer, turns, keepBottom);
+                RenderMessageMirror(seller, buyerLabel, buyer, turns, keepBottom);
                 _messageMirrorRenderedTurns = turns;
             }
             catch (Exception ex)
@@ -311,7 +394,8 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void RenderMessageMirror(
             string seller,
-            string buyer,
+            string buyerDisplay,
+            string buyerIdentity,
             IList<ConversationContextTurn> turns,
             bool keepBottom)
         {
@@ -343,7 +427,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     // Never discard a real sent message just because local matching failed.
                     var nativeBotConversation = FindMessageMirrorActionConversation(
                         seller,
-                        buyer,
+                        buyerIdentity,
                         botAnswer,
                         turn.Timestamp,
                         usedNativeBotConversations);
@@ -352,7 +436,7 @@ namespace Bot.AssistWindow.Widget.Robot
                         : (nativeBotConversation.MirrorAnswerSource ?? string.Empty).Trim();
                     if (string.IsNullOrWhiteSpace(source))
                         source = BotConversationHistoryStore.ResolveAnswerSourceStamp(
-                            seller, buyer, lastBuyerQuestion, botAnswer);
+                            seller, buyerIdentity, lastBuyerQuestion, botAnswer);
                     BotReplyPreset matchedPreset;
                     var isPresetReply = BotReplyPresetService.TryFindPreset(seller, botAnswer, out matchedPreset);
                     // Legacy reply-type labels do not prove which *version* of a
@@ -369,10 +453,10 @@ namespace Bot.AssistWindow.Widget.Robot
                         // Every observed Bot echo gets a durable history row even if
                         // the transient answer card disappeared or the app restarted.
                         var actionShopKey = string.IsNullOrWhiteSpace(_messageMirrorShopKey)
-                            ? ResolveShopKeyForConversation(seller, buyer)
+                            ? ResolveShopKeyForConversation(seller, buyerIdentity)
                             : _messageMirrorShopKey;
                         nativeBotConversation = CtlConversation.Create(
-                            seller, buyer, lastBuyerQuestion, botAnswer, true, source, actionShopKey);
+                            seller, buyerIdentity, lastBuyerQuestion, botAnswer, true, source, actionShopKey);
                         nativeBotConversation.SetSendResult(true, "千牛回显确认已发送");
                         nativeBotConversation.ResendRequested += CtlConversation_ResendRequested;
                         nativeBotConversation.EditRequested += CtlConversation_EditRequested;
@@ -385,9 +469,9 @@ namespace Bot.AssistWindow.Widget.Robot
                     // Keep provenance available after restart and associate the visible
                     // transport echo with the nearest answer card where possible.
                     var botEchoRecordId = BotConversationHistoryStore.RecordBotEcho(
-                        seller, buyer, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
+                        seller, buyerIdentity, lastBuyerQuestion, botAnswer, source, turn.Timestamp, turn.MessageKey);
                     var operatorCorrection = BotConversationHistoryStore.GetManualSource(
-                        ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId);
+                        ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId);
                     if (!string.IsNullOrWhiteSpace(operatorCorrection))
                     {
                         // An explicit correction is more authoritative than a
@@ -401,12 +485,13 @@ namespace Bot.AssistWindow.Widget.Robot
 
                     usedNativeBotConversations.Add(nativeBotConversation);
                     messageElement = BuildMessageMirrorBubble(
-                        turn, seller, buyer, botAnswer, nativeBotConversation,
-                        botEchoRecordId, lastBuyerQuestion);
+                        turn, seller, buyerDisplay, botAnswer, nativeBotConversation,
+                        botEchoRecordId, lastBuyerQuestion, buyerIdentity);
                 }
                 else
                 {
-                    messageElement = BuildMessageMirrorBubble(turn, seller, buyer);
+                    messageElement = BuildMessageMirrorBubble(
+                        turn, seller, buyerDisplay, null, null, null, null, buyerIdentity);
                 }
 
                 if (messageElement == null) continue;
@@ -457,7 +542,8 @@ namespace Bot.AssistWindow.Widget.Robot
             string botAnswer = null,
             CtlConversation botAction = null,
             string botEchoRecordId = null,
-            string botQuestion = null)
+            string botQuestion = null,
+            string buyerIdentity = null)
         {
             var isSeller = string.Equals(turn.Role, "assistant", StringComparison.Ordinal);
             var isBot = isSeller && botAction != null;
@@ -522,8 +608,9 @@ namespace Bot.AssistWindow.Widget.Robot
                 MaxWidth = maxWidth,
                 Child = text
             };
+            buyerIdentity = string.IsNullOrWhiteSpace(buyerIdentity) ? buyer : buyerIdentity;
             bubble.ContextMenu = isBot
-                ? BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer,
+                ? BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer,
                     string.IsNullOrWhiteSpace(botQuestion) ? botAction.MirrorQuestionText : botQuestion,
                     messageText, botEchoRecordId, bubble)
                 : BuildCopyOnlyContextMenu(messageText, bubble);
@@ -578,7 +665,8 @@ namespace Bot.AssistWindow.Widget.Robot
             CtlConversation action,
             ConversationContextTurn turn,
             string seller,
-            string buyer,
+            string buyerIdentity,
+            string buyerDisplay,
             string question,
             string messageText,
             string sourceRecordId,
@@ -588,7 +676,7 @@ namespace Bot.AssistWindow.Widget.Robot
             // The real transport message row takes priority over a transient
             // reply card or a text-only guess. Manual corrections remain scoped
             // to this exact message ID.
-            var shopKey = ResolveShopKeyForConversation(seller, buyer);
+            var shopKey = ResolveShopKeyForConversation(seller, buyerIdentity);
             Func<string> currentSource = () =>
             {
                 var corrected = BotConversationHistoryStore.GetManualSource(
@@ -596,11 +684,11 @@ namespace Bot.AssistWindow.Widget.Robot
                 if (!string.IsNullOrWhiteSpace(corrected)) return corrected;
                 var row = string.IsNullOrWhiteSpace(shopKey)
                     ? null
-                    : BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 200)
+                    : BotConversationHistoryStore.LoadRecent(shopKey, seller, buyerIdentity, 200)
                         .FirstOrDefault(x => string.Equals(x.EntityId, sourceRecordId, StringComparison.Ordinal));
                 return row != null && !string.IsNullOrWhiteSpace(row.AnswerSource)
                     ? row.AnswerSource.Trim()
-                    : ResolveMirrorBotSource(seller, buyer, question, action, messageText);
+                    : ResolveMirrorBotSource(seller, buyerIdentity, question, action, messageText);
             };
             var timestamp = turn == null || turn.Timestamp == DateTime.MinValue
                 ? "时间未记录" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
@@ -612,7 +700,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 var manuallyCorrected = !string.IsNullOrWhiteSpace(
                     BotConversationHistoryStore.GetManualSource(shopKey, seller, sourceRecordId));
                 KnowledgeCenterV2UiBridge.ShowBotReplyTarget(
-                    Window.GetWindow(this), seller, buyer, messageText,
+                    Window.GetWindow(this), seller, buyerIdentity, messageText,
                     sourceRecordId, source, manuallyCorrected, shopKey);
             };
             menu.Items.Insert(0, view);
@@ -620,7 +708,7 @@ namespace Bot.AssistWindow.Widget.Robot
             var searchKnowledge = new MenuItem { Header = "知识库检索问题" };
             searchKnowledge.Click += (s, e) =>
                 KnowledgeCenterV2UiBridge.ShowBotReplySearch(
-                    Window.GetWindow(this), seller, buyer, question, messageText, shopKey);
+                    Window.GetWindow(this), seller, buyerIdentity, question, messageText, shopKey);
             menu.Items.Add(searchKnowledge);
 
             if (action != null && action.MirrorCanResend)
@@ -656,7 +744,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     + "\n来源标签：" + source
                     + "\n来源依据：" + route.Evidence
                     + "\n\n消息所属客服：" + seller
-                    + "\n买家：" + buyer
+                    + "\n买家：" + buyerDisplay
                     + "\n发送时间：" + timestamp
                     + "\n发送者：Bot"
                     + "\n消息记录ID：" + (string.IsNullOrWhiteSpace(sourceRecordId)
@@ -694,7 +782,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 // producer stamp for future replies with the same answer.
                 if (action != null) action.MirrorSetAnswerSource(edited);
                 Log.Info("Bot回复来源标签已由消息菜单修改: seller=" + seller
-                    + ", buyer=" + buyer + ", record=" + sourceRecordId);
+                    + ", buyer=" + buyerDisplay + ", record=" + sourceRecordId);
             };
             menu.Items.Add(editSource);
             return menu;

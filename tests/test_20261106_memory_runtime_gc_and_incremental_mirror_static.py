@@ -48,13 +48,13 @@ def test_memory_sampling_reports_gc_generations_and_native_pressure():
 def test_buyer_only_append_preserves_bot_source_and_fallback_rendering():
     mirror = src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     assert "private List<ConversationContextTurn> _messageMirrorRenderedTurns;" in mirror
-    assert "TryAppendBuyerMessages(seller, buyer, turns, keepBottom)" in mirror
+    assert "TryAppendBuyerMessages(seller, buyerLabel, turns, keepBottom)" in mirror
     assert "if (!force && !identityChanged" in mirror
     assert "if (!SameDisplayedTurn(displayed[i], turns[i])) return false;" in mirror
     assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in mirror
     assert "|| turn.Withdrawn" in mirror
     assert "stkDialog.Children.Add(BuildMessageMirrorBubble(turn, seller, buyer));" in mirror
-    assert "RenderMessageMirror(seller, buyer, turns, keepBottom);" in mirror
+    assert "RenderMessageMirror(seller, buyerLabel, buyer, turns, keepBottom);" in mirror
     assert "BotConversationHistoryStore.RecordBotEcho(" in mirror
     assert "BotConversationHistoryStore.GetManualSource(" in mirror
     assert "BuildMessageMirrorBotContextMenu(" in mirror
@@ -67,7 +67,7 @@ def test_buyer_only_append_preserves_bot_source_and_fallback_rendering():
 def test_original_100_turn_history_is_not_truncated_by_append_optimization():
     source = src("src/Bot/ChromeNs/ConversationContextStore.cs")
     mirror = src("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
-    assert "GetMirrorTurns(seller, buyer, 100)" in mirror
+    assert "GetMirrorTurns(seller, internalBuyer, 100)" in mirror
     assert "Math.Min(100, maxTurns)" in source
     assert "eligible.Skip(Math.Max(0, eligible.Count - take))" in source
 

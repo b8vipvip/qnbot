@@ -389,7 +389,10 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             if (shopKey.Length == 0) return new List<ConversationMirrorSnapshot>();
 
-            var conversationLimit = Math.Max(1, Math.Min(256, maxConversations));
+            // Zero/non-positive limits mean the complete retained mirror. The mirror
+            // is already bounded by the timeline's explicit 7-day retention and
+            // inactive-state sweep; silently cutting it to 100 turns hid real messages.
+            var conversationLimit = maxConversations <= 0 ? int.MaxValue : maxConversations;
             var turnLimit = Math.Max(10, Math.Min(100, maxTurns));
             var now = DateTime.Now;
             var result = new List<ConversationMirrorSnapshot>();
@@ -452,6 +455,8 @@ namespace Bot.ChromeNs
             {
                 state.LastTouchedUtc = DateTime.UtcNow;
                 Cleanup(state, now);
+                // Bot Web must mirror the complete retained desktop timeline, not
+                // silently truncate a buyer conversation to the latest 100 messages.
                 var take = Math.Max(10, Math.Min(100, maxTurns));
                 // OrderBy is stable: when Qianniu gives several messages the same timestamp,
                 // keep their original arrival/history order instead of reordering by a hash/key.

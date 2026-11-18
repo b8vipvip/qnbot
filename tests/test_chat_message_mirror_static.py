@@ -57,9 +57,9 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
     assert "if (nativeBotConversation == null)" in mirror
     assert "usedNativeBotConversations.Add(nativeBotConversation);" in mirror
     assert "BuildMessageMirrorBubble(" in mirror
-    assert "turn, seller, buyer, botAnswer, nativeBotConversation" in mirror
+    assert "turn, seller, buyerDisplay, botAnswer, nativeBotConversation" in mirror
     assert "messageElement = nativeBotConversation;" not in mirror
-    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in mirror
 
     # Bot bubbles retain their original actions even though the old Q/A card
     # is no longer the rendered element.
@@ -72,7 +72,7 @@ def test_a_suffix_is_transport_only_and_bot_is_rendered_on_right_with_native_act
         assert f'Header = "{label}"' in mirror
 
     # Human seller and buyer messages follow the same bubble layout.
-    assert "messageElement = BuildMessageMirrorBubble(turn, seller, buyer);" in mirror
+    assert "messageElement = BuildMessageMirrorBubble(\n                        turn, seller, buyerDisplay, null, null, null, null, buyerIdentity);" in mirror
 
 
 def test_mirror_renderer_is_wired_into_windows_build():
@@ -93,3 +93,36 @@ def test_message_mirror_identity_and_reads_include_shop_key():
     assert "LoadMessageMirrorTurns(QN qn, string seller, string buyer)" in mirror
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in mirror
     assert "using (ShopSettingsScope.Enter(shop))" in mirror
+
+def test_message_mirror_resolves_live_ccode_and_canonical_buyer_identity():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    request = mirror.split(
+        "private async void RequestMessageMirrorHistory(", 1
+    )[1].split("private void RefreshMessageMirror(", 1)[0]
+
+    # qnbotStatus creates a lightweight Conversation snapshot without CCode.
+    # The mirror must query the live current conversation before fetching history.
+    assert "await qn.GetCurrentConversationID()" in request
+    assert "current.Ccode" in request
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)" in request
+    assert "ConversationContextStore.RequestMirrorRemoteRefresh(seller, internalBuyer, ccode)" in request
+    assert "_messageMirrorHistoryRequests.TryAdd(requestKey, 0)" in request
+
+    # Raw chat events are keyed by the internal buyer nick; the panel may show
+    # the display alias, so all timeline reads must use the canonical identity.
+    assert "ResolveInternalNick(seller, buyerDisplay)" in mirror
+    assert "GetMirrorTurns(seller, internalBuyer, 100)" in mirror
+
+def test_message_mirror_keeps_display_alias_separate_from_canonical_action_identity():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    assert "RenderMessageMirror(seller, buyerLabel, buyer, turns, keepBottom);" in mirror
+    assert "string buyerDisplay,\n            string buyerIdentity," in mirror
+    assert "FindMessageMirrorActionConversation(\n                        seller,\n                        buyerIdentity," in mirror
+    assert "BotConversationHistoryStore.RecordBotEcho(\n                        seller, buyerIdentity," in mirror
+    assert "BuildMessageMirrorBubble(\n                        turn, seller, buyerDisplay, botAnswer" in mirror
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in mirror
+    assert "LoadRecent(shopKey, seller, buyerIdentity, 200)" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" not in mirror
+    assert '"\\n买家：" + buyerDisplay' in mirror
+

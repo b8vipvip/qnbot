@@ -21,7 +21,7 @@ def test_exact_time_sender_header_and_alignment():
 def test_bot_echo_is_a_right_aligned_bubble_not_left_qa_card():
     src=read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     assert "TryExtractBotEchoAnswer(turn, out botAnswer)" in src
-    assert "turn, seller, buyer, botAnswer, nativeBotConversation" in src
+    assert "turn, seller, buyerDisplay, botAnswer, nativeBotConversation" in src
     assert 'var isBot = isSeller && botAction != null;' in src
     assert 'var messageText = turn.Withdrawn ? "已撤回一条消息"' in src
     assert ': isBot ? botAnswer : (turn.Text ?? string.Empty);' in src
@@ -33,7 +33,7 @@ def test_bot_echo_is_a_right_aligned_bubble_not_left_qa_card():
 def test_bot_actions_are_preserved_after_converting_to_bubble():
     src=read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     actions=read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
-    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer," in src
+    assert "BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer," in src
     assert "BuildCopyOnlyContextMenu(messageText, placementTarget)" in src
     assert "action.MirrorRequestResend()" in src
     assert "action.MirrorRequestEdit(currentSource(), sourceRecordId, manuallyCorrected)" in src
