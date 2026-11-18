@@ -329,15 +329,66 @@ function Resolve-LatestRelease([string]$ServerUrl) {
     return Resolve-LatestFromGitHub
 }
 
-function Find-VerifiedLocalPackage([string]$ExpectedHash, [string]$RescueRoot) {
+function Get-PackageVersion([string]$PackagePath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+    try {
+        $releaseEntries = @($archive.Entries | Where-Object {
+            ([string]$_.FullName).Replace('\', '/').TrimStart('/') -ieq 'release-info.json'
+        })
+        if ($releaseEntries.Count -ne 1) {
+            throw "安装包必须且只能包含一个 release-info.json，actual=$($releaseEntries.Count)"
+        }
+
+        $reader = New-Object IO.StreamReader($releaseEntries[0].Open(), [Text.Encoding]::UTF8, $true)
+        try {
+            $packageInfo = ($reader.ReadToEnd() | ConvertFrom-Json)
+        }
+        finally {
+            $reader.Dispose()
+        }
+
+        $version = Normalize-Version ([string]$packageInfo.version)
+        if ([string]::IsNullOrWhiteSpace($version)) {
+            throw '安装包 release-info.json 缺少有效 version。'
+        }
+        return $version
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Find-VerifiedLocalPackage([string]$ExpectedVersion, [string]$ExpectedHash, [string]$RescueRoot) {
     $candidates = New-Object System.Collections.ArrayList
 
-    $cwdPackage = Join-Path ([IO.Path]::GetFullPath((Get-Location).Path)) 'qianniu-bot-x64.zip'
-    $downloadPackage = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\qianniu-bot-x64.zip'
-    $scriptPackage = Join-Path $PSScriptRoot 'qianniu-bot-x64.zip'
-    $cachePackage = Join-Path $RescueRoot 'qianniu-bot-x64.zip'
+    # The script's own directory is the primary offline package location.
+    # Also accept the version-suffixed filename used by the download cache.
+    $scriptDir = [IO.Path]::GetFullPath($PSScriptRoot)
+    $scriptPackage = Join-Path $scriptDir 'qianniu-bot-x64.zip'
+    $scriptVersionedPackage = Join-Path $scriptDir ("qianniu-bot-x64-$ExpectedVersion.zip")
 
-    foreach ($candidate in @($cwdPackage, $downloadPackage, $scriptPackage, $cachePackage)) {
+    $cwdDir = [IO.Path]::GetFullPath((Get-Location).Path)
+    $cwdPackage = Join-Path $cwdDir 'qianniu-bot-x64.zip'
+    $cwdVersionedPackage = Join-Path $cwdDir ("qianniu-bot-x64-$ExpectedVersion.zip")
+
+    $downloadDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads'
+    $downloadPackage = Join-Path $downloadDir 'qianniu-bot-x64.zip'
+    $downloadVersionedPackage = Join-Path $downloadDir ("qianniu-bot-x64-$ExpectedVersion.zip")
+
+    $cachePackage = Join-Path $RescueRoot 'qianniu-bot-x64.zip'
+    $cacheVersionedPackage = Join-Path $RescueRoot ("qianniu-bot-x64-$ExpectedVersion.zip")
+
+    foreach ($candidate in @(
+        $scriptPackage,
+        $scriptVersionedPackage,
+        $cwdPackage,
+        $cwdVersionedPackage,
+        $downloadPackage,
+        $downloadVersionedPackage,
+        $cacheVersionedPackage,
+        $cachePackage
+    )) {
         if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $full = [IO.Path]::GetFullPath($candidate)
@@ -346,9 +397,15 @@ function Find-VerifiedLocalPackage([string]$ExpectedHash, [string]$RescueRoot) {
 
     foreach ($candidate in @($candidates)) {
         try {
+            $packageVersion = Get-PackageVersion $candidate
+            if (-not [string]::Equals($packageVersion, $ExpectedVersion, [StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host "本地安装包版本不匹配，忽略：$candidate｜expected=$ExpectedVersion actual=$packageVersion" -ForegroundColor Yellow
+                continue
+            }
+
             $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToUpperInvariant()
             if ($actual -eq $ExpectedHash) {
-                Write-Host "检测到本地已存在并通过 SHA-256 校验的安装包，跳过重新下载：$candidate" -ForegroundColor Green
+                Write-Host "检测到脚本目录或本地缓存中存在相同版本且通过 SHA-256 校验的安装包，跳过重新下载：$candidate" -ForegroundColor Green
                 return $candidate
             }
             Write-Host "发现本地安装包但 SHA-256 不匹配，忽略：$candidate" -ForegroundColor Yellow
@@ -459,7 +516,7 @@ $root = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\rescue'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 
 if ($downloadRequired) {
-    $localPackage = Find-VerifiedLocalPackage $ExpectedSha256 $root
+    $localPackage = Find-VerifiedLocalPackage $ExpectedVersion $ExpectedSha256 $root
     if (-not [string]::IsNullOrWhiteSpace($localPackage)) {
         $PackagePath = $localPackage
         $downloadRequired = $false

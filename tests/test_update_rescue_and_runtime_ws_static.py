@@ -205,3 +205,22 @@ def test_rescue_wrapper_waits_for_updater_process_without_waiting_for_bot_descen
     assert "$installer.Refresh()" in launch
     assert "$installer.ExitCode" in launch
     assert "-PassThru -Wait" not in launch
+
+
+def test_rescue_updater_prefers_script_directory_and_requires_exact_embedded_version():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+    lookup = rescue[
+        rescue.index("function Get-PackageVersion("):
+        rescue.index("function Download-One(")
+    ]
+
+    assert "function Get-PackageVersion([string]$PackagePath)" in lookup
+    assert "release-info.json" in lookup
+    assert "Normalize-Version ([string]$packageInfo.version)" in lookup
+    assert "function Find-VerifiedLocalPackage([string]$ExpectedVersion, [string]$ExpectedHash" in lookup
+    assert lookup.index("$scriptPackage") < lookup.index("$cwdPackage")
+    assert lookup.index("$cwdPackage") < lookup.index("$downloadPackage")
+    assert "qianniu-bot-x64-$ExpectedVersion.zip" in lookup
+    assert "本地安装包版本不匹配，忽略" in lookup
+    assert "Get-FileHash -LiteralPath $candidate -Algorithm SHA256" in lookup
+    assert "Find-VerifiedLocalPackage $ExpectedVersion $ExpectedSha256 $root" in rescue
