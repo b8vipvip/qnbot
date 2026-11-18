@@ -514,7 +514,13 @@ try {
     $args += ' -ExpectedSha256 ' + (Quote-Arg $ExpectedSha256)
     $args += ' -ExpectedVersion ' + (Quote-Arg $ExpectedVersion)
     $args += ' -CurrentPid ' + $currentPid
-    $installer = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru -Wait
+    # Wait for the updater process itself only. Start-Process -Wait also waits for
+    # descendant processes; the updater launches the long-running Bot.exe, so
+    # that option leaves this rescue wrapper open for the entire Bot session.
+    $installer = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru
+    if ($null -eq $installer) { throw '无法启动目标版本更新器。' }
+    $installer.WaitForExit()
+    $installer.Refresh()
     if ($installer.ExitCode -ne 0) { throw "目标更新器执行失败，exitCode=$($installer.ExitCode)。目标更新器会按事务备份自动回滚。" }
 
     $installedInfoPath = Join-Path $InstallDir 'release-info.json'

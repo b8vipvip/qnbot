@@ -192,3 +192,14 @@ def test_rescue_control_plane_timeout_fails_fast_to_github():
     assert "Invoke-JsonRequest $url" in rescue
     assert "} 3 1" in rescue
     assert "GitHub 是权威回退" in rescue or "GitHub is the authoritative fallback" in rescue
+
+
+def test_rescue_wrapper_waits_for_updater_process_without_waiting_for_bot_descendants():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+    launch = rescue[rescue.index("# Wait for the updater process itself only."):rescue.index("$installedInfoPath = Join-Path $InstallDir")]
+
+    assert "Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru" in launch
+    assert "$installer.WaitForExit()" in launch
+    assert "$installer.Refresh()" in launch
+    assert "$installer.ExitCode" in launch
+    assert "-PassThru -Wait" not in launch
