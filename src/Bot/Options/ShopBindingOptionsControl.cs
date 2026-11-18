@@ -258,7 +258,7 @@ namespace Bot.Options
             panel.Children.Add(serverCard);
             panel.Children.Add(new TextBlock
             {
-                Text = "该地址对本机所有店铺一致，不需要逐店填写。部署域名变化时通过客户端构建配置或 QIANNIU_BOT_SERVER_URL 覆盖。",
+                Text = "该地址对本机所有店铺一致，可通过托盘【帮助 → 服务端配置】修改。店铺 Token 和数据仍按 ShopKey 独立隔离。",
                 FontSize = 11,
                 Foreground = Brushes.Gray,
                 TextWrapping = TextWrapping.Wrap,

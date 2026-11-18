@@ -29,7 +29,7 @@ def test_rescue_updater_prefers_control_plane_and_does_not_require_manifest_down
     rescue = read("scripts/qianniu-bot-rescue-update.ps1")
 
     assert 'ControlPlaneUrl = ""' in rescue
-    assert "$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'" in rescue
+    assert "$BuiltInControlPlaneUrl = 'https://qn.numbot.cn'" in rescue
     assert "/api/public/v1/bot-update/latest" in rescue
     assert "Resolve-LatestFromControlPlane" in rescue
     assert "return Resolve-LatestFromGitHub" in rescue
@@ -49,7 +49,8 @@ def test_rescue_updater_autodetects_installed_control_plane_and_migrates_old_hos
     assert "Bin\\Bot.exe.config" in rescue
     assert "BotControlPlaneDefaultUrl" in rescue
     assert "$ObsoleteControlPlaneHost = 'botserver.mv3.cn'" in rescue
-    assert "$CurrentControlPlaneHost = 'aboter.mv3.cn'" in rescue
+    assert "$LegacyControlPlaneHost = 'aboter.mv3.cn'" in rescue
+    assert "$CurrentControlPlaneHost = 'qn.numbot.cn'" in rescue
     assert "$ControlPlaneUrl = Resolve-ControlPlaneUrl $InstallDir" in rescue
 
 
@@ -58,13 +59,17 @@ def test_client_update_endpoint_uses_correct_default_and_preserves_dynamic_overr
     store = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
     network = read("src/Bot/Update/BotUpdateService.Network.Fast.cs")
 
-    assert 'BotControlPlaneDefaultUrl" value="http://aboter.mv3.cn"' in app_config
-    assert 'BuiltInDefaultServerUrl = "http://aboter.mv3.cn"' in store
+    assert 'BotControlPlaneDefaultUrl" value="https://qn.numbot.cn"' in app_config
+    assert 'BuiltInDefaultServerUrl = "https://qn.numbot.cn"' in store
     assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in store
+    assert 'UrlOverrideKey = "ControlPlaneUrlOverride"' in store
     assert "GetProgramServerUrl()" in store
+    assert "PersistentParams.GetParam2Key(UrlOverrideKey, LegacyScope" in store
     assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in store
     assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in store
-    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in store
+    assert 'LegacyBuiltInHost = "aboter.mv3.cn"' in store
+    assert 'CurrentBuiltInHost = "qn.numbot.cn"' in store
+    assert "TryNormalizeServerUrl" in store
     assert "Uri.TryCreate" in store
     assert "GetConfiguredControlPlaneUrls" in network
     assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network

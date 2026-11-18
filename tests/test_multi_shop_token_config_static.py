@@ -47,15 +47,22 @@ def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_mig
     config = read("src/Bot/App.config")
     assert 'DefaultUrlSettingKey = "BotControlPlaneDefaultUrl"' in connection
     assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in connection
+    assert 'UrlOverrideKey = "ControlPlaneUrlOverride"' in connection
     assert "GetProgramServerUrl" in connection
     assert "SaveProgramServerUrl" in connection
+    assert "TryNormalizeServerUrl" in connection
+    assert "PersistentParams.GetParam2Key(UrlOverrideKey, LegacyScope" in connection
     assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in connection
+    assert connection.index("PersistentParams.GetParam2Key(UrlOverrideKey") < connection.index("Environment.GetEnvironmentVariable")
+    assert connection.index("Environment.GetEnvironmentVariable") < connection.index("PersistentParams.GetParam2Key(UrlKey")
     assert "_settings.TryGetString(UrlKey" in connection  # one-time migration from PR #89
     assert "_settings.SetString(UrlKey" not in connection
     assert 'key="BotControlPlaneDefaultUrl"' in config
-    assert 'value="http://aboter.mv3.cn"' in config
+    assert 'value="https://qn.numbot.cn"' in config
+    assert 'BuiltInDefaultServerUrl = "https://qn.numbot.cn"' in connection
     assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in connection
-    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in connection
+    assert 'LegacyBuiltInHost = "aboter.mv3.cn"' in connection
+    assert 'CurrentBuiltInHost = "qn.numbot.cn"' in connection
 
 
 def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url():
@@ -244,3 +251,16 @@ def test_runtime_connection_status_surfaces_explicit_unauthorized():
     assert 'state.LastError.IndexOf("HTTP 401", StringComparison.OrdinalIgnoreCase)' in segment
     assert 'return "令牌已失效";' in segment
     assert segment.index('return "令牌已失效";') < segment.index('return "已连接";')
+
+
+
+def test_tray_help_menu_exposes_validated_persistent_server_configuration():
+    menu = read("src/Bot/AssistWindow/NotifyIcon/MenuCreator/HelpMenuCreator.cs")
+    store = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
+    assert 'CreateItem("服务端配置", OnServerConfigClicked)' in menu
+    assert "GetLegacyGlobalServerUrl()" in menu
+    assert "TryNormalizeServerUrl" in menu
+    assert "SaveProgramServerUrl" in menu
+    assert '"/healthz"' in menu
+    assert "ControlPlaneUrlOverride" in store
+    assert "后续请求将使用新地址" in menu

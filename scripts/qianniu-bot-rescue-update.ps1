@@ -13,10 +13,11 @@ $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'
+$BuiltInControlPlaneUrl = 'https://qn.numbot.cn'
 $ServerUrlEnvironmentKey = 'QIANNIU_BOT_SERVER_URL'
 $ObsoleteControlPlaneHost = 'botserver.mv3.cn'
-$CurrentControlPlaneHost = 'aboter.mv3.cn'
+$LegacyControlPlaneHost = 'aboter.mv3.cn'
+$CurrentControlPlaneHost = 'qn.numbot.cn'
 
 function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
@@ -44,21 +45,28 @@ function Normalize-Version([string]$Value) {
 }
 
 function Normalize-ControlPlaneUrl([string]$Value) {
-    $value = ([string]$Value).Trim().TrimEnd('/')
+    $value = ([string]$Value).Trim()
     if ([string]::IsNullOrWhiteSpace($value)) { return '' }
+    if ($value -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') {
+        $value = 'https://' + $value
+    }
+    $value = $value.TrimEnd('/')
     if ($value.EndsWith('/v1', [StringComparison]::OrdinalIgnoreCase)) {
         $value = $value.Substring(0, $value.Length - 3).TrimEnd('/')
     }
 
     $parsed = $null
     if ([Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$parsed)) {
-        if ([string]::Equals($parsed.Host, $ObsoleteControlPlaneHost, [StringComparison]::OrdinalIgnoreCase)) {
+        if ([string]::Equals($parsed.Host, $ObsoleteControlPlaneHost, [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($parsed.Host, $LegacyControlPlaneHost, [StringComparison]::OrdinalIgnoreCase)) {
             $builder = New-Object System.UriBuilder -ArgumentList $parsed.AbsoluteUri
+            $builder.Scheme = 'https'
             $builder.Host = $CurrentControlPlaneHost
+            $builder.Port = -1
             $value = $builder.Uri.AbsoluteUri.TrimEnd('/')
         }
     }
-    return $value
+    return $value.TrimEnd('/')
 }
 
 function Resolve-InstallDir([string]$Requested) {
