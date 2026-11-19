@@ -23,6 +23,7 @@ namespace Bot.ChromeNs
         {
             public bool Match;
             public DateTime ExpiresUtc;
+            public string ProfileRevision;
         }
 
         private sealed class ReceptionAuditEntry
@@ -95,8 +96,15 @@ namespace Bot.ChromeNs
             }
 
             var cacheKey = shop.ShopKey;
+            // The cache is shared by multiple Bot processes indirectly through the
+            // same profile file. Compare its on-disk revision before reusing a match,
+            // so a disable/product-scope change from another process takes effect now.
+            var profileRevision = KugouReceptionConfigService.GetProfileRevision(shop);
             ShopDetection cached;
-            if (Shops.TryGetValue(cacheKey, out cached) && cached.ExpiresUtc > DateTime.UtcNow)
+            if (!string.IsNullOrEmpty(profileRevision)
+                && Shops.TryGetValue(cacheKey, out cached)
+                && cached.ExpiresUtc > DateTime.UtcNow
+                && string.Equals(cached.ProfileRevision, profileRevision, StringComparison.Ordinal))
                 return cached.Match;
 
             var matched = false;
@@ -121,6 +129,7 @@ namespace Bot.ChromeNs
             Shops[cacheKey] = new ShopDetection
             {
                 Match = matched,
+                ProfileRevision = profileRevision,
                 ExpiresUtc = DateTime.UtcNow.AddMinutes(matched ? 10 : 2)
             };
             return matched;
