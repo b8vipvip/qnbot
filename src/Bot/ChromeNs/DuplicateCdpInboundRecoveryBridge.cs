@@ -344,10 +344,76 @@ namespace Bot.ChromeNs
                 + ", type=" + type + ", suppressedTotal=" + count);
         }
 
-        private static object GetSessionTransitionLock(string sessionId)
+        private static int GetSessionTransitionLockIndex(string sessionId)
         {
             var hash = StringComparer.Ordinal.GetHashCode(sessionId ?? string.Empty);
-            return SessionTransitionLocks[(hash & int.MaxValue) % SessionTransitionLocks.Length];
+            return (hash & int.MaxValue) % SessionTransitionLocks.Length;
+        }
+
+        private static object GetSessionTransitionLock(string sessionId)
+        {
+            return SessionTransitionLocks[GetSessionTransitionLockIndex(sessionId)];
+        }
+
+        // A forwarded event depends on two physical sockets: its source and the
+        // authoritative target. Acquire both fixed stripes in deterministic order
+        // so neither identity can change between the final checks and dispatch.
+        private static bool WithSessionTransitionLocks(
+            string sourceSession, string targetSession, Func<bool> action)
+        {
+            if (action == null) return false;
+            var sourceIndex = GetSessionTransitionLockIndex(sourceSession);
+            var targetIndex = GetSessionTransitionLockIndex(targetSession);
+            if (sourceIndex == targetIndex)
+            {
+                lock (SessionTransitionLocks[sourceIndex]) return action();
+            }
+            var firstIndex = Math.Min(sourceIndex, targetIndex);
+            var secondIndex = Math.Max(sourceIndex, targetIndex);
+            lock (SessionTransitionLocks[firstIndex])
+            {
+                lock (SessionTransitionLocks[secondIndex])
+                {
+                    return action();
+                }
+            }
+        }
+
+        // The original CDP dispatcher must use the same transition stripe as the
+        // recovery queue. A check followed by an unlocked dispatch leaves a narrow
+        // A->B race in which an old physical socket can still deliver to its old QN.
+        internal static bool TryDispatchRawInbound(
+            CDPClient client, string type, string response)
+        {
+            if (client == null || string.IsNullOrEmpty(response)) return false;
+            var sessionId = (client.SessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return false;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return false;
+
+            lock (GetSessionTransitionLock(sessionId))
+            {
+                if (client.IsInvalidated || !server.IsWebSocketSessionConnected(sessionId))
+                    return false;
+
+                // Status is the identity-discovery channel and remains available to
+                // connected standby sockets. All business traffic must still match
+                // the exact current ShopKey and authoritative owner.
+                if (!string.Equals(type, "qnbotStatus", StringComparison.Ordinal))
+                {
+                    if (IsSessionIdentityTransitioning(sessionId) || client.IsShopIdentityRetired)
+                        return false;
+                    var shopKey = (client.ShopKey ?? string.Empty).Trim();
+                    if (shopKey.Length == 0
+                        || !string.Equals(
+                            server.GetShopKeyForSession(sessionId), shopKey, StringComparison.Ordinal)
+                        || !server.IsAuthoritativeShopSession(shopKey, sessionId))
+                        return false;
+                }
+
+                client.DispatchInboundEvent(type, response);
+                return true;
+            }
         }
 
         private static void ReleaseAcceptedFingerprint(PendingInboundEvent item)
@@ -626,38 +692,48 @@ namespace Bot.ChromeNs
                 && string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
-            // Serialize the final identity/connection check and dispatch against
-            // MarkSessionIdentityTransition and ForgetClosedSession. Without this shared
-            // per-session stripe, a transition could begin after the last check but before
-            // DispatchInboundEvent, forwarding an old-shop payload across the boundary.
-            lock (GetSessionTransitionLock(item.SourceSession))
+            // Source and target identities can transition independently. Lock both
+            // fixed stripes in deterministic order so a target login switch cannot
+            // race the source-side check and receive a stale forwarded event.
+            var forwarded = false;
+            var accepted = WithSessionTransitionLocks(item.SourceSession, target.SessionId, () =>
             {
                 if (IsSessionIdentityTransitioning(item.SourceSession)
                     || !IsSourceSessionConnected(item.SourceSession))
                     return false;
-                // The source mapping can change A -> B -> marker cleared between the
-                // optimistic lookup above and this lock. Re-read it while holding the
-                // same stripe used by identity transitions, and never dispatch a payload
-                // under a ShopKey different from the physical source's current binding.
+
                 var finalMappedShopKey = server.GetShopKeyForSession(item.SourceSession);
                 if (!string.Equals(finalMappedShopKey, shopKey, StringComparison.Ordinal))
                 {
                     ReleaseAcceptedFingerprint(item);
                     return true;
                 }
-                if (target.IsInvalidated || target.IsShopIdentityRetired
+
+                if (IsSessionIdentityTransitioning(target.SessionId)
+                    || target.IsInvalidated
+                    || target.IsShopIdentityRetired
+                    || !IsSourceSessionConnected(target.SessionId)
+                    || !string.Equals(
+                        server.GetShopKeyForSession(target.SessionId), shopKey, StringComparison.Ordinal)
                     || !server.IsAuthoritativeShopSession(shopKey, target.SessionId))
                     return false;
+
                 using (CDPClient.BeginForwardedInbound(item.SourceSession))
                 {
                     target.DispatchInboundEvent(item.Type, item.Response);
                 }
+                forwarded = true;
+                return true;
+            });
+            if (!accepted) return false;
+            if (forwarded)
+            {
+                Log.Info("重复千牛CDP入站消息已按ShopKey转交权威会话: shopRef=" + PrivacyToken("shop", shopKey)
+                    + ", sellerRef=" + PrivacyToken("seller", item.Seller)
+                    + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
+                    + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
+                    + ", type=" + item.Type);
             }
-            Log.Info("重复千牛CDP入站消息已按ShopKey转交权威会话: shopRef=" + PrivacyToken("shop", shopKey)
-                + ", sellerRef=" + PrivacyToken("seller", item.Seller)
-                + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
-                + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
-                + ", type=" + item.Type);
             return true;
         }
 
