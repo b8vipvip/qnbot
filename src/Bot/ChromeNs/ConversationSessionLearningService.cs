@@ -1769,13 +1769,37 @@ namespace Bot.ChromeNs
                         + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
                 }
             };
-            var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
-                messages, 2600, 0.05, 50, CancellationToken.None));
-            if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
+            for (var attempt = 0; attempt < 2; attempt++)
             {
-                throw new Exception(result == null ? "AI复盘结果为空" : result.Error);
+                StructuredChatResult result;
+                try
+                {
+                    result = await Task.Run(() => MyOpenAI.CallStructuredChat(
+                        messages, 2600, 0.05, 50, CancellationToken.None));
+                }
+                catch (Exception ex)
+                {
+                    var error = ex.Message ?? string.Empty;
+                    if (!IsRetryableKnowledgeCorpusError(error)) throw;
+                    if (attempt == 1) break;
+                    await Task.Delay(1200);
+                    continue;
+                }
+
+                if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
+                {
+                    var error = result == null ? "AI复盘结果为空" : result.Error;
+                    if (!IsRetryableKnowledgeCorpusError(error))
+                        throw new Exception(result == null ? "AI复盘结果为空" : result.Error);
+                    if (attempt == 1) break;
+                    await Task.Delay(1200);
+                    continue;
+                }
+
+                // JSON/schema errors are deterministic input failures; do not retry them.
+                return ParseObject(result.Answer);
             }
-            return ParseObject(result.Answer);
+            throw new InvalidOperationException("会话复盘AI请求重试后仍不可用");
         }
 
         private static string BuildTranscript(List<ConversationContextTurn> turns, List<BotConversationHistoryEntity> cards)
