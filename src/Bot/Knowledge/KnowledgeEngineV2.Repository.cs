@@ -804,9 +804,30 @@ namespace Bot.Knowledge
 
         private static List<string> ParseList(string json)
         {
-            try { return JsonConvert.DeserializeObject<List<string>>(json ?? "[]") ?? new List<string>(); }
-            catch { return new List<string>(); }
+            if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+
+            List<string> values;
+            try
+            {
+                values = JsonConvert.DeserializeObject<List<string>>(json);
+            }
+            catch (Exception ex)
+            {
+                // A corrupt metadata field must not silently become an empty list:
+                // callers could otherwise re-save a partial record or mark a partial
+                // Knowledge V2 corpus as fully reviewed.
+                throw new InvalidDataException(
+                    "Knowledge V2记录包含无效的列表字段JSON，已中止读取以避免静默丢失知识元数据。",
+                    ex);
+            }
+
+            if (values == null || values.Any(x => x == null))
+                throw new InvalidDataException(
+                    "Knowledge V2记录的列表字段为空值或包含null，已中止读取以保护原始数据。");
+
+            return values;
         }
+
 
         private static void MirrorOneToLegacy(ShopContext shop, KnowledgeV2Record record)
         {
