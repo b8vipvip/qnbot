@@ -118,3 +118,24 @@ def test_per_buyer_reply_gates_are_reference_counted_and_expired_cooldowns_prune
     assert "pair.Value <= now" in cleanup
     assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
     assert "CleanupExpiredOffHoursDeliveredUntil();" in text
+
+
+def test_canonical_premerge_offhours_cooldowns_are_pruned_by_elapsed_time():
+    source = read(ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs")
+    canonical = source[source.index("internal static class CanonicalPreMergeDecisionService"):]
+    cleanup = canonical[
+        canonical.index("private static void CleanupExpiredOffHoursDeliveredUntil"):
+        canonical.index("public static async Task<CanonicalPreMergeOutcome> HandleAsync")
+    ]
+    handler = canonical[
+        canonical.index("public static async Task<CanonicalPreMergeOutcome> HandleAsync"):
+        canonical.index("private static async Task<bool> SendFixedAsync")
+    ]
+
+    assert "Interlocked.Read(ref _lastOffHoursCleanupUtcTicks)" in cleanup
+    assert "Interlocked.CompareExchange(" in cleanup
+    assert "TimeSpan.FromMinutes(1).Ticks" in cleanup
+    assert "pair.Value <= now" in cleanup
+    assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
+    assert "CleanupExpiredOffHoursDeliveredUntil();" in handler
+    assert handler.index("CleanupExpiredOffHoursDeliveredUntil();") < handler.index("if (item == null")
