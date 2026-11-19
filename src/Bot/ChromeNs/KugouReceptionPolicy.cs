@@ -41,6 +41,28 @@ namespace Bot.ChromeNs
         private static readonly Regex PhotoInstruction = new Regex(
             "拍照|截图|拍一张|发图片|发张图|拍给我", RegexOptions.Compiled);
         private static readonly object AuditSync = new object();
+        private static long _lastShopCacheSweepUtcTicks;
+
+        private static void CleanupExpiredShopCache()
+        {
+            // Keep inactive ShopKey entries from accumulating in long-running multi-shop
+            // clients. Sweep at most once per minute and remove only the exact expired pair,
+            // so a concurrent refresh cannot be deleted by an older enumeration snapshot.
+            var nowUtcTicks = DateTime.UtcNow.Ticks;
+            var previousTicks = Interlocked.Read(ref _lastShopCacheSweepUtcTicks);
+            if (nowUtcTicks - previousTicks < TimeSpan.FromMinutes(1).Ticks
+                || Interlocked.CompareExchange(
+                    ref _lastShopCacheSweepUtcTicks, nowUtcTicks, previousTicks) != previousTicks)
+                return;
+
+            var now = DateTime.UtcNow;
+            var exactEntries = (ICollection<KeyValuePair<string, ShopDetection>>)Shops;
+            foreach (var pair in Shops)
+            {
+                if (pair.Value != null && pair.Value.ExpiresUtc <= now)
+                    exactEntries.Remove(pair);
+            }
+        }
 
         internal static ShopContext ResolveShopForSeller(string seller)
         {
@@ -55,6 +77,7 @@ namespace Bot.ChromeNs
 
         public static bool Applies(string seller)
         {
+            CleanupExpiredShopCache();
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return false;
             ShopContext shop;
