@@ -145,3 +145,30 @@ def test_message_mirror_history_reads_survive_cdp_contention_and_are_coalesced()
     assert 'InvokeForHistory<JObject>("im.singlemsg.GetRemoteHisMsg"' in context
     assert "千牛镜像历史同步完成" in context
     assert "qn.Buyer.Ccode" in mirror
+
+
+def test_message_mirror_preserves_last_good_timeline_on_transient_read_failure():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    loader = mirror.split(
+        "private List<ConversationContextTurn> LoadMessageMirrorTurns(", 1
+    )[1].split("private async void RequestMessageMirrorHistory(", 1)[0]
+    refresh = mirror.split(
+        "private void RefreshMessageMirror(bool force)", 1
+    )[1].split("private static bool SameDisplayedTurn(", 1)[0]
+    identity = refresh.split("if (identityChanged)", 1)[1].split(
+        "var turns = LoadMessageMirrorTurns", 1
+    )[0]
+    outer_catch = refresh.split("catch (Exception ex)", 1)[1]
+
+    # A transient read/scope exception must propagate to the outer refresh catch;
+    # it must not be converted into an empty timeline that erases visible messages.
+    assert "catch (Exception ex)" not in loader
+    assert "return new List<ConversationContextTurn>()" not in loader
+    assert "Log.ErrorWithMaxCount(\"刷新千牛镜像聊天区失败：" in outer_catch
+    assert "RenderEmptyMessageMirror()" not in outer_catch
+
+    # When the shop/buyer identity really changes, old messages are cleared before
+    # attempting the new read, so preserving a last-good view cannot leak identities.
+    assert "stkDialog.Children.Clear();" in identity
+    assert "grdTipNoConv.Visibility = Visibility.Visible;" in identity
+    assert "stkDialog.Children.Add(grdTipNoConv);" in identity
