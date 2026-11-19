@@ -57,10 +57,16 @@ namespace Bot.ChromeNs
 
         public static void Initialize()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            AutoDeliveryConfirmationLedger.Initialize();
-            lock (Sync) _cursors = LoadCursors();
-            _timer = new Timer(_ => Tick(), null, 1200, 1800);
+            lock (Sync)
+            {
+                // Public cursor operations also call Initialize. Keep them blocked
+                // until the first disk read has completed and the timer is installed.
+                if (_initialized != 0) return;
+                _initialized = 1;
+                AutoDeliveryConfirmationLedger.Initialize();
+                _cursors = LoadCursors();
+                _timer = new Timer(_ => Tick(), null, 1200, 1800);
+            }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
         }
 
