@@ -1,6 +1,6 @@
 # Client Business Policy JSON
 
-The packaged `default-business-policy.json` is a **neutral template**, not a merchant profile. It contains no merchant-specific product IDs, knowledge IDs, tutorial URLs, prompts, fixed replies, handoff exceptions, or workflow phrases. Its regex entries are empty and therefore resolve to no-op matchers; the generic runtime does not assume a particular store, product, device, payment method, or fulfillment flow.
+The packaged `default-business-policy.json` is a **neutral template**, not a merchant profile. It contains no merchant-specific product IDs, knowledge IDs, tutorial URLs, prompts, fixed replies, handoff exceptions, or workflow phrases. Merchant-specific regex entries are empty and resolve to no-op matchers. Five universal privacy/channel detectors (phone, verification-code, phone/code request cues, and image-message marker) remain enabled; the generic runtime does not assume a particular store, product, device, payment method, or fulfillment flow.
 
 ## Per-shop storage and migration
 
@@ -9,6 +9,7 @@ When a verified `ShopSettingsScope` is active, the runtime policy is stored as `
 - Existing per-shop policy files are left untouched by application upgrades.
 - If a shop has no private file and exactly one shop is registered, the service may adopt the existing legacy global `business-policy.json` into that shop's private directory.
 - In a multi-shop installation, the legacy global file is not automatically copied to any shop; this prevents one shop's business rules from leaking into another.
+- If no verified `ShopSettingsScope` is available, runtime reads use only the packaged neutral template; the legacy global file is never a runtime fallback. Saving requires an explicit verified shop scope.
 - A new shop with no existing private or eligible legacy file receives the neutral packaged template.
 - **Restore default** replaces the current shop's policy with the neutral template after backing up the existing file. Review the result before enabling any business-specific workflow.
 
