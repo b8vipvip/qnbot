@@ -45,7 +45,7 @@ def test_generation_watchdog_covers_all_non_terminal_states_and_drops_terminal_w
     assert "state == BuyerSessionAgentState.Completed" in source
     assert "state == BuyerSessionAgentState.Cancelled" in source
     assert "state == BuyerSessionAgentState.Failed" in source
-    assert "WatchedGenerations.TryRemove" in source
+    assert "RemoveExact(WatchedGenerations, pair)" in source
 
 
 def test_generation_watchdog_is_not_triggered_by_human_reply():
