@@ -33,7 +33,7 @@ def test_server_packages_and_registers_mobile_console():
 def test_web_login_is_bound_to_client_token_and_session():
     source = read(SERVICE)
     assert '@router.post("/api/bot-web/login")' in source
-    assert "_client_by_token(token, capture_cipher=True)" in source
+    assert "_client_by_token(token, capture_cipher=True, request_path=request.url.path)" in source
     assert 'request.session["bot_web_client_id"]' in source
     assert '@router.get("/api/bot-web/snapshot")' in source
     assert "Depends(_web_client)" in source
@@ -135,3 +135,107 @@ def test_admin_console_links_mobile_page_and_copy_extension():
     assert "/bot/" in index
     assert 'src="/static/client-token-copy.js"' in index
     assert "管理员可复制对应令牌" in index
+
+
+def test_bot_web_mirror_exports_all_buyers_and_matches_desktop_100_turn_window():
+    context = read(ROOT / "src" / "Bot" / "ChromeNs" / "ConversationContextStore.cs")
+    sync = read(WINDOWS)
+
+    assert "var conversationLimit = maxConversations <= 0 ? int.MaxValue : maxConversations;" in context
+    assert "var turnLimit = Math.Max(10, Math.Min(100, maxTurns));" in context
+    assert "var take = Math.Max(10, Math.Min(100, maxTurns));" in context
+    assert "GetMirrorTurns(seller, buyer, 100)" in sync
+    assert "GetMirrorConversationSnapshots(" in sync
+    assert "state.Shop.ShopKey, int.MaxValue, 100" in sync
+    assert "Math.Min(256, maxConversations)" not in context
+
+
+def test_bot_web_sync_queue_uses_backpressure_instead_of_silently_evicting_unsent_messages():
+    sync = read(WINDOWS)
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+
+    assert "MaxPendingMessagesPerShop = 20000" in sync
+    assert "PendingMessagesSync" in enqueue
+    assert "nextCount > MaxPendingMessagesPerShop" in enqueue
+    assert "return false;" in enqueue
+    assert "等待后续同步" in enqueue
+    assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
+
+    capture = sync[sync.index("private static string CaptureTurn"):sync.index("private static bool EnqueueMessage")]
+    assert "if (EnqueueMessage(" in capture
+    assert "state.CapturedMessageSignatures[messageKey] = signature;" in capture
+
+
+def test_bot_web_sync_queue_enforces_per_shop_payload_byte_budget_and_exact_accounting():
+    sync = read(WINDOWS)
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+    flush = sync[sync.index("private static async Task SyncOnceAsync"):sync.index("private static JObject BuildStatus")]
+    settings = sync[sync.index("private static void ApplyDesiredSettings"):sync.index("private static async Task ApplyCommandsAsync")]
+
+    assert "MaxPendingMessageBytesPerShop = 64L * 1024 * 1024" in sync
+    assert "public long PendingMessageBytes;" in sync
+    assert "PendingMessageSizeBytes(item)" in enqueue
+    assert "nextBytes > MaxPendingMessageBytesPerShop" in enqueue
+    assert "state.PendingMessageBytes = nextBytes;" in enqueue
+    assert "state.PendingMessageBytes - PendingMessageSizeBytes(item)" in flush
+    assert "state.PendingMessageBytes = 0;" in settings
+    assert "pending_message_bytes" in sync
+    assert "PendingMessages.TryRemove(old.MessageKey" not in enqueue
+
+
+def test_bot_web_message_sync_disable_preserves_retry_for_unacknowledged_messages():
+    sync = read(WINDOWS)
+    capture = sync[sync.index("private static string CaptureTurn"):sync.index("private static long PendingMessageSizeBytes")]
+    enqueue = sync[sync.index("private static bool EnqueueMessage"):sync.index("private static void QueueDueSyncs")]
+    flush = sync[sync.index("private static async Task SyncOnceAsync"):sync.index("private static JObject BuildStatus")]
+    settings = sync[sync.index("private static void ApplyDesiredSettings"):sync.index("private static async Task ApplyCommandsAsync")]
+
+    assert "lock (state.PendingMessagesSync)" in capture
+    assert "if (!state.MessageSyncEnabled) return string.Empty;" in capture
+    assert "if (!state.MessageSyncEnabled) return false;" in enqueue
+    assert "state.CapturedMessageSignatures.TryRemove(key, out ignored);" in settings
+    assert "state.PendingMessages.Clear();" in settings
+    assert "state.PendingMessageBytes = 0;" in settings
+    assert flush.index("PendingMessages).Remove(") < flush.index("ApplyDesiredSettings(state,")
+    assert "pending_message_bytes" in sync
+
+
+def test_bot_web_server_retention_covers_the_complete_visible_buyer_window():
+    service = read(SERVICE)
+    script = read(SCRIPT)
+
+    # The inbox renders up to 600 buyers; each desktop mirror contributes 100 turns.
+    # A 20,000-row server cap silently reduced the effective inbox to about 200 buyers.
+    assert "MAX_MESSAGES_PER_CLIENT = 600 * 100" in service
+    assert "if count > MAX_MESSAGES_PER_CLIENT:" in service
+    assert "ORDER BY id DESC LIMIT ?" in service
+    assert "(client_id, client_id, MAX_MESSAGES_PER_CLIENT)" in service
+    assert 'limit=600&query=' in script
+    assert "limit:\"120\"" in script
+
+
+def test_bot_web_message_history_survives_polling_and_buyer_switches():
+    script = read(SCRIPT)
+    assert "historyLoaded:false,messageLoadToken:0" in script
+    assert "function mergeMessageHistory(existing,incoming)" in script
+    assert "state.messages=mergeMessageHistory(state.messages,incoming)" in script
+    assert "state.historyLoaded=true" in script
+    assert "state.historyLoaded=false;state.messageLoadToken++" in script
+    assert "requestToken!==state.messageLoadToken" in script
+    assert "conversationKey(state.active)!==activeKey" in script
+    assert "list.scrollTop=previousTop+list.scrollHeight-previousHeight" in script
+    assert "renderConversations();renderMessages(false);await loadActiveMessages(true)" in script
+    assert "await loadActiveMessages(true);await markRead()" not in script
+
+def test_rejected_runtime_tokens_are_diagnosed_without_logging_the_secret():
+    source = read(SERVICE)
+    assert "reason=unknown_token" in source
+    assert "reason=disabled_token" in source
+    assert "digest[:12]" in source
+    assert "request_path=request.url.path" in source
+    rejected = source[source.index("def _client_by_token"):source.index("def _runtime_client")]
+    assert "logger.warning" in rejected
+    assert "token_hash_prefix" in rejected
+    assert "logger.warning(.*token)" not in rejected
+    assert "logger.warning(.*Authorization)" not in rejected
+

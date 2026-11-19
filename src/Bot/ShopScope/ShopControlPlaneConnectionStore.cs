@@ -73,6 +73,7 @@ namespace Bot.ShopScope
         public void SaveToken(string token)
         {
             _tokens.Save(token);
+            ShopTokenBindingService.ResetFailure(_shop);
         }
 
         public void ClearToken()

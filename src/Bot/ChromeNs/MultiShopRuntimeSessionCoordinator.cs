@@ -323,6 +323,29 @@ namespace Bot.ChromeNs
             }
         }
 
+        // Read-only UI surfaces may render the last authoritative conversation while the
+        // embedded WebView is temporarily unable to prove document focus. Focus proof remains
+        // mandatory for native send/automation paths through IsActive/ValidateNativeSend.
+        internal static bool IsCurrentSessionForReadOnlyUi(QN qn)
+        {
+            if (qn == null || qn.Seller == null) return false;
+            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+            var shopKey = ShopKey(qn);
+            var sessionId = qn.CDP == null ? string.Empty : (qn.CDP.SessionId ?? string.Empty).Trim();
+            if (!OwnsAuthoritativeSession(qn, shopKey, sessionId)) return false;
+            lock (Sync)
+            {
+                return seller.Length > 0
+                    && _activeShopKey.Length > 0
+                    && shopKey.Length > 0
+                    && string.Equals(_activeSeller, seller, StringComparison.Ordinal)
+                    && string.Equals(_activeShopKey, shopKey, StringComparison.Ordinal)
+                    && _activeSessionId.Length > 0
+                    && sessionId.Length > 0
+                    && string.Equals(_activeSessionId, sessionId, StringComparison.Ordinal);
+            }
+        }
+
         internal static void ObserveChatDialogActive(QN qn, string evidence)
         {
             if (qn == null || qn.Seller == null) return;

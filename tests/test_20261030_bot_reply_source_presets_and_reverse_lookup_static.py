@@ -42,7 +42,7 @@ def test_provenance_prepared_saved_and_confirmed_echo_never_forged():
     assert "BotReplyManualSourceEntity" in history
     assert "OriginalSource" in history
     assert "GetManualSource(" in mirror
-    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId" in mirror
     assert "KnowledgeLearningService.OverrideAnswerSource(" not in mirror
     assert "KnowledgeLearningService.RegisterAnswerSource(" not in mirror
 
