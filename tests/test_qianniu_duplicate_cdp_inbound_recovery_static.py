@@ -196,3 +196,29 @@ def test_duplicate_cdp_fingerprint_cache_has_hard_count_cap_and_closed_sessions_
     assert "internal static void ForgetClosedSession(string sessionId)" in bridge
     assert "SessionSellers.TryRemove(sessionId, out ignored)" in bridge
     assert server.count("DuplicateCdpInboundRecoveryBridge.ForgetClosedSession(session") == 2
+
+
+
+def test_dropped_pending_events_release_only_their_own_accepted_fingerprint():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    release = bridge[
+        bridge.index("private static void ReleaseAcceptedFingerprint"):
+        bridge.index("private static bool TryAcceptInboundFingerprint")
+    ]
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDequeuePending")
+    ]
+    deliver = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+    drain = bridge[bridge.index("private static void DrainPending"):]
+
+    assert "FingerprintAcceptedAt" in bridge
+    assert "ICollection<KeyValuePair<string, DateTime>>" in release
+    assert "new KeyValuePair<string, DateTime>(fingerprint, acceptedAt)" in release
+    assert "ReleaseAcceptedFingerprint(item);" in enqueue
+    assert "ReleaseAcceptedFingerprint(dropped);" in enqueue
+    assert "ReleaseAcceptedFingerprint(item);" in deliver
+    assert "ReleaseAcceptedFingerprint(item);" in drain
