@@ -500,3 +500,25 @@ def test_raw_and_forwarded_cdp_dispatch_share_identity_transition_locks():
     assert "server.GetShopKeyForSession(target.SessionId)" in forwarded
     assert "GetSessionTransitionLockIndex(sourceSession)" in bridge
     assert "GetSessionTransitionLockIndex(targetSession)" in bridge
+
+
+
+def test_dropped_pending_events_release_only_their_own_fingerprint_timestamp():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    release = bridge[
+        bridge.index("private static void ReleaseAcceptedFingerprint"):
+        bridge.index("private static bool IsSourceSessionConnected")
+    ]
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDequeuePending")
+    ]
+    drain = bridge[bridge.index("private static void DrainPending"):]
+
+    assert "FingerprintAcceptedAt" in bridge
+    assert "ICollection<KeyValuePair<string, DateTime>>" in release
+    assert "new KeyValuePair<string, DateTime>(fingerprint, acceptedAt)" in release
+    assert "RecentInboundFingerprints.TryRemove(fingerprint" not in release
+    assert "ReleaseAcceptedFingerprint(item);" in enqueue
+    assert "ReleaseAcceptedFingerprint(dropped);" in enqueue
+    assert "ReleaseAcceptedFingerprint(item);" in drain

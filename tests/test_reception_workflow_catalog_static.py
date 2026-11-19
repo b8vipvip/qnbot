@@ -29,3 +29,34 @@ def test_generic_workflow_editor_exposes_draft_only_navigation():
     assert "ReceptionWorkflowCatalogService.RestoreLatestDraft(" in page
     assert "ReceptionWorkflowCatalogService.cs" in build
     assert "KnowledgeV2WorkflowDraftPage.cs" in build
+
+
+def test_workflow_backup_is_durable_and_restore_skips_corrupt_newest_backup():
+    catalog = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    backup = catalog[catalog.index("private static string CreateBackup"):catalog.index("public static string SaveDraft")]
+    restore = catalog[catalog.index("public static string RestoreLatestDraft"):]
+
+    assert "FileOptions.WriteThrough" in backup
+    assert "input.CopyTo(output);" in backup
+    assert "output.Flush(true);" in backup
+    assert "File.Move(temp, backup);" in backup
+    assert "File.Copy(path" not in catalog
+    assert "OrderByDescending(x => x, StringComparer.Ordinal)" in restore
+    assert "foreach (var backup in backups)" in restore
+    assert "Validate(File.ReadAllText(backup, Encoding.UTF8))" in restore
+    assert "lastInvalidBackup" in restore
+    assert "没有可恢复的有效流程草稿备份" in restore
+    assert "if (File.Exists(path)) CreateBackup(path);" in restore
+
+
+
+def test_workflow_draft_path_prefers_explicit_shop_scope_and_rejects_mismatch():
+    catalog = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    path = catalog[
+        catalog.index("private static string PathForShop"):
+        catalog.index("private static JObject Default")
+    ]
+    assert "ShopSettingsScope.Current" in path
+    assert "ResolveRuntimeBySellerNick(seller)" in path
+    assert "shop.SellerNick" in path
+    assert "拒绝跨店访问" in path

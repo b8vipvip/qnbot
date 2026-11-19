@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
             public string ShopKey;
             public string SourceSession;
             public bool FingerprintAccepted;
+            public DateTime FingerprintAcceptedAt;
             public string Type;
             public string Response;
             public DateTime ReceivedAt;
@@ -157,6 +158,7 @@ namespace Bot.ChromeNs
                     return;
                 }
                 item.FingerprintAccepted = true;
+                item.FingerprintAcceptedAt = now;
             }
             MaybeCleanupTransientState(now);
 
@@ -420,10 +422,18 @@ namespace Bot.ChromeNs
         {
             if (item == null || !item.FingerprintAccepted || string.IsNullOrWhiteSpace(item.ShopKey))
                 return;
-            var fingerprint = BuildInboundFingerprint(item.ShopKey, item.Type, item.Response);
-            DateTime ignored;
-            RecentInboundFingerprints.TryRemove(fingerprint, out ignored);
+
+            var acceptedAt = item.FingerprintAcceptedAt;
+            if (acceptedAt != DateTime.MinValue)
+            {
+                var fingerprint = BuildInboundFingerprint(item.ShopKey, item.Type, item.Response);
+                // Remove only the exact key/value pair. A newer accepted replay with
+                // the same fingerprint must remain protected from duplicate dispatch.
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(new KeyValuePair<string, DateTime>(fingerprint, acceptedAt));
+            }
             item.FingerprintAccepted = false;
+            item.FingerprintAcceptedAt = DateTime.MinValue;
         }
 
         private static bool IsSourceSessionConnected(string sessionId)
@@ -669,12 +679,14 @@ namespace Bot.ChromeNs
 
             if (!item.FingerprintAccepted)
             {
-                if (!TryAcceptInboundFingerprint(shopKey, item.Type, item.Response, DateTime.Now))
+                var acceptedAt = DateTime.Now;
+                if (!TryAcceptInboundFingerprint(shopKey, item.Type, item.Response, acceptedAt))
                 {
                     MaybeLogSuppressedDuplicate(item.Seller, item.SourceSession, item.Type);
                     return true;
                 }
                 item.FingerprintAccepted = true;
+                item.FingerprintAcceptedAt = acceptedAt;
             }
 
             // Resolve the receiver only from the ShopKey that was bound to this physical

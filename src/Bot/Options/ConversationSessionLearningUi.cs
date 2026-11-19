@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -81,6 +82,8 @@ namespace Bot.Options
 
     internal sealed class ConversationSessionLearningReportControl : UserControl
     {
+        // Bind this window to the exact shop that opened it. Never display the global report list.
+        private ShopContext _shop;
         private readonly ObservableCollection<ConversationSessionLearningReportView> _items =
             new ObservableCollection<ConversationSessionLearningReportView>();
         private readonly DataGrid _grid;
@@ -242,12 +245,20 @@ namespace Bot.Options
                 var selectedId = (_grid == null
                     ? null
                     : _grid.SelectedItem as ConversationSessionLearningReportView)?.Id;
-                var reports = ConversationSessionLearningService.GetReports(200);
+                var shop = _shop ?? ShopContextLocator.ResolveCurrentForUi();
+                var seller = (shop.SellerNick ?? string.Empty).Trim();
+                if (seller.Length == 0)
+                    throw new InvalidOperationException("当前店铺身份缺少卖家标识，不能读取学习记录。");
+                _shop = shop;
+
+                var reports = ConversationSessionLearningService.GetReportsForShop(
+                    shop.ShopKey, seller, 200);
                 _items.Clear();
                 foreach (var report in reports) _items.Add(report);
-                _summary.Text = "买家或客服连续 " + ConversationSessionLearningService.InactivityMinutes
+                _summary.Text = "仅显示当前店铺的学习记录。买家或客服连续 "
+                    + ConversationSessionLearningService.InactivityMinutes
                     + " 分钟无新消息后复盘整轮接待；历史覆盖不完整时不调用AI，当前默认dry-run候选，不自动写入生产知识库。"
-                    + "完整Knowledge V2语料覆盖和Windows灰度验收完成前保持关闭自动写入。当前显示最近 "
+                    + "完整Knowledge V2语料覆盖和Windows灰度验收完成前保持关闭自动写入。当前显示 "
                     + reports.Count + " 条。";
                 if (!string.IsNullOrWhiteSpace(selectedId))
                 {
@@ -258,7 +269,12 @@ namespace Bot.Options
             }
             catch (Exception ex)
             {
-                _summary.Text = "读取自动学习记录失败：" + ex.Message;
+                // A failed shop-identity lookup must not leave the previous shop's
+                // report details visible in this long-lived settings window.
+                _items.Clear();
+                if (_grid != null) _grid.SelectedItem = null;
+                if (_detail != null) _detail.Clear();
+                _summary.Text = "当前店铺身份无法验证，已隐藏学习记录：" + ex.Message;
             }
         }
 
