@@ -13,7 +13,7 @@ def test_deterministic_rule_gates_follow_generation_cancellation_with_correct_fa
 
     # Ordinary work-hours fixed rules must serialize for the lifetime of the current generation.
     # A timeout must not fail-open into AI while an earlier deterministic reply may still be sending.
-    ordinary_gate = s.index("gateLease = await AcquireKeyedGateAsync(BuyerGates, key, generationToken)")
+    ordinary_gate = s.index("var generationToken = item.SessionGeneration > 0")
     offhours = s.index("private static async Task<bool> HandleOffHoursExclusiveAsync")
     ordinary_block = s[ordinary_gate:offhours]
     assert "GetCancellationToken(" in ordinary_block
