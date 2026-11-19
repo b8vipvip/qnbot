@@ -58,3 +58,52 @@ def test_ai_failure_fallback_is_current_shop_scoped_and_blocks_withdrawn_answers
     assert "BotFeatureStore.GetKnowledgeBase()" in source
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer)" in source
     assert "最高匹配不足50%" in source
+
+
+
+def test_streaming_reply_retries_only_transient_provider_failures_within_generation_budget():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    stream = source[
+        source.index("private static async Task<string> StreamMessagesAsync"):
+        source.index("private static async Task<StreamResult> StreamOneAsync")
+    ]
+    assert "for (var attempt = 0; attempt < 2; attempt++)" in stream
+    assert "IsRetryableStreamError(error)" in stream
+    assert "IsRetryableStreamError(fallbackError)" in stream
+    assert "Task.Delay(TimeSpan.FromMilliseconds(450), token)" in stream
+    assert "token.ThrowIfCancellationRequested();" in stream
+
+
+def test_smart_reply_circuit_breaker_is_shop_scoped_and_has_a_single_half_open_probe():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    breaker = source[
+        source.index("internal static class ShopScopedReplyCircuitBreaker"):
+        source.index("internal static class ReplyTranscriptSanitizer")
+    ]
+    service = source[
+        source.index("internal static class StreamingBuyerAnswerService"):
+        source.index("internal static class ShopScopedReplyCircuitBreaker")
+    ]
+    assert "ConcurrentDictionary<string, State>" in breaker
+    assert "FailureThreshold = 3" in breaker
+    assert "OpenSeconds = 30" in breaker
+    assert "ProbeInFlight" in breaker
+    assert "HalfOpenProbe = true" in breaker
+    assert "ShopScopedReplyCircuitBreaker.TryEnter(shopKey)" in service
+    assert "ShopScopedReplyCircuitBreaker.RecordFailure(permit)" in service
+    assert "ShopScopedReplyCircuitBreaker.RecordSuccess(permit)" in service
+    assert "ShopScopedReplyCircuitBreaker.ReleaseProbe(permit)" in service
+    assert "burst.ShopKey" in source
+
+
+def test_streaming_reply_circuit_open_and_ai_failure_only_use_non_withdrawn_safe_local_knowledge():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    service = source[
+        source.index("internal static class StreamingBuyerAnswerService"):
+        source.index("internal static class ShopScopedReplyCircuitBreaker")
+    ]
+    assert "CanUseOfflineKnowledgeFallback(plan)" in service
+    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback)" in service
+    assert "AI熔断离线安全兜底" in service
+    assert "已阻止自动发送并建议转人工" in service
+    assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, directAnswer)" in service
