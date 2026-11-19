@@ -109,7 +109,8 @@ namespace Bot.ChromeNs
             string content,
             int retryCount,
             int retryDelayMilliseconds,
-            out string error)
+            out string error,
+            string backupPath = null)
         {
             error = string.Empty;
             var directory = Path.GetDirectoryName(path);
@@ -144,7 +145,7 @@ namespace Bot.ChromeNs
                 {
                     try
                     {
-                        if (File.Exists(path)) File.Replace(temp, path, null, true);
+                        if (File.Exists(path)) File.Replace(temp, path, backupPath, true);
                         else File.Move(temp, path);
                         return true;
                     }

@@ -544,27 +544,12 @@ namespace Bot.ChromeNs
             var shop = RequireCurrentShop();
             profile = NormalizeProfile(profile);
             var path = GetPath(shop);
-            var directory = Path.GetDirectoryName(path);
-            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
             var json = JsonConvert.SerializeObject(profile, Formatting.Indented);
             lock (Sync)
             {
-                File.WriteAllText(temp, json, new UTF8Encoding(false));
-                try
-                {
-                    if (File.Exists(path))
-                    {
-                        try { File.Replace(temp, path, null, true); }
-                        catch (PlatformNotSupportedException) { File.Copy(temp, path, true); File.Delete(temp); }
-                        catch (IOException) { File.Copy(temp, path, true); File.Delete(temp); }
-                    }
-                    else File.Move(temp, path);
-                }
-                finally
-                {
-                    if (File.Exists(temp)) File.Delete(temp);
-                }
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, json, 3, 50, out error))
+                    throw new IOException("店铺规则中心原子保存失败：" + error);
                 Cache[path] = profile;
             }
             Log.Info("店铺规则中心已保存: shop=" + shop.ShopKey

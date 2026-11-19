@@ -441,18 +441,10 @@ namespace Bot.ChromeNs
 
         private static void SaveReportsUnsafe(List<SlowResponseAnomalyReport> reports)
         {
-            Directory.CreateDirectory(ReportDirectory);
-            var target = ReportFilePath;
-            var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllText(temp, JsonConvert.SerializeObject(reports, Formatting.Indented), Encoding.UTF8);
-                File.Copy(temp, target, true);
-            }
-            finally
-            {
-                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
-            }
+            string error;
+            if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                ReportFilePath, JsonConvert.SerializeObject(reports, Formatting.Indented), 3, 50, out error))
+                throw new IOException("慢响应异常报告原子保存失败：" + error);
         }
 
         private static void RaiseReportsChanged()

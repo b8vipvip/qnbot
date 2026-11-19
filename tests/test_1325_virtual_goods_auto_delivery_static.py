@@ -140,8 +140,10 @@ def test_delayed_jobs_and_order_event_cursor_are_durable_and_non_retroactive():
     assert "AutoDeliveryCoordinator.Enqueue(entry.Snapshot);" in seed
     assert "AutoDeliveryConfirmationLedger.IsOperational()" in seed
     assert "暂停消费新订单事件且不推进游标" in seed
-    assert "File.Replace(temp, path, null, true)" in seed
-    assert 'Guid.NewGuid().ToString("N") + ".tmp"' in seed
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in seed
+    atomic = text("src/Bot/ChromeNs/CrossProcessAtomicStateFile.cs")
+    assert "FileOptions.WriteThrough" in atomic
+    assert "stream.Flush(true)" in atomic
     assert "AutoDeliveryCoordinator.Initialize();" in bootstrap
     assert "AutoDeliveryOrderEventSeed.Initialize();" in bootstrap
 
