@@ -133,6 +133,79 @@ namespace Bot.ShopScope
             return result;
         }
 
+        /// <summary>
+        /// Retry one authenticated request only after re-reading credentials for the same ShopKey.
+        /// The send callback must create a fresh HttpRequestMessage on every attempt.
+        /// </summary>
+        public static async Task<HttpResponseMessage> SendWithUnauthorizedRecoveryAsync(
+            ShopContext expectedShop,
+            string rejectedToken,
+            Func<string, Task<HttpResponseMessage>> send)
+        {
+            if (expectedShop == null) throw new ArgumentNullException(nameof(expectedShop));
+            if (send == null) throw new ArgumentNullException(nameof(send));
+
+            var first = await send(rejectedToken).ConfigureAwait(false);
+            if (first == null) throw new InvalidOperationException("控制面请求没有返回 HTTP 响应。");
+            if (first.StatusCode != HttpStatusCode.Unauthorized) return first;
+
+            var firstBody = await ReadResponseBodySafeAsync(first).ConfigureAwait(false);
+            first.Dispose();
+            ShopRuntimeCredentialResolution recovered;
+            try
+            {
+                recovered = await RecoverUnauthorizedAsync(expectedShop, rejectedToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                recovered = new ShopRuntimeCredentialResolution
+                {
+                    Shop = expectedShop,
+                    Success = false,
+                    Error = Safe(ex.Message, 220)
+                };
+            }
+
+            if (recovered == null || !recovered.Success || string.IsNullOrWhiteSpace(recovered.Token))
+            {
+                var recoveryError = recovered == null ? "同店令牌恢复没有返回结果" : Safe(recovered.Error, 220);
+                var failure = "HTTP 401：服务端拒绝本店客户端令牌；同店凭据恢复失败。"
+                    + (string.IsNullOrWhiteSpace(firstBody) ? string.Empty : " 首次响应：" + Safe(firstBody, 180))
+                    + (string.IsNullOrWhiteSpace(recoveryError) ? string.Empty : " 恢复结果：" + recoveryError)
+                    + "。请检查新服务器的 Bot 客户端令牌记录是否存在且已启用。";
+                ShopTokenBindingService.ReportFailure(expectedShop, failure);
+                throw new UnauthorizedAccessException(failure);
+            }
+
+            var retry = await send(recovered.Token).ConfigureAwait(false);
+            if (retry == null) throw new InvalidOperationException("同店令牌恢复重试没有返回 HTTP 响应。");
+            if (retry.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                var retryBody = await ReadResponseBodySafeAsync(retry).ConfigureAwait(false);
+                retry.Dispose();
+                var failure = "HTTP 401：同店令牌恢复后重试仍被服务端拒绝。"
+                    + (string.IsNullOrWhiteSpace(retryBody) ? string.Empty : " 响应：" + Safe(retryBody, 180))
+                    + "。该令牌可能未登记在当前服务器，或已被停用。";
+                ShopTokenBindingService.ReportFailure(expectedShop, failure);
+                throw new UnauthorizedAccessException(failure);
+            }
+
+            if (retry.IsSuccessStatusCode)
+                ShopTokenBindingService.ReportSuccess(expectedShop);
+            return retry;
+        }
+
+        private static async Task<string> ReadResponseBodySafeAsync(HttpResponseMessage response)
+        {
+            try
+            {
+                return response == null || response.Content == null
+                    ? string.Empty
+                    : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }
+            catch { return string.Empty; }
+        }
+
         private static string Fingerprint(string token)
         {
             token = (token ?? string.Empty).Trim();
@@ -171,6 +244,8 @@ namespace Bot.ShopScope
             new ConcurrentDictionary<string, ConnectionState>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> PromptedAt =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> UnauthorizedBackoffUntil =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> PromptOpen =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
@@ -182,6 +257,8 @@ namespace Bot.ShopScope
             state.LastError = string.Empty;
             state.Conflict = false;
             state.BoundShopKey = shop.ShopKey;
+            DateTime ignoredBackoff;
+            UnauthorizedBackoffUntil.TryRemove(shop.ShopKey, out ignoredBackoff);
         }
 
         public static void ReportFailure(ShopContext shop, string error)
@@ -190,6 +267,36 @@ namespace Bot.ShopScope
             var state = States.GetOrAdd(shop.ShopKey, _ => new ConnectionState());
             state.LastFailureUtc = DateTime.UtcNow;
             state.LastError = Safe(error, 240);
+            if ((error ?? string.Empty).IndexOf("HTTP 401", StringComparison.OrdinalIgnoreCase) >= 0
+                || (error ?? string.Empty).IndexOf("Unauthorized", StringComparison.OrdinalIgnoreCase) >= 0)
+                UnauthorizedBackoffUntil[shop.ShopKey] = DateTime.UtcNow.AddMinutes(2);
+        }
+
+        public static bool ShouldAttemptSync(ShopContext shop)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+            DateTime until;
+            if (!UnauthorizedBackoffUntil.TryGetValue(shop.ShopKey, out until)) return true;
+            if (until <= DateTime.UtcNow)
+            {
+                UnauthorizedBackoffUntil.TryRemove(shop.ShopKey, out until);
+                return true;
+            }
+            return false;
+        }
+
+        public static void ResetFailure(ShopContext shop)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+            DateTime ignored;
+            UnauthorizedBackoffUntil.TryRemove(shop.ShopKey, out ignored);
+            ConnectionState state;
+            if (States.TryGetValue(shop.ShopKey, out state))
+            {
+                state.LastFailureUtc = DateTime.MinValue;
+                state.LastError = string.Empty;
+                state.Conflict = false;
+            }
         }
 
         public static void ReportConflict(ShopContext shop, string boundShopKey, string error)
