@@ -71,3 +71,17 @@ def test_generation_watchdog_removes_only_exact_watch_snapshots_and_ids_survive_
     assert "return new WatchedSession" in source
     assert "WatchedGenerations.TryRemove(pair.Key" not in source
     assert "WatchedSessions.TryRemove(pair.Key" not in source
+
+
+
+def test_generation_watchdog_uses_an_immutable_local_acceptance_snapshot():
+    source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    sweep = source[
+        source.index("private static void SweepGenerationDeadlines"):
+        source.index("private static bool RemoveExact")
+    ]
+
+    assert "var acceptedAtUtc = watched.AcceptedAtUtc;" in sweep
+    assert "acceptedAtUtc = authoritativeAcceptedAtUtc;" in sweep
+    assert "var elapsed = now - acceptedAtUtc;" in sweep
+    assert "watched.AcceptedAtUtc = authoritativeAcceptedAtUtc;" not in sweep

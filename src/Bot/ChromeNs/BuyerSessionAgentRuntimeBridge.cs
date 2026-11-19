@@ -157,6 +157,7 @@ namespace Bot.ChromeNs
                     continue;
                 }
 
+                var acceptedAtUtc = watched.AcceptedAtUtc;
                 DateTime authoritativeAcceptedAtUtc;
                 if (Agent.TryGetGenerationAcceptedAtUtc(
                     watched.Seller,
@@ -166,10 +167,10 @@ namespace Bot.ChromeNs
                     watched.ShopKey)
                     && authoritativeAcceptedAtUtc != default(DateTime))
                 {
-                    watched.AcceptedAtUtc = authoritativeAcceptedAtUtc;
+                    acceptedAtUtc = authoritativeAcceptedAtUtc;
                 }
 
-                var elapsed = now - watched.AcceptedAtUtc;
+                var elapsed = now - acceptedAtUtc;
                 if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
                 if (elapsed.TotalSeconds <= BuyerSessionAgent.AbsoluteGenerationAgeSeconds) continue;
 
