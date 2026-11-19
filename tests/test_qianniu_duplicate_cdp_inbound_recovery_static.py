@@ -471,3 +471,32 @@ def test_duplicate_cdp_bridge_drops_events_without_verified_source_shopkey():
     assert "缺少来源稳定ShopKey，拒绝跨会话暂存" in capture
     assert capture.index("if (shopKey.Length == 0)") < capture.index("var item = new PendingInboundEvent")
     assert "seller.Length == 0 && shopKey.Length == 0" not in capture
+
+
+def test_raw_and_forwarded_cdp_dispatch_share_identity_transition_locks():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    client = read("src/Bot/ChromeNs/CDPClient.cs")
+
+    raw_handler = client[
+        client.index("private void OnWSocketRecieveMessage"):
+        client.index("// The raw WebSocket dispatcher")
+    ]
+    raw_dispatch = bridge[
+        bridge.index("internal static bool TryDispatchRawInbound"):
+        bridge.index("private static bool IsRecoverableInboundType")
+    ]
+    forwarded = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+
+    assert "TryDispatchRawInbound(this, e.Type, response)" in raw_handler
+    assert "lock (GetSessionTransitionLock(sessionId))" in raw_dispatch
+    assert "server.GetShopKeyForSession(sessionId)" in raw_dispatch
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in raw_dispatch
+    assert 'string.Equals(type, "qnbotStatus", StringComparison.Ordinal)' in raw_dispatch
+    assert "WithSessionTransitionLocks(item.SourceSession, target.SessionId" in forwarded
+    assert "IsSessionIdentityTransitioning(target.SessionId)" in forwarded
+    assert "server.GetShopKeyForSession(target.SessionId)" in forwarded
+    assert "GetSessionTransitionLockIndex(sourceSession)" in bridge
+    assert "GetSessionTransitionLockIndex(targetSession)" in bridge
