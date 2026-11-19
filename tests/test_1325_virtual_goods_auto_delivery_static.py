@@ -137,7 +137,7 @@ def test_delayed_jobs_and_order_event_cursor_are_durable_and_non_retroactive():
     assert '"virtual-goods-auto-delivery-event-cursor.json"' in seed
     assert "cursor.LastSeenAt = DateTime.Now;" in seed
     assert "OrderEventType.Created" in seed and "OrderEventType.Paid" in seed
-    assert "AutoDeliveryCoordinator.Enqueue(entry.Snapshot);" in seed
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in seed
     assert "AutoDeliveryConfirmationLedger.IsOperational()" in seed
     assert "暂停消费新订单事件且不推进游标" in seed
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in seed
