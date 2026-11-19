@@ -177,12 +177,46 @@ namespace Bot.ChromeNs
             public DateTime LastTouchedUtc;
         }
 
+        private sealed class ShopGateEntry
+        {
+            public readonly object Sync = new object();
+            public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
+            public int References;
+        }
+
+        private sealed class ShopGateLease : IDisposable
+        {
+            private readonly ConcurrentDictionary<string, ShopGateEntry> _entries;
+            private readonly string _shopKey;
+            private ShopGateEntry _entry;
+
+            public ShopGateLease(
+                ConcurrentDictionary<string, ShopGateEntry> entries,
+                string shopKey,
+                ShopGateEntry entry)
+            {
+                _entries = entries;
+                _shopKey = shopKey;
+                _entry = entry;
+            }
+
+            public void Dispose()
+            {
+                var entry = Interlocked.Exchange(ref _entry, null);
+                if (entry == null) return;
+                entry.Gate.Release();
+                ReleaseShopGateReference(_entries, _shopKey, entry);
+            }
+        }
+
         private static readonly ConcurrentDictionary<string, ActiveSession> Active =
             new ConcurrentDictionary<string, ActiveSession>(StringComparer.Ordinal);
         // Full-corpus analysis is serialized per shop so simultaneous idle buyers
         // cannot fan out duplicate batches or race each other's corpus snapshots.
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates =
-            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+        // Reference-counted leases retire idle semaphores without removing a gate
+        // while a holder or waiter still depends on it.
+        private static readonly ConcurrentDictionary<string, ShopGateEntry> CorpusAnalysisGates =
+            new ConcurrentDictionary<string, ShopGateEntry>(StringComparer.Ordinal);
         // AI upstream failures are isolated by ShopKey. A scheduler invariant violation
         // opens the circuit immediately; repeated transient failures open it after three
         // consecutive failures. The per-shop analysis gate serializes the half-open probe.
@@ -193,6 +227,56 @@ namespace Bot.ChromeNs
         private static readonly object DbSync = new object();
         private static int _initialized;
         private static int _schemaReady;
+
+        private static ShopGateEntry AddShopGateReference(
+            ConcurrentDictionary<string, ShopGateEntry> entries, string shopKey)
+        {
+            while (true)
+            {
+                var entry = entries.GetOrAdd(shopKey, _ => new ShopGateEntry());
+                lock (entry.Sync)
+                {
+                    ShopGateEntry current;
+                    if (!entries.TryGetValue(shopKey, out current) || !ReferenceEquals(current, entry))
+                        continue;
+                    entry.References++;
+                    return entry;
+                }
+            }
+        }
+
+        private static void ReleaseShopGateReference(
+            ConcurrentDictionary<string, ShopGateEntry> entries,
+            string shopKey,
+            ShopGateEntry entry)
+        {
+            lock (entry.Sync)
+            {
+                if (entry.References <= 0) return;
+                entry.References--;
+                if (entry.References != 0) return;
+                ((ICollection<KeyValuePair<string, ShopGateEntry>>)entries)
+                    .Remove(new KeyValuePair<string, ShopGateEntry>(shopKey, entry));
+                entry.Gate.Dispose();
+            }
+        }
+
+        private static async Task<ShopGateLease> AcquireShopGateAsync(string shopKey)
+        {
+            if (string.IsNullOrWhiteSpace(shopKey))
+                throw new InvalidOperationException("Knowledge V2全库学习必须绑定稳定ShopKey。");
+            var entry = AddShopGateReference(CorpusAnalysisGates, shopKey);
+            try
+            {
+                await entry.Gate.WaitAsync().ConfigureAwait(false);
+                return new ShopGateLease(CorpusAnalysisGates, shopKey, entry);
+            }
+            catch
+            {
+                ReleaseShopGateReference(CorpusAnalysisGates, shopKey, entry);
+                throw;
+            }
+        }
 
         public static event Action ReportsChanged;
 
@@ -663,13 +747,11 @@ namespace Bot.ChromeNs
                 KnowledgeCorpusAnalysisResult corpusAnalysis;
                 SaveReport(report);
                 NotifyChanged();
-                var corpusGate = CorpusAnalysisGates.GetOrAdd(
-                    session.ShopKey, _ => new SemaphoreSlim(1, 1));
                 report.Status = "等待当前店铺AI学习队列";
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
                 SaveReport(report);
                 NotifyChanged();
-                await corpusGate.WaitAsync();
+                var corpusGateLease = await AcquireShopGateAsync(session.ShopKey).ConfigureAwait(false);
                 try
                 {
                     using (ShopSettingsScope.Enter(shop))
@@ -708,7 +790,7 @@ namespace Bot.ChromeNs
                 }
                 finally
                 {
-                    corpusGate.Release();
+                    corpusGateLease.Dispose();
                 }
                 DateTime corpusCircuitOpenUntil;
                 if (TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey, out corpusCircuitOpenUntil))
