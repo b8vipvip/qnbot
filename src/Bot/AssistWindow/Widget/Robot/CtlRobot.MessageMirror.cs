@@ -76,19 +76,16 @@ namespace Bot.AssistWindow.Widget.Robot
                     // Rebind only to the exact globally arbitrated ShopKey/session;
                     // a shared nickname or even the same ShopKey is not enough to
                     // keep rendering a stale conversation wrapper.
-                    var current = QN.CurQN;
+                    // QN.CurQN is a convenience pointer and can be temporarily stale
+                    // while the authoritative CDP session remains connected. Resolve the
+                    // exact registry-owned ShopKey + SessionId instead of trusting that
+                    // global pointer to recover a read-only conversation.
+                    var activeSessionId = ActiveShopSessionRegistry.GetActiveSessionId();
+                    var current = ShopContextLocator.FindConnectedQnByShopKey(
+                        activeShopKey, activeSessionId);
                     if (current == null || current.Seller == null || current.Buyer == null
                         || !ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current))
                         return null;
-                    try
-                    {
-                        if (!string.Equals(
-                            ShopIdentityResolver.Resolve(current.Seller).ShopKey,
-                            activeShopKey,
-                            StringComparison.Ordinal))
-                            return null;
-                    }
-                    catch { return null; }
                     qn = current;
                     seller = (qn.Seller.Nick ?? string.Empty).Trim();
                     buyer = (qn.Buyer.Nick ?? string.Empty).Trim();
