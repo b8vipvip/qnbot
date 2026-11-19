@@ -8,6 +8,7 @@ on:
     paths:
       - 'src/**'
       - 'tools/qn_discovery_lab/**'
+      - 'tests/**'
       - '.github/workflows/windows-build.yml'
       - '.github/workflows/ci.yml'
   push:
@@ -15,6 +16,7 @@ on:
     paths:
       - 'src/**'
       - 'tools/qn_discovery_lab/**'
+      - 'tests/**'
       - '.github/workflows/windows-build.yml'
       - '.github/workflows/ci.yml'
 
