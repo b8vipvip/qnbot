@@ -312,7 +312,7 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            DispatchInboundEvent(e.Type, response);
+            DuplicateCdpInboundRecoveryBridge.TryDispatchRawInbound(this, e.Type, response);
         }
 
         // The raw WebSocket dispatcher is a separate path from duplicate-page recovery.
