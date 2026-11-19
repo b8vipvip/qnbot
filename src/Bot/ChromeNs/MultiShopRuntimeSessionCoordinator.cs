@@ -304,6 +304,8 @@ namespace Bot.ChromeNs
 
         internal static string GetActiveSessionId()
         {
+            // Read under the same lock as activation/retirement so callers never
+            // observe a partially updated authoritative session identifier.
             lock (Sync) return _activeSessionId;
         }
 
