@@ -302,6 +302,11 @@ namespace Bot.ChromeNs
             lock (Sync) return _activeShopKey;
         }
 
+        internal static string GetActiveSessionId()
+        {
+            lock (Sync) return _activeSessionId;
+        }
+
         internal static bool IsActive(QN qn)
         {
             if (qn == null || qn.Seller == null) return false;
