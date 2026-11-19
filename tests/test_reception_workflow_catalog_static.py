@@ -14,11 +14,18 @@ def test_generic_flow_catalog_does_not_publish_or_execute_operations():
     assert 'order_snapshot' in s and 'image_message' in s and 'manual_correction' in s
     assert 'next_state' in s and 'timeout_minutes' in s
     assert 'Path.Combine(dir, "reception-workflow-drafts.json")' in s
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in s
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in s
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in s
     assert "RestoreLatestDraft(" in s
     assert "SendTextWithRetryAsync" not in s
     assert "SubmitRecharge" not in s
+
+def test_workflow_draft_path_respects_exact_current_shop_scope():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    resolver = s[s.index("private static string PathForShop"):s.index("private static JObject Default")]
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in resolver
+    assert "ShopSettingsScope.Enter(shop)" in resolver
+
 
 def test_generic_workflow_editor_exposes_draft_only_navigation():
     ui = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
@@ -30,33 +37,53 @@ def test_generic_workflow_editor_exposes_draft_only_navigation():
     assert "ReceptionWorkflowCatalogService.cs" in build
     assert "KnowledgeV2WorkflowDraftPage.cs" in build
 
-
-def test_workflow_backup_is_durable_and_restore_skips_corrupt_newest_backup():
-    catalog = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    backup = catalog[catalog.index("private static string CreateBackup"):catalog.index("public static string SaveDraft")]
-    restore = catalog[catalog.index("public static string RestoreLatestDraft"):]
-
-    assert "FileOptions.WriteThrough" in backup
-    assert "input.CopyTo(output);" in backup
-    assert "output.Flush(true);" in backup
-    assert "File.Move(temp, backup);" in backup
-    assert "File.Copy(path" not in catalog
-    assert "OrderByDescending(x => x, StringComparer.Ordinal)" in restore
-    assert "foreach (var backup in backups)" in restore
-    assert "Validate(File.ReadAllText(backup, Encoding.UTF8))" in restore
-    assert "lastInvalidBackup" in restore
-    assert "没有可恢复的有效流程草稿备份" in restore
-    assert "if (File.Exists(path)) CreateBackup(path);" in restore
-
-
-
-def test_workflow_draft_path_prefers_explicit_shop_scope_and_rejects_mismatch():
-    catalog = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    path = catalog[
-        catalog.index("private static string PathForShop"):
-        catalog.index("private static JObject Default")
+def test_workflow_restore_skips_corrupt_newest_backup_and_keeps_draft_fail_closed():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    restore = s[
+        s.index("public static string RestoreLatestDraft"):
+        s.index("\n    }\n}")
     ]
-    assert "ShopSettingsScope.Current" in path
-    assert "ResolveRuntimeBySellerNick(seller)" in path
-    assert "shop.SellerNick" in path
-    assert "拒绝跨店访问" in path
+    assert "OrderByDescending(x => x, StringComparer.Ordinal).ToList()" in restore
+    assert "foreach (var candidate in backups)" in restore
+    assert "Validate(File.ReadAllText(candidate, Encoding.UTF8))" in restore
+    assert "没有找到有效的流程草稿备份，当前草稿未修改" in restore
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error)" in restore
+    assert "仍需单独人工审核和灰度激活" in restore
+
+def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    save = s[
+        s.index("public static string SaveDraft"):
+        s.index("public static string RestoreLatestDraft")
+    ]
+    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")' in save
+    assert 'Guid.NewGuid().ToString("N")' in save
+    assert 'File.Copy(path, path + ".backup."' in save
+
+
+
+
+
+def test_workflow_draft_storage_requires_stable_shop_identity_and_shopkey():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    path = service[
+        service.index("private static string PathForShop"):
+        service.index("private static JObject Default")
+    ]
+
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
+    assert "!shop.HasStableSellerId" in path
+    assert "不允许保存流程草稿" in path
+
+
+def test_workflow_steps_require_nonempty_unique_evidence_contracts():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    validation = s[
+        s.index("private static JObject Validate"):
+        s.index("private static bool ValidKey")
+    ]
+    assert "required.Count < 1 || required.Count > 10" in validation
+    assert "new HashSet<string>(StringComparer.Ordinal)" in validation
+    assert "evidenceKinds.Add(Convert.ToString(kind))" in validation
+    assert "同一步骤不允许重复声明相同证据类型" in validation

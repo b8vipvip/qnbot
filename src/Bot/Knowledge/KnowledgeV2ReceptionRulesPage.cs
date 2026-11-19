@@ -25,7 +25,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "编辑前请核对真实教程地址。保存会校验字段并创建旧配置备份；不能通过JSON开启自动充值、关闭人工审核或改变其他店铺。",
+                Text = "此配置只属于当前稳定 ShopKey。默认关闭且不含任何店铺商品ID、知识ID、教程链接或业务话术；请先导入/填写经核验的私有业务资料。保存会校验字段并创建备份；不能通过JSON开启自动充值或关闭人工审核。",
                 Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 5, 0, 10)
             });
@@ -72,7 +72,7 @@ namespace Bot.Knowledge
                         return;
                     }
                     _editor.Text = t.Result ?? string.Empty;
-                    _status.Text = "规则已加载；更改后点击「校验并保存」才会生效。";
+                    _status.Text = "已加载当前 ShopKey 配置。若 enabled=false，专属接待保持关闭；请核对私有商品ID、知识隔离ID、教程链接、视觉规则和提示词后再启用。";
                 })));
         }
 

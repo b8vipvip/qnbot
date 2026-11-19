@@ -30,18 +30,11 @@ namespace Bot.ChromeNs
 
         private static string PathForShop(string seller)
         {
-            // Prefer the immutable ShopContext supplied by the caller. Nickname-only
-            // resolution is retained solely for legacy callers without an explicit scope.
-            var shop = ShopSettingsScope.Current;
-            if (shop == null)
-                shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-            else if (!string.Equals(
-                (shop.SellerNick ?? string.Empty).Trim(),
-                (seller ?? string.Empty).Trim(),
-                StringComparison.Ordinal))
-                throw new InvalidOperationException("当前店铺作用域与流程卖家不匹配，拒绝跨店访问。");
-
-            if (shop == null) throw new InvalidOperationException("店铺身份无法验证，不允许保存流程");
+            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !shop.HasStableSellerId)
+                throw new InvalidOperationException("店铺身份不稳定或未绑定唯一ShopKey，不允许保存流程草稿");
             using (ShopSettingsScope.Enter(shop))
             {
                 var dir = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
@@ -122,11 +115,17 @@ namespace Bot.ChromeNs
                     if (!timeout.HasValue || timeout < 0 || timeout > 10080)
                         throw new InvalidDataException("步骤超时超出范围");
                     var required = step["required_evidence"] as JArray;
-                    if (required == null || required.Count > 10)
-                        throw new InvalidDataException("缺少必要证据或证据种类过多");
+                    if (required == null || required.Count < 1 || required.Count > 10)
+                        throw new InvalidDataException("每个流程步骤必须声明1到10种必要证据");
+                    var evidenceKinds = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var kind in required)
-                        if (kind.Type != JTokenType.String || !AllowedEvidence.Contains(Convert.ToString(kind)))
+                    {
+                        if (kind == null || kind.Type != JTokenType.String
+                            || !AllowedEvidence.Contains(Convert.ToString(kind)))
                             throw new InvalidDataException("证据类型不受支持");
+                        if (!evidenceKinds.Add(Convert.ToString(kind)))
+                            throw new InvalidDataException("同一步骤不允许重复声明相同证据类型");
+                    }
                     if (!ValidKey(Convert.ToString(step["next_state"])))
                         throw new InvalidDataException("下一状态无效");
                 }
@@ -187,32 +186,6 @@ namespace Bot.ChromeNs
                 .ToString(Formatting.Indented);
         }
 
-        private static string CreateBackup(string path)
-        {
-            var suffix = DateTime.UtcNow.ToString(
-                "yyyyMMdd-HHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
-                + "." + Guid.NewGuid().ToString("N");
-            var backup = path + ".backup." + suffix;
-            var temp = backup + ".tmp";
-            try
-            {
-                using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var output = new FileStream(
-                    temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                    81920, FileOptions.WriteThrough))
-                {
-                    input.CopyTo(output);
-                    output.Flush(true);
-                }
-                File.Move(temp, backup);
-                return backup;
-            }
-            finally
-            {
-                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
-            }
-        }
-
         public static string SaveDraft(string seller, string json)
         {
             var data = Validate(json).ToString(Formatting.Indented);
@@ -222,7 +195,9 @@ namespace Bot.ChromeNs
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取草稿写锁");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-                if (File.Exists(path)) CreateBackup(path);
+                if (File.Exists(path))
+                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N"), false);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, data, 3, 50, out error))
                     throw new IOException(error);
@@ -233,46 +208,41 @@ namespace Bot.ChromeNs
         public static string RestoreLatestDraft(string seller)
         {
             var path = PathForShop(seller);
+            string selectedBackup = null;
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowDraft", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取恢复写锁");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) throw new FileNotFoundException("暂无草稿备份");
                 var backups = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
-                    .Where(x => !x.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(x => x, StringComparer.Ordinal)
-                    .ToList();
+                    .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
                 if (backups.Count == 0) throw new FileNotFoundException("暂无草稿备份");
-
                 string validated = null;
-                Exception lastInvalidBackup = null;
-                foreach (var backup in backups)
+                foreach (var candidate in backups)
                 {
                     try
                     {
-                        validated = Validate(File.ReadAllText(backup, Encoding.UTF8))
-                            .ToString(Formatting.Indented);
+                        validated = Validate(File.ReadAllText(candidate, Encoding.UTF8)).ToString(Formatting.Indented);
+                        selectedBackup = candidate;
                         break;
                     }
                     catch (Exception ex)
                     {
-                        lastInvalidBackup = ex;
-                        Log.ErrorWithMaxCount("忽略损坏或不兼容的流程草稿备份："
-                            + Path.GetFileName(backup) + ", error=" + ex.GetType().Name, 10);
+                        Log.ErrorWithMaxCount("跳过无效的流程草稿备份: file="
+                            + Path.GetFileName(candidate) + ", error=" + ex.Message, 10);
                     }
                 }
                 if (validated == null)
-                    throw new InvalidDataException("没有可恢复的有效流程草稿备份；当前草稿未被修改。", lastInvalidBackup);
-
-                // Preserve the current draft before replacing it. The selected restore
-                // source was chosen before this backup is created, so the active file
-                // cannot accidentally become its own restore source.
-                if (File.Exists(path)) CreateBackup(path);
+                    throw new InvalidDataException("没有找到有效的流程草稿备份，当前草稿未修改。");
+                if (File.Exists(path))
+                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
+                        + "-" + Guid.NewGuid().ToString("N"), false);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
                     throw new IOException(error);
             }
-            return "已恢复上一份流程草稿备份；仍需单独人工审核和灰度激活。";
+            return "已恢复最近一份有效的流程草稿备份：" + Path.GetFileName(selectedBackup)
+                + "；仍需单独人工审核和灰度激活。";
         }
     }
 }

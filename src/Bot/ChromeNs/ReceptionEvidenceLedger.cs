@@ -46,21 +46,19 @@ namespace Bot.ChromeNs
                     Encoding.UTF8.GetBytes(value ?? string.Empty))).Replace("-", "").ToLowerInvariant();
         }
 
+        private static double NormalizeConfidence(double confidence)
+        {
+            if (double.IsNaN(confidence) || double.IsInfinity(confidence)) return 0;
+            return Math.Max(0, Math.Min(1, confidence));
+        }
+
         private static string PathForSeller(string seller)
         {
-            // An explicit operation scope is stronger than a nickname lookup. This
-            // keeps evidence writes working for duplicate seller nicknames while
-            // still rejecting a caller whose seller does not match the scope.
-            var shop = ShopSettingsScope.Current;
-            if (shop == null)
-                shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-            else if (!string.Equals(
-                (shop.SellerNick ?? string.Empty).Trim(),
-                (seller ?? string.Empty).Trim(),
-                StringComparison.Ordinal))
-                throw new InvalidOperationException("当前店铺作用域与证据卖家不匹配，拒绝跨店写入。");
-
-            if (shop == null) throw new InvalidOperationException("未能确认店铺范围，拒绝证据写入");
+            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !shop.HasStableSellerId)
+                throw new InvalidOperationException("店铺身份不稳定或未绑定唯一ShopKey，拒绝证据写入");
             using (ShopSettingsScope.Enter(shop))
             {
                 var parent = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
@@ -99,8 +97,13 @@ namespace Bot.ChromeNs
                     var buyerKey = Digest(seller + "\n" + buyer);
                     var sourceKey = Digest(seller + "\n" + buyer + "\n" + (messageId ?? ""));
                     var sourceHash = Digest(evidenceText ?? "");
+                    // A single source message can change state later (for example,
+                    // an image is withdrawn after it was first analyzed). Include the
+                    // observation state in the event identity so the later transition is
+                    // not swallowed as a duplicate of the earlier observation.
                     var id = Digest(buyerKey + "|" + (sessionId ?? "") + "|" + kind
-                        + "|" + sourceKey + "|" + sourceHash);
+                        + "|" + sourceKey + "|" + sourceHash + "|" + (observation ?? "")
+                        + "|" + (stage ?? "") + "|" + (authority ?? ""));
                     if (records.Any(x => x != null && x.Id == id)) return;
                     records.Add(new EvidenceRow
                     {
@@ -111,7 +114,7 @@ namespace Bot.ChromeNs
                         SourceMessageKey = sourceKey, EvidenceDigest = sourceHash,
                         Kind = kind, Observation = observation,
                         Stage = stage, Authority = authority,
-                        Confidence = Math.Max(0, Math.Min(1, confidence)),
+                        Confidence = NormalizeConfidence(confidence),
                         SchemaVersion = SchemaVersion, ObservedUtcTicks = DateTime.UtcNow.Ticks
                     });
                     var cutoff = DateTime.UtcNow.AddDays(-KeepDays).Ticks;
@@ -162,39 +165,9 @@ namespace Bot.ChromeNs
             var file = PathForSeller(seller);
             string error;
             var raw = CrossProcessAtomicStateFile.ReadAllTextShared(file, 2, 30, out error);
-            if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                // A missing ledger is a valid empty state. An existing zero-byte file
-                // is not: displaying it as [] would hide evidence-store corruption.
-                if (!File.Exists(file)) return "[]";
-                throw new InvalidDataException("接待证据账本存在但内容为空，拒绝将存储故障显示为无证据。");
-            }
-
-            List<EvidenceRow> records;
-            try
-            {
-                records = JsonConvert.DeserializeObject<List<EvidenceRow>>(raw);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException("接待证据账本JSON损坏，原文件已保留。", ex);
-            }
-            if (records == null
-                || records.Any(x => x == null
-                    || x.SchemaVersion != SchemaVersion
-                    || string.IsNullOrWhiteSpace(x.Id)
-                    || string.IsNullOrWhiteSpace(x.BuyerKey)
-                    || string.IsNullOrWhiteSpace(x.SourceMessageKey)
-                    || string.IsNullOrWhiteSpace(x.EvidenceDigest)
-                    || string.IsNullOrWhiteSpace(x.Kind)
-                    || string.IsNullOrWhiteSpace(x.Stage)
-                    || string.IsNullOrWhiteSpace(x.Authority)
-                    || x.ObservedUtcTicks <= 0)
-                || records.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != records.Count)
-                throw new InvalidDataException("接待证据账本记录结构无效或存在重复ID，拒绝显示为空记录。");
-
-            return JsonConvert.SerializeObject(records, Formatting.Indented);
+            if (!string.IsNullOrWhiteSpace(error))
+                throw new IOException("读取接待证据审计失败：" + error);
+            return string.IsNullOrWhiteSpace(raw) ? "[]" : raw;
         }
     }
 }

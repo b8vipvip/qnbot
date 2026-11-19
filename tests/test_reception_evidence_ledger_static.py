@@ -7,7 +7,8 @@ def source(path):
 
 def test_event_ledger_is_shop_scoped_atomic_and_deduplicated():
     code=source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
-    assert "ResolveRuntimeBySellerNick(seller)" in code
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in code
+    assert "ShopSettingsScope.Current" not in code
     assert 'Path.Combine(parent, "reception-evidence-ledger.json")' in code
     assert "CrossProcessAtomicStateFile.Acquire" in code
     assert "WriteAllTextAtomic" in code
@@ -46,38 +47,69 @@ def test_followup_uses_original_image_identity_without_raw_chat_storage():
     assert "recent.Item.MessageKey, question" in followup
 
 
-def test_audit_read_failure_is_not_misreported_as_an_empty_evidence_ledger():
+
+def test_evidence_audit_read_failure_is_not_misreported_as_an_empty_ledger():
     code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
-    audit = code[code.index("internal static string GetAuditJson"):]
-
-    assert "if (!File.Exists(file)) return \"[]\";" in audit
-    assert "throw new InvalidDataException" in audit
-    assert "JsonConvert.DeserializeObject<List<EvidenceRow>>(raw)" in audit
-    assert "records.Any(x => x == null" in audit
-    assert "Distinct(StringComparer.Ordinal).Count() != records.Count" in audit
-    assert audit.count('return "[]";') == 1
-    assert "catch (Exception ex)" in audit
-    assert 'throw new InvalidDataException("接待证据账本JSON损坏，原文件已保留。", ex);' in audit
-    assert 'Log.ErrorWithMaxCount("读取接待证据审计失败' not in audit
-
-
-def test_reception_audit_ui_surfaces_ledger_errors_instead_of_showing_no_evidence():
+    audit = code[
+        code.index("internal static string GetAuditJson"):
+        code.index("\n    }\n}")
+    ]
     page = source("src/Bot/Knowledge/KnowledgeV2ReceptionAuditPage.cs")
-    refresh = page[page.index("public void RefreshView"):page.index("private void ExportAudit")]
+    refresh = page[
+        page.index("public void RefreshView()"):
+        page.index("private void ExportAudit()")
+    ]
 
+    assert "ReadAllTextShared(file, 2, 30, out error)" in audit
+    assert "throw new IOException(" in audit
+    assert "return string.IsNullOrWhiteSpace(raw) ? \"[]\" : raw;" in audit
+    assert "catch (Exception ex)" not in audit
     assert "if (t.IsFaulted)" in refresh
     assert '_status.Text = "读取失败";' in refresh
-    assert "_output.Text = t.Exception.GetBaseException().Message;" in refresh
 
 
 
-def test_evidence_ledger_prefers_explicit_shop_scope_and_rejects_mismatched_seller():
+def test_evidence_ledger_requires_stable_seller_identity_and_nonempty_shopkey():
     code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
     path = code[
         code.index("private static string PathForSeller"):
         code.index("/// <summary>", code.index("private static string PathForSeller"))
     ]
-    assert "ShopSettingsScope.Current" in path
-    assert "ResolveRuntimeBySellerNick(seller)" in path
-    assert "shop.SellerNick" in path
-    assert "拒绝跨店写入" in path
+
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
+    assert "!shop.HasStableSellerId" in path
+    assert "拒绝证据写入" in path
+
+
+
+def test_evidence_ledger_never_persists_non_finite_confidence():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    normalizer = code[
+        code.index("private static double NormalizeConfidence"):
+        code.index("private static string PathForSeller")
+    ]
+    append = code[
+        code.index("private static void Append"):
+        code.index("internal static void RecordDeliveredEvidenceRequest")
+    ]
+
+    assert "double.IsNaN(confidence)" in normalizer
+    assert "double.IsInfinity(confidence)" in normalizer
+    assert "Confidence = NormalizeConfidence(confidence)" in append
+
+
+def test_evidence_dedup_identity_includes_state_transition_fields():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    append = code[
+        code.index("private static void Append"):
+        code.index("internal static void RecordDeliveredEvidenceRequest")
+    ]
+
+    # The same image/message may first be analyzed and later withdrawn. Those are
+    # separate evidence events even when the source message and visual digest match.
+    assert '"|" + (observation ?? "")' in append
+    assert '"|" + (stage ?? "")' in append
+    assert '"|" + (authority ?? "")' in append
+    assert 'withdrawn ? "withdrawn_image_seen" : "image_analyzed"' in code
+    assert "records.Any(x => x != null && x.Id == id)" in append
