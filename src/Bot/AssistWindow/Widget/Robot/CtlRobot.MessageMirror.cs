@@ -104,20 +104,15 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private List<ConversationContextTurn> LoadMessageMirrorTurns(QN qn, string seller, string buyer)
         {
-            try
+            // Let transient scope/store failures reach RefreshMessageMirror's outer
+            // handler. Returning an empty list here makes a read failure indistinguishable
+            // from a genuinely empty conversation and clears the last good UI timeline.
+            var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            using (ShopSettingsScope.Enter(shop))
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-                    if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
-                    return ConversationContextStore.GetMirrorTurns(seller, internalBuyer, 100);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("读取千牛镜像聊天记录失败：" + ex.Message, 10);
-                return new List<ConversationContextTurn>();
+                var internalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (string.IsNullOrWhiteSpace(internalBuyer)) internalBuyer = buyer;
+                return ConversationContextStore.GetMirrorTurns(seller, internalBuyer, 100);
             }
         }
 
@@ -264,6 +259,13 @@ namespace Bot.AssistWindow.Widget.Robot
                     _messageMirrorSignature = string.Empty;
                     _messageMirrorRenderedTurns = null;
                     _messageMirrorLastRemoteRefresh = DateTime.MinValue;
+
+                    // Never leave the previous shop/buyer's messages visible while
+                    // the new identity is loading. For the same identity, however,
+                    // a transient read failure must preserve the last good timeline.
+                    stkDialog.Children.Clear();
+                    grdTipNoConv.Visibility = Visibility.Visible;
+                    stkDialog.Children.Add(grdTipNoConv);
                     RequestMessageMirrorHistory(qn, seller, buyer, true);
                 }
 
