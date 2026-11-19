@@ -112,7 +112,9 @@ def test_per_buyer_reply_gates_are_reference_counted_and_expired_cooldowns_prune
         text.index("private static void CleanupExpiredOffHoursDeliveredUntil"):
         text.index("public static Task<bool> HandleBeforeMergeAsync")
     ]
-    assert "Interlocked.Increment(ref _offHoursCleanupCounter) & 0x7F" in cleanup
+    assert "Interlocked.Read(ref _lastOffHoursCleanupUtcTicks)" in cleanup
+    assert "Interlocked.CompareExchange(" in cleanup
+    assert "TimeSpan.FromMinutes(1).Ticks" in cleanup
     assert "pair.Value <= now" in cleanup
     assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
     assert "CleanupExpiredOffHoursDeliveredUntil();" in text
