@@ -68,7 +68,7 @@ def test_generation_watchdog_removes_only_exact_watch_snapshots_and_ids_survive_
     assert "RemoveExact(WatchedGenerations, pair)" in source
     assert "RemoveExact(WatchedSessions, pair)" in source
     assert "return new WatchedGeneration" in source
-    assert "return new WatchedSession" in source
+    assert "(_, existing) => new WatchedSession" in source
     assert "WatchedGenerations.TryRemove(pair.Key" not in source
     assert "WatchedSessions.TryRemove(pair.Key" not in source
 
