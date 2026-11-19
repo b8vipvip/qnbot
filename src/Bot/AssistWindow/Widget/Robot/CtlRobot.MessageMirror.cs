@@ -70,7 +70,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 try { candidateShopKey = ShopIdentityResolver.Resolve(qn.Seller).ShopKey; }
                 catch { return null; }
                 if (!string.Equals(candidateShopKey, activeShopKey, StringComparison.Ordinal)
-                    || !ActiveShopSessionRegistry.IsActive(qn))
+                    || !ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn))
                 {
                     // _preQN can outlive a seller-tab switch or CDP replacement.
                     // Rebind only to the exact globally arbitrated ShopKey/session;
@@ -78,7 +78,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     // keep rendering a stale conversation wrapper.
                     var current = QN.CurQN;
                     if (current == null || current.Seller == null || current.Buyer == null
-                        || !ActiveShopSessionRegistry.IsActive(current))
+                        || !ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current))
                         return null;
                     try
                     {
