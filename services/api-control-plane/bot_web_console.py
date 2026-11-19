@@ -240,21 +240,52 @@ def _ensure_state(client_id: int) -> None:
         )
 
 
-def _rate_limit_login(request: Request) -> None:
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 600
+_LOGIN_ATTEMPT_LIMIT = 12
+_LOGIN_ATTEMPT_MAX_KEYS = 4096
+_LOGIN_ATTEMPT_KEY_MAX_LENGTH = 128
+
+
+def _login_attempt_key(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
     key = forwarded or (request.client.host if request.client else "unknown")
+    return key[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH] or "unknown"
+
+
+def _rate_limit_login(request: Request) -> None:
+    key = _login_attempt_key(request)
     now = time.time()
+    cutoff = now - _LOGIN_ATTEMPT_WINDOW_SECONDS
     with _LOGIN_LOCK:
-        recent = [x for x in _LOGIN_ATTEMPTS.get(key, []) if x >= now - 600]
-        if len(recent) >= 12:
+        # Prune every source, not only the current one. Otherwise one-off source
+        # addresses accumulate forever in this long-lived process.
+        for source, attempts in list(_LOGIN_ATTEMPTS.items()):
+            recent_source_attempts = [x for x in attempts if x >= cutoff]
+            if recent_source_attempts:
+                _LOGIN_ATTEMPTS[source] = recent_source_attempts
+            else:
+                _LOGIN_ATTEMPTS.pop(source, None)
+
+        recent = _LOGIN_ATTEMPTS.get(key, [])
+        if len(recent) >= _LOGIN_ATTEMPT_LIMIT:
             raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试")
+
+        # X-Forwarded-For is supplied by the proxy chain and may contain many
+        # distinct values. Keep the in-memory limiter bounded even if upstream
+        # forwarding configuration is misconfigured or a caller rotates values.
+        if key not in _LOGIN_ATTEMPTS and len(_LOGIN_ATTEMPTS) >= _LOGIN_ATTEMPT_MAX_KEYS:
+            oldest_key = min(
+                _LOGIN_ATTEMPTS,
+                key=lambda source: _LOGIN_ATTEMPTS[source][-1] if _LOGIN_ATTEMPTS[source] else 0,
+            )
+            _LOGIN_ATTEMPTS.pop(oldest_key, None)
+
         recent.append(now)
         _LOGIN_ATTEMPTS[key] = recent
 
 
 def _clear_login_attempts(request: Request) -> None:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    key = forwarded or (request.client.host if request.client else "unknown")
+    key = _login_attempt_key(request)
     with _LOGIN_LOCK:
         _LOGIN_ATTEMPTS.pop(key, None)
 
