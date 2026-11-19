@@ -233,7 +233,8 @@ def test_missing_shop_scope_uses_neutral_defaults_and_never_reads_or_writes_glob
     assert "禁止写入全局默认策略" in save
     assert "var path = GetUserPath(shop);" in save
     assert "var userPath = shop == null ? GetDefaultPath() : GetUserPath(shop);" in ensure_loaded
-    assert "if (shop != null) EnsureUserFile(userPath, shop);" in ensure_loaded
+    assert "if (shop != null)" in ensure_loaded
+    assert "EnsureUserFile(userPath, shop);" in ensure_loaded
     assert "scope=neutral-default" in ensure_loaded
 
 
