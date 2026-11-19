@@ -75,3 +75,15 @@ def test_workflow_draft_storage_requires_stable_shop_identity_and_shopkey():
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
     assert "!shop.HasStableSellerId" in path
     assert "不允许保存流程草稿" in path
+
+
+def test_workflow_steps_require_nonempty_unique_evidence_contracts():
+    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    validation = s[
+        s.index("private static JObject Validate"):
+        s.index("private static bool ValidKey")
+    ]
+    assert "required.Count < 1 || required.Count > 10" in validation
+    assert "new HashSet<string>(StringComparer.Ordinal)" in validation
+    assert "evidenceKinds.Add(Convert.ToString(kind))" in validation
+    assert "同一步骤不允许重复声明相同证据类型" in validation
