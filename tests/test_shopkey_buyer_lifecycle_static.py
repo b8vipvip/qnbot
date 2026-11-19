@@ -315,3 +315,28 @@ def test_buyer_session_agent_prune_cannot_remove_a_refreshed_state_or_orphan_new
     assert "lock (pair.Value.SyncRoot)" in prune
     assert "((ICollection<KeyValuePair<string, SessionState>>)Sessions).Remove(pair)" in prune
     assert "Sessions.TryRemove(pair.Key, out removed)" not in prune
+
+
+
+def test_async_status_binding_uses_per_session_generation_to_reject_out_of_order_results():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    generation = server[
+        server.index("private long NextStatusBindingGenerationLocked"):
+        server.index("private void ForgetStatusBindingAttempt")
+    ]
+    bind = server[
+        server.index("private async Task TryBindStatusConversation"):
+        server.index("private void ReleaseStaleSessions")
+    ]
+
+    assert "_statusBindingGenerations" in server
+    assert "NextStatusBindingGenerationLocked(sessionId)" in generation
+    assert "IsCurrentStatusBindingGenerationLocked" in generation
+    assert "private long ShouldRefreshStatusBinding(" in generation
+    assert "bindingGeneration" in bind
+    assert "IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)" in bind
+    assert "lock (_sellerSessionSync)" in bind
+    assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in bind
+    assert "TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration)" in server
+    assert "BeginStatusBindingAttempt(session.SessionID)" in server
+    assert "NextStatusBindingGenerationLocked(session.SessionID)" in server
