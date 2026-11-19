@@ -172,3 +172,13 @@ def test_message_mirror_preserves_last_good_timeline_on_transient_read_failure()
     assert "stkDialog.Children.Clear();" in identity
     assert "grdTipNoConv.Visibility = Visibility.Visible;" in identity
     assert "stkDialog.Children.Add(grdTipNoConv);" in identity
+
+
+def test_message_mirror_recovers_using_exact_active_shop_and_cdp_session():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    registry = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+
+    assert "internal static string GetActiveSessionId()" in registry
+    assert "var activeSessionId = ActiveShopSessionRegistry.GetActiveSessionId();" in mirror
+    assert "ShopContextLocator.FindConnectedQnByShopKey(\n                        activeShopKey, activeSessionId)" in mirror
+    assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current)" in mirror
