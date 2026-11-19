@@ -250,3 +250,24 @@ def test_shop_policy_lock_contention_keeps_reply_path_available_with_cached_or_n
     assert "state.Policy = Validate(GetDefaultJson());" in ensure_loaded
     assert "state.Loaded = true;" in ensure_loaded
     assert "稍后重试" in ensure_loaded
+
+
+def test_idle_shop_policy_states_are_pruned_without_removing_a_refreshed_state():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    cleanup = service[
+        service.index("private static void CleanupIdleStates"):
+        service.index("private static PolicyState EnsureLoaded")
+    ]
+    ensure = service[
+        service.index("private static PolicyState EnsureLoaded"):
+        service.index("private static void EnsureUserFile")
+    ]
+
+    assert "TimeSpan.FromMinutes(5).Ticks" in cleanup
+    assert "now.AddMinutes(-30)" in cleanup
+    assert "ICollection<KeyValuePair<string, PolicyState>>" in cleanup
+    assert "lock (state.Sync)" in cleanup
+    assert "exactEntries.Remove(pair)" in cleanup
+    assert "CleanupIdleStates(userPath);" in ensure
+    assert "ReferenceEquals(current, state)" in ensure
+    assert "if (!States.TryGetValue(userPath, out current)" in ensure
