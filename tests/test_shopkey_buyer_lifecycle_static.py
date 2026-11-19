@@ -63,7 +63,7 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     ]
     promotion = server[
         server.index("private async Task TryPromoteAvailableStandbyAsync"):
-        server.index("private bool ShouldRefreshStatusBinding")
+        server.index("private long ShouldRefreshStatusBinding")
     ]
     identity_change = server[
         server.index("private bool TryClaimShopSession"):
