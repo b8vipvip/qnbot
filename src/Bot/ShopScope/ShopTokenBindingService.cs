@@ -208,7 +208,7 @@ namespace Bot.ShopScope
 
         private static string SafeError(string value, int max)
         {
-            value = (value ?? string.Empty).Replace("\\r", " ").Replace("\\n", " ").Trim();
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             while (value.Contains("  ")) value = value.Replace("  ", " ");
             return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
