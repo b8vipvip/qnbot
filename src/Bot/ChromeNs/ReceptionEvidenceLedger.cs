@@ -148,19 +148,42 @@ namespace Bot.ChromeNs
 
         internal static string GetAuditJson(string seller)
         {
+            var file = PathForSeller(seller);
+            string error;
+            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(file, 2, 30, out error);
+            if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                // A missing ledger is a valid empty state. An existing zero-byte file
+                // is not: displaying it as [] would hide evidence-store corruption.
+                if (!File.Exists(file)) return "[]";
+                throw new InvalidDataException("接待证据账本存在但内容为空，拒绝将存储故障显示为无证据。");
+            }
+
+            List<EvidenceRow> records;
             try
             {
-                var file = PathForSeller(seller);
-                string error;
-                var raw = CrossProcessAtomicStateFile.ReadAllTextShared(file, 2, 30, out error);
-                if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
-                return string.IsNullOrWhiteSpace(raw) ? "[]" : raw;
+                records = JsonConvert.DeserializeObject<List<EvidenceRow>>(raw);
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("读取接待证据审计失败：" + ex.Message, 10);
-                return "[]";
+                throw new InvalidDataException("接待证据账本JSON损坏，原文件已保留。", ex);
             }
+            if (records == null
+                || records.Any(x => x == null
+                    || x.SchemaVersion != SchemaVersion
+                    || string.IsNullOrWhiteSpace(x.Id)
+                    || string.IsNullOrWhiteSpace(x.BuyerKey)
+                    || string.IsNullOrWhiteSpace(x.SourceMessageKey)
+                    || string.IsNullOrWhiteSpace(x.EvidenceDigest)
+                    || string.IsNullOrWhiteSpace(x.Kind)
+                    || string.IsNullOrWhiteSpace(x.Stage)
+                    || string.IsNullOrWhiteSpace(x.Authority)
+                    || x.ObservedUtcTicks <= 0)
+                || records.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != records.Count)
+                throw new InvalidDataException("接待证据账本记录结构无效或存在重复ID，拒绝显示为空记录。");
+
+            return JsonConvert.SerializeObject(records, Formatting.Indented);
         }
     }
 }

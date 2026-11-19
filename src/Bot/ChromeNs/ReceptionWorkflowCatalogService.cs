@@ -177,6 +177,32 @@ namespace Bot.ChromeNs
                 .ToString(Formatting.Indented);
         }
 
+        private static string CreateBackup(string path)
+        {
+            var suffix = DateTime.UtcNow.ToString(
+                "yyyyMMdd-HHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+                + "." + Guid.NewGuid().ToString("N");
+            var backup = path + ".backup." + suffix;
+            var temp = backup + ".tmp";
+            try
+            {
+                using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var output = new FileStream(
+                    temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                    81920, FileOptions.WriteThrough))
+                {
+                    input.CopyTo(output);
+                    output.Flush(true);
+                }
+                File.Move(temp, backup);
+                return backup;
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+        }
+
         public static string SaveDraft(string seller, string json)
         {
             var data = Validate(json).ToString(Formatting.Indented);
@@ -186,8 +212,7 @@ namespace Bot.ChromeNs
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取草稿写锁");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-                if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"), false);
+                if (File.Exists(path)) CreateBackup(path);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, data, 3, 50, out error))
                     throw new IOException(error);
@@ -203,12 +228,36 @@ namespace Bot.ChromeNs
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取恢复写锁");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) throw new FileNotFoundException("暂无草稿备份");
-                var original = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
-                    .OrderByDescending(x => x, StringComparer.Ordinal).FirstOrDefault();
-                if (original == null) throw new FileNotFoundException("暂无草稿备份");
-                var validated = Validate(File.ReadAllText(original, Encoding.UTF8)).ToString(Formatting.Indented);
-                if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"), false);
+                var backups = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
+                    .Where(x => !x.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(x => x, StringComparer.Ordinal)
+                    .ToList();
+                if (backups.Count == 0) throw new FileNotFoundException("暂无草稿备份");
+
+                string validated = null;
+                Exception lastInvalidBackup = null;
+                foreach (var backup in backups)
+                {
+                    try
+                    {
+                        validated = Validate(File.ReadAllText(backup, Encoding.UTF8))
+                            .ToString(Formatting.Indented);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastInvalidBackup = ex;
+                        Log.ErrorWithMaxCount("忽略损坏或不兼容的流程草稿备份："
+                            + Path.GetFileName(backup) + ", error=" + ex.GetType().Name, 10);
+                    }
+                }
+                if (validated == null)
+                    throw new InvalidDataException("没有可恢复的有效流程草稿备份；当前草稿未被修改。", lastInvalidBackup);
+
+                // Preserve the current draft before replacing it. The selected restore
+                // source was chosen before this backup is created, so the active file
+                // cannot accidentally become its own restore source.
+                if (File.Exists(path)) CreateBackup(path);
                 string error;
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
                     throw new IOException(error);
