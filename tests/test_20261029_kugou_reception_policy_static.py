@@ -321,5 +321,5 @@ def test_cross_process_shop_profile_changes_invalidate_cached_detection_immediat
     assert "ProfileRevision = profileRevision" in applies
     assert "info.LastWriteTimeUtc.Ticks.ToString()" in revision
     assert "info.Length.ToString()" in revision
-    assert 'return "missing";' in revision
+    assert ': "missing";' in revision
     assert "return string.Empty;" in revision
