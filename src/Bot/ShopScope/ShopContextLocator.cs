@@ -47,43 +47,34 @@ namespace Bot.ShopScope
             var current = ShopSettingsScope.Current;
             if (current != null)
             {
-                // A settings scope is authoritative, but an explicit ShopKey must
-                // never be allowed to silently target a different shop.
                 if (IsQianniuShopKey(sellerNick)
                     && !string.Equals(current.ShopKey, sellerNick, StringComparison.Ordinal))
                     throw new InvalidOperationException(
                         "请求的ShopKey与当前店铺作用域不一致，已阻止跨店访问。");
 
-                // Stable profiles can be opened while offline with DisplayName as a
-                // UI label. It is not an identity key; the explicit scope remains the
-                // authority when SellerNick is unavailable.
-                if (sellerNick.Length > 0
-                    && !IsQianniuShopKey(sellerNick)
-                    && !string.IsNullOrWhiteSpace(current.SellerNick)
-                    && !string.Equals(current.SellerNick, sellerNick, StringComparison.Ordinal)
-                    && !string.Equals(current.DisplayName, sellerNick, StringComparison.Ordinal))
-                    throw new InvalidOperationException(
-                        "请求的卖家与当前店铺作用域不一致，已阻止跨店访问。");
-
+                if (sellerNick.Length > 0 && !IsQianniuShopKey(sellerNick))
+                {
+                    var sellerMatches = !string.IsNullOrWhiteSpace(current.SellerNick)
+                        && string.Equals(current.SellerNick, sellerNick, StringComparison.Ordinal);
+                    var displayNameMatches = !string.IsNullOrWhiteSpace(current.DisplayName)
+                        && string.Equals(current.DisplayName, sellerNick, StringComparison.Ordinal);
+                    if (!sellerMatches && !displayNameMatches)
+                        throw new InvalidOperationException(
+                            "请求的卖家与当前店铺作用域不一致，已阻止跨店访问。");
+                }
                 return current;
             }
 
-            // Background refreshes and timers run after the short UI scope has ended.
-            // A persisted ShopKey is still an exact identity and must not be treated
-            // as a seller nickname.
             if (IsQianniuShopKey(sellerNick))
                 return ResolveRuntimeByShopKey(sellerNick);
-
             return ResolveBySellerNick(sellerNick);
         }
 
         private static bool IsQianniuShopKey(string value)
         {
             value = (value ?? string.Empty).Trim();
-            if (value.Length != 15
-                || !value.StartsWith("qn_", StringComparison.Ordinal))
+            if (value.Length != 15 || !value.StartsWith("qn_", StringComparison.Ordinal))
                 return false;
-
             for (var i = 3; i < value.Length; i++)
             {
                 var ch = value[i];
