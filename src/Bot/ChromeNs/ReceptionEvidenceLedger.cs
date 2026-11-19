@@ -46,6 +46,12 @@ namespace Bot.ChromeNs
                     Encoding.UTF8.GetBytes(value ?? string.Empty))).Replace("-", "").ToLowerInvariant();
         }
 
+        private static double NormalizeConfidence(double confidence)
+        {
+            if (double.IsNaN(confidence) || double.IsInfinity(confidence)) return 0;
+            return Math.Max(0, Math.Min(1, confidence));
+        }
+
         private static string PathForSeller(string seller)
         {
             var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
@@ -103,7 +109,7 @@ namespace Bot.ChromeNs
                         SourceMessageKey = sourceKey, EvidenceDigest = sourceHash,
                         Kind = kind, Observation = observation,
                         Stage = stage, Authority = authority,
-                        Confidence = Math.Max(0, Math.Min(1, confidence)),
+                        Confidence = NormalizeConfidence(confidence),
                         SchemaVersion = SchemaVersion, ObservedUtcTicks = DateTime.UtcNow.Ticks
                     });
                     var cutoff = DateTime.UtcNow.AddDays(-KeepDays).Ticks;

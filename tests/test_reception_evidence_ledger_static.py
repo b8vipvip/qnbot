@@ -80,3 +80,20 @@ def test_evidence_ledger_requires_stable_seller_identity_and_nonempty_shopkey():
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
     assert "!shop.HasStableSellerId" in path
     assert "拒绝证据写入" in path
+
+
+
+def test_evidence_ledger_never_persists_non_finite_confidence():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    normalizer = code[
+        code.index("private static double NormalizeConfidence"):
+        code.index("private static string PathForSeller")
+    ]
+    append = code[
+        code.index("private static void Append"):
+        code.index("internal static void RecordDeliveredEvidenceRequest")
+    ]
+
+    assert "double.IsNaN(confidence)" in normalizer
+    assert "double.IsInfinity(confidence)" in normalizer
+    assert "Confidence = NormalizeConfidence(confidence)" in append
