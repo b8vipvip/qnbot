@@ -27,7 +27,8 @@ def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first
     assert "FileMode.CreateNew" in helper
     assert "FileOptions.WriteThrough" in helper
     assert "stream.Flush(true)" in helper
-    assert "File.Replace(temp, path, null, true)" in helper
+    assert "File.Replace(temp, path, backupPath, true)" in helper
+    assert "string backupPath = null" in helper
     assert "File.Delete(path)" not in helper
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     state = order[order.index("private static void EnsureActionStateLoadedLocked"):order.index("private static string GetActionStatePath")]

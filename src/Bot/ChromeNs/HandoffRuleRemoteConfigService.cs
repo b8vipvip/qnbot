@@ -436,23 +436,10 @@ namespace Bot.ChromeNs
 
         private static void AtomicWrite(string path, string content)
         {
-            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
-            File.WriteAllText(temp, content ?? string.Empty, new UTF8Encoding(false));
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var backup = path + ".bak";
-                    try { File.Replace(temp, path, backup, true); return; }
-                    catch (PlatformNotSupportedException) { }
-                    catch (IOException) { }
-                    File.Copy(temp, path, true);
-                    File.Delete(temp);
-                    return;
-                }
-                File.Move(temp, path);
-            }
-            finally { if (File.Exists(temp)) File.Delete(temp); }
+            string error;
+            if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                path, content, 3, 50, out error, path + ".bak"))
+                throw new IOException("配置原子保存失败：" + error);
         }
 
         private static void RefreshFileStamp(string path, RuleState state)
