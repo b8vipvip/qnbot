@@ -112,6 +112,13 @@ namespace Bot.ChromeNs
             {
                 if (shop != null && ShopSettingsScope.Current == null)
                     scope = ShopSettingsScope.Enter(shop);
+                // Live messages can carry the buyer's internal nick while the UI
+                // and the current conversation expose its display nick (or vice versa).
+                // Learn the alias inside the exact ShopKey scope before choosing the
+                // canonical timeline key, otherwise the same buyer gets split timelines.
+                BuyerIdentityAliasService.ObserveMessage(seller, message);
+                var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
                 var state = GetState(seller, buyer);
                 RecordMessage(state, seller, buyer, message, messageText, false);
                 var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
@@ -158,20 +165,26 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0
                 || string.Equals(seller, buyer, StringComparison.Ordinal)) return false;
-            var from = message.fromid == null ? string.Empty
-                : (message.fromid.nick ?? string.Empty).Trim();
-            var to = message.toid == null ? string.Empty
-                : (message.toid.nick ?? string.Empty).Trim();
-            // Never trust a guessed seller/buyer relation or create a cross-shop
-            // conversation from an unverified third-party message.
-            if (!string.Equals(from, seller, StringComparison.Ordinal)
-                || !string.Equals(to, buyer, StringComparison.Ordinal)) return false;
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return false;
             IDisposable scope = null;
             try
             {
                 scope = ShopSettingsScope.Enter(shop);
+                // Seller echoes can expose a different buyer nick than the active
+                // conversation snapshot. Resolve only aliases observed in this exact
+                // shop scope; do not accept an unverified third-party participant.
+                BuyerIdentityAliasService.ObserveMessage(seller, message);
+                var from = message.fromid == null ? string.Empty
+                    : (message.fromid.nick ?? string.Empty).Trim();
+                var to = message.toid == null ? string.Empty
+                    : (message.toid.nick ?? string.Empty).Trim();
+                if (!string.Equals(from, seller, StringComparison.Ordinal)
+                    || (!string.Equals(to, buyer, StringComparison.Ordinal)
+                        && !BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)))
+                    return false;
+                var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
                 var state = GetState(seller, buyer);
                 RecordMessage(state, seller, buyer, message, messageText, false);
                 return true;
@@ -617,7 +630,8 @@ namespace Bot.ChromeNs
                 Log.Info("千牛镜像历史同步完成: shop="
                     + (shop == null ? "unknown" : shop.ShopKey)
                     + ", fetched=" + messages.Count
-                    + ", merged=" + merged);
+                    + ", merged=" + merged
+                    + ", filtered=" + Math.Max(0, messages.Count - merged));
             }
             catch (Exception ex)
             {
@@ -676,9 +690,19 @@ namespace Bot.ChromeNs
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
+            // GetRemoteHisMsg and live events do not always serialize the same nick
+            // form. Record aliases in the current ShopKey scope, then classify only
+            // exact seller↔buyer pairs or their already-observed buyer aliases.
+            BuyerIdentityAliasService.ObserveMessage(seller, message);
+            var fromIsBuyer = string.Equals(from, buyer, StringComparison.Ordinal)
+                || BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);
+            var toIsBuyer = string.Equals(to, buyer, StringComparison.Ordinal)
+                || BuyerIdentityAliasService.AreEquivalent(seller, to, buyer);
             string role;
-            if (from == seller && to == buyer) role = "assistant";
-            else if (from == buyer && to == seller) role = "user";
+            if (string.Equals(from, seller, StringComparison.Ordinal) && toIsBuyer)
+                role = "assistant";
+            else if (fromIsBuyer && string.Equals(to, seller, StringComparison.Ordinal))
+                role = "user";
             else return string.Empty;
 
             var cleanText = IncomingMessageSafety.GetDisplayText(message, text);
