@@ -54,6 +54,9 @@ namespace Bot.ChromeNs
         private WebSocketSession _webSocketSession;
         private const int InvokeTimeoutMs = 8000;
         private const int ExecuteGateWaitTimeoutMs = 1500;
+        // History reads are asynchronous and user-visible. Let them wait behind one
+        // in-flight CDP command; all ordinary probes/sends keep the short fail-fast gate.
+        private const int HistoryGateWaitTimeoutMs = 10000;
         private int _sessionInvalidated;
         private string _shopKey = string.Empty;
         private int _shopIdentityRetired;
@@ -377,7 +380,8 @@ namespace Bot.ChromeNs
         }
 
         private async Task<string> SendExecuteAndWaitAsync(
-            string cmd, string desc, bool allowRetiredIdentityRead = false)
+            string cmd, string desc, bool allowRetiredIdentityRead = false,
+            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs)
         {
             if (IsShopIdentityRetired && !allowRetiredIdentityRead)
             {
@@ -393,23 +397,29 @@ namespace Bot.ChromeNs
                 var preferred = ResolvePreferredRuntimeClient();
                 if (preferred != null && !ReferenceEquals(preferred, this))
                     return await preferred.SendExecuteAndWaitCoreAsync(
-                        cmd, desc + "@runtime-active-session").ConfigureAwait(false);
+                        cmd, desc + "@runtime-active-session", allowRetiredIdentityRead,
+                        gateWaitTimeoutMs).ConfigureAwait(false);
             }
-            return await SendExecuteAndWaitCoreAsync(cmd, desc, allowRetiredIdentityRead).ConfigureAwait(false);
+            return await SendExecuteAndWaitCoreAsync(
+                cmd, desc, allowRetiredIdentityRead, gateWaitTimeoutMs).ConfigureAwait(false);
         }
 
         private async Task<string> SendExecuteAndWaitCoreAsync(
-            string cmd, string desc, bool allowRetiredIdentityRead = false)
+            string cmd, string desc, bool allowRetiredIdentityRead = false,
+            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs)
         {
             var gateAcquired = false;
+            var effectiveGateWaitTimeoutMs = Math.Max(
+                ExecuteGateWaitTimeoutMs,
+                Math.Min(HistoryGateWaitTimeoutMs, gateWaitTimeoutMs));
             try
             {
-                gateAcquired = await _executeGate.WaitAsync(ExecuteGateWaitTimeoutMs).ConfigureAwait(false);
+                gateAcquired = await _executeGate.WaitAsync(effectiveGateWaitTimeoutMs).ConfigureAwait(false);
                 if (!gateAcquired)
                 {
                     Log.ErrorWithMaxCount(
                         "CDP调用等待串行门超时，已快速失败避免排队放大: desc=" + desc
-                        + ", timeoutMs=" + ExecuteGateWaitTimeoutMs
+                        + ", timeoutMs=" + effectiveGateWaitTimeoutMs
                         + ", session=" + SessionId,
                         100);
                     return string.Empty;
@@ -673,6 +683,19 @@ namespace Bot.ChromeNs
             return JsonConvert.DeserializeObject<T>(response);
         }
 
+        // Read-only history operations may wait for the single-flight CDP channel.
+        // This does not relax the gate for message sends, probes, or other normal calls.
+        public async Task<T> InvokeForHistory<T>(string apiName, object param = null)
+        {
+            param = param ?? new object();
+            var cmd = $@"imsdk.invoke('{apiName}',{JsonConvert.SerializeObject(param)})";
+            var response = await SendExecuteAndWaitAsync(
+                cmd, "InvokeHistory:" + apiName,
+                gateWaitTimeoutMs: HistoryGateWaitTimeoutMs).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(response)) return default(T);
+            return JsonConvert.DeserializeObject<T>(response);
+        }
+
         public void Invoke(string apiName, object param = null)
         {
             param = param ?? new object();
@@ -881,6 +904,11 @@ namespace Bot.ChromeNs
         public async Task<ConversationResponse> GetCurrentConversationID()
         {
             return await Invoke<ConversationResponse>("im.uiutil.GetCurrentConversationID");
+        }
+
+        public async Task<ConversationResponse> GetCurrentConversationIDForHistory()
+        {
+            return await InvokeForHistory<ConversationResponse>("im.uiutil.GetCurrentConversationID");
         }
     }
 }

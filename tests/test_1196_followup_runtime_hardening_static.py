@@ -72,7 +72,9 @@ def test_generation_deadline_watch_uses_actual_acceptance_clock_and_direct_regis
 def test_cdp_execute_gate_wait_is_bounded_before_per_request_timeout():
     cdp = read("src/Bot/ChromeNs/CDPClient.cs")
     assert "private const int ExecuteGateWaitTimeoutMs = 1500;" in cdp
-    assert "_executeGate.WaitAsync(ExecuteGateWaitTimeoutMs)" in cdp
+    assert "_executeGate.WaitAsync(effectiveGateWaitTimeoutMs)" in cdp
+    assert "HistoryGateWaitTimeoutMs = 10000" in cdp
+    assert "gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs" in cdp
     assert "CDP调用等待串行门超时，已快速失败避免排队放大" in cdp
     assert "if (gateAcquired) _executeGate.Release();" in cdp
     assert "private const int InvokeTimeoutMs = 8000;" in cdp

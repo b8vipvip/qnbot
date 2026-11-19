@@ -37,7 +37,9 @@ def test_cdp_execute_requests_are_serialized_and_timeout_invalidates_session():
 
     assert "SemaphoreSlim _executeGate" in source
     assert "ExecuteGateWaitTimeoutMs = 1500" in source
-    assert "await _executeGate.WaitAsync(ExecuteGateWaitTimeoutMs).ConfigureAwait(false)" in source
+    assert "await _executeGate.WaitAsync(effectiveGateWaitTimeoutMs).ConfigureAwait(false)" in source
+    assert "gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs" in source
+    assert "HistoryGateWaitTimeoutMs = 10000" in source
     assert "CDP调用等待串行门超时，已快速失败避免排队放大" in source
     assert "if (gateAcquired) _executeGate.Release();" in source
     assert "CDP调用超时" in source

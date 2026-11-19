@@ -91,3 +91,42 @@ def test_401_recovery_never_falls_back_to_another_shop_or_legacy_global_token():
     recovery = "\n".join(p.read_text(encoding="utf-8-sig") for p in recovery_files)
     assert "GetLegacyGlobalToken" not in recovery
     assert "same-shop" in recovery.lower() or "同店" in recovery
+
+
+def test_authenticated_syncs_share_same_shop_401_recovery_and_backoff():
+    authority = text(SHOP / "ShopTokenBindingService.cs")
+    connection = text(SHOP / "ShopControlPlaneConnectionStore.cs")
+    clients = {
+        "bot_web": text(CHROME / "BotWebConsoleSyncService.cs"),
+        "bot_enabled": text(CHROME / "BotWebBotEnabledSyncService.cs"),
+        "knowledge": text(ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeCloudSyncService.cs"),
+        "knowledge_v2": text(ROOT / "src" / "Bot" / "Knowledge" / "KnowledgeV2CloudSyncService.cs"),
+        "store_rules": text(ROOT / "src" / "Bot" / "Knowledge" / "StoreRuleCloudSyncService.cs"),
+    }
+
+    assert "SendWithUnauthorizedRecoveryAsync" in authority
+    assert "RecoverUnauthorizedAsync(expectedShop, rejectedToken)" in authority
+    assert "ShopTokenBindingService.ReportFailure(expectedShop, failure)" in authority
+    assert "ShopTokenBindingService.ReportSuccess(expectedShop)" in authority
+    assert "UnauthorizedBackoffUntil" in authority
+    assert "ShouldAttemptSync(ShopContext shop)" in authority
+    assert "ResetFailure(_shop)" in connection
+    assert "GetLegacyGlobalToken" not in authority
+
+    for name, source in clients.items():
+        assert "ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync" in source, name
+        assert "ShouldAttemptSync" in source, name
+
+
+def test_401_recovery_never_logs_or_returns_raw_client_token():
+    authority = text(SHOP / "ShopTokenBindingService.cs")
+    helper = authority[
+        authority.index("SendWithUnauthorizedRecoveryAsync"):
+        authority.index("private static string SafeError")
+    ]
+    assert "token_hash" not in helper.lower()
+    assert "rejectedToken" in helper
+    assert "Log.Info" not in helper
+    assert "Log.Error" not in helper
+    assert "same-shop" in helper.lower() or "同店" in helper
+
