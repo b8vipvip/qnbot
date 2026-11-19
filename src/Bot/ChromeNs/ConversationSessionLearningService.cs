@@ -1736,9 +1736,21 @@ namespace Bot.ChromeNs
             foreach (var report in reports)
             {
                 DateTime openUntilUtc;
-                if (report == null || string.IsNullOrWhiteSpace(report.ShopKey)
-                    || !TryGetPersistedKnowledgeCorpusCircuitOpenUntil(report.Error, out openUntilUtc))
+                if (report == null || string.IsNullOrWhiteSpace(report.ShopKey))
                     continue;
+
+                var hasDeadline = TryGetPersistedKnowledgeCorpusCircuitOpenUntil(
+                    report.Error, out openUntilUtc);
+                var coverageError = Convert.ToString(
+                    ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]);
+                DateTime coverageDeadline;
+                if (TryGetPersistedKnowledgeCorpusCircuitOpenUntil(coverageError, out coverageDeadline)
+                    && (!hasDeadline || coverageDeadline > openUntilUtc))
+                {
+                    openUntilUtc = coverageDeadline;
+                    hasDeadline = true;
+                }
+                if (!hasDeadline) continue;
 
                 var state = KnowledgeCorpusCircuitBreakers.GetOrAdd(
                     report.ShopKey, _ => new KnowledgeCorpusCircuitState());
@@ -2128,8 +2140,25 @@ namespace Bot.ChromeNs
                 // session with the old retry; preserve both audit outcomes.
                 DisposeTimer(session);
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
+                DateTime errorDeadline;
+                var hasCircuitDeadline = TryGetPersistedKnowledgeCorpusCircuitOpenUntil(
+                    report.Error, out errorDeadline);
+                var circuitError = hasCircuitDeadline ? report.Error : string.Empty;
+                var coverageError = Convert.ToString(
+                    ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]);
+                DateTime coverageDeadline;
+                if (TryGetPersistedKnowledgeCorpusCircuitOpenUntil(coverageError, out coverageDeadline)
+                    && (!hasCircuitDeadline || coverageDeadline > errorDeadline))
+                {
+                    circuitError = coverageError;
+                    hasCircuitDeadline = true;
+                }
                 report.Status = "历史覆盖不完整，后续接待已开始，已跳过";
-                report.Error = "requeue_conflict_new_session_active";
+                // Keep an open ShopKey cooldown discoverable after restart even
+                // when this older session is superseded by a newer buyer turn.
+                report.Error = hasCircuitDeadline
+                    ? circuitError
+                    : "requeue_conflict_new_session_active";
                 report.CompletedAtTicks = DateTime.Now.Ticks;
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
                 SaveReport(report);
@@ -2310,16 +2339,20 @@ namespace Bot.ChromeNs
         {
             try
             {
-                List<ConversationSessionLearningReportEntity> reports;
+                List<ConversationSessionLearningReportEntity> allReports;
                 lock (DbSync)
                 {
-                    reports = (DbHelper.Db.Select(
+                    allReports = (DbHelper.Db.Select(
                         typeof(ConversationSessionLearningReportEntity),
-                        "where CompletedAtTicks = 0 order by UpdatedAtTicks desc") ?? new List<object>())
+                        "order by UpdatedAtTicks desc") ?? new List<object>())
                         .OfType<ConversationSessionLearningReportEntity>()
                         .ToList();
                 }
-                RestoreKnowledgeCorpusCircuitBreakers(reports);
+                // Restore shop cooldowns from every retained report, including a
+                // superseded/completed report whose pending retry was replaced by
+                // a newer buyer turn. Only unfinished reports are rescheduled.
+                RestoreKnowledgeCorpusCircuitBreakers(allReports);
+                var reports = allReports.Where(x => x.CompletedAtTicks == 0).ToList();
                 var resumedKeys = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var report in reports)
                 {
