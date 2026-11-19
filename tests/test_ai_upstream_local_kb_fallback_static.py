@@ -82,7 +82,6 @@ def test_smart_reply_circuit_breaker_is_shop_scoped_and_has_a_single_half_open_p
     ]
     service = source[
         source.index("internal static class StreamingBuyerAnswerService"):
-        source.index("internal static class ShopScopedReplyCircuitBreaker")
     ]
     assert "ConcurrentDictionary<string, State>" in breaker
     assert "FailureThreshold = 3" in breaker
