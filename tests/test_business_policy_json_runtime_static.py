@@ -210,3 +210,28 @@ def test_custom_policy_regexes_and_handoff_overrides_have_hard_size_limits():
     assert "handoffKeywords.Add(keyword)" in service
     assert "handoffOverrides 不允许重复 keyword" in service
     assert "required && string.IsNullOrWhiteSpace(value)" in service
+
+
+def test_missing_shop_scope_uses_neutral_defaults_and_never_reads_or_writes_global_policy():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    get_user_path = service[
+        service.index("public static string GetUserPath"):
+        service.index("private static string GetUserPath(ShopContext shop)")
+    ]
+    save = service[
+        service.index("public static string SaveJson"):
+        service.index("public static string RestoreDefault")
+    ]
+    ensure_loaded = service[
+        service.index("private static PolicyState EnsureLoaded"):
+        service.index("private static void EnsureUserFile")
+    ]
+
+    assert "return shop == null ? GetDefaultPath() : GetUserPath(shop);" in get_user_path
+    assert "PathEx.GlobalDataDir" not in get_user_path
+    assert "if (shop == null)" in save
+    assert "禁止写入全局默认策略" in save
+    assert "var path = GetUserPath(shop);" in save
+    assert "var userPath = shop == null ? GetDefaultPath() : GetUserPath(shop);" in ensure_loaded
+    assert "if (shop != null) EnsureUserFile(userPath, shop);" in ensure_loaded
+    assert "scope=neutral-default" in ensure_loaded
