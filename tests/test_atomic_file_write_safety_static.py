@@ -50,8 +50,11 @@ def test_shop_scoped_store_writes_keep_previous_generation_as_backup():
         "src/Bot/ShopScope/ShopProfileStore.cs",
         "src/Bot/ShopScope/ShopScopedSettingsStore.cs",
         "src/Bot/ShopScope/ShopLegacyDataMigrationService.cs",
-        "src/Bot/ChromeNs/BusinessPolicyProfileService.cs",
         "src/Bot/ChromeNs/HandoffRuleRemoteConfigService.cs",
     ):
         source = read(path)
         assert 'path + ".bak"' in source, path
+
+    policy = read("src/Bot/ChromeNs/BusinessPolicyProfileService.cs")
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in policy
+    assert 'path + ".bak"' in policy or "File.Copy(path, backup" in policy
