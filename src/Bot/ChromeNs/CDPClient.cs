@@ -315,12 +315,47 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            DispatchInboundEvent(e.Type, response);
+            DuplicateCdpInboundRecoveryBridge.TryDispatchRawInbound(this, e.Type, response);
+        }
+
+        // The raw WebSocket dispatcher is a separate path from duplicate-page recovery.
+        // It must enforce the same ShopKey authority so a retired physical socket cannot
+        // deliver directly to its former QN while the identity-transition queue is drained.
+        // qnbotStatus remains available on standby/retired pages because it is needed to
+        // discover and rebind the new login identity.
+        private bool HasCurrentShopAuthority()
+        {
+            var sessionId = SessionId;
+            if (string.IsNullOrWhiteSpace(sessionId)
+                || IsInvalidated
+                || IsShopIdentityRetired
+                || DuplicateCdpInboundRecoveryBridge.IsSessionIdentityTransitioning(sessionId))
+                return false;
+
+            var shopKey = (ShopKey ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return shopKey.Length > 0
+                && server != null
+                && server.IsWebSocketSessionConnected(sessionId)
+                && server.IsAuthoritativeShopSession(shopKey, sessionId);
+        }
+
+        private bool CanDispatchInboundEvent(string type)
+        {
+            var sessionId = SessionId;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (string.IsNullOrWhiteSpace(sessionId)
+                || server == null
+                || !server.IsWebSocketSessionConnected(sessionId))
+                return false;
+            if (string.Equals(type, "qnbotStatus", StringComparison.Ordinal)) return true;
+            return HasCurrentShopAuthority();
         }
 
         internal void DispatchInboundEvent(string type, string response)
         {
             if (string.IsNullOrEmpty(response)) return;
+            if (!CanDispatchInboundEvent(type)) return;
             if (type == "receiveNewMsg")
             {
                 RecieveNewMessage(response);
@@ -434,6 +469,13 @@ namespace Bot.ChromeNs
                 {
                     Log.Info("CDP调用已阻止：登录身份已变化，禁止旧ShopKey继续发送。desc="
                         + desc + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                    return string.Empty;
+                }
+                if (!allowRetiredIdentityRead && !HasCurrentShopAuthority())
+                {
+                    Log.Info("CDP业务命令已阻止：当前WebSocket不再拥有该ShopKey权威身份。desc="
+                        + desc + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", ShopKey)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
                     return string.Empty;
                 }
 

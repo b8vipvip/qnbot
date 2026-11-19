@@ -86,7 +86,8 @@ def test_duplicate_cdp_bridge_deduplicates_exact_cross_page_replays_with_bounded
     assert "StableHash64(raw)" in bridge
     assert "RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)" in bridge
     assert "MaybeCleanupTransientState(now)" in bridge
-    assert "RecentInboundFingerprints.TryRemove(pair.Key, out ignored)" in bridge
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in bridge
+    assert ".Remove(pair);" in bridge
 
     # The bridge fingerprints the complete event payload, not just human-visible text, so two
     # legitimate same-text messages with different ids/timestamps are not collapsed together.
@@ -199,11 +200,12 @@ def test_duplicate_cdp_fingerprint_cache_has_hard_count_cap_and_closed_sessions_
 
 
 
-def test_dropped_pending_events_release_only_their_own_accepted_fingerprint():
+def test_websocket_shop_identity_transition_drops_old_pending_events_until_new_binding():
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
-    release = bridge[
-        bridge.index("private static void ReleaseAcceptedFingerprint"):
-        bridge.index("private static bool TryAcceptInboundFingerprint")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    on_message = bridge[
+        bridge.index("private static void OnWebSocketMessage"):
+        bridge.index("private static bool IsRecoverableInboundType")
     ]
     enqueue = bridge[
         bridge.index("private static void EnqueuePendingBounded"):
@@ -213,12 +215,332 @@ def test_dropped_pending_events_release_only_their_own_accepted_fingerprint():
         bridge.index("private static bool TryDeliverLive"):
         bridge.index("private static void DrainPending")
     ]
+    transition = bridge[
+        bridge.index("internal static void MarkSessionIdentityTransition"):
+        bridge.index("private static void MaybeCleanupTransientState")
+    ]
+    claim = server[
+        server.index("private bool TryClaimShopSession"):
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
+    ]
+
+    assert "ConcurrentDictionary<string, byte> RetiredSourceSessions" in bridge
+    assert "if (IsSessionIdentityTransitioning(sessionId)) return;" in on_message
+    assert "if (IsSessionIdentityTransitioning(item.SourceSession)" in enqueue
+    assert "|| !IsSourceSessionConnected(item.SourceSession))" in enqueue
+    assert "if (IsSessionIdentityTransitioning(item.SourceSession)" in deliver
+    assert "|| !IsSourceSessionConnected(item.SourceSession)) return false;" in deliver
+    assert "RetiredSourceSessions[sessionId] = 0;" in transition
+    assert "DropPendingForSourceSession(sessionId)" in transition
+    assert "ReleaseAcceptedFingerprint(pending)" in transition
+    assert "_pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - pending.PayloadBytes)" in transition
+    assert "RetiredSourceSessions.TryRemove(sessionId, out ignoredTransition)" in transition
+    assert "DuplicateCdpInboundRecoveryBridge.MarkSessionIdentityTransition(sessionId)" in claim
+    assert claim.count("DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId)") == 3
+
+
+
+def test_identity_transition_marker_is_set_before_old_shopkey_mapping_is_removed():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    claim = server[
+        server.index("private bool TryClaimShopSession"):
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
+    ]
+
+    marker = claim.index("DuplicateCdpInboundRecoveryBridge.MarkSessionIdentityTransition(sessionId)")
+    remove_mapping = claim.index("_sessionShopKeys.TryRemove(sessionId, out ignoredShop)")
+    assert marker < remove_mapping
+
+
+
+def test_shop_identity_binding_is_periodically_revalidated_even_when_display_nicks_match():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    method = server[
+        server.index("private long ShouldRefreshStatusBinding"):
+        server.index("private async Task TryBindStatusConversation")
+    ]
+    assert "StatusBindingRefreshInterval = TimeSpan.FromSeconds(30)" in server
+    assert "_lastStatusBindingRefreshUtc" in server
+    assert "if (!TryReserveStatusBindingRefresh(sessionId, DateTime.UtcNow, keyChanged)) return 0;" in method
+    assert "_lastStatusBindings[sessionId] = key;" in method
+    assert "else if (!wasAuthoritative)" in server
+    assert "var bindingGeneration = ShouldRefreshStatusBinding(" in server
+    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration))" in server
+
+
+
+def test_periodic_sweeper_revalidates_exact_shopkey_for_every_connected_websocket():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    sweeper = server[
+        server.index("private void StartDuplicateSessionSweeper"):
+        server.index("private bool TryClaimShopSession")
+    ]
+    refresh = server[
+        server.index("private void RevalidateConnectedShopSessions"):
+        server.index("private async Task TryBindStatusConversation")
+    ]
+
+    assert "DuplicateSessionSweepInterval = TimeSpan.FromSeconds(30)" in server
+    assert "RevalidateConnectedShopSessions();" in sweeper
+    assert "foreach (var pair in _liveSessions)" in refresh
+    assert "!_connectedSessions.ContainsKey(pair.Key)" in refresh
+    assert "_initializing.ContainsKey(pair.Key)" in refresh
+    assert "_closingDuplicateSessions.ContainsKey(pair.Key)" in refresh
+    assert "TryReserveStatusBindingRefresh(pair.Key, now, false)" in refresh
+    assert "Task.Run(() => TryRevalidateShopIdentity(session))" in refresh
+    assert "private async Task TryRevalidateShopIdentity(WebSocketSession session)" in server
+    assert "var user = await cdp.GetCurrentUser();" in server
+    assert "ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result)" in server
+    assert '"periodic_shop_identity_revalidation"' in server
+    assert "TargetId/ShopKey" in refresh
+
+
+
+def test_periodic_identity_revalidation_does_not_resurrect_closed_websocket_sessions():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    method = server[
+        server.index("private async Task TryRevalidateShopIdentity"):
+        server.index("private bool TryReserveStatusBindingRefresh")
+    ]
+
+    assert "if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;" in method
+    assert "if (!_connectedSessions.ContainsKey(session.SessionID)" in method
+    assert "TryClaimShopSession(shopKey, session.SessionID)" in method
+    assert "&& _connectedSessions.ContainsKey(session.SessionID)" in method
+
+
+
+def test_duplicate_identity_revalidation_checks_connection_before_restoring_client_binding():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    method = server[
+        server.index("private async Task TryRevalidateShopIdentity"):
+        server.index("private bool TryReserveStatusBindingRefresh")
+    ]
+
+    assert "if (_connectedSessions.ContainsKey(session.SessionID)" in method
+    assert method.index("TryClaimShopSession(shopKey, session.SessionID)") < method.index(
+        "if (_connectedSessions.ContainsKey(session.SessionID)\n                    && _sessionShopKeys.TryGetValue"
+    )
+
+
+
+def test_final_duplicate_cdp_dispatch_is_serialized_with_source_identity_transition():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    mark = bridge[
+        bridge.index("internal static void MarkSessionIdentityTransition"):
+        bridge.index("internal static void ClearSessionIdentityTransition")
+    ]
+    deliver = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+
+    assert "SessionTransitionLocks" in bridge
+    assert "Enumerable.Range(0, 64).Select(_ => new object()).ToArray()" in bridge
+    assert "lock (GetSessionTransitionLock(sessionId))" in mark
+    assert "WithSessionTransitionLocks(item.SourceSession, target.SessionId" in deliver
+    assert deliver.index("WithSessionTransitionLocks(item.SourceSession, target.SessionId") < deliver.index(
+        "target.DispatchInboundEvent(item.Type, item.Response)"
+    )
+    assert "if (IsSessionIdentityTransitioning(item.SourceSession)" in deliver
+    assert "|| !IsSourceSessionConnected(item.SourceSession))" in deliver
+
+
+def test_closed_or_transitioning_source_sessions_cannot_requeue_or_replay_inbound_events():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDequeuePending")
+    ]
+    forget = bridge[
+        bridge.index("internal static void ForgetClosedSession"):
+        bridge.index("private static void MaybeCleanupTransientState")
+    ]
+    on_message = bridge[
+        bridge.index("private static void OnWebSocketMessage"):
+        bridge.index("private static bool IsRecoverableInboundType")
+    ]
+
+    assert "IsWebSocketSessionConnected(sessionId)" in on_message
+    assert "internal bool IsWebSocketSessionConnected(string sessionId)" in server
+    assert "IsSourceSessionConnected(item.SourceSession)" in enqueue
+    assert "ReleaseAcceptedFingerprint(item)" in enqueue
+    assert "ReleaseAcceptedFingerprint(dropped)" in enqueue
+    assert "DropPendingForSourceSession(sessionId)" in forget
+    assert "lock (GetSessionTransitionLock(sessionId))" in forget
+
+
+def test_rejected_or_expired_pending_events_release_their_dedup_fingerprint():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDequeuePending")
+    ]
+    drain = bridge[bridge.index("private static void DrainPending"):]
+
+    assert "private static void ReleaseAcceptedFingerprint(PendingInboundEvent item)" in bridge
+    assert "ReleaseAcceptedFingerprint(item)" in enqueue
+    assert "ReleaseAcceptedFingerprint(dropped)" in enqueue
+    assert "ReleaseAcceptedFingerprint(item)" in drain
+    assert "ReleaseAcceptedFingerprint(pending)" in bridge
+
+
+
+def test_final_dispatch_revalidates_the_exact_current_shopkey_inside_transition_lock():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    deliver = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+    lock_body = deliver[
+        deliver.index("WithSessionTransitionLocks(item.SourceSession, target.SessionId"):
+        deliver.index("if (!accepted) return false;")
+    ]
+
+    assert "var finalMappedShopKey = server.GetShopKeyForSession(item.SourceSession);" in lock_body
+    assert "if (!string.Equals(finalMappedShopKey, shopKey, StringComparison.Ordinal))" in lock_body
+    assert "ReleaseAcceptedFingerprint(item);" in lock_body
+    assert lock_body.index("finalMappedShopKey") < lock_body.index(
+        "target.DispatchInboundEvent(item.Type, item.Response)"
+    )
+
+
+def test_direct_cdpcclient_dispatch_cannot_bypass_shopkey_identity_transition_gate():
+    client = read("src/Bot/ChromeNs/CDPClient.cs")
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+
+    authority = client[
+        client.index("private bool HasCurrentShopAuthority"):
+        client.index("private bool CanDispatchInboundEvent")
+    ]
+    gate = client[
+        client.index("private bool CanDispatchInboundEvent"):
+        client.index("internal void DispatchInboundEvent")
+    ]
+    dispatch = client[
+        client.index("internal void DispatchInboundEvent"):
+        client.index("private void RepairDuplicateStatusDiagnostics")
+    ]
+    execute = client[
+        client.index("private async Task<string> SendExecuteAndWaitCoreAsync"):
+        client.index("internal Task<string> EvaluateExpressionAsync")
+    ]
+    socket_dispatch = client[
+        client.index("private void OnWSocketRecieveMessage"):
+        client.index("internal void DispatchInboundEvent")
+    ]
+
+    assert "if (!CanDispatchInboundEvent(type)) return;" in dispatch
+    assert 'string.Equals(type, "qnbotStatus", StringComparison.Ordinal)' in gate
+    assert "return HasCurrentShopAuthority();" in gate
+    assert "IsInvalidated" in authority
+    assert "IsShopIdentityRetired" in authority
+    assert "DuplicateCdpInboundRecoveryBridge.IsSessionIdentityTransitioning(sessionId)" in authority
+    assert "server.IsWebSocketSessionConnected(sessionId)" in authority
+    assert "server.IsWebSocketSessionConnected(sessionId)" in gate
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in authority
+    assert "internal static bool IsSessionIdentityTransitioning(string sessionId)" in bridge
+
+    # Outbound commands can wait behind another execute call while the same physical
+    # WebSocket changes accounts. Revalidate ownership after acquiring the gate and
+    # immediately before sending; only identity probes may read a retired page.
+    assert "if (!allowRetiredIdentityRead && !HasCurrentShopAuthority())" in execute
+    assert execute.index("!HasCurrentShopAuthority()") < execute.index("_webSocketSession.Send(")
+    identity_probe = client[
+        client.index("private async Task<T> InvokeShopIdentity"):
+        client.index("public async Task<LocalUserResponse> GetCurrentUser")
+    ]
+    assert "allowRetiredIdentityRead: true" in identity_probe
+
+    # execute responses still complete the in-flight identity-discovery request before
+    # business-event gating, so a retired socket can safely discover its new ShopKey.
+    assert socket_dispatch.index('if (e.Type == "execute")') < socket_dispatch.index(
+        "TryDispatchRawInbound(this, e.Type, response)"
+    )
+
+
+def test_duplicate_cdp_bridge_drops_events_without_verified_source_shopkey():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    capture = bridge[
+        bridge.index("private static void OnWebSocketMessage"):
+        bridge.index("private static bool IsRecoverableInboundType")
+    ]
+
+    assert "var shopKey = server.GetShopKeyForSession(sessionId);" in capture
+    assert "if (shopKey.Length == 0)" in capture
+    assert "缺少来源稳定ShopKey，拒绝跨会话暂存" in capture
+    assert capture.index("if (shopKey.Length == 0)") < capture.index("var item = new PendingInboundEvent")
+    assert "seller.Length == 0 && shopKey.Length == 0" not in capture
+
+
+def test_raw_and_forwarded_cdp_dispatch_share_identity_transition_locks():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    client = read("src/Bot/ChromeNs/CDPClient.cs")
+
+    raw_handler = client[
+        client.index("private void OnWSocketRecieveMessage"):
+        client.index("// The raw WebSocket dispatcher")
+    ]
+    raw_dispatch = bridge[
+        bridge.index("internal static bool TryDispatchRawInbound"):
+        bridge.index("private static void ReleaseAcceptedFingerprint")
+    ]
+    forwarded = bridge[
+        bridge.index("private static bool TryDeliverLive"):
+        bridge.index("private static void DrainPending")
+    ]
+
+    assert "TryDispatchRawInbound(this, e.Type, response)" in raw_handler
+    assert "lock (GetSessionTransitionLock(sessionId))" in raw_dispatch
+    assert "server.GetShopKeyForSession(sessionId)" in raw_dispatch
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in raw_dispatch
+    assert 'string.Equals(type, "qnbotStatus", StringComparison.Ordinal)' in raw_dispatch
+    assert "WithSessionTransitionLocks(item.SourceSession, target.SessionId" in forwarded
+    assert "IsSessionIdentityTransitioning(target.SessionId)" in forwarded
+    assert "server.GetShopKeyForSession(target.SessionId)" in forwarded
+    assert "GetSessionTransitionLockIndex(sourceSession)" in bridge
+    assert "GetSessionTransitionLockIndex(targetSession)" in bridge
+
+
+
+def test_dropped_pending_events_release_only_their_own_fingerprint_timestamp():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    release = bridge[
+        bridge.index("private static void ReleaseAcceptedFingerprint"):
+        bridge.index("private static bool IsSourceSessionConnected")
+    ]
+    enqueue = bridge[
+        bridge.index("private static void EnqueuePendingBounded"):
+        bridge.index("private static bool TryDequeuePending")
+    ]
     drain = bridge[bridge.index("private static void DrainPending"):]
 
     assert "FingerprintAcceptedAt" in bridge
     assert "ICollection<KeyValuePair<string, DateTime>>" in release
     assert "new KeyValuePair<string, DateTime>(fingerprint, acceptedAt)" in release
+    assert "RecentInboundFingerprints.TryRemove(fingerprint" not in release
     assert "ReleaseAcceptedFingerprint(item);" in enqueue
     assert "ReleaseAcceptedFingerprint(dropped);" in enqueue
-    assert "ReleaseAcceptedFingerprint(item);" in deliver
     assert "ReleaseAcceptedFingerprint(item);" in drain
+
+
+
+def test_transient_cache_cleanup_removes_only_the_exact_stale_snapshot():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    cleanup = bridge[
+        bridge.index("private static void MaybeCleanupTransientState"):
+        bridge.index("private static void EnqueuePendingBounded")
+    ]
+    trim = bridge[
+        bridge.index("private static void TrimOldestRecentFingerprints"):
+        bridge.index("private static void EnqueuePendingBounded")
+    ]
+
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in cleanup
+    assert ".Remove(pair);" in cleanup
+    assert "((ICollection<KeyValuePair<string, SessionSellerBinding>>)SessionSellers)" in cleanup
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in trim
+    assert "RecentInboundFingerprints.TryRemove(pair.Key" not in cleanup
+    assert "SessionSellers.TryRemove(pair.Key" not in cleanup
+    assert "RecentInboundFingerprints.TryRemove(pair.Key" not in trim

@@ -59,11 +59,11 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     release = server[
         server.index("private void ReleaseShopSession"):
-        server.index("private bool ShouldRefreshStatusBinding")
+        server.index("private long ShouldRefreshStatusBinding")
     ]
     promotion = server[
         server.index("private async Task TryPromoteAvailableStandbyAsync"):
-        server.index("private bool ShouldRefreshStatusBinding")
+        server.index("private long ShouldRefreshStatusBinding")
     ]
     identity_change = server[
         server.index("private bool TryClaimShopSession"):
@@ -290,3 +290,53 @@ def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
     assert "current.SellerNick" in progress
     assert '"unresolved:" + Guid.NewGuid().ToString("N")' in progress
     assert "DeliveryKey(seller, buyer, answer, shopKey)" in progress
+
+
+
+def test_buyer_session_agent_prune_cannot_remove_a_refreshed_state_or_orphan_new_generation():
+    agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    observe = agent[
+        agent.index("public BuyerSessionAgentObservation ObserveBuyerMessage"):
+        agent.index("public BuyerSessionEventResult RecordEvent")
+    ]
+    record = agent[
+        agent.index("public BuyerSessionEventResult RecordEvent"):
+        agent.index("public bool IsCurrent")
+    ]
+    prune = agent[
+        agent.index("public void Prune"):
+        agent.index("private static SessionState GetOrCreateState")
+    ]
+
+    assert "Sessions.TryGetValue(key, out current)" in observe
+    assert "ReferenceEquals(current, state)" in observe
+    assert "Sessions.TryGetValue(key, out current)" in record
+    assert "ReferenceEquals(current, state)" in record
+    assert "lock (pair.Value.SyncRoot)" in prune
+    assert "((ICollection<KeyValuePair<string, SessionState>>)Sessions).Remove(pair)" in prune
+    assert "Sessions.TryRemove(pair.Key, out removed)" not in prune
+
+
+
+def test_async_status_binding_uses_per_session_generation_to_reject_out_of_order_results():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    generation = server[
+        server.index("private long NextStatusBindingGenerationLocked"):
+        server.index("private void ForgetStatusBindingAttempt")
+    ]
+    bind = server[
+        server.index("private async Task TryBindStatusConversation"):
+        server.index("private void ReleaseStaleSessions")
+    ]
+
+    assert "_statusBindingGenerations" in server
+    assert "NextStatusBindingGenerationLocked(sessionId)" in generation
+    assert "IsCurrentStatusBindingGenerationLocked" in generation
+    assert "private long ShouldRefreshStatusBinding(" in generation
+    assert "bindingGeneration" in bind
+    assert "IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)" in bind
+    assert "lock (_sellerSessionSync)" in bind
+    assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in bind
+    assert "TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration)" in server
+    assert "BeginStatusBindingAttempt(session.SessionID)" in server
+    assert "NextStatusBindingGenerationLocked(session.SessionID)" in server

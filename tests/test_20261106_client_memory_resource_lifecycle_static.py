@@ -99,6 +99,30 @@ def test_resource_samples_know_cache_cardinalities_without_user_content():
     assert '", imageRecords=" + VisionImageCacheService.CachedRecordCount' in monitor
     images = source("src/Bot/ChromeNs/VisionImageCacheService.cs")
     assert "internal static int CachedRecordCount" in images
+    assert '", buyerSortEntries=" + LatestBuyerSourceSort.Count' in monitor
+
+
+def test_buyer_ordering_cache_has_a_ttl_and_hard_count_bound():
+    monitor = source("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    assert "MaxLatestBuyerSourceSortEntries = 10000;" in monitor
+    assert "LatestBuyerSourceSortRetention = TimeSpan.FromHours(6);" in monitor
+    assert "LatestBuyerSourceSortSweepInterval = TimeSpan.FromMinutes(5);" in monitor
+    assert "SweepLatestBuyerSourceSortIfDue(now);" in monitor
+    assert "LatestBuyerSourceSort.Count <= MaxLatestBuyerSourceSortEntries" in monitor
+    assert "exactEntries.Remove(pair);" in monitor
+    assert "buyerState.LastSeenUtc" in monitor
+
+
+def test_vision_cache_releases_raw_messages_and_bounds_download_pressure():
+    images = source("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    assert "MaxCacheRecords = 512;" in images
+    assert "MaxConcurrentDownloads = 2;" in images
+    assert "RecentMessageReferenceRetentionMinutes = 6;" in images
+    assert "DownloadSlots.WaitAsync(timeout.Token)" in images
+    assert "DownloadSlots.Release();" in images
+    assert "Interlocked.Exchange(ref record.Message, null);" in images
+    assert "TrimCompletedRecordsForAdmission" in images
+    assert "EnsureCleanupTimer();" in images
 
 
 def test_windows_memory_sampler_is_read_only_and_collects_machine_pressure():
@@ -110,7 +134,11 @@ def test_windows_memory_sampler_is_read_only_and_collects_machine_pressure():
     assert "CpuPercentOfMachine" in collector
     assert "SystemFreeMiB" in collector
     assert "Export-Csv" in collector
-    assert "Get-Process -Name" in collector
+    assert "Get-Process -Name $processNames" in collector
+    assert "TopProcessCount" in collector
+    assert "SampleKind          = 'system'" in collector
+    assert "Process             = '__SYSTEM__'" in collector
+    assert "SystemUsedPercent" in collector
     assert "Stop-Process" not in collector
     assert "GC]::Collect" not in collector
     assert "Get-ChildItem" not in collector

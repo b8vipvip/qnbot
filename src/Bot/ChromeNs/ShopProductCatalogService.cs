@@ -84,7 +84,7 @@ namespace Bot.ChromeNs
             if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))
                 return current;
 
-            return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            return ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
         }
 
         private static string CachePath(string seller)

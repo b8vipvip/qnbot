@@ -1,17 +1,17 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-09-04 16:40 +08:00 之后
+Last updated / 最后更新：2026-11-19
 
 本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把历史实验 TODO 当作当前生产 TODO。
 
 ## 1. Current production baseline / 当前生产基线
 
 - Default branch / 默认分支：`master`
-- Verified master commit / 已验证主线提交：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`
-- Current formal release / 当前正式版本：`bot-v1.1.1213`
-- Release target commit：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`
-- x64 package SHA-256：`933cba62c3f8e93eec47b34ec24f851adb9fa5661c8f0cd8f55596d5a1607122`
-- PR #220 合并前 Windows CI、API control plane CI、Windows x64 Release build 均成功
+- Current master commit / 当前主线提交：`beaf0470f85b57a71073eb43f78bce1c8ba5f718`
+- Current formal release / 当前正式版本：`bot-v1.1.2243`
+- Release target commit：`beaf0470f85b57a71073eb43f78bce1c8ba5f718`
+- x64 package SHA-256：`795bbe23ba680002b6dab1953a1ec830aab26f1cae2d9cb5848f6f77a2363f92`
+- 当前正式版的 Windows x64 release build、API control plane CI 均通过；当前发布信息以 GitHub Release `bot-v1.1.2243` 为准。
 
 ## 2. Completed / 已完成
 
@@ -66,7 +66,13 @@ Last updated / 最后更新：2026-09-04 16:40 +08:00 之后
 
 ## 3. Remaining runtime work / 当前剩余运行时工作
 
-### P1 — `bot-v1.1.1213` runtime verification / 新版真实日志验证
+### P0 — `bot-v1.1.2243` message mirror confirmation / 消息镜像确认
+
+当前需要一份更新到正式版后的完整运行日志，重点确认：
+- Bot Web 消息区完成首次同步后，等待 3～5 秒仍持续显示当前买家的历史消息，不再短暂闪现后变成“暂无聊天消息”；
+- 切换买家后，消息列表与右侧会话始终对应同一个 buyer/session，不出现旧会话覆盖新会话。
+
+### P1 — `bot-v1.1.2243` runtime verification / 新版真实日志验证
 
 下一份完整日志重点检查：
 - 55 秒 absolute-age deadline 是否从 buyer action 起稳定生效；
@@ -81,7 +87,17 @@ Last updated / 最后更新：2026-09-04 16:40 +08:00 之后
 
 ### P2 — CDP lifecycle observation / 生命周期观察
 
-当前没有足够证据证明 page-channel 持续泄漏。保持观察；只有 `1.1.1213` 长时日志出现持续增长、旧 target/session 不释放时才继续改生命周期代码。
+当前没有足够证据证明 page-channel 持续泄漏。保持观察；只有 `1.1.2243` 长时日志出现持续增长、旧 target/session 不释放时才继续改生命周期代码。
+
+### P3 — Draft PR acceptance / 待验收改造
+
+以下改造已在原有 PR 中继续修复并同步当前 master，但尚未进入正式版：
+- #426：CDP raw inbound 与重复会话转发的身份切换锁；需要真实 A→B 店铺切换确认旧会话不再接收业务事件。
+- #429：私有接待配置按 ShopKey 隔离；需要多店铺及离线配置打开验证。
+- #430：中性默认业务策略和无 scope fail-closed；需要旧配置升级与新店铺初始化验证。
+- #431：AI 上游熔断与重启恢复；需要 502/503 故障注入和恢复验证。
+
+CI 通过只证明代码与构建契约，不代表以上真实运行验收已经完成。
 
 ## 4. Validation rule / 验证规则
 
@@ -94,8 +110,8 @@ Last updated / 最后更新：2026-09-04 16:40 +08:00 之后
 
 ## 5. Next execution / 下一步
 
-1. 客户端更新到 `bot-v1.1.1213`；
-2. 做真实买家文本、图片、订单、长耗时 AI、连续多消息、会话切换与平台提醒测试；
+1. 客户端更新到 `bot-v1.1.2243`，先验证消息镜像持续显示；
+2. 做真实买家文本、图片、订单、长耗时 AI、连续多消息、A→B 店铺切换与平台提醒测试；
 3. 保持长时运行以观察 CDP/page-channel 生命周期；
-4. 导出完整日志；
-5. 按新日志继续挖掘，不凭旧文档重复修复已完成项。
+4. 对 #429/#430/#431 分别完成多店铺隔离、策略迁移和上游故障恢复验收；
+5. 导出完整日志，未完成真实验收前不把 Draft PR 合入正式版。

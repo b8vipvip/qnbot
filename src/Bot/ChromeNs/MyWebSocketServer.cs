@@ -29,6 +29,12 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, bool> _initializing = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, bool> _connectedSessions = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, string> _lastStatusBindings = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, DateTime> _lastStatusBindingRefreshUtc =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        // Async status lookups may complete out of order. A per-session generation
+        // ensures only the newest status event can update the active buyer.
+        private readonly ConcurrentDictionary<string, long> _statusBindingGenerations =
+            new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _shopSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _sessionShopKeys = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _duplicateShopSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
@@ -43,7 +49,8 @@ namespace Bot.ChromeNs
         private const int WebSocketStartMaxAttempts = 5;
         private const int WebSocketStartRetryBaseDelayMs = 250;
         private static readonly TimeSpan DuplicateSessionIdleTimeout = TimeSpan.FromMinutes(4);
-        private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(45);
+        private static readonly TimeSpan StatusBindingRefreshInterval = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(30);
         private int _duplicateSessionSweeperStarted;
         private WebSocketServer _webSocketServer;
 
@@ -167,6 +174,7 @@ namespace Bot.ChromeNs
                     await Task.Delay(DuplicateSessionSweepInterval).ConfigureAwait(false);
                     try
                     {
+                        RevalidateConnectedShopSessions();
                         var cutoff = DateTime.UtcNow - DuplicateSessionIdleTimeout;
                         List<KeyValuePair<string, string>> stale;
                         lock (_sellerSessionSync)
@@ -210,6 +218,10 @@ namespace Bot.ChromeNs
                     && !string.IsNullOrWhiteSpace(previousShopKey)
                     && !string.Equals(previousShopKey, shopKey, StringComparison.Ordinal))
                 {
+                    // Mark the source before removing its old ShopKey mapping. The
+                    // duplicate-page bridge must stop interpreting any in-flight payload
+                    // from this socket under the previous shop during the transition.
+                    DuplicateCdpInboundRecoveryBridge.MarkSessionIdentityTransition(sessionId);
                     // One physical WebSocket must never silently migrate its old QN/CDP
                     // object to a different shop. Detach the previous identity first and
                     // let the next status event establish a fresh ShopKey binding.
@@ -238,6 +250,7 @@ namespace Bot.ChromeNs
                             _sessionShopKeys[sessionId] = shopKey;
                             string ignoredDuplicate;
                             _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
+                            DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId);
                             BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                             return true;
                         }
@@ -246,6 +259,7 @@ namespace Bot.ChromeNs
                         {
                             _duplicateShopSessions[sessionId] = shopKey;
                             _sessionShopKeys[sessionId] = shopKey;
+                            DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId);
                             EnforceDuplicateShopSessionCapLocked(shopKey);
                             return false;
                         }
@@ -263,6 +277,7 @@ namespace Bot.ChromeNs
                     _sessionShopKeys[sessionId] = shopKey;
                     string ignored;
                     _duplicateShopSessions.TryRemove(sessionId, out ignored);
+                    DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId);
                     BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
                     Log.Info("已选定ShopKey权威千牛CDP会话: shopRef=" + DiagnosticRef("shop", shopKey)
                         + ", sessionRef=" + DiagnosticRef("session", sessionId));
@@ -289,6 +304,8 @@ namespace Bot.ChromeNs
                 CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);
                 string ignoredStatusBinding;
                 _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
+                DateTime ignoredStatusRefresh;
+                _lastStatusBindingRefreshUtc.TryRemove(sessionId, out ignoredStatusRefresh);
                 if (releasedPreviousAuthority)
                     Task.Run(() => TryPromoteAvailableStandbyAsync(previousShopKey, "shop_identity_changed", sessionId));
                 Log.Info("检测到同一WebSocket切换了登录店铺身份，已解绑旧ShopKey并等待下一次状态事件重新绑定: oldShopRef="
@@ -425,6 +442,8 @@ namespace Bot.ChromeNs
             qn.CDP = client;
             string ignoredStatusBinding;
             _lastStatusBindings.TryRemove(sessionId, out ignoredStatusBinding);
+            DateTime ignoredStatusRefresh;
+            _lastStatusBindingRefreshUtc.TryRemove(sessionId, out ignoredStatusRefresh);
             CDPClient.PreferRuntimeSession(
                 shopKey, client.Nick, sessionId, string.Empty, "standby_promoted");
 
@@ -433,6 +452,12 @@ namespace Bot.ChromeNs
                 + ", activeSessionRef=" + DiagnosticRef("session", sessionId)
                 + ", reason=" + (reason ?? "foreground"));
             return true;
+        }
+
+        internal bool IsWebSocketSessionConnected(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            return sessionId.Length > 0 && _connectedSessions.ContainsKey(sessionId);
         }
 
         internal string GetShopKeyForSession(string sessionId)
@@ -464,6 +489,10 @@ namespace Bot.ChromeNs
             {
                 string ignoredDuplicate;
                 _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
+                string ignoredStatus;
+                DateTime ignoredStatusRefresh;
+                _lastStatusBindings.TryRemove(sessionId, out ignoredStatus);
+                _lastStatusBindingRefreshUtc.TryRemove(sessionId, out ignoredStatusRefresh);
                 string shopKey;
                 if (!_sessionShopKeys.TryRemove(sessionId, out shopKey)
                     || string.IsNullOrWhiteSpace(shopKey))
@@ -529,17 +558,112 @@ namespace Bot.ChromeNs
                 + DiagnosticRef("shop", shopKey) + ", reason=" + (reason ?? string.Empty));
         }
 
-        private bool ShouldRefreshStatusBinding(string sessionId, string loginNick, string conversationNick)
+        private async Task TryRevalidateShopIdentity(WebSocketSession session)
         {
-            var key = (loginNick ?? string.Empty).Trim() + "\n" + (conversationNick ?? string.Empty).Trim();
-            string previous;
-            if (_lastStatusBindings.TryGetValue(sessionId, out previous)
-                && string.Equals(previous, key, StringComparison.Ordinal))
+            if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;
+            try
             {
-                return false;
+                var cdp = GetOrCreateClient(session);
+                var user = await cdp.GetCurrentUser();
+                if (!_connectedSessions.ContainsKey(session.SessionID)
+                    || user == null || user.Result == null || string.IsNullOrWhiteSpace(user.Result.Nick))
+                    return;
+
+                var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result);
+                var shopKey = shop.ShopKey;
+                var qn = QN.GetByShopIdentity(user.Result);
+                var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
+                if (TryClaimShopSession(shopKey, session.SessionID)
+                    && _connectedSessions.ContainsKey(session.SessionID))
+                {
+                    cdp.ShopKey = shopKey;
+                    cdp.IsShopIdentityRetired = false;
+                    cdp.Nick = sellerNick;
+                    qn.CDP = cdp;
+                    CDPClient.PreferRuntimeSession(
+                        shopKey, sellerNick, session.SessionID, string.Empty, "periodic_shop_identity_revalidation");
+                    _initialized[session.SessionID] = true;
+                    return;
+                }
+
+                // A verified duplicate/standby is still bound to the exact ShopKey,
+                // even though it is not allowed to own the QN runtime.
+                string mappedShopKey;
+                if (_connectedSessions.ContainsKey(session.SessionID)
+                    && _sessionShopKeys.TryGetValue(session.SessionID, out mappedShopKey)
+                    && string.Equals(mappedShopKey, shopKey, StringComparison.Ordinal))
+                {
+                    cdp.ShopKey = shopKey;
+                    cdp.IsShopIdentityRetired = false;
+                    cdp.Nick = sellerNick;
+                    _initialized[session.SessionID] = true;
+                }
             }
-            _lastStatusBindings[sessionId] = key;
-            return true;
+            catch (Exception ex)
+            {
+                Log.Info("千牛WebSocket周期性ShopKey身份复核失败: sessionRef="
+                    + DiagnosticRef("session", session.SessionID) + ", error=" + ex.Message);
+            }
+        }
+
+        private bool TryReserveStatusBindingRefresh(string sessionId, DateTime now, bool force)
+        {
+            while (true)
+            {
+                DateTime lastRefreshUtc;
+                if (_lastStatusBindingRefreshUtc.TryGetValue(sessionId, out lastRefreshUtc))
+                {
+                    if (!force && now - lastRefreshUtc < StatusBindingRefreshInterval) return false;
+                    if (_lastStatusBindingRefreshUtc.TryUpdate(sessionId, now, lastRefreshUtc)) return true;
+                    continue;
+                }
+                if (_lastStatusBindingRefreshUtc.TryAdd(sessionId, now)) return true;
+            }
+        }
+
+        private long NextStatusBindingGenerationLocked(string sessionId)
+        {
+            long current;
+            _statusBindingGenerations.TryGetValue(sessionId, out current);
+            var next = current == long.MaxValue ? 1L : current + 1L;
+            _statusBindingGenerations[sessionId] = next;
+            return next;
+        }
+
+        private bool IsCurrentStatusBindingGenerationLocked(string sessionId, long generation)
+        {
+            long current;
+            return generation > 0
+                && _statusBindingGenerations.TryGetValue(sessionId, out current)
+                && current == generation;
+        }
+
+        private long BeginStatusBindingAttempt(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return 0;
+            lock (_sellerSessionSync)
+            {
+                if (!_connectedSessions.ContainsKey(sessionId)) return 0;
+                return NextStatusBindingGenerationLocked(sessionId);
+            }
+        }
+
+        private long ShouldRefreshStatusBinding(string sessionId, string loginNick, string conversationNick)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return 0;
+            var key = (loginNick ?? string.Empty).Trim() + "\n" + (conversationNick ?? string.Empty).Trim();
+            lock (_sellerSessionSync)
+            {
+                if (!_connectedSessions.ContainsKey(sessionId)) return 0;
+                string previous;
+                var keyChanged = !_lastStatusBindings.TryGetValue(sessionId, out previous)
+                    || !string.Equals(previous, key, StringComparison.Ordinal);
+                if (!TryReserveStatusBindingRefresh(sessionId, DateTime.UtcNow, keyChanged)) return 0;
+                _lastStatusBindings[sessionId] = key;
+                return NextStatusBindingGenerationLocked(sessionId);
+            }
         }
 
         private void ForgetStatusBindingAttempt(WebSocketSession session, string loginNick, string conversationNick)
@@ -552,9 +676,28 @@ namespace Bot.ChromeNs
                 new KeyValuePair<string, string>(session.SessionID, key));
         }
 
-        private async Task TryBindStatusConversation(WebSocketSession session, string loginNick, string conversationNick)
+        private void RevalidateConnectedShopSessions()
         {
-            if (session == null) return;
+            var now = DateTime.UtcNow;
+            foreach (var pair in _liveSessions)
+            {
+                var session = pair.Value;
+                if (session == null || !_connectedSessions.ContainsKey(pair.Key)
+                    || _initializing.ContainsKey(pair.Key)
+                    || _closingDuplicateSessions.ContainsKey(pair.Key))
+                    continue;
+                if (!TryReserveStatusBindingRefresh(pair.Key, now, false)) continue;
+                // This is an exact CDP TargetId/ShopKey verification, not a seller-nick
+                // lookup. It also runs for duplicate/standby pages so identical display
+                // names across shops cannot keep a stale session binding forever.
+                Task.Run(() => TryRevalidateShopIdentity(session));
+            }
+        }
+
+        private async Task TryBindStatusConversation(
+            WebSocketSession session, string loginNick, string conversationNick, long bindingGeneration)
+        {
+            if (session == null || bindingGeneration <= 0) return;
             loginNick = (loginNick ?? string.Empty).Trim();
             conversationNick = (conversationNick ?? string.Empty).Trim();
 
@@ -563,7 +706,7 @@ namespace Bot.ChromeNs
                 // Never select a QN by loginNick first: this CDP session may belong
                 // to another registered shop with the same display nickname.
                 var cdp = GetOrCreateClient(session);
-                var user = await cdp.GetCurrentUser();
+                var user = await cdp.GetCurrentUser().ConfigureAwait(false);
                 if (user == null || user.Result == null || string.IsNullOrWhiteSpace(user.Result.Nick))
                 {
                     BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
@@ -574,11 +717,48 @@ namespace Bot.ChromeNs
                 var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result);
                 var shopKey = shop.ShopKey;
                 var qn = QN.GetByShopIdentity(user.Result);
-                if (!TryClaimShopSession(shopKey, session.SessionID))
+                var claimed = false;
+                var duplicateShopKey = string.Empty;
+                var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
+                lock (_sellerSessionSync)
                 {
-                    _initialized[session.SessionID] = true;
-                    string duplicateShopKey;
-                    if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
+                    // GetCurrentUser is asynchronous; ignore a late result if a newer
+                    // status event has already superseded this physical socket's request.
+                    if (!IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)
+                        || !_connectedSessions.ContainsKey(session.SessionID)
+                        || cdp.IsInvalidated)
+                        return;
+
+                    claimed = TryClaimShopSession(shopKey, session.SessionID);
+                    if (claimed
+                        && _connectedSessions.ContainsKey(session.SessionID)
+                        && !cdp.IsInvalidated
+                        && IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)
+                        && IsAuthoritativeShopSession(shopKey, session.SessionID))
+                    {
+                        cdp.ShopKey = shopKey;
+                        cdp.IsShopIdentityRetired = false;
+                        cdp.Nick = sellerNick;
+                        qn.CDP = cdp;
+                        qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
+                        _initialized[session.SessionID] = true;
+                    }
+                    else if (!claimed)
+                    {
+                        _initialized[session.SessionID] = true;
+                        _duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey);
+                    }
+                    else if (qn.CDP == cdp)
+                    {
+                        // The socket closed/lost authority during the claim; don't leave
+                        // a now-invalid CDP client installed on the QN runtime.
+                        qn.CDP = null;
+                    }
+                }
+
+                if (!claimed)
+                {
+                    if (!string.IsNullOrWhiteSpace(duplicateShopKey))
                         Log.Info("已忽略同一ShopKey的重复千牛CDP状态会话: shopRef="
                             + DiagnosticRef("shop", duplicateShopKey)
                             + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
@@ -589,24 +769,15 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
                 if (loginNick.Length > 0 && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
                     Log.Info("状态事件loginNick与CDP登录身份昵称不同，已以TargetId/ShopKey为准: shopRef="
                         + DiagnosticRef("shop", shopKey)
                         + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
-                cdp.ShopKey = shopKey;
-                cdp.IsShopIdentityRetired = false;
-                cdp.Nick = sellerNick;
-                qn.CDP = cdp;
-                qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
-                _initialized[session.SessionID] = true;
             }
             catch (Exception ex)
             {
-                // ShouldRefreshStatusBinding suppresses duplicate in-flight status events.
-                // If this attempt failed, release only its own suppression key so a later
-                // identical status event can retry the transient CDP/shop lookup.
+                // Remove only this attempt's status key; never erase a newer event's key.
                 ForgetStatusBindingAttempt(session, loginNick, conversationNick);
                 Log.Exception(ex);
             }
@@ -718,12 +889,17 @@ namespace Bot.ChromeNs
                 DateTime ignoredTime;
                 string ignoredString;
                 _liveSessions.TryRemove(sessionId, out ignoredSession);
-                _connectedSessions.TryRemove(sessionId, out ignoredBool);
+                lock (_sellerSessionSync)
+                {
+                    _connectedSessions.TryRemove(sessionId, out ignoredBool);
+                    NextStatusBindingGenerationLocked(sessionId);
+                }
                 _sessionLastActivityUtc.TryRemove(sessionId, out ignoredTime);
                 _closingDuplicateSessions.TryRemove(sessionId, out ignoredBool);
                 _recoverableStandbySessions.TryRemove(sessionId, out ignoredBool);
                 _standbyLoggedSessions.TryRemove(sessionId, out ignoredBool);
                 _lastStatusBindings.TryRemove(sessionId, out ignoredString);
+                _lastStatusBindingRefreshUtc.TryRemove(sessionId, out ignoredTime);
                 _initialized.TryRemove(sessionId, out ignoredBool);
                 _initializing.TryRemove(sessionId, out ignoredBool);
                 _duplicateShopSessions.TryRemove(sessionId, out ignoredString);
@@ -851,20 +1027,34 @@ namespace Bot.ChromeNs
                                         }
                                         else if (!hasShopKey)
                                         {
-                                            if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick))
-                                                Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                            var bindingGeneration = ShouldRefreshStatusBinding(
+                                                session.SessionID, loginNick, conversationNick);
+                                            if (bindingGeneration > 0)
+                                                Task.Run(() => TryBindStatusConversation(
+                                                    session, loginNick, conversationNick, bindingGeneration));
                                         }
                                         else if (!wasAuthoritative)
                                         {
                                             _initialized[session.SessionID] = true;
+                                            // Duplicate pages also need periodic exact ShopKey
+                                            // verification; display nicknames can be identical
+                                            // across different shops.
+                                            var bindingGeneration = ShouldRefreshStatusBinding(
+                                                session.SessionID, loginNick, conversationNick);
+                                            if (bindingGeneration > 0)
+                                                Task.Run(() => TryBindStatusConversation(
+                                                    session, loginNick, conversationNick, bindingGeneration));
                                             Log.Info("检测到同一ShopKey的重复千牛WebSocket页面，保留为可恢复standby: shopRef="
                                                 + DiagnosticRef("shop", sessionShopKey)
                                                 + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
                                         }
-                                        else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
-                                            && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
+                                        else if (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick))
                                         {
-                                            Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                            var bindingGeneration = ShouldRefreshStatusBinding(
+                                                session.SessionID, loginNick, conversationNick);
+                                            if (bindingGeneration > 0)
+                                                Task.Run(() => TryBindStatusConversation(
+                                                    session, loginNick, conversationNick, bindingGeneration));
                                         }
                                     }
                                 }
@@ -906,7 +1096,9 @@ namespace Bot.ChromeNs
                                                     activeBuyer = ReadJsonString(activePayload, "buyerNick");
                                             }
                                             catch { }
-                                            await TryBindStatusConversation(session, string.Empty, activeBuyer)
+                                            var bindingGeneration = BeginStatusBindingAttempt(session.SessionID);
+                                            await TryBindStatusConversation(
+                                                session, string.Empty, activeBuyer, bindingGeneration)
                                                 .ConfigureAwait(false);
                                         }
                                     });
@@ -935,7 +1127,11 @@ namespace Bot.ChromeNs
                     };
                     webSocket.SessionClosed += (session, value) =>
                     {
-                        _connectedSessions.TryRemove(session.SessionID, out _);
+                        lock (_sellerSessionSync)
+                        {
+                            _connectedSessions.TryRemove(session.SessionID, out _);
+                            NextStatusBindingGenerationLocked(session.SessionID);
+                        }
                         WebSocketSession ignoredSession;
                         DateTime ignoredActivity;
                         bool ignoredClosing;
@@ -963,6 +1159,8 @@ namespace Bot.ChromeNs
                         _initialized.TryRemove(session.SessionID, out b);
                         _initializing.TryRemove(session.SessionID, out b);
                         _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
+                        DateTime ignoredStatusRefresh;
+                        _lastStatusBindingRefreshUtc.TryRemove(session.SessionID, out ignoredStatusRefresh);
                         _duplicateShopSessions.TryRemove(session.SessionID, out duplicateSeller);
                     };
                     var config = new ServerConfig()

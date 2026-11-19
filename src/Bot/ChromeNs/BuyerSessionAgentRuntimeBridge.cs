@@ -4,6 +4,7 @@ using Bot.ShopScope;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 
@@ -96,18 +97,21 @@ namespace Bot.ChromeNs
                 },
                 (_, existing) =>
                 {
-                    existing = existing ?? new WatchedGeneration();
-                    existing.ShopKey = shopKey;
-                    existing.Seller = seller;
-                    existing.Buyer = buyer;
-                    existing.Generation = generation;
-                    // Never replace a real acceptance time with a later discovery/recovery time.
-                    if (existing.AcceptedAtUtc == default(DateTime)
-                        || acceptedAtUtc < existing.AcceptedAtUtc)
+                    // Replace the value instead of mutating it in place. A concurrent sweep
+                    // can then remove only the exact snapshot it inspected, never a refreshed watch.
+                    var preservedAcceptedAt = existing == null
+                        || existing.AcceptedAtUtc == default(DateTime)
+                        || acceptedAtUtc < existing.AcceptedAtUtc
+                        ? acceptedAtUtc
+                        : existing.AcceptedAtUtc;
+                    return new WatchedGeneration
                     {
-                        existing.AcceptedAtUtc = acceptedAtUtc;
-                    }
-                    return existing;
+                        ShopKey = shopKey,
+                        Seller = seller,
+                        Buyer = buyer,
+                        Generation = generation,
+                        AcceptedAtUtc = preservedAcceptedAt
+                    };
                 });
         }
 
@@ -140,8 +144,7 @@ namespace Bot.ChromeNs
                 var watched = pair.Value;
                 if (watched == null)
                 {
-                    WatchedGeneration ignored;
-                    WatchedGenerations.TryRemove(pair.Key, out ignored);
+                    RemoveExact(WatchedGenerations, pair);
                     continue;
                 }
 
@@ -151,11 +154,11 @@ namespace Bot.ChromeNs
                     || state == BuyerSessionAgentState.Cancelled
                     || state == BuyerSessionAgentState.Failed)
                 {
-                    WatchedGeneration ignored;
-                    WatchedGenerations.TryRemove(pair.Key, out ignored);
+                    RemoveExact(WatchedGenerations, pair);
                     continue;
                 }
 
+                var acceptedAtUtc = watched.AcceptedAtUtc;
                 DateTime authoritativeAcceptedAtUtc;
                 if (Agent.TryGetGenerationAcceptedAtUtc(
                     watched.Seller,
@@ -165,10 +168,10 @@ namespace Bot.ChromeNs
                     watched.ShopKey)
                     && authoritativeAcceptedAtUtc != default(DateTime))
                 {
-                    watched.AcceptedAtUtc = authoritativeAcceptedAtUtc;
+                    acceptedAtUtc = authoritativeAcceptedAtUtc;
                 }
 
-                var elapsed = now - watched.AcceptedAtUtc;
+                var elapsed = now - acceptedAtUtc;
                 if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
                 if (elapsed.TotalSeconds <= BuyerSessionAgent.AbsoluteGenerationAgeSeconds) continue;
 
@@ -178,8 +181,7 @@ namespace Bot.ChromeNs
                     watched.Generation,
                     "absolute_generation_age_exceeded",
                     watched.ShopKey);
-                WatchedGeneration removed;
-                WatchedGenerations.TryRemove(pair.Key, out removed);
+                RemoveExact(WatchedGenerations, pair);
                 Log.ErrorWithMaxCount(
                     "generation超过绝对年龄已由独立线程硬取消，禁止迟到结果进入Ready/Sending: seller="
                     + watched.Seller + ", buyer=" + watched.Buyer
@@ -193,9 +195,15 @@ namespace Bot.ChromeNs
             {
                 var watched = pair.Value;
                 if (watched != null && now - watched.LastSeenUtc <= TimeSpan.FromHours(6)) continue;
-                WatchedSession removed;
-                WatchedSessions.TryRemove(pair.Key, out removed);
+                RemoveExact(WatchedSessions, pair);
             }
+        }
+
+        private static bool RemoveExact<TValue>(
+            ConcurrentDictionary<string, TValue> dictionary,
+            KeyValuePair<string, TValue> snapshot)
+        {
+            return ((ICollection<KeyValuePair<string, TValue>>)dictionary).Remove(snapshot);
         }
 
         private static void WatchSession(string shopKey, string seller, string buyer)
@@ -210,14 +218,12 @@ namespace Bot.ChromeNs
             WatchedSessions.AddOrUpdate(
                 key,
                 _ => new WatchedSession { ShopKey = shopKey, Seller = seller, Buyer = buyer, LastSeenUtc = now },
-                (_, existing) =>
+                (_, existing) => new WatchedSession
                 {
-                    existing = existing ?? new WatchedSession();
-                    existing.ShopKey = shopKey;
-                    existing.Seller = seller;
-                    existing.Buyer = buyer;
-                    existing.LastSeenUtc = now;
-                    return existing;
+                    ShopKey = shopKey,
+                    Seller = seller,
+                    Buyer = buyer,
+                    LastSeenUtc = now
                 });
         }
 

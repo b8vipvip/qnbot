@@ -69,6 +69,15 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, SessionSellerBinding> SessionSellers =
             new ConcurrentDictionary<string, SessionSellerBinding>(StringComparer.Ordinal);
+        // A physical WebSocket that has just changed login identity must not forward
+        // queued events captured under its previous ShopKey while the next status
+        // event establishes the new binding.
+        private static readonly ConcurrentDictionary<string, byte> RetiredSourceSessions =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        // Serialize the final source-identity check with transition/close. Fixed stripes
+        // avoid retaining one lock object per transient WebSocket session.
+        private static readonly object[] SessionTransitionLocks =
+            Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
         private static readonly ConcurrentDictionary<string, DateTime> RecentInboundFingerprints =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly object PendingSync = new object();
@@ -101,6 +110,8 @@ namespace Bot.ChromeNs
             if (session == null || e == null) return;
             var sessionId = (session.SessionID ?? string.Empty).Trim();
             if (sessionId.Length == 0) return;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null || !server.IsWebSocketSessionConnected(sessionId)) return;
 
             if (string.Equals(e.Type, "qnbotStatus", StringComparison.Ordinal))
             {
@@ -109,16 +120,21 @@ namespace Bot.ChromeNs
             }
 
             if (!IsRecoverableInboundType(e.Type)) return;
+            if (IsSessionIdentityTransitioning(sessionId)) return;
             var response = e.Value ?? string.Empty;
             if (response.Length == 0) return;
 
-            var server = MyWebSocketServer.WSocketSvrInst;
-            var shopKey = server == null ? string.Empty : server.GetShopKeyForSession(sessionId);
+            var shopKey = server.GetShopKeyForSession(sessionId);
             var seller = ResolveSeller(sessionId, e.Type, response);
             if (seller.Length > 0) TouchSessionSeller(sessionId, seller, DateTime.Now);
-            if (seller.Length == 0 && shopKey.Length == 0)
+            if (shopKey.Length == 0)
             {
-                Log.Info("重复CDP入站消息暂无法确定ShopKey，等待正常通道处理: sessionRef="
+                // A seller nickname is diagnostic only, not a stable routing identity.
+                // If this physical socket has no verified ShopKey at event arrival,
+                // do not queue a payload that could later be rebound to another shop.
+                // The authoritative page/history recovery remains responsible for reconciliation.
+                Log.Info("重复CDP入站消息缺少来源稳定ShopKey，拒绝跨会话暂存: sellerRef="
+                    + PrivacyToken("seller", seller) + ", sessionRef="
                     + PrivacyToken("session", sessionId) + ", type=" + e.Type);
                 return;
             }
@@ -149,10 +165,13 @@ namespace Bot.ChromeNs
             if (!TryDeliverLive(item, false))
             {
                 EnqueuePendingBounded(item, "initial");
-                Log.Info("千牛入站消息已暂存等待ShopKey权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
-                    + ", shopRef=" + PrivacyToken("shop", item.ShopKey)
-                    + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type
-                    + ", pending=" + GetPendingCount() + "/" + MaxPendingInboundEvents);
+                if (!IsSessionIdentityTransitioning(sessionId))
+                {
+                    Log.Info("千牛入站消息已暂存等待ShopKey权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
+                        + ", shopRef=" + PrivacyToken("shop", item.ShopKey)
+                        + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type
+                        + ", pending=" + GetPendingCount() + "/" + MaxPendingInboundEvents);
+                }
             }
         }
 
@@ -254,24 +273,6 @@ namespace Bot.ChromeNs
             return string.Empty;
         }
 
-        private static void ReleaseAcceptedFingerprint(PendingInboundEvent item)
-        {
-            if (item == null || !item.FingerprintAccepted || string.IsNullOrWhiteSpace(item.ShopKey))
-                return;
-
-            var acceptedAt = item.FingerprintAcceptedAt;
-            if (acceptedAt != DateTime.MinValue)
-            {
-                var fingerprint = BuildInboundFingerprint(item.ShopKey, item.Type, item.Response);
-                // ICollection.Remove on ConcurrentDictionary removes only the exact
-                // key/value pair. A newer accepted replay must never be cleared here.
-                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
-                    .Remove(new KeyValuePair<string, DateTime>(fingerprint, acceptedAt));
-            }
-            item.FingerprintAccepted = false;
-            item.FingerprintAcceptedAt = DateTime.MinValue;
-        }
-
         private static bool TryAcceptInboundFingerprint(
             string shopKey,
             string type,
@@ -345,12 +346,180 @@ namespace Bot.ChromeNs
                 + ", type=" + type + ", suppressedTotal=" + count);
         }
 
+        private static int GetSessionTransitionLockIndex(string sessionId)
+        {
+            var hash = StringComparer.Ordinal.GetHashCode(sessionId ?? string.Empty);
+            return (hash & int.MaxValue) % SessionTransitionLocks.Length;
+        }
+
+        private static object GetSessionTransitionLock(string sessionId)
+        {
+            return SessionTransitionLocks[GetSessionTransitionLockIndex(sessionId)];
+        }
+
+        // A forwarded event depends on two physical sockets: its source and the
+        // authoritative target. Acquire both fixed stripes in deterministic order
+        // so neither identity can change between the final checks and dispatch.
+        private static bool WithSessionTransitionLocks(
+            string sourceSession, string targetSession, Func<bool> action)
+        {
+            if (action == null) return false;
+            var sourceIndex = GetSessionTransitionLockIndex(sourceSession);
+            var targetIndex = GetSessionTransitionLockIndex(targetSession);
+            if (sourceIndex == targetIndex)
+            {
+                lock (SessionTransitionLocks[sourceIndex]) return action();
+            }
+            var firstIndex = Math.Min(sourceIndex, targetIndex);
+            var secondIndex = Math.Max(sourceIndex, targetIndex);
+            lock (SessionTransitionLocks[firstIndex])
+            {
+                lock (SessionTransitionLocks[secondIndex])
+                {
+                    return action();
+                }
+            }
+        }
+
+        // The original CDP dispatcher must use the same transition stripe as the
+        // recovery queue. A check followed by an unlocked dispatch leaves a narrow
+        // A->B race in which an old physical socket can still deliver to its old QN.
+        internal static bool TryDispatchRawInbound(
+            CDPClient client, string type, string response)
+        {
+            if (client == null || string.IsNullOrEmpty(response)) return false;
+            var sessionId = (client.SessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return false;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null) return false;
+
+            lock (GetSessionTransitionLock(sessionId))
+            {
+                if (client.IsInvalidated || !server.IsWebSocketSessionConnected(sessionId))
+                    return false;
+
+                // Status is the identity-discovery channel and remains available to
+                // connected standby sockets. All business traffic must still match
+                // the exact current ShopKey and authoritative owner.
+                if (!string.Equals(type, "qnbotStatus", StringComparison.Ordinal))
+                {
+                    if (IsSessionIdentityTransitioning(sessionId) || client.IsShopIdentityRetired)
+                        return false;
+                    var shopKey = (client.ShopKey ?? string.Empty).Trim();
+                    if (shopKey.Length == 0
+                        || !string.Equals(
+                            server.GetShopKeyForSession(sessionId), shopKey, StringComparison.Ordinal)
+                        || !server.IsAuthoritativeShopSession(shopKey, sessionId))
+                        return false;
+                }
+
+                client.DispatchInboundEvent(type, response);
+                return true;
+            }
+        }
+
+        private static void ReleaseAcceptedFingerprint(PendingInboundEvent item)
+        {
+            if (item == null || !item.FingerprintAccepted || string.IsNullOrWhiteSpace(item.ShopKey))
+                return;
+
+            var acceptedAt = item.FingerprintAcceptedAt;
+            if (acceptedAt != DateTime.MinValue)
+            {
+                var fingerprint = BuildInboundFingerprint(item.ShopKey, item.Type, item.Response);
+                // Remove only the exact key/value pair. A newer accepted replay with
+                // the same fingerprint must remain protected from duplicate dispatch.
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(new KeyValuePair<string, DateTime>(fingerprint, acceptedAt));
+            }
+            item.FingerprintAccepted = false;
+            item.FingerprintAcceptedAt = DateTime.MinValue;
+        }
+
+        private static bool IsSourceSessionConnected(string sessionId)
+        {
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return server != null && server.IsWebSocketSessionConnected(sessionId);
+        }
+
+        internal static void MarkSessionIdentityTransition(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return;
+            lock (GetSessionTransitionLock(sessionId))
+            {
+                RetiredSourceSessions[sessionId] = 0;
+                SessionSellerBinding ignored;
+                SessionSellers.TryRemove(sessionId, out ignored);
+                var dropped = DropPendingForSourceSession(sessionId);
+                if (dropped > 0)
+                {
+                    var total = Interlocked.Add(ref _droppedPendingCount, dropped);
+                    Log.Info("千牛WebSocket登录身份变化，已清除旧身份暂存事件: sessionRef="
+                        + PrivacyToken("session", sessionId) + ", dropped=" + dropped
+                        + ", droppedTotal=" + total);
+                }
+            }
+        }
+
+        internal static void ClearSessionIdentityTransition(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return;
+            lock (GetSessionTransitionLock(sessionId))
+            {
+                byte ignored;
+                RetiredSourceSessions.TryRemove(sessionId, out ignored);
+            }
+        }
+
+        internal static bool IsSessionIdentityTransitioning(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            return sessionId.Length > 0 && RetiredSourceSessions.ContainsKey(sessionId);
+        }
+
+        private static int DropPendingForSourceSession(string sessionId)
+        {
+            var dropped = 0;
+            lock (PendingSync)
+            {
+                var retained = new Queue<PendingInboundEvent>();
+                while (Pending.Count > 0)
+                {
+                    var pending = Pending.Dequeue();
+                    if (pending == null) continue;
+                    if (string.Equals(pending.SourceSession, sessionId, StringComparison.Ordinal))
+                    {
+                        _pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - pending.PayloadBytes);
+                        ReleaseAcceptedFingerprint(pending);
+                        dropped++;
+                    }
+                    else
+                    {
+                        retained.Enqueue(pending);
+                    }
+                }
+                while (retained.Count > 0) Pending.Enqueue(retained.Dequeue());
+            }
+            return dropped;
+        }
+
         internal static void ForgetClosedSession(string sessionId)
         {
             sessionId = (sessionId ?? string.Empty).Trim();
             if (sessionId.Length == 0) return;
-            SessionSellerBinding ignored;
-            SessionSellers.TryRemove(sessionId, out ignored);
+            lock (GetSessionTransitionLock(sessionId))
+            {
+                RetiredSourceSessions[sessionId] = 0;
+                SessionSellerBinding ignored;
+                SessionSellers.TryRemove(sessionId, out ignored);
+                var dropped = DropPendingForSourceSession(sessionId);
+                byte ignoredTransition;
+                RetiredSourceSessions.TryRemove(sessionId, out ignoredTransition);
+                if (dropped > 0)
+                    Interlocked.Add(ref _droppedPendingCount, dropped);
+            }
         }
 
         private static void MaybeCleanupTransientState(DateTime now)
@@ -360,8 +529,8 @@ namespace Bot.ChromeNs
             foreach (var pair in RecentInboundFingerprints)
             {
                 if (now - pair.Value <= InboundFingerprintRetention) continue;
-                DateTime ignored;
-                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(pair);
             }
             TrimOldestRecentFingerprints();
 
@@ -370,8 +539,8 @@ namespace Bot.ChromeNs
                 var binding = pair.Value;
                 if (binding == null || now - binding.LastSeenAt > SessionSellerRetention)
                 {
-                    SessionSellerBinding ignored;
-                    SessionSellers.TryRemove(pair.Key, out ignored);
+                    ((ICollection<KeyValuePair<string, SessionSellerBinding>>)SessionSellers)
+                        .Remove(pair);
                 }
             }
         }
@@ -386,8 +555,8 @@ namespace Bot.ChromeNs
             var removeCount = count - targetCount;
             foreach (var pair in RecentInboundFingerprints.OrderBy(x => x.Value).Take(removeCount))
             {
-                DateTime ignored;
-                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(pair);
             }
         }
 
@@ -418,6 +587,15 @@ namespace Bot.ChromeNs
             long pendingBytes;
             lock (PendingSync)
             {
+                // Identity retirement can race the initial delivery attempt. Recheck
+                // under the queue lock so a transition cannot enqueue an old-ShopKey
+                // payload after MarkSessionIdentityTransition drained the queue.
+                if (IsSessionIdentityTransitioning(item.SourceSession)
+                    || !IsSourceSessionConnected(item.SourceSession))
+                {
+                    ReleaseAcceptedFingerprint(item);
+                    return;
+                }
                 while (Pending.Count >= MaxPendingInboundEvents
                     || _pendingPayloadBytes + item.PayloadBytes > MaxPendingInboundPayloadBytes)
                 {
@@ -475,6 +653,8 @@ namespace Bot.ChromeNs
         private static bool TryDeliverLive(PendingInboundEvent item, bool replayPending)
         {
             if (item == null) return false;
+            if (IsSessionIdentityTransitioning(item.SourceSession)
+                || !IsSourceSessionConnected(item.SourceSession)) return false;
             var server = MyWebSocketServer.WSocketSvrInst;
             if (server == null) return false;
 
@@ -486,8 +666,7 @@ namespace Bot.ChromeNs
                 && !string.Equals(shopKey, mappedShopKey, StringComparison.Ordinal))
             {
                 // The source WebSocket changed login identity after this event was queued.
-                // Never reinterpret the old payload under the new ShopKey. Release only
-                // this event's fingerprint so a valid replay on the original shop can recover.
+                // Never reinterpret the old payload under the new ShopKey.
                 Log.Info("千牛入站暂存事件来源WebSocket身份已变化，拒绝跨店补发: oldShopRef="
                     + PrivacyToken("shop", shopKey)
                     + ", currentShopRef=" + PrivacyToken("shop", mappedShopKey)
@@ -525,15 +704,48 @@ namespace Bot.ChromeNs
                 && string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
-            using (CDPClient.BeginForwardedInbound(item.SourceSession))
+            // Source and target identities can transition independently. Lock both
+            // fixed stripes in deterministic order so a target login switch cannot
+            // race the source-side check and receive a stale forwarded event.
+            var forwarded = false;
+            var accepted = WithSessionTransitionLocks(item.SourceSession, target.SessionId, () =>
             {
-                target.DispatchInboundEvent(item.Type, item.Response);
+                if (IsSessionIdentityTransitioning(item.SourceSession)
+                    || !IsSourceSessionConnected(item.SourceSession))
+                    return false;
+
+                var finalMappedShopKey = server.GetShopKeyForSession(item.SourceSession);
+                if (!string.Equals(finalMappedShopKey, shopKey, StringComparison.Ordinal))
+                {
+                    ReleaseAcceptedFingerprint(item);
+                    return true;
+                }
+
+                if (IsSessionIdentityTransitioning(target.SessionId)
+                    || target.IsInvalidated
+                    || target.IsShopIdentityRetired
+                    || !IsSourceSessionConnected(target.SessionId)
+                    || !string.Equals(
+                        server.GetShopKeyForSession(target.SessionId), shopKey, StringComparison.Ordinal)
+                    || !server.IsAuthoritativeShopSession(shopKey, target.SessionId))
+                    return false;
+
+                using (CDPClient.BeginForwardedInbound(item.SourceSession))
+                {
+                    target.DispatchInboundEvent(item.Type, item.Response);
+                }
+                forwarded = true;
+                return true;
+            });
+            if (!accepted) return false;
+            if (forwarded)
+            {
+                Log.Info("重复千牛CDP入站消息已按ShopKey转交权威会话: shopRef=" + PrivacyToken("shop", shopKey)
+                    + ", sellerRef=" + PrivacyToken("seller", item.Seller)
+                    + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
+                    + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
+                    + ", type=" + item.Type);
             }
-            Log.Info("重复千牛CDP入站消息已按ShopKey转交权威会话: shopRef=" + PrivacyToken("shop", shopKey)
-                + ", sellerRef=" + PrivacyToken("seller", item.Seller)
-                + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
-                + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
-                + ", type=" + item.Type);
             return true;
         }
 

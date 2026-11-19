@@ -13,21 +13,24 @@ def test_deterministic_rule_gates_follow_generation_cancellation_with_correct_fa
 
     # Ordinary work-hours fixed rules must serialize for the lifetime of the current generation.
     # A timeout must not fail-open into AI while an earlier deterministic reply may still be sending.
-    ordinary_gate = s.index("var gate = BuyerGates.GetOrAdd")
+    ordinary_gate = s.index("var generationToken = item.SessionGeneration > 0")
     offhours = s.index("private static async Task<bool> HandleOffHoursExclusiveAsync")
     ordinary_block = s[ordinary_gate:offhours]
     assert "GetCancellationToken(" in ordinary_block
-    assert "await gate.WaitAsync(generationToken)" in ordinary_block
-    assert "gate.WaitAsync(1800)" not in ordinary_block
+    assert "AcquireKeyedGateAsync(BuyerGates, key, generationToken)" in ordinary_block
+    assert "gateLease.Dispose()" in ordinary_block
+    assert "WaitAsync(1800)" not in ordinary_block
     assert "已放行消息合并/AI链路" not in ordinary_block
     assert "固定规则串行等待期间generation已失效" in ordinary_block
     assert "return false;" in ordinary_block
 
     # Off-hours remains separately bounded + fail-closed because no Knowledge/AI answer is allowed
-    # during the configured off-hours window.
+    # during the configured off-hours window. Its lease also releases the per-buyer entry.
     scoped = s.index("private static async Task<bool> HandleScopedBeforeMergeAsync", offhours)
     offhours_block = s[offhours:scoped]
-    assert "gate.WaitAsync(1800)" in offhours_block
+    assert "TryAcquireKeyedGateAsync(OffHoursGates, buyerKey, 1800)" in offhours_block
+    assert "gateLease == null" in offhours_block
+    assert "gateLease.Dispose()" in offhours_block
     assert "fail-closed阻止Knowledge/AI链路" in offhours_block
     assert "return false;" in offhours_block
 

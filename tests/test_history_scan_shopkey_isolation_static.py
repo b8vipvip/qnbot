@@ -41,9 +41,18 @@ def test_current_shop_scope_resolver_remains_fail_closed_for_legacy_ambiguous_ni
     ]
 
     assert "ShopSettingsScope.Current" in helper
-    assert "if (current != null) return current;" in helper
+    assert "if (current != null)" in helper
+    assert "if (current != null)\n            {" in helper
+    assert "if (IsQianniuShopKey(sellerNick)" in helper
+    assert "IsQianniuShopKey(sellerNick)" in helper
+    assert "ResolveRuntimeByShopKey(sellerNick)" in helper
+    assert "current.SellerNick" in helper
+    assert "current.DisplayName" in helper
+    assert "if (!sellerMatches && !displayNameMatches)" in helper
+    assert "请求的ShopKey与当前店铺作用域不一致，已阻止跨店访问。" in helper
+    assert "请求的卖家与当前店铺作用域不一致，已阻止跨店访问。" in helper
+    assert "return current;" in helper
     assert "return ResolveBySellerNick(sellerNick);" in helper
-
 
 def test_history_scan_reuses_the_already_verified_shopkey_for_history_store_reads():
     scan = read("src/Bot/Knowledge/ChatHistoryScanService.cs")

@@ -45,7 +45,7 @@ def test_generation_watchdog_covers_all_non_terminal_states_and_drops_terminal_w
     assert "state == BuyerSessionAgentState.Completed" in source
     assert "state == BuyerSessionAgentState.Cancelled" in source
     assert "state == BuyerSessionAgentState.Failed" in source
-    assert "WatchedGenerations.TryRemove" in source
+    assert "RemoveExact(WatchedGenerations, pair)" in source
 
 
 def test_generation_watchdog_is_not_triggered_by_human_reply():
@@ -54,3 +54,34 @@ def test_generation_watchdog_is_not_triggered_by_human_reply():
     assert "WatchSession(shopKey, seller, buyer);" in source
     assert "SellerHumanReply" in source
     assert "false, shopKey);" in source
+
+
+def test_generation_watchdog_removes_only_exact_watch_snapshots_and_ids_survive_session_pruning():
+    agent = text("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+
+    assert "private static long _generationSequence;" in agent
+    assert "Interlocked.Increment(ref _generationSequence)" in agent
+    assert "state.Generation = generation" in agent
+    assert "private static bool RemoveExact<TValue>" in source
+    assert "((ICollection<KeyValuePair<string, TValue>>)dictionary).Remove(snapshot)" in source
+    assert "RemoveExact(WatchedGenerations, pair)" in source
+    assert "RemoveExact(WatchedSessions, pair)" in source
+    assert "return new WatchedGeneration" in source
+    assert "(_, existing) => new WatchedSession" in source
+    assert "WatchedGenerations.TryRemove(pair.Key" not in source
+    assert "WatchedSessions.TryRemove(pair.Key" not in source
+
+
+
+def test_generation_watchdog_uses_an_immutable_local_acceptance_snapshot():
+    source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    sweep = source[
+        source.index("private static void SweepGenerationDeadlines"):
+        source.index("private static bool RemoveExact")
+    ]
+
+    assert "var acceptedAtUtc = watched.AcceptedAtUtc;" in sweep
+    assert "acceptedAtUtc = authoritativeAcceptedAtUtc;" in sweep
+    assert "var elapsed = now - acceptedAtUtc;" in sweep
+    assert "watched.AcceptedAtUtc = authoritativeAcceptedAtUtc;" not in sweep

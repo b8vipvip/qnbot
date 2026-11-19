@@ -115,7 +115,7 @@ namespace Bot.Options
                     Log.Exception(ex);
                 }
                 autoDelivery = new AutoDeliveryOptionsControl(Seller);
-                shopStrategy = new ShopStrategyOptionsControl(Seller);
+                shopStrategy = new ShopStrategyOptionsControl(_shop.ShopKey);
                 dataManagement = new CtlDataManagement();
                 aboutUpdate = new BotUpdateOptionsControl();
             });

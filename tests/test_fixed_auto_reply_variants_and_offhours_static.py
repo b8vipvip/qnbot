@@ -86,3 +86,56 @@ def test_ai_paraphrase_rejects_business_mutations():
     assert 'canonical.Contains("已付款") && !variant.Contains("已付款")' in text
     assert 'variant.Contains("已上班") || variant.Contains("正在上班")' in text
     assert "array.Any(x => x.Type != JTokenType.String)" in text
+
+
+def test_per_buyer_reply_gates_are_reference_counted_and_expired_cooldowns_pruned():
+    text = read(DET)
+    assert "ConcurrentDictionary<string, KeyedGateEntry> BuyerGates" in text
+    assert "ConcurrentDictionary<string, KeyedGateEntry> OffHoursGates" in text
+    assert "ConcurrentDictionary<string, SemaphoreSlim> BuyerGates" not in text
+    assert "ConcurrentDictionary<string, SemaphoreSlim> OffHoursGates" not in text
+
+    reserve = text[
+        text.index("private static KeyedGateEntry AddGateReference"):
+        text.index("private static void CleanupExpiredOffHoursDeliveredUntil")
+    ]
+    assert "entry.References++;" in reserve
+    assert "entry.References--;" in reserve
+    assert "entry.References != 0" in reserve
+    assert "ICollection<KeyValuePair<string, KeyedGateEntry>>" in reserve
+    assert "entry.Gate.Dispose();" in reserve
+    assert "WaitAsync(cancellationToken)" in reserve
+    assert "WaitAsync(timeoutMilliseconds)" in reserve
+    assert "ReleaseGateReference(entries, key, entry);" in reserve
+
+    cleanup = text[
+        text.index("private static void CleanupExpiredOffHoursDeliveredUntil"):
+        text.index("public static Task<bool> HandleBeforeMergeAsync")
+    ]
+    assert "Interlocked.Read(ref _lastOffHoursCleanupUtcTicks)" in cleanup
+    assert "Interlocked.CompareExchange(" in cleanup
+    assert "TimeSpan.FromMinutes(1).Ticks" in cleanup
+    assert "pair.Value <= now" in cleanup
+    assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
+    assert "CleanupExpiredOffHoursDeliveredUntil();" in text
+
+
+def test_canonical_premerge_offhours_cooldowns_are_pruned_by_elapsed_time():
+    source = read(ROOT / "src" / "Bot" / "ChromeNs" / "BuyerMessageBurstCoordinator.cs")
+    canonical = source[source.index("internal static class CanonicalPreMergeDecisionService"):]
+    cleanup = canonical[
+        canonical.index("private static void CleanupExpiredOffHoursDeliveredUntil"):
+        canonical.index("public static async Task<CanonicalPreMergeOutcome> HandleAsync")
+    ]
+    handler = canonical[
+        canonical.index("public static async Task<CanonicalPreMergeOutcome> HandleAsync"):
+        canonical.index("private static async Task<bool> SendFixedAsync")
+    ]
+
+    assert "Interlocked.Read(ref _lastOffHoursCleanupUtcTicks)" in cleanup
+    assert "Interlocked.CompareExchange(" in cleanup
+    assert "TimeSpan.FromMinutes(1).Ticks" in cleanup
+    assert "pair.Value <= now" in cleanup
+    assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
+    assert "CleanupExpiredOffHoursDeliveredUntil();" in handler
+    assert handler.index("CleanupExpiredOffHoursDeliveredUntil();") < handler.index("if (item == null")

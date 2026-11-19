@@ -116,19 +116,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Validate Windows updater PowerShell syntax
+      - name: Validate Windows PowerShell scripts
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'scripts/update-bot.ps1'),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List | Out-String | Write-Error
-            exit 1
+          $files = @(
+            'scripts/update-bot.ps1',
+            'scripts/Stop-QnBot.ps1',
+            'scripts/Collect-QnBotMemory.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error ("PowerShell syntax failed for " + $file)
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
           }
 
   full-gate:

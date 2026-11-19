@@ -62,6 +62,7 @@ def test_agent_keeps_generation_boundary_separate_from_raw_events():
     record_start = agent.index("public BuyerSessionEventResult RecordEvent")
     observe_body = agent[observe_start:record_start]
     record_body = agent[record_start:agent.index("public bool IsCurrent", record_start)]
-    assert "state.Generation++" in observe_body
+    assert "Interlocked.Increment(ref _generationSequence)" in observe_body
+    assert "state.Generation = generation" in observe_body
     assert "ReusedCoalescingGeneration" in observe_body
     assert "state.Generation++" not in record_body

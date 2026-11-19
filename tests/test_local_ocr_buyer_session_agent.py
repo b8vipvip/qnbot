@@ -64,7 +64,8 @@ def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_on
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
 
     assert "BuyerSessionAgent.cs" in props
-    assert "state.Generation++" in agent
+    assert "Interlocked.Increment(ref _generationSequence)" in agent
+    assert "state.Generation = generation" in agent
     assert "previous.Cancel()" not in agent
     assert "ActiveGenerations" in agent
     assert "independentGeneration=True" in agent

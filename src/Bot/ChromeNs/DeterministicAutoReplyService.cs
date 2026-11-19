@@ -32,12 +32,142 @@ namespace Bot.ChromeNs
             "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。";
         private const int OffHoursRepeatMinutes = 5;
 
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> BuyerGates =
-            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> OffHoursGates =
-            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+        private sealed class KeyedGateEntry
+        {
+            public readonly object Sync = new object();
+            public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
+            public int References;
+        }
+
+        private sealed class KeyedGateLease : IDisposable
+        {
+            private readonly ConcurrentDictionary<string, KeyedGateEntry> _entries;
+            private readonly string _key;
+            private KeyedGateEntry _entry;
+
+            public KeyedGateLease(
+                ConcurrentDictionary<string, KeyedGateEntry> entries,
+                string key,
+                KeyedGateEntry entry)
+            {
+                _entries = entries;
+                _key = key;
+                _entry = entry;
+            }
+
+            public void Dispose()
+            {
+                var entry = Interlocked.Exchange(ref _entry, null);
+                if (entry == null) return;
+                entry.Gate.Release();
+                ReleaseGateReference(_entries, _key, entry);
+            }
+        }
+
+        // Entries are retained only while a caller is holding or waiting for the
+        // keyed gate. The final lease removes and disposes the exact entry.
+        private static readonly ConcurrentDictionary<string, KeyedGateEntry> BuyerGates =
+            new ConcurrentDictionary<string, KeyedGateEntry>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, KeyedGateEntry> OffHoursGates =
+            new ConcurrentDictionary<string, KeyedGateEntry>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> OffHoursDeliveredUntil =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static long _lastOffHoursCleanupUtcTicks;
+
+        private static KeyedGateEntry AddGateReference(
+            ConcurrentDictionary<string, KeyedGateEntry> entries, string key)
+        {
+            while (true)
+            {
+                var entry = entries.GetOrAdd(key, _ => new KeyedGateEntry());
+                lock (entry.Sync)
+                {
+                    KeyedGateEntry current;
+                    if (!entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry))
+                        continue;
+                    entry.References++;
+                    return entry;
+                }
+            }
+        }
+
+        private static void ReleaseGateReference(
+            ConcurrentDictionary<string, KeyedGateEntry> entries,
+            string key,
+            KeyedGateEntry entry)
+        {
+            lock (entry.Sync)
+            {
+                if (entry.References <= 0) return;
+                entry.References--;
+                if (entry.References != 0) return;
+
+                ((ICollection<KeyValuePair<string, KeyedGateEntry>>)entries)
+                    .Remove(new KeyValuePair<string, KeyedGateEntry>(key, entry));
+                entry.Gate.Dispose();
+            }
+        }
+
+        private static async Task<KeyedGateLease> AcquireKeyedGateAsync(
+            ConcurrentDictionary<string, KeyedGateEntry> entries,
+            string key,
+            CancellationToken cancellationToken)
+        {
+            var entry = AddGateReference(entries, key);
+            try
+            {
+                await entry.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return new KeyedGateLease(entries, key, entry);
+            }
+            catch
+            {
+                ReleaseGateReference(entries, key, entry);
+                throw;
+            }
+        }
+
+        private static async Task<KeyedGateLease> TryAcquireKeyedGateAsync(
+            ConcurrentDictionary<string, KeyedGateEntry> entries,
+            string key,
+            int timeoutMilliseconds)
+        {
+            var entry = AddGateReference(entries, key);
+            bool acquired;
+            try
+            {
+                acquired = await entry.Gate.WaitAsync(timeoutMilliseconds).ConfigureAwait(false);
+            }
+            catch
+            {
+                ReleaseGateReference(entries, key, entry);
+                throw;
+            }
+            if (!acquired)
+            {
+                ReleaseGateReference(entries, key, entry);
+                return null;
+            }
+            return new KeyedGateLease(entries, key, entry);
+        }
+
+        private static void CleanupExpiredOffHoursDeliveredUntil()
+        {
+            // Sweep at most once per minute, but also clean up on the first message
+            // after an idle period so sparse buyer traffic cannot retain expired keys.
+            var nowUtcTicks = DateTime.UtcNow.Ticks;
+            var previousTicks = Interlocked.Read(ref _lastOffHoursCleanupUtcTicks);
+            if (nowUtcTicks - previousTicks < TimeSpan.FromMinutes(1).Ticks
+                || Interlocked.CompareExchange(
+                    ref _lastOffHoursCleanupUtcTicks, nowUtcTicks, previousTicks) != previousTicks)
+                return;
+
+            var now = DateTime.Now;
+            var exactEntries = (ICollection<KeyValuePair<string, DateTime>>)OffHoursDeliveredUntil;
+            foreach (var pair in OffHoursDeliveredUntil)
+            {
+                if (pair.Value <= now) exactEntries.Remove(pair);
+            }
+        }
 
         /// <summary>
         /// Returns true when the original buyer message should continue into the burst/context
@@ -57,6 +187,7 @@ namespace Bot.ChromeNs
             BuyerMessageBurstItem item,
             bool allowLocalShortReply)
         {
+            CleanupExpiredOffHoursDeliveredUntil();
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
 
             if (item == null
@@ -103,16 +234,14 @@ namespace Bot.ChromeNs
                 }
             }
 
-            var gate = BuyerGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-            var gateAcquired = false;
+            KeyedGateLease gateLease = null;
             var sessionAgent = new BuyerSessionAgent();
             var generationToken = item.SessionGeneration > 0
                 ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)
                 : CancellationToken.None;
             try
             {
-                await gate.WaitAsync(generationToken).ConfigureAwait(false);
-                gateAcquired = true;
+                gateLease = await AcquireKeyedGateAsync(BuyerGates, key, generationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -160,7 +289,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                if (gateAcquired) gate.Release();
+                if (gateLease != null) gateLease.Dispose();
             }
         }
 
@@ -169,9 +298,9 @@ namespace Bot.ChromeNs
             string buyerKey,
             string resolvedReply)
         {
-            var gate = OffHoursGates.GetOrAdd(buyerKey, _ => new SemaphoreSlim(1, 1));
-            var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
-            if (!gateAcquired)
+            var gateLease = await TryAcquireKeyedGateAsync(OffHoursGates, buyerKey, 1800)
+                .ConfigureAwait(false);
+            if (gateLease == null)
             {
                 Log.ErrorWithMaxCount(
                     "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路: seller="
@@ -232,7 +361,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                gate.Release();
+                gateLease.Dispose();
             }
         }
 

@@ -31,7 +31,7 @@ def test_managed_catalog_is_shop_scoped_and_survives_a_full_refresh():
     assert 'shop.catalog.managed-products.v1' in service
     assert "ShopScopedSettingsStore" in service
     assert "private static ShopCatalogManagedEdits LoadManagedEdits" in service
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in service
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in service
     assert "var managed = LoadManagedEdits(seller)" in service
     assert "products[local.ItemId] = local" in service
     assert "products.Remove(hidden)" in service
@@ -68,4 +68,4 @@ def test_catalog_resolution_prefers_the_exact_current_shop_scope():
     assert "if (current != null && !string.IsNullOrWhiteSpace(current.ShopKey))" in helper
     assert "return current;" in helper
     assert "current.SellerNick" not in helper
-    assert "ResolveRuntimeBySellerNick(seller)" in helper
+    assert "ResolveCurrentOrBySellerNick(seller)" in helper

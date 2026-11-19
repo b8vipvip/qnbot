@@ -102,3 +102,27 @@ def test_settings_optional_feature_failure_cannot_block_shop_binding_page():
     assert "_featureSettings = null;" in build
     assert "if (_featureSettings != null)" in build
     assert "店铺绑定" in build
+
+def test_shop_product_catalog_uses_the_bound_scope_and_stable_shopkey_outside_ui_scope():
+    catalog = read("src/Bot/ChromeNs/ShopProductCatalogService.cs")
+    locator = read("src/Bot/ShopScope/ShopContextLocator.cs")
+    window = read("src/Bot/Options/WndOption.xaml.cs")
+
+    resolver = catalog.split("private static ShopContext ResolveShopForSeller", 1)[1].split(
+        "private static string CachePath", 1
+    )[0]
+    cache_path = catalog.split("private static string CachePath", 1)[1].split(
+        "private static ShopScopedSettingsStore RuleStore", 1
+    )[0]
+    rule_store = catalog.split("private static ShopScopedSettingsStore RuleStore", 1)[1].split(
+        "internal static ShopCatalogSnapshot Load", 1
+    )[0]
+
+    assert "ResolveShopForSeller(seller)" in cache_path
+    assert "ResolveShopForSeller(seller)" in rule_store
+    assert "ShopSettingsScope.Current" in resolver
+    assert "current.ShopKey" in resolver
+    assert "ResolveCurrentOrBySellerNick(seller)" in resolver
+    assert "ResolveRuntimeByShopKey(sellerNick)" in locator
+    assert "IsQianniuShopKey(sellerNick)" in locator
+    assert "shopStrategy = new ShopStrategyOptionsControl(_shop.ShopKey);" in window
