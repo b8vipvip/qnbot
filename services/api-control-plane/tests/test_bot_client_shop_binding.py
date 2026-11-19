@@ -121,3 +121,55 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
         ).fetchone()
     assert row["shop_key"] == "shop_b"
     assert row["seller"] == "seller-b"
+
+
+def test_force_rebind_rolls_back_when_old_shop_state_cleanup_fails(tmp_path):
+    cp = setup_cp(tmp_path)
+    binding.ensure_binding(1, "shop_a", False, "seller-a")
+
+    with cp.db() as conn:
+        conn.execute("INSERT INTO bot_messages(client_id) VALUES(1)")
+        conn.execute(
+            """
+            CREATE TRIGGER deny_bot_message_cleanup
+            BEFORE DELETE ON bot_messages
+            BEGIN
+                SELECT RAISE(ABORT, 'cleanup blocked');
+            END;
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="cleanup blocked"):
+        binding.ensure_binding(1, "shop_b", True, "seller-b")
+
+    with cp.db() as conn:
+        row = conn.execute(
+            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=1"
+        ).fetchone()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM bot_messages WHERE client_id=1"
+        ).fetchone()[0]
+
+    assert row["shop_key"] == "shop_a"
+    assert row["seller"] == "seller-a"
+    assert count == 1
+
+
+def test_force_rebind_fails_closed_when_existing_state_table_has_no_client_id(tmp_path):
+    cp = setup_cp(tmp_path)
+    binding.ensure_binding(1, "shop_a", False, "seller-a")
+
+    with cp.db() as conn:
+        conn.execute("DROP TABLE bot_client_data_backups")
+        conn.execute("CREATE TABLE bot_client_data_backups(id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(RuntimeError, match="has no client_id column"):
+        binding.ensure_binding(1, "shop_b", True, "seller-b")
+
+    with cp.db() as conn:
+        row = conn.execute(
+            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=1"
+        ).fetchone()
+
+    assert row["shop_key"] == "shop_a"
+    assert row["seller"] == "seller-a"
