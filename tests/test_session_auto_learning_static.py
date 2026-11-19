@@ -740,3 +740,30 @@ def test_read_only_message_mirror_does_not_require_focus_proof_but_native_action
     assert "IsCurrentSessionForReadOnlyUi(qn)" in resolver
     assert "IsCurrentSessionForReadOnlyUi(current)" in resolver
 
+
+
+
+def test_learning_report_ui_is_bound_to_one_verified_shop():
+    ui = read("src/Bot/Options/ConversationSessionLearningUi.cs")
+    refresh = ui[
+        ui.index("private void RefreshReports()"):
+        ui.index("private void ShowSelected()")
+    ]
+    assert "ShopContextLocator.ResolveCurrentForUi()" in refresh
+    assert "GetReportsForShop(" in refresh
+    assert "shop.ShopKey, seller, 200" in refresh
+    assert "ConversationSessionLearningService.GetReports(200)" not in refresh
+    assert "_items.Clear();" in refresh
+    assert "已隐藏学习记录" in refresh
+
+
+def test_commerce_learning_bridge_resolves_report_by_shopkey_not_nickname():
+    bridge = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    process = bridge[
+        bridge.index("private static void ProcessReport("):
+        bridge.index("private static bool ApplyScenarioScope(")
+    ]
+    assert "ResolveRuntimeByShopKey(report.ShopKey)" in process
+    assert "shop.SellerNick" in process
+    assert "ResolveBySellerNick(report.Seller)" not in process
+    assert "Seller与ShopKey不匹配" in process

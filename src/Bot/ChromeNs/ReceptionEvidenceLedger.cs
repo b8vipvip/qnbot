@@ -48,7 +48,18 @@ namespace Bot.ChromeNs
 
         private static string PathForSeller(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            // An explicit operation scope is stronger than a nickname lookup. This
+            // keeps evidence writes working for duplicate seller nicknames while
+            // still rejecting a caller whose seller does not match the scope.
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+                shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            else if (!string.Equals(
+                (shop.SellerNick ?? string.Empty).Trim(),
+                (seller ?? string.Empty).Trim(),
+                StringComparison.Ordinal))
+                throw new InvalidOperationException("当前店铺作用域与证据卖家不匹配，拒绝跨店写入。");
+
             if (shop == null) throw new InvalidOperationException("未能确认店铺范围，拒绝证据写入");
             using (ShopSettingsScope.Enter(shop))
             {

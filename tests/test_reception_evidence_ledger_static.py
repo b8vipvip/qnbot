@@ -68,3 +68,16 @@ def test_reception_audit_ui_surfaces_ledger_errors_instead_of_showing_no_evidenc
     assert "if (t.IsFaulted)" in refresh
     assert '_status.Text = "读取失败";' in refresh
     assert "_output.Text = t.Exception.GetBaseException().Message;" in refresh
+
+
+
+def test_evidence_ledger_prefers_explicit_shop_scope_and_rejects_mismatched_seller():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    path = code[
+        code.index("private static string PathForSeller"):
+        code.index("/// <summary>", code.index("private static string PathForSeller"))
+    ]
+    assert "ShopSettingsScope.Current" in path
+    assert "ResolveRuntimeBySellerNick(seller)" in path
+    assert "shop.SellerNick" in path
+    assert "拒绝跨店写入" in path

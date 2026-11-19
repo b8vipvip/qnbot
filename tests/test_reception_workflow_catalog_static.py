@@ -47,3 +47,16 @@ def test_workflow_backup_is_durable_and_restore_skips_corrupt_newest_backup():
     assert "lastInvalidBackup" in restore
     assert "没有可恢复的有效流程草稿备份" in restore
     assert "if (File.Exists(path)) CreateBackup(path);" in restore
+
+
+
+def test_workflow_draft_path_prefers_explicit_shop_scope_and_rejects_mismatch():
+    catalog = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    path = catalog[
+        catalog.index("private static string PathForShop"):
+        catalog.index("private static JObject Default")
+    ]
+    assert "ShopSettingsScope.Current" in path
+    assert "ResolveRuntimeBySellerNick(seller)" in path
+    assert "shop.SellerNick" in path
+    assert "拒绝跨店访问" in path

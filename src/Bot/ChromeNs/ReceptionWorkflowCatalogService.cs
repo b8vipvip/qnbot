@@ -30,7 +30,17 @@ namespace Bot.ChromeNs
 
         private static string PathForShop(string seller)
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            // Prefer the immutable ShopContext supplied by the caller. Nickname-only
+            // resolution is retained solely for legacy callers without an explicit scope.
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+                shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            else if (!string.Equals(
+                (shop.SellerNick ?? string.Empty).Trim(),
+                (seller ?? string.Empty).Trim(),
+                StringComparison.Ordinal))
+                throw new InvalidOperationException("当前店铺作用域与流程卖家不匹配，拒绝跨店访问。");
+
             if (shop == null) throw new InvalidOperationException("店铺身份无法验证，不允许保存流程");
             using (ShopSettingsScope.Enter(shop))
             {
