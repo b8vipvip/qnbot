@@ -45,3 +45,24 @@ def test_followup_uses_original_image_identity_without_raw_chat_storage():
     assert '"image_followup", "linked_to_prior_image"' in ledger
     assert "ReceptionEvidenceLedger.RecordImageFollowUp(" in followup
     assert "recent.Item.MessageKey, question" in followup
+
+
+
+def test_evidence_audit_read_failure_is_not_misreported_as_an_empty_ledger():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    audit = code[
+        code.index("internal static string GetAuditJson"):
+        code.index("\n    }\n}")
+    ]
+    page = source("src/Bot/Knowledge/KnowledgeV2ReceptionAuditPage.cs")
+    refresh = page[
+        page.index("public void RefreshView()"):
+        page.index("private void ExportAudit()")
+    ]
+
+    assert "ReadAllTextShared(file, 2, 30, out error)" in audit
+    assert "throw new IOException(" in audit
+    assert "return string.IsNullOrWhiteSpace(raw) ? \"[]\" : raw;" in audit
+    assert "catch (Exception ex)" not in audit
+    assert "if (t.IsFaulted)" in refresh
+    assert '_status.Text = "读取失败";' in refresh

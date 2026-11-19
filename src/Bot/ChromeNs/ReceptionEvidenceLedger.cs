@@ -148,19 +148,12 @@ namespace Bot.ChromeNs
 
         internal static string GetAuditJson(string seller)
         {
-            try
-            {
-                var file = PathForSeller(seller);
-                string error;
-                var raw = CrossProcessAtomicStateFile.ReadAllTextShared(file, 2, 30, out error);
-                if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
-                return string.IsNullOrWhiteSpace(raw) ? "[]" : raw;
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("读取接待证据审计失败：" + ex.Message, 10);
-                return "[]";
-            }
+            var file = PathForSeller(seller);
+            string error;
+            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(file, 2, 30, out error);
+            if (!string.IsNullOrWhiteSpace(error))
+                throw new IOException("读取接待证据审计失败：" + error);
+            return string.IsNullOrWhiteSpace(raw) ? "[]" : raw;
         }
     }
 }
