@@ -79,7 +79,7 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     assert "MigratePendingConfirmationIntentsLocked" in ledger
     assert 'token["ConfirmationIntentAt"]' in ledger
 
-    enqueue = runtime.index("public static void Enqueue")
+    enqueue = runtime.index("public static bool Enqueue")
     has_intent = runtime.index("AutoDeliveryConfirmationLedger.HasIntent", enqueue)
     queue_lookup = runtime.index("var existing = _state.Pending.FirstOrDefault", has_intent)
     assert enqueue < has_intent < queue_lookup
@@ -163,7 +163,7 @@ def test_auto_delivery_sources_are_included_in_normal_and_wpf_temp_builds():
 
 def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pending_tasks():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
     loader = runtime[runtime.index("private static StateDocument LoadState"):runtime.index("private static bool SaveStateLocked")]
 
     assert "private static bool _stateLoadFailed;" in runtime
@@ -181,7 +181,7 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
 
 def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_load():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    runtime_init = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    runtime_init = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
     seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
     seed_init = seed[seed.index("public static void Initialize"):seed.index("public static void MarkConfiguration")]
 
@@ -227,6 +227,6 @@ def test_event_cursor_does_not_advance_when_queue_persistence_is_unavailable():
     assert "public static bool Enqueue(OrderSnapshot snapshot)" in enqueue
     assert "if (!SaveStateLocked()) return false;" in enqueue
     assert "return AutoDeliveryConfirmationLedger.IsOperational();" in enqueue
-    assert "if (!AutoDeliveryCoordinator.IsOperational())" in tick
+    assert "|| !AutoDeliveryCoordinator.IsOperational()" in tick
     assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
     assert tick.index("AutoDeliveryCoordinator.Enqueue(entry.Snapshot)") < tick.index("cursor.LastSeenAt = latest;")
