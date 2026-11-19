@@ -40,7 +40,7 @@ def test_manual_correction_does_not_bleed_into_other_messages():
     mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
     manager = read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")
     history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
-    assert "ResolveShopKeyForConversation(seller, buyer), seller, botEchoRecordId" in mirror
+    assert "ResolveShopKeyForConversation(seller, buyerIdentity), seller, botEchoRecordId" in mirror
     assert "GetManualSource(shopKey, seller, sourceRecordId)" in mirror
     assert "UpdateAnswerSource(\n                    shopKey, seller, sourceRecordId, edited)" in mirror
     assert "BotConversationHistoryStore.UpdateAnswerSource(" in manager

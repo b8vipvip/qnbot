@@ -46,7 +46,8 @@ namespace Bot.ChromeNs
         {
             foreach (var shop in SnapshotActiveShops())
             {
-                if (!Syncing.TryAdd(shop.ShopKey, 0)) continue;
+                if (!ShopTokenBindingService.ShouldAttemptSync(shop)
+                    || !Syncing.TryAdd(shop.ShopKey, 0)) continue;
                 var captured = shop;
                 Task.Run(async () =>
                 {
@@ -108,18 +109,25 @@ namespace Bot.ChromeNs
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                 using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
                 using (var http = new HttpClient(handler))
-                using (var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/bot-enabled-sync"))
                 {
                     http.Timeout = TimeSpan.FromSeconds(20);
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                    request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-enabled-sync/1.0");
-                    request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
-                    request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
-
-                    using (var response = await http.SendAsync(request))
+                    using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                        shop,
+                        token,
+                        async requestToken =>
+                        {
+                            using (var request = new HttpRequestMessage(
+                                HttpMethod.Post,
+                                serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/bot-enabled-sync"))
+                            {
+                                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-enabled-sync/1.0");
+                                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                                request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                                return await http.SendAsync(request).ConfigureAwait(false);
+                            }
+                        }))
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (response.StatusCode == HttpStatusCode.Conflict)
