@@ -152,7 +152,8 @@ namespace Bot.ChromeNs
                         {
                             conversationCtl.SetProcessing("正在流式生成答案：" + preview);
                         }
-                    });
+                    },
+                    burst.ShopKey);
                 // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
                 // after they begin. Race the whole answer task only against the canonical generation
                 // budget. Provider/control-plane timeouts remain upstream concerns and must not be
@@ -570,6 +571,114 @@ namespace Bot.ChromeNs
         }
     }
 
+    internal static class ShopScopedReplyCircuitBreaker
+    {
+        internal const int FailureThreshold = 3;
+        internal const int OpenSeconds = 30;
+
+        internal sealed class Permit
+        {
+            public string ShopKey;
+            public long Epoch;
+            public bool Allowed;
+            public bool HalfOpenProbe;
+        }
+
+        private sealed class State
+        {
+            public readonly object SyncRoot = new object();
+            public int ConsecutiveFailures;
+            public DateTime OpenUntilUtc = DateTime.MinValue;
+            public bool ProbeInFlight;
+            public long Epoch;
+        }
+
+        private static readonly ConcurrentDictionary<string, State> States =
+            new ConcurrentDictionary<string, State>(StringComparer.Ordinal);
+
+        public static Permit TryEnter(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                return new Permit { Allowed = true, ShopKey = string.Empty };
+
+            var state = States.GetOrAdd(shopKey, _ => new State());
+            lock (state.SyncRoot)
+            {
+                var now = DateTime.UtcNow;
+                if (state.OpenUntilUtc > now)
+                    return new Permit { Allowed = false, ShopKey = shopKey, Epoch = state.Epoch };
+                if (state.OpenUntilUtc != DateTime.MinValue)
+                {
+                    if (state.ProbeInFlight)
+                        return new Permit { Allowed = false, ShopKey = shopKey, Epoch = state.Epoch };
+                    state.ProbeInFlight = true;
+                    return new Permit
+                    {
+                        Allowed = true,
+                        ShopKey = shopKey,
+                        Epoch = state.Epoch,
+                        HalfOpenProbe = true
+                    };
+                }
+                return new Permit { Allowed = true, ShopKey = shopKey, Epoch = state.Epoch };
+            }
+        }
+
+        public static void RecordSuccess(Permit permit)
+        {
+            State state;
+            if (permit == null || !permit.Allowed || string.IsNullOrWhiteSpace(permit.ShopKey)
+                || !States.TryGetValue(permit.ShopKey, out state)) return;
+            lock (state.SyncRoot)
+            {
+                if (permit.Epoch != state.Epoch) return;
+                state.ConsecutiveFailures = 0;
+                if (permit.HalfOpenProbe)
+                {
+                    state.OpenUntilUtc = DateTime.MinValue;
+                    state.ProbeInFlight = false;
+                    state.Epoch++;
+                    Log.Info("Smart Reply店铺AI熔断探测成功，已关闭熔断: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", permit.ShopKey));
+                }
+            }
+        }
+
+        public static void RecordFailure(Permit permit)
+        {
+            State state;
+            if (permit == null || !permit.Allowed || string.IsNullOrWhiteSpace(permit.ShopKey)
+                || !States.TryGetValue(permit.ShopKey, out state)) return;
+            lock (state.SyncRoot)
+            {
+                if (permit.Epoch != state.Epoch || state.OpenUntilUtc > DateTime.UtcNow) return;
+                state.ConsecutiveFailures++;
+                if (permit.HalfOpenProbe || state.ConsecutiveFailures >= FailureThreshold)
+                {
+                    state.ConsecutiveFailures = FailureThreshold;
+                    state.OpenUntilUtc = DateTime.UtcNow.AddSeconds(OpenSeconds);
+                    state.ProbeInFlight = false;
+                    state.Epoch++;
+                    Log.Info("Smart Reply店铺AI连续失败，已开启安全熔断: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", permit.ShopKey)
+                        + ", cooldownSeconds=" + OpenSeconds);
+                }
+            }
+        }
+
+        public static void ReleaseProbe(Permit permit)
+        {
+            State state;
+            if (permit == null || !permit.HalfOpenProbe || string.IsNullOrWhiteSpace(permit.ShopKey)
+                || !States.TryGetValue(permit.ShopKey, out state)) return;
+            lock (state.SyncRoot)
+            {
+                if (permit.Epoch == state.Epoch) state.ProbeInFlight = false;
+            }
+        }
+    }
+
     internal static class ReplyTranscriptSanitizer
     {
         internal const string PromptGuard =
@@ -628,7 +737,8 @@ namespace Bot.ChromeNs
             string buyer,
             string question,
             CancellationToken token,
-            Action<string> partial)
+            Action<string> partial,
+            string shopKey = null)
         {
             token.ThrowIfCancellationRequested();
 
@@ -682,8 +792,31 @@ namespace Bot.ChromeNs
                         + "\n触发原因：" + manualDecision.Reason
                         + "\n买家问题：" + question)
                 };
-                var handoff = await StreamMessagesAsync(handoffMessages, token, partial);
-                if (!string.IsNullOrWhiteSpace(handoff))
+                var handoffPermit = ShopScopedReplyCircuitBreaker.TryEnter(shopKey);
+                if (!handoffPermit.Allowed)
+                    return BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
+
+                string handoff = string.Empty;
+                try
+                {
+                    handoff = await StreamMessagesAsync(handoffMessages, token, partial);
+                    if (string.IsNullOrWhiteSpace(handoff) || handoff.StartsWith("错误：", StringComparison.Ordinal))
+                        ShopScopedReplyCircuitBreaker.RecordFailure(handoffPermit);
+                    else
+                        ShopScopedReplyCircuitBreaker.RecordSuccess(handoffPermit);
+                }
+                catch (OperationCanceledException)
+                {
+                    ShopScopedReplyCircuitBreaker.ReleaseProbe(handoffPermit);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    ShopScopedReplyCircuitBreaker.RecordFailure(handoffPermit);
+                    Log.Info("下班转人工AI生成失败，使用固定兜底话术：" + ex.GetType().Name);
+                }
+                if (!string.IsNullOrWhiteSpace(handoff)
+                    && !handoff.StartsWith("错误：", StringComparison.Ordinal))
                 {
                     handoff = BotFeatureStore.ApplyOutputPolicy(handoff);
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, handoff, "转人工回复");
@@ -703,6 +836,9 @@ namespace Bot.ChromeNs
                 && best.Entry != null)
             {
                 var directAnswer = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                if (string.IsNullOrWhiteSpace(directAnswer)
+                    || ConversationContextStore.IsWithdrawnAnswer(seller, buyer, directAnswer))
+                    return "错误：本地知识回复为空或已被客服撤回，已阻止再次发送。";
                 KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答");
                 MessageProcessingTraceService.RecordKnowledgeDecision(
                     seller,
@@ -739,10 +875,14 @@ namespace Bot.ChromeNs
                     && best.Entry != null)
                 {
                     var fallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "智能路由-离线知识兜底");
-                    MessageProcessingTraceService.RecordKnowledgeDecision(
-                        seller, buyer, "AI不可用，使用安全离线知识兜底", "knowledgeId=" + best.Entry.Id, 0);
-                    return fallback;
+                    if (!string.IsNullOrWhiteSpace(fallback)
+                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, fallback))
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "智能路由-离线知识兜底");
+                        MessageProcessingTraceService.RecordKnowledgeDecision(
+                            seller, buyer, "AI不可用，使用安全离线知识兜底", "knowledgeId=" + best.Entry.Id, 0);
+                        return fallback;
+                    }
                 }
                 return "错误：没有可用的AI接口；当前问题需要结合上下文，已阻止直接套用可能不合适的本地固定答案。";
             }
@@ -803,25 +943,65 @@ namespace Bot.ChromeNs
                 + ", candidates=" + (plan.Candidates == null ? 0 : plan.Candidates.Count)
                 + ", reason=" + plan.Reason);
 
-            var answer = await StreamMessagesAsync(messages, token, partial);
-            if (string.IsNullOrWhiteSpace(answer))
+            var permit = ShopScopedReplyCircuitBreaker.TryEnter(shopKey);
+            if (!permit.Allowed)
             {
                 if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
-                    && best != null
-                    && best.Entry != null)
+                    && best != null && best.Entry != null)
                 {
                     var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
-                    KnowledgeLearningService.RegisterAnswerSource(
-                        seller, buyer, question, safeFallback, "智能路由-AI失败离线安全兜底");
-                    MessageProcessingTraceService.RecordKnowledgeDecision(
-                        seller,
-                        buyer,
-                        "AI接口失败，使用安全离线知识兜底",
-                        "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route,
-                        0);
-                    Log.Info("Smart Reply AI失败后使用安全离线知识兜底: buyer=" + buyer
-                        + ", knowledgeId=" + best.Entry.Id);
-                    return safeFallback;
+                    if (!string.IsNullOrWhiteSpace(safeFallback)
+                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback))
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(
+                            seller, buyer, question, safeFallback, "智能路由-AI熔断离线安全兜底");
+                        MessageProcessingTraceService.RecordKnowledgeDecision(
+                            seller, buyer, "AI上游熔断，使用安全离线知识兜底",
+                            "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route, 0);
+                        return safeFallback;
+                    }
+                }
+                return "错误：当前店铺AI上游处于熔断保护期，且没有可用的安全离线知识，已阻止自动发送并建议转人工。";
+            }
+
+            string answer = string.Empty;
+            try
+            {
+                answer = await StreamMessagesAsync(messages, token, partial);
+                if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
+                    ShopScopedReplyCircuitBreaker.RecordFailure(permit);
+                else
+                    ShopScopedReplyCircuitBreaker.RecordSuccess(permit);
+            }
+            catch (OperationCanceledException)
+            {
+                ShopScopedReplyCircuitBreaker.ReleaseProbe(permit);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                ShopScopedReplyCircuitBreaker.RecordFailure(permit);
+                Log.Info("Smart Reply AI生成异常，进入安全兜底：" + ex.GetType().Name);
+            }
+
+            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
+                    && best != null && best.Entry != null)
+                {
+                    var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                    if (!string.IsNullOrWhiteSpace(safeFallback)
+                        && !ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback))
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(
+                            seller, buyer, question, safeFallback, "智能路由-AI失败离线安全兜底");
+                        MessageProcessingTraceService.RecordKnowledgeDecision(
+                            seller, buyer, "AI接口失败，使用安全离线知识兜底",
+                            "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route, 0);
+                        Log.Info("Smart Reply AI失败后使用安全离线知识兜底: buyer=" + buyer
+                            + ", knowledgeId=" + best.Entry.Id);
+                        return safeFallback;
+                    }
                 }
                 return "错误：所有AI接口均未返回有效答案。";
             }
@@ -845,6 +1025,19 @@ namespace Bot.ChromeNs
             return answer;
         }
 
+        private static bool IsRetryableStreamError(string error)
+        {
+            error = (error ?? string.Empty).ToLowerInvariant();
+            return error.Contains("http 408") || error.Contains("http 425")
+                || error.Contains("http 429") || error.Contains("http 500")
+                || error.Contains("http 502") || error.Contains("http 503")
+                || error.Contains("http 504") || error.Contains("timeout")
+                || error.Contains("timed out") || error.Contains("network")
+                || error.Contains("connection") || error.Contains("temporarily")
+                || error.Contains("socket") || error.Contains("远程主机")
+                || error.Contains("网络") || error.Contains("连接");
+        }
+
         private static async Task<string> StreamMessagesAsync(
             JArray messages,
             CancellationToken token,
@@ -852,51 +1045,78 @@ namespace Bot.ChromeNs
         {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             var errors = new List<string>();
-            foreach (var endpoint in endpoints)
+            foreach (var endpoint in endpoints ?? new List<AiEndpointConfig>())
             {
+                if (endpoint == null) continue;
                 token.ThrowIfCancellationRequested();
-                var result = await StreamOneAsync(endpoint, messages, token, partial);
-                BotRuntimeStats.RecordAiCall(
-                    endpoint,
-                    result.InputTokens,
-                    result.OutputTokens,
-                    result.Success,
-                    result.LatencyMs,
-                    result.Success ? "流式成功" : result.Error);
-                endpoint.LastLatencyMs = result.LatencyMs;
-                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
-                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
-                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
-                    errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
-                    continue;
+                    var result = await StreamOneAsync(endpoint, messages, token, partial);
+                    BotRuntimeStats.RecordAiCall(
+                        endpoint,
+                        result.InputTokens,
+                        result.OutputTokens,
+                        result.Success,
+                        result.LatencyMs,
+                        result.Success ? "流式成功" : result.Error);
+                    endpoint.LastLatencyMs = result.LatencyMs;
+                    endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                    if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                    {
+                        var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                        if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                        errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                        break;
+                    }
+
+                    var error = result.Error ?? "未知流式错误";
+                    if (attempt == 0 && IsRetryableStreamError(error))
+                    {
+                        Log.Info("Smart Reply上游瞬时错误，进行一次有界重试: endpoint="
+                            + (endpoint.Name ?? "接口") + ", error=" + error);
+                        await Task.Delay(TimeSpan.FromMilliseconds(450), token).ConfigureAwait(false);
+                        continue;
+                    }
+                    errors.Add((endpoint.Name ?? "接口") + "：" + error);
+                    break;
                 }
-                errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
             }
 
             token.ThrowIfCancellationRequested();
             try
             {
-                // The linked generation token remains the real deadline. Passing the same total
-                // budget here prevents CallStructuredChat from creating a shorter second window;
-                // whatever time was already spent streaming is automatically subtracted by token.
-                var fallback = await Task.Run(
-                    () => MyOpenAI.CallStructuredChat(
-                        messages,
-                        220,
-                        0.15,
-                        BuyerStreamingReplyPipeline.TotalAiBudgetSeconds,
-                        token,
-                        true),
-                    token);
-                if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
+                StructuredChatResult fallback = null;
+                for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    var sanitized = ReplyTranscriptSanitizer.Sanitize(fallback.Answer);
-                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
-                    errors.Add("非流式兜底仅返回了内部时间线标签，已丢弃");
+                    // The linked generation token remains the real deadline. Passing the same total
+                    // budget here prevents CallStructuredChat from creating a shorter second window;
+                    // whatever time was already spent streaming is automatically subtracted by token.
+                    fallback = await Task.Run(
+                        () => MyOpenAI.CallStructuredChat(
+                            messages,
+                            220,
+                            0.15,
+                            BuyerStreamingReplyPipeline.TotalAiBudgetSeconds,
+                            token,
+                            true),
+                        token);
+                    if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
+                    {
+                        var sanitized = ReplyTranscriptSanitizer.Sanitize(fallback.Answer);
+                        if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                        errors.Add("非流式兜底仅返回了内部时间线标签，已丢弃");
+                        break;
+                    }
+                    var fallbackError = fallback == null ? "非流式兜底无结果" : fallback.Error;
+                    if (attempt == 0 && IsRetryableStreamError(fallbackError))
+                    {
+                        errors.Add("非流式兜底：" + fallbackError);
+                        await Task.Delay(TimeSpan.FromMilliseconds(450), token).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (!string.IsNullOrWhiteSpace(fallbackError)) errors.Add(fallbackError);
+                    break;
                 }
-                if (fallback != null && !string.IsNullOrWhiteSpace(fallback.Error)) errors.Add(fallback.Error);
             }
             catch (OperationCanceledException)
             {

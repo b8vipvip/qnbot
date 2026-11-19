@@ -44,6 +44,11 @@ def test_streaming_pipeline_hard_cancels_only_invalid_work_and_allows_relevant_p
     assert "AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20" in agent
     assert "+ BuyerSessionAgent.AbsoluteGenerationAgeSeconds" in bridge
     assert "await lease.ConfirmStableAsync(180)" in pipeline; assert "await qn.SendTextWithRetryAsync" in pipeline; assert "正在流式生成答案" in pipeline
-    assert "BuyerStreamingReplyPipeline.TotalAiBudgetSeconds" in pipeline; assert "token,\n                        true" in pipeline
+    assert "BuyerStreamingReplyPipeline.TotalAiBudgetSeconds" in pipeline
+    fallback_start = pipeline.index("MyOpenAI.CallStructuredChat(")
+    fallback_end = pipeline.index("),", fallback_start)
+    fallback_call = pipeline[fallback_start:fallback_end]
+    assert "token" in fallback_call
+    assert "true" in fallback_call
     assert "BuyerStreamingReplyPipeline.Initialize();" in app; assert "ChromeNs\\BuyerStreamingReplyPipeline.cs" in targets
     assert 'StreamAbortMarker = "[[QN_STREAM_ABORTED]]"' in formatter; assert "value.IndexOf(StreamAbortMarker" in formatter; assert "已阻止发送半截答案" in formatter; assert "return \"错误：AI流式输出中断" in formatter
