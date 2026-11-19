@@ -674,7 +674,9 @@ def test_pending_learning_resume_covers_full_retention_and_audits_expired_rows()
         service.index("private static void ResumePending"):
         service.index("private static void CleanupReports")
     ]
-    assert '"where CompletedAtTicks = 0 order by UpdatedAtTicks desc"' in resume
+    assert '"order by UpdatedAtTicks desc"' in resume
+    assert "RestoreKnowledgeCorpusCircuitBreakers(allReports);" in resume
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in resume
     assert "LastBuyerAtTicks >= ?" not in resume
     assert "ReportRetentionDays" in resume
     assert '"pending_session_exceeded_retention"' in resume
