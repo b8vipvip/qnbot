@@ -529,8 +529,8 @@ namespace Bot.ChromeNs
             foreach (var pair in RecentInboundFingerprints)
             {
                 if (now - pair.Value <= InboundFingerprintRetention) continue;
-                DateTime ignored;
-                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(pair);
             }
             TrimOldestRecentFingerprints();
 
@@ -539,8 +539,8 @@ namespace Bot.ChromeNs
                 var binding = pair.Value;
                 if (binding == null || now - binding.LastSeenAt > SessionSellerRetention)
                 {
-                    SessionSellerBinding ignored;
-                    SessionSellers.TryRemove(pair.Key, out ignored);
+                    ((ICollection<KeyValuePair<string, SessionSellerBinding>>)SessionSellers)
+                        .Remove(pair);
                 }
             }
         }
@@ -555,8 +555,8 @@ namespace Bot.ChromeNs
             var removeCount = count - targetCount;
             foreach (var pair in RecentInboundFingerprints.OrderBy(x => x.Value).Take(removeCount))
             {
-                DateTime ignored;
-                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(pair);
             }
         }
 

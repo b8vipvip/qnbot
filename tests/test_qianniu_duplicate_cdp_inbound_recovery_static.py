@@ -522,3 +522,24 @@ def test_dropped_pending_events_release_only_their_own_fingerprint_timestamp():
     assert "ReleaseAcceptedFingerprint(item);" in enqueue
     assert "ReleaseAcceptedFingerprint(dropped);" in enqueue
     assert "ReleaseAcceptedFingerprint(item);" in drain
+
+
+
+def test_transient_cache_cleanup_removes_only_the_exact_stale_snapshot():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    cleanup = bridge[
+        bridge.index("private static void MaybeCleanupTransientState"):
+        bridge.index("private static void EnqueuePendingBounded")
+    ]
+    trim = bridge[
+        bridge.index("private static void TrimOldestRecentFingerprints"):
+        bridge.index("private static void EnqueuePendingBounded")
+    ]
+
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in cleanup
+    assert ".Remove(pair);" in cleanup
+    assert "((ICollection<KeyValuePair<string, SessionSellerBinding>>)SessionSellers)" in cleanup
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in trim
+    assert "RecentInboundFingerprints.TryRemove(pair.Key" not in cleanup
+    assert "SessionSellers.TryRemove(pair.Key" not in cleanup
+    assert "RecentInboundFingerprints.TryRemove(pair.Key" not in trim
