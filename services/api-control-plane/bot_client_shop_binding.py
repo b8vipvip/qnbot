@@ -32,7 +32,7 @@ def install(control_plane: Any) -> None:
             shop_key = (request.headers.get("x-shop-key") or "").strip()
             token = core._bearer(request)
             if shop_key and token:
-                client = core._client_by_token(token, capture_cipher=True)
+                client = core._client_by_token(token, capture_cipher=True, request_path=path)
                 if client:
                     try:
                         ensure_binding(int(client["id"]), shop_key, False, "")
@@ -168,27 +168,51 @@ def _validate_runtime_seller_identity(
     )
 
 
+TOKEN_SCOPED_STATE_TABLES = (
+    "bot_messages",
+    "bot_commands",
+    "bot_client_state",
+    "bot_conversation_reads",
+    "bot_knowledge_state",
+    "bot_store_rule_state",
+    "bot_message_processing_traces",
+    "bot_client_bot_enabled",
+    "bot_client_data_backups",
+)
+
+
 def _delete_if_table_exists(conn, table: str, client_id: int) -> None:
-    try:
-        conn.execute(f"DELETE FROM {table} WHERE client_id=?", (client_id,))
-    except Exception:
-        pass
+    # This helper is intentionally limited to the fixed table allowlist above.
+    # Missing tables are valid during rolling schema upgrades; failed deletes or
+    # incompatible schemas are not. They must abort the enclosing rebind transaction.
+    if table not in TOKEN_SCOPED_STATE_TABLES:
+        raise ValueError(f"Refusing to clear an unapproved token-scoped table: {table}")
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if exists is None:
+        return
+
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if "client_id" not in columns:
+        raise RuntimeError(
+            f"Refusing shop rebind: token-scoped table {table} has no client_id column"
+        )
+
+    # Do not swallow OperationalError/IntegrityError here. The control-plane db()
+    # context manager rolls the whole binding transaction back when cleanup fails.
+    conn.execute(f"DELETE FROM {table} WHERE client_id=?", (client_id,))
 
 
 def _reset_old_shop_server_state(conn, client_id: int) -> None:
     # A force rebind/correction must never expose the old shop's cloud/runtime state to the
-    # corrected shop. These tables are all client-token scoped in the historical schema.
-    for table in (
-        "bot_messages",
-        "bot_commands",
-        "bot_client_state",
-        "bot_conversation_reads",
-        "bot_knowledge_state",
-        "bot_store_rule_state",
-        "bot_message_processing_traces",
-        "bot_client_bot_enabled",
-        "bot_client_data_backups",
-    ):
+    # corrected shop. Missing legacy tables are tolerated, but every existing table must
+    # be verified and cleared before the new ShopKey binding can be committed.
+    for table in TOKEN_SCOPED_STATE_TABLES:
         _delete_if_table_exists(conn, table, client_id)
 
 
