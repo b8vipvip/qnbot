@@ -302,3 +302,24 @@ def test_expired_shop_detection_cache_entries_are_pruned_without_racing_refreshe
     assert "exactEntries.Remove(pair)" in cleanup
     assert "CleanupExpiredShopCache();" in applies
     assert applies.index("CleanupExpiredShopCache();") < applies.index("Shops.TryGetValue(cacheKey")
+
+
+def test_cross_process_shop_profile_changes_invalidate_cached_detection_immediately():
+    policy = src(POLICY)
+    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    applies = policy[
+        policy.index("public static bool Applies"):
+        policy.index("internal static bool RequiresManualKnowledgeReview")
+    ]
+    revision = config[
+        config.index("internal static string GetProfileRevision"):
+        config.index("internal static KugouReceptionConfig GetConfig(ShopContext shop)")
+    ]
+
+    assert "KugouReceptionConfigService.GetProfileRevision(shop)" in applies
+    assert "cached.ProfileRevision, profileRevision" in applies
+    assert "ProfileRevision = profileRevision" in applies
+    assert "info.LastWriteTimeUtc.Ticks.ToString()" in revision
+    assert "info.Length.ToString()" in revision
+    assert 'return "missing";' in revision
+    assert "return string.Empty;" in revision
