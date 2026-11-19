@@ -575,3 +575,51 @@ def test_session_summary_preserves_retryable_upstream_error_for_shop_circuit_bre
     assert "RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message" in finalize
     assert "IsRetryableKnowledgeCorpusError(ex.Message)" in finalize
     assert "ai_upstream_circuit_open_until:" in finalize
+
+
+
+def test_checkpoint_resume_revalidates_candidate_batch_and_live_message_evidence():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    restore = service[
+        service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"):
+        service.index("if (!canResume)", service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"))
+    ]
+
+    assert "batches[batchIndex - 1].Any" in restore
+    assert "result.CompletedBatchIndices.Contains(batchIndex - 1)" in restore
+    assert "candidate.EvidenceMessageIds.All(humanMessageIds.Contains)" in restore
+    assert "candidate.EvidenceMessageIds.All(allMessageIds.Contains)" in restore
+    assert 'candidate.EvidenceType, "conversation_synthesis"' in restore
+    assert 'candidate.Action != "update"' in restore
+    assert "candidate.SourceFingerprint, result.SourceFingerprint" in restore
+
+
+def test_ai_learning_confidence_must_be_finite_and_inside_zero_to_one():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    parser = service[
+        service.index("private static double ParseConfidence"):
+        service.index("private static List<Suggestion> ParseSuggestions")
+    ]
+    batch = service[
+        service.index("private static bool TryParseKnowledgeCorpusBatch"):
+        service.index("private static bool IsRetryableKnowledgeCorpusError")
+    ]
+    suggestions = service[
+        service.index("private static List<Suggestion> ParseSuggestions"):
+        service.index("private static IEnumerable<Suggestion> DeduplicateSuggestions")
+    ]
+    can_apply = service[
+        service.index("private static bool CanApply"):
+        service.index("private static bool ContainsHighRisk")
+    ]
+
+    assert "NumberStyles.Float" in parser
+    assert "CultureInfo.InvariantCulture" in parser
+    assert "double.IsNaN(confidence)" in parser
+    assert "double.IsInfinity(confidence)" in parser
+    assert "confidence < 0" in parser
+    assert "confidence > 1" in parser
+    assert 'ParseConfidence(token["confidence"])' in batch
+    assert 'ParseConfidence(item["confidence"])' in suggestions
+    assert "double.IsNaN(suggestion.Confidence)" in can_apply
+    assert "suggestion.Confidence > 1.0" in can_apply

@@ -945,14 +945,37 @@ namespace Bot.ChromeNs
                         StringComparer.Ordinal);
                     foreach (var candidate in restoredCandidates)
                     {
-                        if (string.IsNullOrWhiteSpace(candidate.KnowledgeId)
+                        var batchIndex = candidate == null ? 0 : candidate.CorpusBatchIndex;
+                        var belongsToBatch = candidate != null
+                            && batchIndex >= 1 && batchIndex <= batches.Count
+                            && batches[batchIndex - 1].Any(x => x != null
+                                && string.Equals(x.Id, candidate.KnowledgeId, StringComparison.Ordinal));
+                        var evidenceIds = candidate == null ? null : candidate.EvidenceMessageIds;
+                        var evidenceMatchesCurrentTranscript = evidenceIds != null && evidenceIds.Count > 0;
+                        if (evidenceMatchesCurrentTranscript && IsHumanEvidence(candidate.EvidenceType))
+                            evidenceMatchesCurrentTranscript = evidenceIds.All(humanMessageIds.Contains);
+                        else if (evidenceMatchesCurrentTranscript
+                            && string.Equals(candidate.EvidenceType, "conversation_synthesis", StringComparison.OrdinalIgnoreCase))
+                            evidenceMatchesCurrentTranscript = localFirst
+                                && candidate.Confidence >= 0.92
+                                && evidenceIds.All(allMessageIds.Contains);
+                        else
+                            evidenceMatchesCurrentTranscript = false;
+
+                        if (candidate == null
+                            || candidate.Action != "update"
+                            || string.IsNullOrWhiteSpace(candidate.KnowledgeId)
                             || !knownIds.Contains(candidate.KnowledgeId)
+                            || !belongsToBatch
                             || !string.Equals(candidate.SourceFingerprint, result.SourceFingerprint, StringComparison.Ordinal)
-                            || candidate.CorpusBatchIndex < 1
-                            || candidate.CorpusBatchIndex > batches.Count
-                            || !result.CompletedBatchIndices.Contains(candidate.CorpusBatchIndex - 1)
-                            || candidate.EvidenceMessageIds == null
-                            || candidate.EvidenceMessageIds.Count == 0)
+                            || !result.CompletedBatchIndices.Contains(batchIndex - 1)
+                            || double.IsNaN(candidate.Confidence)
+                            || double.IsInfinity(candidate.Confidence)
+                            || candidate.Confidence < 0.86
+                            || candidate.Confidence > 1.0
+                            || string.IsNullOrWhiteSpace(candidate.Question)
+                            || string.IsNullOrWhiteSpace(candidate.Answer)
+                            || !evidenceMatchesCurrentTranscript)
                         {
                             canResume = false;
                             break;
@@ -1519,10 +1542,7 @@ namespace Bot.ChromeNs
                 if (action != "update") continue;
 
                 var proposed = StripAi(Redact(Clean(Convert.ToString(token["proposed_answer"]), 1200)));
-                double confidence;
-                if (!double.TryParse(Convert.ToString(token["confidence"]), out confidence))
-                    confidence = 0;
-                confidence = Math.Max(0, Math.Min(1, confidence));
+                var confidence = ParseConfidence(token["confidence"]);
                 var evidenceType = Clean(Convert.ToString(token["evidence_type"]), 80).ToLowerInvariant();
                 var idsToken = token["evidence_message_ids"] as JArray;
                 var evidenceIds = idsToken == null ? new List<string>()
@@ -1871,14 +1891,26 @@ namespace Bot.ChromeNs
                 || value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static double ParseConfidence(JToken token)
+        {
+            double confidence;
+            var raw = Convert.ToString(token, CultureInfo.InvariantCulture);
+            if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out confidence)
+                || double.IsNaN(confidence)
+                || double.IsInfinity(confidence)
+                || confidence < 0
+                || confidence > 1)
+                return 0;
+            return confidence;
+        }
+
         private static List<Suggestion> ParseSuggestions(JArray array)
         {
             var result = new List<Suggestion>();
             if (array == null) return result;
             foreach (var item in array.OfType<JObject>())
             {
-                double confidence;
-                if (!double.TryParse(Convert.ToString(item["confidence"]), out confidence)) confidence = 0;
+                var confidence = ParseConfidence(item["confidence"]);
                 var keywordToken = item["keywords"];
                 var keywords = keywordToken is JArray
                     ? string.Join(",", ((JArray)keywordToken).Select(x => Clean(x.ToString(), 80)).Where(x => x.Length > 0))
@@ -1894,7 +1926,7 @@ namespace Bot.ChromeNs
                     EvidenceType = Clean(Convert.ToString(item["evidence_type"]), 80).ToLowerInvariant(),
                     Evidence = Redact(Clean(Convert.ToString(item["evidence"]), 1200)),
                     Reason = Redact(Clean(Convert.ToString(item["reason"]), 1200)),
-                    Confidence = Math.Max(0, Math.Min(1, confidence)),
+                    Confidence = confidence,
                     Applied = item.Value<bool?>("applied") == true,
                     ApplyMessage = Clean(Convert.ToString(item["apply_message"]), 500),
                     KnowledgeId = Clean(Convert.ToString(item["knowledge_id"]), 256),
@@ -1941,9 +1973,12 @@ namespace Bot.ChromeNs
                 suggestion.ApplyMessage = "AI建议跳过";
                 return false;
             }
-            if (suggestion.Confidence < 0.86)
+            if (double.IsNaN(suggestion.Confidence)
+                || double.IsInfinity(suggestion.Confidence)
+                || suggestion.Confidence < 0.86
+                || suggestion.Confidence > 1.0)
             {
-                suggestion.ApplyMessage = "置信度低于0.86";
+                suggestion.ApplyMessage = "置信度必须是0到1之间的有效数值，且不低于0.86";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(suggestion.Question) || string.IsNullOrWhiteSpace(suggestion.Answer))
