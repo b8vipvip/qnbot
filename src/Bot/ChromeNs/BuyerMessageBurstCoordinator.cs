@@ -247,12 +247,33 @@ namespace Bot.ChromeNs
         private const int OffHoursRepeatMinutes = 2;
         private static readonly ConcurrentDictionary<string, DateTime> OffHoursDeliveredUntil =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static long _lastOffHoursCleanupUtcTicks;
+
+        private static void CleanupExpiredOffHoursDeliveredUntil()
+        {
+            // Sweep at most once per minute; the first message after an idle period
+            // also removes expired buyer keys without relying on a high message rate.
+            var nowUtcTicks = DateTime.UtcNow.Ticks;
+            var previousTicks = Interlocked.Read(ref _lastOffHoursCleanupUtcTicks);
+            if (nowUtcTicks - previousTicks < TimeSpan.FromMinutes(1).Ticks
+                || Interlocked.CompareExchange(
+                    ref _lastOffHoursCleanupUtcTicks, nowUtcTicks, previousTicks) != previousTicks)
+                return;
+
+            var now = DateTime.Now;
+            var exactEntries = (ICollection<KeyValuePair<string, DateTime>>)OffHoursDeliveredUntil;
+            foreach (var pair in OffHoursDeliveredUntil)
+            {
+                if (pair.Value <= now) exactEntries.Remove(pair);
+            }
+        }
 
         public static async Task<CanonicalPreMergeOutcome> HandleAsync(
             BuyerMessageBurstItem item,
             bool allowLocalShortReply,
             CancellationToken cancellationToken)
         {
+            CleanupExpiredOffHoursDeliveredUntil();
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
             if (item == null
                 || string.IsNullOrWhiteSpace(item.SellerNick)
