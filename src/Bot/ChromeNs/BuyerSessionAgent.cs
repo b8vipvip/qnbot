@@ -134,15 +134,23 @@ namespace Bot.ChromeNs
         {
             shopKey = ResolveShopKey(sellerNick, shopKey);
             var key = BuildKey(sellerNick, buyerNick, shopKey);
-            var state = GetOrCreateState(key, sellerNick, buyerNick);
 
-            long generation;
-            bool hadParallelGeneration;
-            CancellationToken token;
-            DateTime acceptedAtUtc;
-            lock (state.SyncRoot)
+            long generation = 0;
+            bool hadParallelGeneration = false;
+            CancellationToken token = CancellationToken.None;
+            DateTime acceptedAtUtc = default(DateTime);
+            while (true)
             {
-                state.ShopKey = shopKey;
+                var state = GetOrCreateState(key, sellerNick, buyerNick);
+                lock (state.SyncRoot)
+                {
+                    SessionState current;
+                    // Prune may have removed this state after GetOrCreateState returned it.
+                    // Never create a generation on an orphaned state object.
+                    if (!Sessions.TryGetValue(key, out current) || !ReferenceEquals(current, state))
+                        continue;
+
+                    state.ShopKey = shopKey;
                 state.SellerNick = Normalize(sellerNick);
                 state.BuyerNick = Normalize(buyerNick);
                 state.LastObservedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
@@ -195,6 +203,8 @@ namespace Bot.ChromeNs
                     generation,
                     false,
                     "actionable_buyer_message");
+                }
+                break;
             }
 
             BuyerSessionAgentRuntimeBridge.RegisterAcceptedGeneration(
@@ -239,16 +249,22 @@ namespace Bot.ChromeNs
         {
             shopKey = ResolveShopKey(sellerNick, shopKey);
             var key = BuildKey(sellerNick, buyerNick, shopKey);
-            var state = GetOrCreateState(key, sellerNick, buyerNick);
             CancellationTokenSource cancel = null;
             var result = new BuyerSessionEventResult();
             observedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
             sourceTimestamp = sourceTimestamp == default(DateTime) ? observedAt : sourceTimestamp;
             messageKey = Normalize(messageKey);
 
-            lock (state.SyncRoot)
+            while (true)
             {
-                state.ShopKey = shopKey;
+                var state = GetOrCreateState(key, sellerNick, buyerNick);
+                lock (state.SyncRoot)
+                {
+                    SessionState current;
+                    if (!Sessions.TryGetValue(key, out current) || !ReferenceEquals(current, state))
+                        continue;
+
+                    state.ShopKey = shopKey;
                 state.SellerNick = Normalize(sellerNick);
                 state.BuyerNick = Normalize(buyerNick);
                 state.LastObservedAt = observedAt;
@@ -303,6 +319,8 @@ namespace Bot.ChromeNs
                     SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
                     result.CancelledCurrentGeneration = true;
                 }
+                }
+                break;
             }
 
             if (cancel != null)
@@ -567,18 +585,21 @@ namespace Bot.ChromeNs
             var cutoff = DateTime.Now - maxIdle;
             foreach (var pair in Sessions.ToArray())
             {
-                var remove = false;
+                SessionState removed = null;
                 lock (pair.Value.SyncRoot)
                 {
-                    remove = pair.Value.LastObservedAt != default(DateTime)
+                    var remove = pair.Value.LastObservedAt != default(DateTime)
                         && pair.Value.LastObservedAt < cutoff
                         && pair.Value.ActiveGenerations.Count == 0
                         && (pair.Value.State == BuyerSessionAgentState.Completed
                             || pair.Value.State == BuyerSessionAgentState.Cancelled
                             || pair.Value.State == BuyerSessionAgentState.Failed);
+                    if (remove
+                        && ((ICollection<KeyValuePair<string, SessionState>>)Sessions).Remove(pair))
+                        removed = pair.Value;
                 }
-                SessionState removed;
-                if (remove && Sessions.TryRemove(pair.Key, out removed))
+
+                if (removed != null)
                 {
                     lock (removed.SyncRoot)
                     {

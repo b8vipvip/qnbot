@@ -290,3 +290,28 @@ def test_delivery_watchdog_and_progress_fallback_never_merge_ambiguous_shops():
     assert "current.SellerNick" in progress
     assert '"unresolved:" + Guid.NewGuid().ToString("N")' in progress
     assert "DeliveryKey(seller, buyer, answer, shopKey)" in progress
+
+
+
+def test_buyer_session_agent_prune_cannot_remove_a_refreshed_state_or_orphan_new_generation():
+    agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    observe = agent[
+        agent.index("public BuyerSessionAgentObservation ObserveBuyerMessage"):
+        agent.index("public BuyerSessionEventResult RecordEvent")
+    ]
+    record = agent[
+        agent.index("public BuyerSessionEventResult RecordEvent"):
+        agent.index("public bool IsCurrent")
+    ]
+    prune = agent[
+        agent.index("public void Prune"):
+        agent.index("private static SessionState GetOrCreateState")
+    ]
+
+    assert "Sessions.TryGetValue(key, out current)" in observe
+    assert "ReferenceEquals(current, state)" in observe
+    assert "Sessions.TryGetValue(key, out current)" in record
+    assert "ReferenceEquals(current, state)" in record
+    assert "lock (pair.Value.SyncRoot)" in prune
+    assert "((ICollection<KeyValuePair<string, SessionState>>)Sessions).Remove(pair)" in prune
+    assert "Sessions.TryRemove(pair.Key, out removed)" not in prune
