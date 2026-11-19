@@ -109,8 +109,12 @@ def test_reception_policy_cache_and_knowledge_detection_are_shopkey_scoped():
     assert "Shops[cacheKey]" in applies
     assert "using (ShopSettingsScope.Enter(shop))" in applies
     assert "KnowledgeEngineV2Repository.LoadAll(seller)" in applies
-    assert "current.SellerNick" in policy
-    assert "拒绝跨店读取接待规则" in policy
+    locator = src("src/Bot/ShopScope/ShopContextLocator.cs")
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in policy
+    assert "current.SellerNick" in locator
+    assert "current.DisplayName" in locator
+    assert "请求的ShopKey与当前店铺作用域不一致" in locator
+    assert "请求的卖家与当前店铺作用域不一致" in locator
 
 
 def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
@@ -264,3 +268,16 @@ def test_private_profile_string_fields_and_visual_rule_ids_are_strictly_bounded(
     assert 'if (!SafeId.IsMatch(id))' in config
     assert 'visualRuleIds.Add(ValidateVisualRule(token, guideUrl))' in config
     assert 'RequireBoolean(obj, "automatic_recharge_enabled")' in config
+
+
+def test_offline_shop_scope_uses_display_name_only_when_it_matches_the_exact_profile():
+    locator = src("src/Bot/ShopScope/ShopContextLocator.cs")
+    resolver = locator[
+        locator.index("public static ShopContext ResolveCurrentOrBySellerNick"):
+        locator.index("private static bool IsQianniuShopKey")
+    ]
+
+    assert "displayNameMatches" in resolver
+    assert "sellerMatches" in resolver
+    assert "if (!sellerMatches && !displayNameMatches)" in resolver
+    assert "return ResolveRuntimeByShopKey(sellerNick)" in resolver
