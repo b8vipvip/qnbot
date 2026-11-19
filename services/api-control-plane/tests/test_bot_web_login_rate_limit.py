@@ -54,11 +54,36 @@ def test_login_rate_limit_preserves_twelve_attempt_window_and_success_reset(monk
         core._LOGIN_ATTEMPTS.clear()
 
 
-def test_login_rate_limit_bounds_forwarded_source_key_length(monkeypatch):
+def test_login_rate_limit_bounds_untrusted_peer_key_length(monkeypatch):
     core._LOGIN_ATTEMPTS.clear()
     monkeypatch.setattr(core.time, "time", lambda: 1_800_000_000.0)
     try:
-        core._rate_limit_login(RequestStub("127.0.0.1", "x" * 10_000))
+        core._rate_limit_login(RequestStub("x" * 10_000, "203.0.113.8"))
         assert len(next(iter(core._LOGIN_ATTEMPTS))) == core._LOGIN_ATTEMPT_KEY_MAX_LENGTH
     finally:
         core._LOGIN_ATTEMPTS.clear()
+
+
+def test_login_rate_limit_ignores_forwarded_header_from_untrusted_peer(monkeypatch):
+    monkeypatch.setattr(core, "_TRUSTED_PROXY_NETWORKS", (core.ipaddress.ip_network("127.0.0.0/8"),))
+    request = RequestStub("198.51.100.10", "203.0.113.99")
+    assert core._login_attempt_key(request) == "198.51.100.10"
+
+
+def test_login_rate_limit_uses_rightmost_untrusted_address_from_trusted_proxy(monkeypatch):
+    monkeypatch.setattr(core, "_TRUSTED_PROXY_NETWORKS", (
+        core.ipaddress.ip_network("127.0.0.0/8"),
+        core.ipaddress.ip_network("172.16.0.0/12"),
+    ))
+    # The leftmost entry is attacker-supplied; Caddy appends the real peer at right.
+    request = RequestStub("172.20.0.5", "203.0.113.99, 198.51.100.22")
+    assert core._login_attempt_key(request) == "198.51.100.22"
+
+
+def test_login_rate_limit_walks_multiple_trusted_proxies_from_right_to_left(monkeypatch):
+    monkeypatch.setattr(core, "_TRUSTED_PROXY_NETWORKS", (
+        core.ipaddress.ip_network("127.0.0.0/8"),
+        core.ipaddress.ip_network("172.16.0.0/12"),
+    ))
+    request = RequestStub("172.20.0.5", "198.51.100.22, 172.20.0.4")
+    assert core._login_attempt_key(request) == "198.51.100.22"
