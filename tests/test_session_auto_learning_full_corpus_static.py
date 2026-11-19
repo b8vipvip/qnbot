@@ -533,7 +533,9 @@ def test_session_summary_retries_only_transient_upstream_failures_once():
     assert "await Task.Delay(1200);" in analyze
     assert "return ParseObject(result.Answer);" in analyze
     assert "JSON/schema errors are deterministic input failures" in analyze
-    assert "throw new InvalidOperationException(\"会话复盘AI请求重试后仍不可用\");" in analyze
+    assert "throw new InvalidOperationException(" in analyze
+    assert "会话复盘AI请求重试后仍不可用:" in analyze
+    assert "Clean(lastRetryableError, 500)" in analyze
 
 
 
