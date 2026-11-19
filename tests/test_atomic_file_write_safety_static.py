@@ -58,3 +58,15 @@ def test_shop_scoped_store_writes_keep_previous_generation_as_backup():
     policy = read("src/Bot/ChromeNs/BusinessPolicyProfileService.cs")
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in policy
     assert 'path + ".bak"' in policy or "File.Copy(path, backup" in policy
+
+
+def test_confirmation_ledger_never_replaces_a_corrupt_or_incomplete_barrier_file():
+    ledger = read("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    initialize = ledger[ledger.index("public static void Initialize"):ledger.index("public static bool IsOperational")]
+    loader = ledger[ledger.index("private static LedgerState LoadState"):ledger.index("private static void CleanupLocked")]
+
+    assert "if (!_failClosed)" in initialize
+    assert "if (!_failClosed && (migrated || !File.Exists(StatePath()))" in initialize
+    assert "loaded == null || loaded.Schema != 1 || loaded.Records == null" in loader
+    assert "if (loaded.Records == null) loaded.Records = new List<ConfirmationRecord>();" not in loader
+    assert "保留原文件" in loader
