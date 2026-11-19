@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -25,6 +26,7 @@ namespace Bot.ChromeNs
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static readonly ConcurrentDictionary<string, PolicyState> States =
             new ConcurrentDictionary<string, PolicyState>(StringComparer.OrdinalIgnoreCase);
+        private static long _lastStatesSweepUtcTicks;
 
         private sealed class PolicyState
         {
@@ -199,16 +201,52 @@ namespace Bot.ChromeNs
             return false;
         }
 
+        private static void CleanupIdleStates(string activePath)
+        {
+            // PolicyState contains compiled regexes and a parsed JSON tree per ShopKey.
+            // Retire inactive profiles after 30 minutes; do a bounded sweep at most
+            // every five minutes. Lock + exact key/value removal prevents an old
+            // enumeration snapshot from deleting a state that was just refreshed.
+            var now = DateTime.UtcNow;
+            var nowTicks = now.Ticks;
+            var previousTicks = Interlocked.Read(ref _lastStatesSweepUtcTicks);
+            if (nowTicks - previousTicks < TimeSpan.FromMinutes(5).Ticks
+                || Interlocked.CompareExchange(
+                    ref _lastStatesSweepUtcTicks, nowTicks, previousTicks) != previousTicks)
+                return;
+
+            var cutoff = now.AddMinutes(-30);
+            var exactEntries = (ICollection<KeyValuePair<string, PolicyState>>)States;
+            foreach (var pair in States)
+            {
+                if (string.Equals(pair.Key, activePath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var state = pair.Value;
+                lock (state.Sync)
+                {
+                    if (state.NextCheckUtc == DateTime.MinValue || state.NextCheckUtc >= cutoff)
+                        continue;
+                    exactEntries.Remove(pair);
+                }
+            }
+        }
+
         private static PolicyState EnsureLoaded()
         {
             var shop = ShopSettingsScope.Current;
             var userPath = shop == null ? GetDefaultPath() : GetUserPath(shop);
-            var state = States.GetOrAdd(userPath, _ => new PolicyState());
-            lock (state.Sync)
+            CleanupIdleStates(userPath);
+            while (true)
             {
-                var now = DateTime.UtcNow;
-                if (state.Loaded && now < state.NextCheckUtc) return state;
-                state.NextCheckUtc = now.AddSeconds(2);
+                var state = States.GetOrAdd(userPath, _ => new PolicyState());
+                lock (state.Sync)
+                {
+                    PolicyState current;
+                    if (!States.TryGetValue(userPath, out current) || !ReferenceEquals(current, state))
+                        continue;
+                    var now = DateTime.UtcNow;
+                    if (state.Loaded && now < state.NextCheckUtc) return state;
+                    state.NextCheckUtc = now.AddSeconds(2);
 
                 // No ambient shop identity means no merchant policy. Read the
                 // packaged neutral defaults and never fall back to the legacy
@@ -259,7 +297,8 @@ namespace Bot.ChromeNs
                 state.Loaded = true;
                 Log.Info("客户端运行策略已加载: version=" + Convert.ToString(state.Policy["version"])
                     + ", file=" + userPath + (shop == null ? ", scope=neutral-default" : ", shop=" + shop.ShopKey));
-                return state;
+                    return state;
+                }
             }
         }
 
