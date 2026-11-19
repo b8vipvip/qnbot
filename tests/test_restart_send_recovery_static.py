@@ -50,3 +50,16 @@ def test_restart_recovery_does_not_reinitialize_same_authority_forever_but_rebin
     assert "Task.Run(() => TryInitSession(session, \"status\"))" in source
     assert "else if (!wasAuthoritative)" in source
     assert "Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick))" in source
+
+
+def test_status_binding_failure_releases_only_its_own_suppression_key_for_retry():
+    source = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    helper = source[source.index("private void ForgetStatusBindingAttempt"):source.index("private async Task TryBindStatusConversation")]
+    bind = source[source.index("private async Task TryBindStatusConversation"):source.index("private async Task TryInitSession")]
+
+    assert "ICollection<KeyValuePair<string, string>>" in helper
+    assert "new KeyValuePair<string, string>(session.SessionID, key)" in helper
+    assert "ForgetStatusBindingAttempt(session, loginNick, conversationNick);" in bind
+    assert bind.index("ForgetStatusBindingAttempt(session, loginNick, conversationNick);") < bind.index("return;")
+    assert "catch (Exception ex)" in bind
+    assert "Log.Exception(ex);" in bind
