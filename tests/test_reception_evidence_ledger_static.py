@@ -97,3 +97,19 @@ def test_evidence_ledger_never_persists_non_finite_confidence():
     assert "double.IsNaN(confidence)" in normalizer
     assert "double.IsInfinity(confidence)" in normalizer
     assert "Confidence = NormalizeConfidence(confidence)" in append
+
+
+def test_evidence_dedup_identity_includes_state_transition_fields():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    append = code[
+        code.index("private static void Append"):
+        code.index("internal static void RecordDeliveredEvidenceRequest")
+    ]
+
+    # The same image/message may first be analyzed and later withdrawn. Those are
+    # separate evidence events even when the source message and visual digest match.
+    assert '"|" + (observation ?? "")' in append
+    assert '"|" + (stage ?? "")' in append
+    assert '"|" + (authority ?? "")' in append
+    assert 'withdrawn ? "withdrawn_image_seen" : "image_analyzed"' in code
+    assert "records.Any(x => x != null && x.Id == id)" in append
