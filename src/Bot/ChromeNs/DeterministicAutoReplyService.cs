@@ -1122,38 +1122,10 @@ namespace Bot.ChromeNs
             bool failOnDuplicate)
         {
             var normalized = NormalizeEntries(entries, failOnDuplicate);
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
             var json = JsonConvert.SerializeObject(normalized, Formatting.Indented);
-            File.WriteAllText(temp, json, new UTF8Encoding(false));
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var previous = path + ".previous";
-                    try
-                    {
-                        File.Replace(temp, path, previous, true);
-                        if (File.Exists(previous)) File.Delete(previous);
-                    }
-                    catch
-                    {
-                        File.Copy(temp, path, true);
-                        File.Delete(temp);
-                    }
-                }
-                else
-                {
-                    File.Move(temp, path);
-                }
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    try { File.Delete(temp); } catch { }
-                }
-            }
+            string error;
+            if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, json, 3, 50, out error))
+                throw new IOException("本地快捷回复原子保存失败：" + error);
 
             var ticks = File.GetLastWriteTimeUtc(path).Ticks;
             Cache[path] = new CacheState { LastWriteTicks = ticks, Entries = Clone(normalized) };
