@@ -303,7 +303,9 @@ def test_remote_history_never_infers_end_from_missing_hasmore_or_empty_page_with
 
     assert 'var hasMoreKnown = resultObject != null' in method
     assert 'TryReadInt(resultObject["hasMore"], out hasMore)' in method
-    assert "if (hasMoreKnown && hasMore > 0)" in method
+    assert "if (!hasMoreKnown)" in method
+    assert "if (hasMore > 0)" in method
+    assert 'history_empty_page_missing_has_more' in method
     assert 'result.ErrorCode = "history_empty_page_with_more"' in method
     assert "if (hasMoreKnown && hasMore == 0)" in method
     assert "if (hasMore == 0 && messages.Count < LearningHistoryPageSize)" not in method

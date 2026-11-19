@@ -214,10 +214,14 @@ jobs:
           jq -n --arg task "$TASK_ID" --arg run "$FAILED_RUN_ID" --arg pr "$PR_NUMBER" \
             '{kind:"repair_request",task_id:$task,run_id:$run,pr_number:$pr,status:"open",repair_owner:"repair_pipeline"}' > "$request"
           marker="<!-- gptauto-repair:$REPAIR_KEY -->"
-          existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
-          if ! grep -Fq "$marker" <<<"$existing"; then
-            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
+          if [[ -n "$PR_NUMBER" ]]; then
+            existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+            if ! grep -Fq "$marker" <<<"$existing"; then
+              gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto three-tier repair cycle is open for task $TASK_ID on current head $HEAD_SHA (latest failed run $FAILED_RUN_ID). Tier 1 deterministic repair runs first, Tier 2 Copilot CLI runs only if Tier 1 produces no patch, and Tier 3 preserves the same repair lease if automation cannot safely repair it."
+            fi
+          else
+            echo "::notice::Direct-push repair request has no pull-request context; skipped PR comment."
           fi
 
       - name: Check autonomous repair credential

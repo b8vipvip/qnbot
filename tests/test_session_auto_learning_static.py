@@ -716,7 +716,8 @@ def test_negative_or_non_finite_hasmore_values_are_unknown_not_explicit_server_e
     assert "value = 0;\n                    return false;" in parser
     assert "double.IsNaN(numeric) || double.IsInfinity(numeric) || numeric < 0" in parser
     assert "hasMoreKnown && hasMore == 0" in refresh
-    assert "hasMoreKnown && hasMore > 0" in refresh
+    assert "if (!hasMoreKnown)" in refresh
+    assert "if (hasMore > 0)" in refresh
 
 
 def test_read_only_message_mirror_does_not_require_focus_proof_but_native_actions_still_do():
