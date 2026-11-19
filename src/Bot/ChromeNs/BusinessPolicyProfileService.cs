@@ -87,8 +87,12 @@ namespace Bot.ChromeNs
 
         public static string SaveJson(string json)
         {
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+                throw new InvalidOperationException("保存运行策略必须处于已验证的店铺作用域，禁止写入全局默认策略。");
+
             var normalized = Validate(json).ToString(Formatting.Indented);
-            var path = GetUserPath();
+            var path = GetUserPath(shop);
             var directory = Path.GetDirectoryName(path);
             var backup = string.Empty;
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "BusinessPolicyProfile", 3000))
@@ -98,7 +102,7 @@ namespace Bot.ChromeNs
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                 if (File.Exists(path))
                 {
-                    var backupDirectory = CurrentBackupRoot(directory);
+                    var backupDirectory = CurrentBackupRoot(directory, shop);
                     Directory.CreateDirectory(backupDirectory);
                     backup = Path.Combine(backupDirectory,
                         "business-policy-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
@@ -124,8 +128,16 @@ namespace Bot.ChromeNs
         public static string GetUserPath()
         {
             var shop = ShopSettingsScope.Current;
-            if (shop != null) return Path.Combine(Paths.GetRulesRoot(shop), "business-policy.json");
-            return Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
+            // Without an explicit shop scope, runtime reads use only the packaged
+            // neutral policy. The legacy global file is considered solely while
+            // initializing an exact shop-scoped profile.
+            return shop == null ? GetDefaultPath() : GetUserPath(shop);
+        }
+
+        private static string GetUserPath(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            return Path.Combine(Paths.GetRulesRoot(shop), "business-policy.json");
         }
 
         public static bool TryOverrideHandoff(
@@ -189,7 +201,8 @@ namespace Bot.ChromeNs
 
         private static PolicyState EnsureLoaded()
         {
-            var userPath = GetUserPath();
+            var shop = ShopSettingsScope.Current;
+            var userPath = shop == null ? GetDefaultPath() : GetUserPath(shop);
             var state = States.GetOrAdd(userPath, _ => new PolicyState());
             lock (state.Sync)
             {
@@ -197,7 +210,10 @@ namespace Bot.ChromeNs
                 if (state.Loaded && now < state.NextCheckUtc) return state;
                 state.NextCheckUtc = now.AddSeconds(2);
 
-                EnsureUserFile(userPath);
+                // No ambient shop identity means no merchant policy. Read the
+                // packaged neutral defaults and never fall back to the legacy
+                // process-global business-policy.json.
+                if (shop != null) EnsureUserFile(userPath, shop);
                 var info = new FileInfo(userPath);
                 if (state.Loaded && info.Exists
                     && info.LastWriteTimeUtc == state.LoadedWriteUtc
@@ -220,13 +236,14 @@ namespace Bot.ChromeNs
                 state.LoadedLength = info.Exists ? info.Length : -1;
                 state.Loaded = true;
                 Log.Info("客户端运行策略已加载: version=" + Convert.ToString(state.Policy["version"])
-                    + ", file=" + userPath);
+                    + ", file=" + userPath + (shop == null ? ", scope=neutral-default" : ", shop=" + shop.ShopKey));
                 return state;
             }
         }
 
-        private static void EnsureUserFile(string userPath)
+        private static void EnsureUserFile(string userPath, ShopContext shop)
         {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
             using (var lease = CrossProcessAtomicStateFile.Acquire(userPath, "BusinessPolicyProfile", 3000))
             {
                 if (lease == null || !lease.Acquired)
@@ -238,7 +255,6 @@ namespace Bot.ChromeNs
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
 
                 var source = GetDefaultPath();
-                var shop = ShopSettingsScope.Current;
                 var legacy = Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
                 if (shop != null && CanAutoAdoptLegacy() && File.Exists(legacy)) source = legacy;
                 if (!File.Exists(source))
@@ -355,9 +371,8 @@ namespace Bot.ChromeNs
             return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "default-business-policy.json");
         }
 
-        private static string CurrentBackupRoot(string fallbackDirectory)
+        private static string CurrentBackupRoot(string fallbackDirectory, ShopContext shop)
         {
-            var shop = ShopSettingsScope.Current;
             return shop == null ? Path.Combine(fallbackDirectory, "backups") : Paths.GetBackupRoot(shop);
         }
 
