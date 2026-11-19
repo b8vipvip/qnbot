@@ -82,7 +82,7 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan UncertainRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan MaxPendingAge = TimeSpan.FromHours(24);
         private static StateDocument _state;
-        private static bool _stateLoadFailed;
+        private static volatile bool _stateLoadFailed;
         private static Timer _timer;
         private static int _initialized;
         private static int _workerRunning;
@@ -141,7 +141,8 @@ namespace Bot.ChromeNs
                 return AutoDeliveryConfirmationLedger.IsOperational();
             }
             var cfg = AutoDeliverySettings.Load(snapshot.Seller);
-            if (cfg == null || !cfg.Enabled) return true;
+            if (cfg == null) return false;
+            if (!cfg.Enabled) return true;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
 
             var now = DateTime.Now;

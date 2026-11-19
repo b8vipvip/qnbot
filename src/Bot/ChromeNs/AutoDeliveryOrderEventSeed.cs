@@ -54,7 +54,7 @@ namespace Bot.ChromeNs
         private static Timer _timer;
         private static int _initialized;
         private static int _running;
-        private static bool _cursorStateUnavailable;
+        private static volatile bool _cursorStateUnavailable;
 
         public static void Initialize()
         {

@@ -166,7 +166,7 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
     initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
     loader = runtime[runtime.index("private static StateDocument LoadState"):runtime.index("private static bool SaveStateLocked")]
 
-    assert "private static bool _stateLoadFailed;" in runtime
+    assert "private static volatile bool _stateLoadFailed;" in runtime
     assert "LoadState(out loadedSuccessfully)" in initialize
     assert "if (!loadedSuccessfully)" in initialize
     assert "if (!SaveStateLocked())" in initialize
@@ -204,7 +204,7 @@ def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwrit
     assert "LoadCursors(out loadedSuccessfully)" in initialize
     assert "if (!loadedSuccessfully)" in initialize
     assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
-    assert "private static bool _cursorStateUnavailable;" in seed
+    assert "private static volatile bool _cursorStateUnavailable;" in seed
     assert "state == null || state.Schema != 1 || state.Sellers == null" in loader
     assert "loadedSuccessfully = false;" in loader
     assert "return new CursorState();" in loader
@@ -226,6 +226,8 @@ def test_event_cursor_does_not_advance_when_queue_persistence_is_unavailable():
     assert "return queueReady && AutoDeliveryConfirmationLedger.IsOperational();" in operational
     assert "public static bool Enqueue(OrderSnapshot snapshot)" in enqueue
     assert "if (!SaveStateLocked()) return false;" in enqueue
+    assert "if (cfg == null) return false;" in enqueue
+    assert "if (!cfg.Enabled) return true;" in enqueue
     assert "return AutoDeliveryConfirmationLedger.IsOperational();" in enqueue
     assert "|| !AutoDeliveryCoordinator.IsOperational()" in tick
     assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
