@@ -41,7 +41,12 @@ def test_current_shop_scope_resolver_remains_fail_closed_for_legacy_ambiguous_ni
     ]
 
     assert "ShopSettingsScope.Current" in helper
-    assert "if (current != null) return current;" in helper
+    assert "if (current != null)\n            {" in helper
+    assert "if (IsQianniuShopKey(sellerNick)" in helper
+    assert "if (!sellerMatches && !displayNameMatches)" in helper
+    assert "请求的ShopKey与当前店铺作用域不一致，已阻止跨店访问。" in helper
+    assert "请求的卖家与当前店铺作用域不一致，已阻止跨店访问。" in helper
+    assert "return current;" in helper
     assert "return ResolveBySellerNick(sellerNick);" in helper
 
 
