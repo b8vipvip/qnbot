@@ -292,7 +292,16 @@ namespace Bot.ChromeNs
                 Text = source.Text,
                 Timestamp = source.Timestamp,
                 MessageKey = source.MessageKey,
-                Withdrawn = source.Withdrawn
+                Withdrawn = source.Withdrawn,
+                // Learning must retain every native transport identity discovered when
+                // live events and remote history are reconciled. Otherwise evidence IDs
+                // and provenance are silently reduced to the first canonical key.
+                NativeAliases = source.NativeAliases == null
+                    ? new string[0]
+                    : source.NativeAliases.ToArray(),
+                PreciseTimeTicks = source.PreciseTimeTicks,
+                SeenLive = source.SeenLive,
+                SeenHistory = source.SeenHistory
             };
         }
 

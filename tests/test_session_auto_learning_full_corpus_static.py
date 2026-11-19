@@ -159,11 +159,19 @@ def test_full_corpus_ai_scans_are_serialized_per_shop_to_avoid_duplicate_fanout(
         service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
     ]
 
-    assert "ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates" in service
-    assert "CorpusAnalysisGates.GetOrAdd(" in finalize
-    assert "await corpusGate.WaitAsync();" in finalize
+    assert "ConcurrentDictionary<string, ShopGateEntry> CorpusAnalysisGates" in service
+    assert "AddShopGateReference(CorpusAnalysisGates, shopKey)" in service
+    assert "await entry.Gate.WaitAsync().ConfigureAwait(false)" in service
+    assert "entry.References++;" in service
+    assert "entry.References--;" in service
+    assert "entry.References != 0" in service
+    assert "ICollection<KeyValuePair<string, ShopGateEntry>>" in service
+    assert "entry.Gate.Dispose();" in service
+    assert "await AcquireShopGateAsync(session.ShopKey)" in finalize
+    assert "corpusGateLease.Dispose();" in finalize
     assert "finally" in finalize
-    assert "corpusGate.Release();" in finalize
+    assert finalize.index("await AcquireShopGateAsync(session.ShopKey)") < finalize.index("analysis = await AnalyzeAsync(")
+    assert finalize.index("analysis = await AnalyzeAsync(") < finalize.index("AnalyzeKnowledgeCorpusAsync(")
 
 
 
@@ -175,7 +183,8 @@ def test_structured_chat_timeout_exception_retries_instead_of_bypassing_batch_re
     ]
 
     assert "catch (OperationCanceledException ex)" in batch
-    assert "failed.Error = \"timeout:\"" in batch
+    assert 'var timeoutError = "timeout:" + Clean(ex.Message, 300);' in batch
+    assert "failed.Error = timeoutError;" in batch
     assert batch.index("catch (OperationCanceledException ex)") < batch.index(
         "if (raw == null || !raw.Success"
     )
@@ -383,6 +392,144 @@ def test_invalid_message_list_shape_is_not_coerced_to_a_complete_empty_page():
     assert 'result.ErrorCode = "history_page_invalid_messages"' in method
 
 
+
+def test_scheduler_invariant_opens_shop_scoped_learning_circuit_immediately():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    retry = service[
+        service.index("private static bool IsRetryableKnowledgeCorpusError"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    assert "KnowledgeCorpusCircuitBreakers" in service
+    assert "KnowledgeCorpusCircuitFailureThreshold = 3" in service
+    assert "KnowledgeCorpusCircuitCooldown = TimeSpan.FromMinutes(5)" in service
+    assert "KnowledgeCorpusCircuitBreakers.GetOrAdd(\n                shopKey" in retry
+    assert "state.ConsecutiveFailures >= KnowledgeCorpusCircuitFailureThreshold" in retry
+    assert "IsKnowledgeCorpusSchedulerInvariantError(error)" in retry
+    assert 'error.Contains("scheduler invariant")' in retry
+    assert 'error.Contains("already owns request")' in retry
+    assert "TryGetKnowledgeCorpusCircuitOpenUntil" in retry
+    assert "ai_upstream_circuit_open_until:" in service
+
+
+def test_corpus_batch_loop_stops_after_shop_circuit_opens_and_keeps_checkpoint_pending():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    batch = service[
+        service.index("private static async Task<KnowledgeCorpusBatchResult> AnalyzeKnowledgeCorpusBatchAsync"):
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages")
+    ]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+    assert method.index("TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey") < method.index(
+        "AnalyzeKnowledgeCorpusBatchAsync("
+    )
+    assert 'result.Error = "ai_upstream_circuit_open_until:"' in method
+    assert "session.ShopKey, batch, batchIndex + 1" in method
+    assert "RegisterKnowledgeCorpusAiFailure(shopKey" in batch
+    assert "GetKnowledgeCorpusCircuitRetryDelay(corpusCircuitOpenUntil)" in finalize
+    assert 'report.CompletedAtTicks = 0;' in finalize
+
+
+def test_primary_session_ai_502_is_requeued_instead_of_becoming_terminal_learning_failure():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+    assert "RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message" in finalize
+    assert "if (IsRetryableKnowledgeCorpusError(ex.Message)" in finalize
+    assert "session.RetryCount < 3" in finalize
+    assert "ai_upstream_retryable:" in finalize
+    assert 'Requeue(session, "等待AI上游恢复后再次复盘", TimeSpan.FromMinutes(1))' in finalize
+    assert 'report.CompletedAtTicks = 0;' in finalize
+
+
+def test_open_ai_learning_circuit_cooldown_survives_application_restart():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    parser = service[
+        service.index("private static bool TryGetPersistedKnowledgeCorpusCircuitOpenUntil"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+    requeue = service[
+        service.index("private static void Requeue"):
+        service.index("private static void CompleteSkipped")
+    ]
+    snapshot = service[
+        service.index("private static void SaveSnapshot"):
+        service.index("private static ConversationSessionLearningReportEntity NewReport")
+    ]
+
+    assert 'const string prefix = "ai_upstream_circuit_open_until:"' in parser
+    assert "DateTimeStyles.RoundtripKind" in parser
+    assert "CultureInfo.InvariantCulture" in parser
+    assert "return openUntilUtc > DateTime.UtcNow;" in parser
+    assert "var circuitDelay = GetKnowledgeCorpusCircuitRetryDelay(circuitOpenUntil);" in recovery
+    assert "if (circuitDelay > due) due = circuitDelay;" in recovery
+    # The successful requeue path calls SaveSnapshot, which must preserve report.Error.
+    assert "SaveSnapshot(session, waitingStatus);" in requeue
+    assert "report.Error =" not in snapshot
+    assert "var delay = retryDelay ?? TimeSpan.FromMinutes(1);" in requeue
+    assert "Schedule(session, delay);" in requeue
+    assert "Schedule(session, TimeSpan.FromMinutes(1));" not in requeue
+
+
+def test_startup_restores_latest_unexpired_circuit_before_scheduling_all_sessions_for_that_shop():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    restore = service[
+        service.index("private static void RestoreKnowledgeCorpusCircuitBreakers"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+
+    assert "string.IsNullOrWhiteSpace(report.ShopKey)" in restore
+    assert "report.Error, out openUntilUtc" in restore
+    assert 'ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]' in restore
+    assert "coverageDeadline > openUntilUtc" in restore
+    assert "KnowledgeCorpusCircuitBreakers.GetOrAdd(\n                    report.ShopKey" in restore
+    assert "if (openUntilUtc <= state.OpenUntilUtc) continue;" in restore
+    assert "state.OpenUntilUtc = openUntilUtc;" in restore
+    assert recovery.index("RestoreKnowledgeCorpusCircuitBreakers(allReports);") < recovery.index(
+        "foreach (var report in reports)"
+    )
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
+    assert recovery.index("TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey") < recovery.index(
+        "Schedule(session, due);"
+    )
+
+
+def test_corpus_retry_classifier_recognizes_dotnet_transport_failures():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    retry = service[
+        service.index("private static bool IsRetryableKnowledgeCorpusError"):
+        service.index("private static async Task<JObject> AnalyzeAsync")
+    ]
+
+    for phrase in (
+        "error occurred while sending",
+        "underlying connection was closed",
+        "connection reset",
+        "connection refused",
+        "no such host",
+        "bad gateway",
+        "service unavailable",
+        "基础连接已经关闭",
+        "远程名称无法解析",
+    ):
+        assert 'error.Contains("' + phrase + '")' in retry
+
+
 def test_session_summary_retries_only_transient_upstream_failures_once():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     analyze = service[
@@ -395,7 +542,9 @@ def test_session_summary_retries_only_transient_upstream_failures_once():
     assert "await Task.Delay(1200);" in analyze
     assert "return ParseObject(result.Answer);" in analyze
     assert "JSON/schema errors are deterministic input failures" in analyze
-    assert "throw new InvalidOperationException(\"会话复盘AI请求重试后仍不可用\");" in analyze
+    assert "throw new InvalidOperationException(" in analyze
+    assert "会话复盘AI请求重试后仍不可用:" in analyze
+    assert "Clean(lastRetryableError, 500)" in analyze
 
 
 
@@ -414,3 +563,105 @@ def test_empty_history_page_without_explicit_hasmore_is_not_complete():
     assert 'empty_page_missing_has_more' in empty_page
     assert "result.IsComplete = true;" not in empty_page[:empty_page.index("if (hasMore > 0)")]
     assert "result.StopReason = \"server_end\";" in empty_page
+
+
+
+def test_session_summary_preserves_retryable_upstream_error_for_shop_circuit_breaker():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<JObject> AnalyzeAsync"):
+        service.index("private static string BuildTranscript")
+    ]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult>")
+    ]
+
+    assert "var lastRetryableError = string.Empty;" in analyze
+    assert analyze.count("lastRetryableError = error;") == 2
+    assert "Clean(lastRetryableError, 500)" in analyze
+    assert "会话复盘AI请求重试后仍不可用:" in analyze
+    assert "RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message" in finalize
+    assert "IsRetryableKnowledgeCorpusError(ex.Message)" in finalize
+    assert "ai_upstream_circuit_open_until:" in finalize
+
+
+
+def test_checkpoint_resume_revalidates_candidate_batch_and_live_message_evidence():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    restore = service[
+        service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"):
+        service.index("if (!canResume)", service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"))
+    ]
+
+    assert "batches[batchIndex - 1].Any" in restore
+    assert "result.CompletedBatchIndices.Contains(batchIndex - 1)" in restore
+    assert "evidenceIds.All(humanMessageIds.Contains)" in restore
+    assert "evidenceIds.All(allMessageIds.Contains)" in restore
+    assert 'candidate.EvidenceType, "conversation_synthesis"' in restore
+    assert 'candidate.Action != "update"' in restore
+    assert "candidate.SourceFingerprint, result.SourceFingerprint" in restore
+
+
+def test_ai_learning_confidence_must_be_finite_and_inside_zero_to_one():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    parser = service[
+        service.index("private static double ParseConfidence"):
+        service.index("private static List<Suggestion> ParseSuggestions")
+    ]
+    batch = service[
+        service.index("private static bool TryParseKnowledgeCorpusBatch"):
+        service.index("private static bool IsRetryableKnowledgeCorpusError")
+    ]
+    suggestions = service[
+        service.index("private static List<Suggestion> ParseSuggestions"):
+        service.index("private static IEnumerable<Suggestion> DeduplicateSuggestions")
+    ]
+    can_apply = service[
+        service.index("private static bool CanApply"):
+        service.index("private static bool ContainsHighRisk")
+    ]
+
+    assert "NumberStyles.Float" in parser
+    assert "CultureInfo.InvariantCulture" in parser
+    assert "double.IsNaN(confidence)" in parser
+    assert "double.IsInfinity(confidence)" in parser
+    assert "confidence < 0" in parser
+    assert "confidence > 1" in parser
+    assert 'ParseConfidence(token["confidence"])' in batch
+    assert 'ParseConfidence(item["confidence"])' in suggestions
+    assert "double.IsNaN(suggestion.Confidence)" in can_apply
+    assert "suggestion.Confidence > 1.0" in can_apply
+
+
+def test_superseded_learning_session_keeps_open_shop_circuit_deadline_for_restart():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    requeue = service[
+        service.index("private static void Requeue("):
+        service.index("private static void CompleteSkipped")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+
+    assert "TryGetPersistedKnowledgeCorpusCircuitOpenUntil(" in requeue
+    assert 'ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]' in requeue
+    assert "report.Error = hasCircuitDeadline" in requeue
+    assert '"requeue_conflict_new_session_active"' in requeue
+    assert "RestoreKnowledgeCorpusCircuitBreakers(allReports);" in recovery
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
+
+
+def test_learning_timeline_clone_preserves_native_identity_aliases_and_feed_provenance():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    clone = bridge[
+        bridge.index("private static ConversationContextTurn CloneTurn"):
+        bridge.index("private static string ExtractMessageText")
+    ]
+
+    assert "NativeAliases = source.NativeAliases == null" in clone
+    assert "source.NativeAliases.ToArray()" in clone
+    assert "PreciseTimeTicks = source.PreciseTimeTicks" in clone
+    assert "SeenLive = source.SeenLive" in clone
+    assert "SeenHistory = source.SeenHistory" in clone
