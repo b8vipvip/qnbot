@@ -379,3 +379,18 @@ def test_invalid_message_list_shape_is_not_coerced_to_a_complete_empty_page():
     assert "var messages = messagesToken.ToObject<List<QNChatMessage>>();" in method
     assert "if (messages == null)" in method
     assert 'result.ErrorCode = "history_page_invalid_messages"' in method
+
+
+def test_session_summary_retries_only_transient_upstream_failures_once():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<JObject> AnalyzeAsync"):
+        service.index("private static string BuildTranscript")
+    ]
+
+    assert "for (var attempt = 0; attempt < 2; attempt++)" in analyze
+    assert "IsRetryableKnowledgeCorpusError(error)" in analyze
+    assert "await Task.Delay(1200);" in analyze
+    assert "return ParseObject(result.Answer);" in analyze
+    assert "JSON/schema errors are deterministic input failures" in analyze
+    assert "throw new InvalidOperationException(\"会话复盘AI请求重试后仍不可用\");" in analyze
