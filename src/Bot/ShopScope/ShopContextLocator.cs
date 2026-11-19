@@ -43,9 +43,47 @@ namespace Bot.ShopScope
         // back to nickname resolution, which remains fail-closed when ambiguous.
         public static ShopContext ResolveCurrentOrBySellerNick(string sellerNick)
         {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
+            if (current != null)
+            {
+                if (IsQianniuShopKey(sellerNick)
+                    && !string.Equals(current.ShopKey, sellerNick, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        "请求的ShopKey与当前店铺作用域不一致，已阻止跨店访问。");
+
+                if (sellerNick.Length > 0 && !IsQianniuShopKey(sellerNick))
+                {
+                    var sellerMatches = !string.IsNullOrWhiteSpace(current.SellerNick)
+                        && string.Equals(current.SellerNick, sellerNick, StringComparison.Ordinal);
+                    var displayNameMatches = !string.IsNullOrWhiteSpace(current.DisplayName)
+                        && string.Equals(current.DisplayName, sellerNick, StringComparison.Ordinal);
+                    if (!sellerMatches && !displayNameMatches)
+                        throw new InvalidOperationException(
+                            "请求的卖家与当前店铺作用域不一致，已阻止跨店访问。");
+                }
+                return current;
+            }
+
+            if (IsQianniuShopKey(sellerNick))
+                return ResolveRuntimeByShopKey(sellerNick);
             return ResolveBySellerNick(sellerNick);
+        }
+
+        private static bool IsQianniuShopKey(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length != 15 || !value.StartsWith("qn_", StringComparison.Ordinal))
+                return false;
+            for (var i = 3; i < value.Length; i++)
+            {
+                var ch = value[i];
+                if (!((ch >= '0' && ch <= '9')
+                    || (ch >= 'a' && ch <= 'f')
+                    || (ch >= 'A' && ch <= 'F')))
+                    return false;
+            }
+            return true;
         }
 
         // Resolve from the exact QN instance that raised an event. Seller nick is
