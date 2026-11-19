@@ -213,7 +213,29 @@ namespace Bot.ChromeNs
                 // No ambient shop identity means no merchant policy. Read the
                 // packaged neutral defaults and never fall back to the legacy
                 // process-global business-policy.json.
-                if (shop != null) EnsureUserFile(userPath, shop);
+                if (shop != null)
+                {
+                    try
+                    {
+                        EnsureUserFile(userPath, shop);
+                    }
+                    catch (Exception ex)
+                    {
+                        // A competing Bot process may briefly hold the profile mutex.
+                        // Do not fail the buyer reply pipeline: retain the last verified
+                        // policy, or use the neutral packaged policy on first load, then
+                        // retry after the normal short cache interval.
+                        Log.ErrorWithMaxCount(
+                            "店铺运行策略暂时不可用，使用缓存或中性默认策略并稍后重试: " + Safe(ex.Message), 10);
+                        if (state.Loaded) return state;
+                        state.Policy = Validate(GetDefaultJson());
+                        state.Regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+                        state.LoadedWriteUtc = DateTime.MinValue;
+                        state.LoadedLength = -1;
+                        state.Loaded = true;
+                        return state;
+                    }
+                }
                 var info = new FileInfo(userPath);
                 if (state.Loaded && info.Exists
                     && info.LastWriteTimeUtc == state.LoadedWriteUtc
