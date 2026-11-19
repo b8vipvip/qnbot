@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import threading
 import time
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _cp: Any = None
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: Dict[str, List[float]] = {}
@@ -149,16 +151,33 @@ def _bearer(request: Request) -> str:
     return header.split(" ", 1)[1].strip()
 
 
-def _client_by_token(token: str, capture_cipher: bool = True) -> Optional[Dict[str, Any]]:
+def _client_by_token(
+    token: str,
+    capture_cipher: bool = True,
+    request_path: str = "",
+) -> Optional[Dict[str, Any]]:
     if not token:
         return None
     digest = _cp.hash_token(token)
     with _cp.db() as conn:
         row = conn.execute(
-            "SELECT * FROM client_tokens WHERE token_hash=? AND enabled=1",
+            "SELECT * FROM client_tokens WHERE token_hash=?",
             (digest,),
         ).fetchone()
         if not row:
+            logger.warning(
+                "bot_client_token_rejected reason=unknown_token path=%s token_hash_prefix=%s",
+                _safe(request_path, 120),
+                digest[:12],
+            )
+            return None
+        if not bool(row["enabled"]):
+            logger.warning(
+                "bot_client_token_rejected reason=disabled_token path=%s client_id=%s token_hash_prefix=%s",
+                _safe(request_path, 120),
+                int(row["id"]),
+                digest[:12],
+            )
             return None
         item = dict(row)
         updates = ["last_used_at=?"]
@@ -172,7 +191,11 @@ def _client_by_token(token: str, capture_cipher: bool = True) -> Optional[Dict[s
 
 
 def _runtime_client(request: Request) -> Dict[str, Any]:
-    client = _client_by_token(_bearer(request), capture_cipher=True)
+    client = _client_by_token(
+        _bearer(request),
+        capture_cipher=True,
+        request_path=request.url.path,
+    )
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="客户端令牌无效")
     return client
@@ -411,7 +434,7 @@ def bot_web_page() -> FileResponse:
 def bot_web_login(data: TokenLoginInput, request: Request) -> Dict[str, Any]:
     _rate_limit_login(request)
     token = data.token.strip()
-    client = _client_by_token(token, capture_cipher=True)
+    client = _client_by_token(token, capture_cipher=True, request_path=request.url.path)
     if not client:
         raise HTTPException(status_code=401, detail="Bot 客户端令牌无效")
     _clear_login_attempts(request)
