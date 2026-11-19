@@ -1055,14 +1055,23 @@ namespace Bot.ChromeNs
                             && TryReadInt(resultObject["hasMore"], out hasMore);
                         if (messages.Count == 0)
                         {
-                            if (hasMoreKnown && hasMore > 0)
+                            if (!hasMoreKnown)
+                            {
+                                // An empty page without an explicit server end is not proof
+                                // that the cursor reached the end; transient empty pages must
+                                // never make a partial transcript pass the learning gate.
+                                result.ErrorCode = "history_empty_page_missing_has_more";
+                                result.StopReason = "empty_page_missing_has_more";
+                                break;
+                            }
+                            if (hasMore > 0)
                             {
                                 result.ErrorCode = "history_empty_page_with_more";
                                 result.StopReason = "empty_page_with_more";
                                 break;
                             }
                             result.IsComplete = true;
-                            result.StopReason = hasMoreKnown ? "server_end" : "empty_page";
+                            result.StopReason = "server_end";
                             break;
                         }
                         if (messages.Any(x => x == null))

@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
             public string ShopKey;
             public string SourceSession;
             public bool FingerprintAccepted;
+            public DateTime FingerprintAcceptedAt;
             public string Type;
             public string Response;
             public DateTime ReceivedAt;
@@ -141,6 +142,7 @@ namespace Bot.ChromeNs
                     return;
                 }
                 item.FingerprintAccepted = true;
+                item.FingerprintAcceptedAt = now;
             }
             MaybeCleanupTransientState(now);
 
@@ -250,6 +252,24 @@ namespace Bot.ChromeNs
             }
 
             return string.Empty;
+        }
+
+        private static void ReleaseAcceptedFingerprint(PendingInboundEvent item)
+        {
+            if (item == null || !item.FingerprintAccepted || string.IsNullOrWhiteSpace(item.ShopKey))
+                return;
+
+            var acceptedAt = item.FingerprintAcceptedAt;
+            if (acceptedAt != DateTime.MinValue)
+            {
+                var fingerprint = BuildInboundFingerprint(item.ShopKey, item.Type, item.Response);
+                // ICollection.Remove on ConcurrentDictionary removes only the exact
+                // key/value pair. A newer accepted replay must never be cleared here.
+                ((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)
+                    .Remove(new KeyValuePair<string, DateTime>(fingerprint, acceptedAt));
+            }
+            item.FingerprintAccepted = false;
+            item.FingerprintAcceptedAt = DateTime.MinValue;
         }
 
         private static bool TryAcceptInboundFingerprint(
@@ -377,6 +397,7 @@ namespace Bot.ChromeNs
             item.PayloadBytes = (long)(item.Response ?? string.Empty).Length * sizeof(char);
             if (item.PayloadBytes > MaxPendingInboundPayloadBytes)
             {
+                ReleaseAcceptedFingerprint(item);
                 var oversizedTotal = Interlocked.Increment(ref _droppedPendingCount);
                 if (oversizedTotal <= 3 || oversizedTotal % 50 == 0)
                 {
@@ -403,6 +424,7 @@ namespace Bot.ChromeNs
                     if (Pending.Count == 0) break;
                     var dropped = Pending.Dequeue();
                     _pendingPayloadBytes = Math.Max(0, _pendingPayloadBytes - dropped.PayloadBytes);
+                    ReleaseAcceptedFingerprint(dropped);
                     lastDroppedType = dropped.Type ?? string.Empty;
                     droppedCount++;
                 }
@@ -464,11 +486,13 @@ namespace Bot.ChromeNs
                 && !string.Equals(shopKey, mappedShopKey, StringComparison.Ordinal))
             {
                 // The source WebSocket changed login identity after this event was queued.
-                // Never reinterpret the old payload under the new ShopKey.
+                // Never reinterpret the old payload under the new ShopKey. Release only
+                // this event's fingerprint so a valid replay on the original shop can recover.
                 Log.Info("千牛入站暂存事件来源WebSocket身份已变化，拒绝跨店补发: oldShopRef="
                     + PrivacyToken("shop", shopKey)
                     + ", currentShopRef=" + PrivacyToken("shop", mappedShopKey)
                     + ", sessionRef=" + PrivacyToken("session", item.SourceSession));
+                ReleaseAcceptedFingerprint(item);
                 return true;
             }
             if (shopKey.Length == 0) return false;
@@ -476,12 +500,14 @@ namespace Bot.ChromeNs
 
             if (!item.FingerprintAccepted)
             {
-                if (!TryAcceptInboundFingerprint(shopKey, item.Type, item.Response, DateTime.Now))
+                var acceptedAt = DateTime.Now;
+                if (!TryAcceptInboundFingerprint(shopKey, item.Type, item.Response, acceptedAt))
                 {
                     MaybeLogSuppressedDuplicate(item.Seller, item.SourceSession, item.Type);
                     return true;
                 }
                 item.FingerprintAccepted = true;
+                item.FingerprintAcceptedAt = acceptedAt;
             }
 
             // Resolve the receiver only from the ShopKey that was bound to this physical
@@ -524,6 +550,7 @@ namespace Bot.ChromeNs
                     if (!TryDequeuePending(out item) || item == null) continue;
                     if (DateTime.Now - item.ReceivedAt > TimeSpan.FromSeconds(15))
                     {
+                        ReleaseAcceptedFingerprint(item);
                         Log.Info("千牛入站暂存消息等待权威CDP超时，已放弃: sellerRef="
                             + PrivacyToken("seller", item.Seller)
                             + ", sessionRef=" + PrivacyToken("session", item.SourceSession)

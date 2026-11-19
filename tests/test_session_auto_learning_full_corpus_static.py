@@ -394,3 +394,21 @@ def test_session_summary_retries_only_transient_upstream_failures_once():
     assert "return ParseObject(result.Answer);" in analyze
     assert "JSON/schema errors are deterministic input failures" in analyze
     assert "throw new InvalidOperationException(\"会话复盘AI请求重试后仍不可用\");" in analyze
+
+
+
+def test_empty_history_page_without_explicit_hasmore_is_not_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+    empty_page = method[
+        method.index("if (messages.Count == 0)"):
+        method.index("if (messages.Any(x => x == null))")
+    ]
+    assert "if (!hasMoreKnown)" in empty_page
+    assert 'history_empty_page_missing_has_more' in empty_page
+    assert 'empty_page_missing_has_more' in empty_page
+    assert "result.IsComplete = true;" not in empty_page[:empty_page.index("if (hasMore > 0)")]
+    assert "result.StopReason = \"server_end\";" in empty_page
