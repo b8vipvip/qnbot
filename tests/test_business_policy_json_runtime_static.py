@@ -235,3 +235,17 @@ def test_missing_shop_scope_uses_neutral_defaults_and_never_reads_or_writes_glob
     assert "var userPath = shop == null ? GetDefaultPath() : GetUserPath(shop);" in ensure_loaded
     assert "if (shop != null) EnsureUserFile(userPath, shop);" in ensure_loaded
     assert "scope=neutral-default" in ensure_loaded
+
+
+def test_shop_policy_lock_contention_keeps_reply_path_available_with_cached_or_neutral_rules():
+    service = read(BOT / "ChromeNs" / "BusinessPolicyProfileService.cs")
+    ensure_loaded = service[
+        service.index("private static PolicyState EnsureLoaded"):
+        service.index("private static void EnsureUserFile")
+    ]
+
+    assert "try\n                    {\n                        EnsureUserFile(userPath, shop);" in ensure_loaded
+    assert "if (state.Loaded) return state;" in ensure_loaded
+    assert "state.Policy = Validate(GetDefaultJson());" in ensure_loaded
+    assert "state.Loaded = true;" in ensure_loaded
+    assert "稍后重试" in ensure_loaded
