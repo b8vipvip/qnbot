@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -244,12 +246,62 @@ _LOGIN_ATTEMPT_WINDOW_SECONDS = 600
 _LOGIN_ATTEMPT_LIMIT = 12
 _LOGIN_ATTEMPT_MAX_KEYS = 4096
 _LOGIN_ATTEMPT_KEY_MAX_LENGTH = 128
+_LOGIN_ATTEMPT_MAX_FORWARDED_HOPS = 16
+_DEFAULT_TRUSTED_PROXY_CIDRS = "127.0.0.0/8,::1/128,172.16.0.0/12"
+
+
+def _load_trusted_proxy_networks():
+    configured = os.environ.get("QNBOT_TRUSTED_PROXY_CIDRS", _DEFAULT_TRUSTED_PROXY_CIDRS)
+    networks = []
+    for item in configured.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid QNBOT_TRUSTED_PROXY_CIDRS entry: %s", item[:128])
+    return tuple(networks)
+
+
+_TRUSTED_PROXY_NETWORKS = _load_trusted_proxy_networks()
+
+
+def _is_trusted_proxy(address) -> bool:
+    return any(address.version == network.version and address in network
+               for network in _TRUSTED_PROXY_NETWORKS)
 
 
 def _login_attempt_key(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    key = forwarded or (request.client.host if request.client else "unknown")
-    return key[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH] or "unknown"
+    peer_text = request.client.host if request.client else "unknown"
+    try:
+        peer = ipaddress.ip_address(str(peer_text).strip())
+    except ValueError:
+        return str(peer_text)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH] or "unknown"
+
+    # Never trust forwarding headers from a direct/untrusted peer. In particular,
+    # a caller must not be able to rotate X-Forwarded-For to evade the login limit.
+    if not _is_trusted_proxy(peer):
+        return str(peer)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH]
+
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if not forwarded or len(forwarded) > 2048:
+        return str(peer)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH]
+
+    # Proxies append their observed peer to the right of any incoming chain.
+    # Walk from the trusted edge inward and choose the first non-proxy address;
+    # never take the leftmost value, which may have been supplied by the caller.
+    chain = forwarded.split(",")[-_LOGIN_ATTEMPT_MAX_FORWARDED_HOPS:]
+    for item in reversed(chain):
+        try:
+            address = ipaddress.ip_address(item.strip())
+        except ValueError:
+            return str(peer)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH]
+        if _is_trusted_proxy(address):
+            continue
+        return str(address)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH]
+
+    return str(peer)[:_LOGIN_ATTEMPT_KEY_MAX_LENGTH]
 
 
 def _rate_limit_login(request: Request) -> None:

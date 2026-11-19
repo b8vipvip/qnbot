@@ -542,6 +542,16 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private void ForgetStatusBindingAttempt(WebSocketSession session, string loginNick, string conversationNick)
+        {
+            if (session == null) return;
+            var key = (loginNick ?? string.Empty).Trim() + "\n" + (conversationNick ?? string.Empty).Trim();
+            // Remove only the failed attempt's exact value. A newer status event may
+            // have already installed a different key while this async bind was running.
+            ((ICollection<KeyValuePair<string, string>>)_lastStatusBindings).Remove(
+                new KeyValuePair<string, string>(session.SessionID, key));
+        }
+
         private async Task TryBindStatusConversation(WebSocketSession session, string loginNick, string conversationNick)
         {
             if (session == null) return;
@@ -557,6 +567,7 @@ namespace Bot.ChromeNs
                 if (user == null || user.Result == null || string.IsNullOrWhiteSpace(user.Result.Nick))
                 {
                     BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
+                    ForgetStatusBindingAttempt(session, loginNick, conversationNick);
                     return;
                 }
 
@@ -593,6 +604,10 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                // ShouldRefreshStatusBinding suppresses duplicate in-flight status events.
+                // If this attempt failed, release only its own suppression key so a later
+                // identical status event can retry the transient CDP/shop lookup.
+                ForgetStatusBindingAttempt(session, loginNick, conversationNick);
                 Log.Exception(ex);
             }
         }
