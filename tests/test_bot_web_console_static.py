@@ -33,7 +33,7 @@ def test_server_packages_and_registers_mobile_console():
 def test_web_login_is_bound_to_client_token_and_session():
     source = read(SERVICE)
     assert '@router.post("/api/bot-web/login")' in source
-    assert "_client_by_token(token, capture_cipher=True)" in source
+    assert "_client_by_token(token, capture_cipher=True, request_path=request.url.path)" in source
     assert 'request.session["bot_web_client_id"]' in source
     assert '@router.get("/api/bot-web/snapshot")' in source
     assert "Depends(_web_client)" in source
@@ -226,3 +226,16 @@ def test_bot_web_message_history_survives_polling_and_buyer_switches():
     assert "list.scrollTop=previousTop+list.scrollHeight-previousHeight" in script
     assert "renderConversations();renderMessages(false);await loadActiveMessages(true)" in script
     assert "await loadActiveMessages(true);await markRead()" not in script
+
+def test_rejected_runtime_tokens_are_diagnosed_without_logging_the_secret():
+    source = read(SERVICE)
+    assert "reason=unknown_token" in source
+    assert "reason=disabled_token" in source
+    assert "digest[:12]" in source
+    assert "request_path=request.url.path" in source
+    rejected = source[source.index("def _client_by_token"):source.index("def _runtime_client")]
+    assert "logger.warning" in rejected
+    assert "token_hash_prefix" in rejected
+    assert "logger.warning(.*token)" not in rejected
+    assert "logger.warning(.*Authorization)" not in rejected
+
