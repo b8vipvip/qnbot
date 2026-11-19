@@ -162,15 +162,15 @@ namespace Bot.ShopScope
                 {
                     Shop = expectedShop,
                     Success = false,
-                    Error = Safe(ex.Message, 220)
+                    Error = SafeError(ex.Message, 220)
                 };
             }
 
             if (recovered == null || !recovered.Success || string.IsNullOrWhiteSpace(recovered.Token))
             {
-                var recoveryError = recovered == null ? "同店令牌恢复没有返回结果" : Safe(recovered.Error, 220);
+                var recoveryError = recovered == null ? "同店令牌恢复没有返回结果" : SafeError(recovered.Error, 220);
                 var failure = "HTTP 401：服务端拒绝本店客户端令牌；同店凭据恢复失败。"
-                    + (string.IsNullOrWhiteSpace(firstBody) ? string.Empty : " 首次响应：" + Safe(firstBody, 180))
+                    + (string.IsNullOrWhiteSpace(firstBody) ? string.Empty : " 首次响应：" + SafeError(firstBody, 180))
                     + (string.IsNullOrWhiteSpace(recoveryError) ? string.Empty : " 恢复结果：" + recoveryError)
                     + "。请检查新服务器的 Bot 客户端令牌记录是否存在且已启用。";
                 ShopTokenBindingService.ReportFailure(expectedShop, failure);
@@ -184,7 +184,7 @@ namespace Bot.ShopScope
                 var retryBody = await ReadResponseBodySafeAsync(retry).ConfigureAwait(false);
                 retry.Dispose();
                 var failure = "HTTP 401：同店令牌恢复后重试仍被服务端拒绝。"
-                    + (string.IsNullOrWhiteSpace(retryBody) ? string.Empty : " 响应：" + Safe(retryBody, 180))
+                    + (string.IsNullOrWhiteSpace(retryBody) ? string.Empty : " 响应：" + SafeError(retryBody, 180))
                     + "。该令牌可能未登记在当前服务器，或已被停用。";
                 ShopTokenBindingService.ReportFailure(expectedShop, failure);
                 throw new UnauthorizedAccessException(failure);
@@ -204,6 +204,13 @@ namespace Bot.ShopScope
                     : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             }
             catch { return string.Empty; }
+        }
+
+        private static string SafeError(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\\r", " ").Replace("\\n", " ").Trim();
+            while (value.Contains("  ")) value = value.Replace("  ", " ");
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
         private static string Fingerprint(string token)
