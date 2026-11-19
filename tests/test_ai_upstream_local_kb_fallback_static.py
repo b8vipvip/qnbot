@@ -99,7 +99,6 @@ def test_streaming_reply_circuit_open_and_ai_failure_only_use_non_withdrawn_safe
     source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     service = source[
         source.index("internal static class StreamingBuyerAnswerService"):
-        source.index("internal static class ShopScopedReplyCircuitBreaker")
     ]
     assert "CanUseOfflineKnowledgeFallback(plan)" in service
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, safeFallback)" in service

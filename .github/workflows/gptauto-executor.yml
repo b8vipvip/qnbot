@@ -256,7 +256,7 @@ jobs:
 
       - name: Dispatch three-tier repair pipeline
         id: repair-dispatch
-        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' }}
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' && steps.state.outputs.pr-number != '' }}
         env:
           GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
           REPOSITORY: ${{ github.repository }}
@@ -267,7 +267,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          [[ -n "$PR_NUMBER" && -n "$HEAD_SHA" && -n "$FAILED_RUN_ID" ]] || { echo "::error::Repair dispatch is missing PR/head/run identity."; exit 1; }
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "::notice::Direct-push repair request has no PR context; skipping PR repair dispatch."
+            exit 0
+          fi
+          [[ -n "$HEAD_SHA" && -n "$FAILED_RUN_ID" ]] || { echo "::error::Repair dispatch is missing head/run identity."; exit 1; }
           marker="<!-- gptauto-repair-dispatched:$TASK_ID:$HEAD_SHA -->"
           # Do not let an unresolved PR consume Actions indefinitely by
           # repeatedly generating a fresh head and failing the same product CI.
