@@ -645,3 +645,17 @@ def test_superseded_learning_session_keeps_open_shop_circuit_deadline_for_restar
     assert '"requeue_conflict_new_session_active"' in requeue
     assert "RestoreKnowledgeCorpusCircuitBreakers(allReports);" in recovery
     assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
+
+
+def test_learning_timeline_clone_preserves_native_identity_aliases_and_feed_provenance():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    clone = bridge[
+        bridge.index("private static ConversationContextTurn CloneTurn"):
+        bridge.index("private static string ExtractMessageText")
+    ]
+
+    assert "NativeAliases = source.NativeAliases == null" in clone
+    assert "source.NativeAliases.ToArray()" in clone
+    assert "PreciseTimeTicks = source.PreciseTimeTicks" in clone
+    assert "SeenLive = source.SeenLive" in clone
+    assert "SeenHistory = source.SeenHistory" in clone
