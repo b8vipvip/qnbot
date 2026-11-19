@@ -464,8 +464,8 @@ def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
     assert "ActiveShopSessionRegistry.GetActiveShopKey()" in resolver
     assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in resolver
     assert "ShopIdentityResolver.Resolve(current.Seller).ShopKey" in resolver
-    assert "ActiveShopSessionRegistry.IsActive(qn)" in resolver
-    assert "ActiveShopSessionRegistry.IsActive(current)" in resolver
+    assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn)" in resolver
+    assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current)" in resolver
     assert "var qn = ResolveMessageMirrorQn();" in restore
     assert "var current = ResolveMessageMirrorQn();" in restore
     assert "ActiveShopSessionRegistry.IsActive(current)" in reshow
@@ -714,3 +714,26 @@ def test_negative_or_non_finite_hasmore_values_are_unknown_not_explicit_server_e
     assert "double.IsNaN(numeric) || double.IsInfinity(numeric) || numeric < 0" in parser
     assert "hasMoreKnown && hasMore == 0" in refresh
     assert "hasMoreKnown && hasMore > 0" in refresh
+
+
+def test_read_only_message_mirror_does_not_require_focus_proof_but_native_actions_still_do():
+    registry = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    read_only = registry.split(
+        "internal static bool IsCurrentSessionForReadOnlyUi(QN qn)", 1
+    )[1].split("internal static void ObserveChatDialogActive", 1)[0]
+    active = registry.split(
+        "internal static bool IsActive(QN qn)", 1
+    )[1].split("internal static bool IsCurrentSessionForReadOnlyUi", 1)[0]
+    resolver = mirror.split(
+        "private QN ResolveMessageMirrorQn()", 1
+    )[1].split("private List<ConversationContextTurn> LoadMessageMirrorTurns", 1)[0]
+
+    assert "OwnsAuthoritativeSession(qn, shopKey, sessionId)" in read_only
+    assert "_activeShopKey" in read_only
+    assert "_activeSessionId" in read_only
+    assert "HasFreshFocusProofLocked" not in read_only
+    assert "HasFreshFocusProofLocked()" in active
+    assert "IsCurrentSessionForReadOnlyUi(qn)" in resolver
+    assert "IsCurrentSessionForReadOnlyUi(current)" in resolver
+

@@ -14,7 +14,7 @@ KNOWLEDGE = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
 
 def test_buyer_only_context_action_preserves_copy_and_seller_bot_menus():
-    assert 'BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyer,' in MIRROR
+    assert 'BuildMessageMirrorBotContextMenu(botAction, turn, seller, buyerIdentity, buyer,' in MIRROR
     assert ': BuildCopyOnlyContextMenu(messageText, bubble);' in MIRROR
     assert 'if (!isSeller' in MIRROR
     assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in MIRROR

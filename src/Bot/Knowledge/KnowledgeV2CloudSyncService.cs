@@ -60,7 +60,8 @@ namespace Bot.Knowledge
         }
         private static void Queue(ShopContext shop)
         {
-            if(shop==null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)) return;
+            if(shop==null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)
+                || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state=States.GetOrAdd(shop.ShopKey,_=>LoadState(shop));
             if(Interlocked.Exchange(ref state.Syncing,1)!=0) return;
             Task.Run(async()=>{try{await SyncOnce(shop,state);}catch(Exception ex){Log.ErrorWithMaxCount("Knowledge V2 云同步失败："+Safe(ex.Message,260),20);}finally{Interlocked.Exchange(ref state.Syncing,0);}});
@@ -83,14 +84,22 @@ namespace Bot.Knowledge
                 ServicePointManager.SecurityProtocol|=SecurityProtocolType.Tls12;
                 using(var handler=new HttpClientHandler{UseProxy=true,Proxy=WebRequest.DefaultWebProxy})
                 using(var http=new HttpClient(handler))
-                using(var request=new HttpRequestMessage(HttpMethod.Post,url.TrimEnd('/')+"/api/runtime/v1/bot-web/knowledge-v2-sync"))
                 {
                     http.Timeout=TimeSpan.FromSeconds(45);
-                    request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",token);
-                    request.Headers.TryAddWithoutValidation("X-Shop-Key",shop.ShopKey);
-                    request.Headers.TryAddWithoutValidation("User-Agent","qianniu-knowledge-v2-cloud/1.0");
-                    request.Content=new StringContent(payload.ToString(Formatting.None),Encoding.UTF8,"application/json");
-                    using(var response=await http.SendAsync(request))
+                    using(var response=await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                        shop,
+                        token,
+                        async requestToken =>
+                        {
+                            using(var request=new HttpRequestMessage(HttpMethod.Post,url.TrimEnd('/')+"/api/runtime/v1/bot-web/knowledge-v2-sync"))
+                            {
+                                request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",requestToken);
+                                request.Headers.TryAddWithoutValidation("X-Shop-Key",shop.ShopKey);
+                                request.Headers.TryAddWithoutValidation("User-Agent","qianniu-knowledge-v2-cloud/1.0");
+                                request.Content=new StringContent(payload.ToString(Formatting.None),Encoding.UTF8,"application/json");
+                                return await http.SendAsync(request).ConfigureAwait(false);
+                            }
+                        }))
                     {
                         var body=await response.Content.ReadAsStringAsync();
                         if(!response.IsSuccessStatusCode) throw new Exception("HTTP "+(int)response.StatusCode+" "+Safe(body,200));

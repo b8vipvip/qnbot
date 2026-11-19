@@ -64,6 +64,30 @@ curl -fsS http://127.0.0.1:18081/healthz
 5. 在“Bot 客户端”创建一枚令牌。
 6. 在 Windows Bot 的“API 服务连接”中填写 `https://<CONTROL_PLANE_HOST>` 和该令牌。
 
+## 迁移到新服务器时的 Bot 客户端令牌
+
+Bot 业务接口使用 Bearer 客户端令牌。服务端将令牌计算为 SHA-256，并只接受
+`client_tokens` 表中匹配且 `enabled=1` 的记录。Bot 版本更新通知
+`/api/public/v1/bot-update/events` 是公开 SSE 通道；它连接成功不代表业务令牌已通过验证。
+
+迁移控制面时必须明确选择以下一种方式：
+
+1. **保留原有客户端身份和云端数据（推荐）**：停掉旧、新控制面写入后，备份并迁移完整的
+   `data/` 目录（其中包含 `api-control-plane.db`），同时保留旧 `.env` 中的
+   `APP_SECRET` 和 `API_KEY_ENCRYPTION_KEY`。当前宝塔 Compose 将宿主机
+   `services/api-control-plane/data` 挂载到容器 `/data`，数据库默认位于
+   `/data/api-control-plane.db`。不要只复制 `.env`，也不要只复制一张表后丢失其他
+   client_id 关联数据。
+2. **在新服务器重新建立客户端身份**：如果新服务器使用全新数据库，在后台
+   “Bot 客户端”创建并启用新令牌，然后在 Windows Bot 的“店铺绑定 → 管理令牌”
+   中为对应店铺更换该令牌。客户端会先调用同店绑定校验，成功后才保存；保留本地配置和
+   知识库的选项不会重置这些数据。
+
+如果业务接口持续返回 `401 {"detail":"客户端令牌无效"}`，请检查新服务器后台的
+“Bot 客户端”列表中是否存在该令牌对应的客户端，以及它是否启用。服务端会在拒绝时
+记录 `reason=unknown_token` 或 `reason=disabled_token`、请求路径和令牌哈希前缀；
+日志不会记录原始令牌。不要关闭鉴权，也不要手工把客户端令牌写入其他店铺的配置。
+
 ## 企业微信应用消息转人工
 
 ### 1. 控制面网页配置

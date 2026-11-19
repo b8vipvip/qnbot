@@ -25,6 +25,36 @@ def test_live_seller_and_remote_history_share_one_canonical_timeline():
     assert "MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory)" in record
 
 
+def test_live_and_history_messages_resolve_buyer_aliases_within_shop_scope():
+    store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    live = store.split("public static void RefreshAndRecord(", 1)[1].split(
+        "/// <summary>", 1
+    )[0]
+    seller_echo = store.split("internal static bool RecordObservedSellerMessage(", 1)[1].split(
+        "public static bool IsPlatformSystemTip(", 1
+    )[0]
+    record = store.split("private static string RecordMessage(", 1)[1].split(
+        "private static string[] GetNativeMessageAliases(", 1
+    )[0]
+
+    # Live events establish the alias before selecting the canonical timeline key.
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message);" in live
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in live
+
+    # Seller echoes remain bound to the exact shop and seller, while accepting only
+    # a buyer alias already observed by the shop-scoped identity service.
+    assert "var shop = ResolveShop(seller, shopKey);" in seller_echo
+    assert "ShopSettingsScope.Enter(shop)" in seller_echo
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message);" in seller_echo
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)" in seller_echo
+    assert "string.Equals(from, seller, StringComparison.Ordinal)" in seller_echo
+
+    # Remote history uses the same alias-aware role classification as live messages.
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message);" in record
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, from, buyer)" in record
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)" in record
+
+
 def test_true_same_text_double_sends_are_not_collapsed_by_text_alone():
     store = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     record = store.split("private static string RecordMessage(", 1)[1].split(
