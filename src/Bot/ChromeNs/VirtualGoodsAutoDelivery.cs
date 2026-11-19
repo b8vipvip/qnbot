@@ -89,10 +89,14 @@ namespace Bot.ChromeNs
 
         public static void Initialize()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            AutoDeliveryConfirmationLedger.Initialize();
             lock (Sync)
             {
+                // Serialize the first load with every public queue operation. A second
+                // caller must not observe _initialized before _state is ready.
+                if (_initialized != 0) return;
+                _initialized = 1;
+                AutoDeliveryConfirmationLedger.Initialize();
+
                 bool loadedSuccessfully;
                 _state = LoadState(out loadedSuccessfully);
                 if (!loadedSuccessfully)
@@ -108,8 +112,8 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，避免使用未持久化状态。", 10);
                     return;
                 }
+                _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
             }
-            _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
             Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
         }
 

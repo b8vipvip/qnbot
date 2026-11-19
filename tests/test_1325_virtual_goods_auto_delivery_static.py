@@ -177,3 +177,18 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
     assert "loadedSuccessfully = false;" in loader
     assert "if (_stateLoadFailed) return;" in runtime
     assert "if (_stateLoadFailed) return false;" in runtime
+
+
+def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_load():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    runtime_init = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    seed_init = seed[seed.index("public static void Initialize"):seed.index("public static void MarkConfiguration")]
+
+    for initializer in (runtime_init, seed_init):
+        assert "lock (Sync)" in initializer
+        assert "if (_initialized != 0) return;" in initializer
+        assert "Interlocked.Exchange(ref _initialized" not in initializer
+        assert initializer.index("if (_initialized != 0) return;") < initializer.index("_initialized = 1;")
+    assert runtime_init.index("_state = LoadState(out loadedSuccessfully);") < runtime_init.index("new Timer(")
+    assert seed_init.index("_cursors = LoadCursors();") < seed_init.index("new Timer(")
