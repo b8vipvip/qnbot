@@ -47,15 +47,10 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0)
                 throw new InvalidOperationException("卖家昵称为空，无法确定店铺作用域。");
-            var current = ShopSettingsScope.Current;
-            if (current != null)
-            {
-                if (!string.Equals((current.SellerNick ?? string.Empty).Trim(),
-                    seller, StringComparison.Ordinal))
-                    throw new InvalidOperationException("当前店铺作用域与卖家身份不一致，拒绝跨店读取接待规则。");
-                return current;
-            }
-            return ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            // Reuse the shared resolver so offline DisplayName labels are accepted
+            // only for the exact active scope, while mismatched SellerNick/ShopKey
+            // values are rejected instead of silently reading another shop's rules.
+            return ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
         }
 
         public static bool Applies(string seller)
