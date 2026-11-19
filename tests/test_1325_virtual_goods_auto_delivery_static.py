@@ -159,3 +159,21 @@ def test_auto_delivery_sources_are_included_in_normal_and_wpf_temp_builds():
         "AutoDeliveryAppBootstrap.cs",
     ):
         assert path in props
+
+
+def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pending_tasks():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    loader = runtime[runtime.index("private static StateDocument LoadState"):runtime.index("private static bool SaveStateLocked")]
+
+    assert "private static bool _stateLoadFailed;" in runtime
+    assert "LoadState(out loadedSuccessfully)" in initialize
+    assert "if (!loadedSuccessfully)" in initialize
+    assert "if (!SaveStateLocked())" in initialize
+    assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
+    assert "保留原状态文件并暂停自动发货" in initialize
+    assert "private static StateDocument LoadState(out bool loadedSuccessfully)" in loader
+    assert "loaded.Schema != 1 || loaded.Pending == null" in loader
+    assert "loadedSuccessfully = false;" in loader
+    assert "if (_stateLoadFailed) return;" in runtime
+    assert "if (_stateLoadFailed) return false;" in runtime

@@ -413,7 +413,12 @@ namespace Bot.ChromeNs
         {
             lock (FileSync)
             {
-                var reports = LoadReportsUnsafe();
+                List<SlowResponseAnomalyReport> reports;
+                if (!TryLoadReportsUnsafe(out reports))
+                {
+                    Log.Info("慢响应异常报告读取失败，本次更新已跳过以保护现有历史文件。");
+                    return;
+                }
                 var index = reports.FindIndex(x => string.Equals(x.Id, report.Id, StringComparison.Ordinal));
                 if (index >= 0) reports[index] = report;
                 else reports.Add(report);
@@ -425,17 +430,29 @@ namespace Bot.ChromeNs
 
         private static List<SlowResponseAnomalyReport> LoadReportsUnsafe()
         {
+            List<SlowResponseAnomalyReport> reports;
+            return TryLoadReportsUnsafe(out reports)
+                ? reports
+                : new List<SlowResponseAnomalyReport>();
+        }
+
+        private static bool TryLoadReportsUnsafe(out List<SlowResponseAnomalyReport> reports)
+        {
+            reports = new List<SlowResponseAnomalyReport>();
+            if (!File.Exists(ReportFilePath)) return true;
             try
             {
-                if (!File.Exists(ReportFilePath)) return new List<SlowResponseAnomalyReport>();
                 var text = File.ReadAllText(ReportFilePath, Encoding.UTF8);
-                return JsonConvert.DeserializeObject<List<SlowResponseAnomalyReport>>(text)
-                    ?? new List<SlowResponseAnomalyReport>();
+                var loaded = JsonConvert.DeserializeObject<List<SlowResponseAnomalyReport>>(text);
+                if (loaded == null) throw new InvalidDataException("异常报告文件不是有效的 JSON 数组。");
+                reports = loaded;
+                return true;
             }
             catch (Exception ex)
             {
+                reports = null;
                 Log.Info("读取慢响应异常报告失败：" + Safe(ex.Message, 300));
-                return new List<SlowResponseAnomalyReport>();
+                return false;
             }
         }
 

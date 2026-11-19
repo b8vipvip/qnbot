@@ -82,6 +82,7 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan UncertainRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan MaxPendingAge = TimeSpan.FromHours(24);
         private static StateDocument _state;
+        private static bool _stateLoadFailed;
         private static Timer _timer;
         private static int _initialized;
         private static int _workerRunning;
@@ -92,9 +93,21 @@ namespace Bot.ChromeNs
             AutoDeliveryConfirmationLedger.Initialize();
             lock (Sync)
             {
-                _state = LoadState();
+                bool loadedSuccessfully;
+                _state = LoadState(out loadedSuccessfully);
+                if (!loadedSuccessfully)
+                {
+                    _stateLoadFailed = true;
+                    Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，禁止以空队列覆盖旧任务。", 10);
+                    return;
+                }
                 CleanupExpiredLocked(DateTime.Now);
-                SaveStateLocked();
+                if (!SaveStateLocked())
+                {
+                    _stateLoadFailed = true;
+                    Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，避免使用未持久化状态。", 10);
+                    return;
+                }
             }
             _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
             Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
@@ -104,6 +117,7 @@ namespace Bot.ChromeNs
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller) || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
             Initialize();
+            if (_stateLoadFailed) return;
             if (!AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId))
             {
                 Log.ErrorWithMaxCount("自动发货拒绝非安全订单号：仅允许16-24位纯数字真实订单号。orderId=" + (snapshot.OrderId ?? string.Empty), 20);
@@ -163,6 +177,7 @@ namespace Bot.ChromeNs
         public static void ReconfigureSeller(string seller, bool enabled, int delayMinutes)
         {
             Initialize();
+            if (_stateLoadFailed) return;
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return;
             delayMinutes = AutoDeliverySettings.Clamp(delayMinutes);
@@ -192,6 +207,7 @@ namespace Bot.ChromeNs
         public static bool TryPersistConfirmationIntent(string seller, string orderId)
         {
             Initialize();
+            if (_stateLoadFailed) return false;
             seller = (seller ?? string.Empty).Trim();
             orderId = (orderId ?? string.Empty).Trim();
             if (seller.Length == 0 || !AutoDeliveryConfirmationLedger.IsSafeOrderId(orderId)) return false;
@@ -232,6 +248,7 @@ namespace Bot.ChromeNs
 
         private static void ScheduleWorker()
         {
+            if (_stateLoadFailed) return;
             if (Interlocked.CompareExchange(ref _workerRunning, 1, 0) != 0) return;
             Task.Run(RunWorkerAsync);
         }
@@ -446,20 +463,29 @@ namespace Bot.ChromeNs
             return Path.Combine(root, "virtual-goods-auto-delivery-queue.json");
         }
 
-        private static StateDocument LoadState()
+        private static StateDocument LoadState(out bool loadedSuccessfully)
         {
+            loadedSuccessfully = false;
             try
             {
                 var path = StatePath();
-                if (!File.Exists(path)) return new StateDocument();
+                if (!File.Exists(path))
+                {
+                    loadedSuccessfully = true;
+                    return new StateDocument();
+                }
                 var loaded = JsonConvert.DeserializeObject<StateDocument>(File.ReadAllText(path, Encoding.UTF8));
-                if (loaded == null || loaded.Schema != 1) return new StateDocument();
-                if (loaded.Pending == null) loaded.Pending = new List<PendingRecord>();
+                if (loaded == null || loaded.Schema != 1 || loaded.Pending == null)
+                {
+                    Log.ErrorWithMaxCount("自动发货任务队列结构无效；拒绝重置或覆盖现有任务文件。", 10);
+                    return new StateDocument();
+                }
+                loadedSuccessfully = true;
                 return loaded;
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("读取虚拟商品自动发货任务状态失败，使用空队列：" + ex.Message, 5);
+                Log.ErrorWithMaxCount("读取虚拟商品自动发货任务状态失败；暂停自动发货并保留原文件：" + ex.Message, 10);
                 return new StateDocument();
             }
         }
