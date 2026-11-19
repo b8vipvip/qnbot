@@ -59,7 +59,10 @@ def test_status_binding_failure_releases_only_its_own_suppression_key_for_retry(
 
     assert "ICollection<KeyValuePair<string, string>>" in helper
     assert "new KeyValuePair<string, string>(session.SessionID, key)" in helper
-    assert "ForgetStatusBindingAttempt(session, loginNick, conversationNick);" in bind
-    assert bind.index("ForgetStatusBindingAttempt(session, loginNick, conversationNick);") < bind.index("return;")
-    assert "catch (Exception ex)" in bind
-    assert "Log.Exception(ex);" in bind
+    invalid_user = bind[bind.index("if (user == null"):bind.index("var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity")]
+    failure_catch = bind[bind.index("catch (Exception ex)"):]
+
+    assert "ForgetStatusBindingAttempt(session, loginNick, conversationNick);" in invalid_user
+    assert invalid_user.index("ForgetStatusBindingAttempt(session, loginNick, conversationNick);") < invalid_user.index("return;")
+    assert "ForgetStatusBindingAttempt(session, loginNick, conversationNick);" in failure_catch
+    assert "Log.Exception(ex);" in failure_catch
