@@ -54,6 +54,7 @@ namespace Bot.ChromeNs
         private static Timer _timer;
         private static int _initialized;
         private static int _running;
+        private static bool _cursorStateUnavailable;
 
         public static void Initialize()
         {
@@ -64,7 +65,14 @@ namespace Bot.ChromeNs
                 if (_initialized != 0) return;
                 _initialized = 1;
                 AutoDeliveryConfirmationLedger.Initialize();
-                _cursors = LoadCursors();
+                bool loadedSuccessfully;
+                _cursors = LoadCursors(out loadedSuccessfully);
+                if (!loadedSuccessfully)
+                {
+                    _cursorStateUnavailable = true;
+                    Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，避免跳过未处理订单。", 10);
+                    return;
+                }
                 _timer = new Timer(_ => Tick(), null, 1200, 1800);
             }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
@@ -73,6 +81,7 @@ namespace Bot.ChromeNs
         public static void MarkConfiguration(string seller, bool enabled)
         {
             Initialize();
+            if (_cursorStateUnavailable) return;
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return;
             lock (Sync)
@@ -82,13 +91,14 @@ namespace Bot.ChromeNs
                 {
                     cursor.EnabledObserved = enabled;
                     cursor.LastSeenAt = DateTime.Now;
-                    SaveCursorsLocked();
+                    if (!SaveCursorsLocked()) return;
                 }
             }
         }
 
         private static void Tick()
         {
+            if (_cursorStateUnavailable) return;
             if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return;
             try
             {
@@ -108,10 +118,11 @@ namespace Bot.ChromeNs
                 // If the irreversible confirmation ledger is corrupted/unwritable, do not advance
                 // order-event cursors. That preserves new events for recovery after the ledger is
                 // repaired instead of silently consuming them while auto-confirm is fail-closed.
-                if (!AutoDeliveryConfirmationLedger.IsOperational())
+                if (!AutoDeliveryConfirmationLedger.IsOperational()
+                    || !AutoDeliveryCoordinator.IsOperational())
                 {
                     Log.ErrorWithMaxCount(
-                        "自动发货长期确认防重账本不可用；暂停消费新订单事件且不推进游标。",
+                        "自动发货队列或长期确认防重账本不可用；暂停消费新订单事件且不推进游标。",
                         10);
                     return;
                 }
@@ -134,7 +145,7 @@ namespace Bot.ChromeNs
                             // false -> true begins exactly at now; all prior events are history.
                             cursor.EnabledObserved = enabled;
                             cursor.LastSeenAt = DateTime.Now;
-                            SaveCursorsLocked();
+                            if (!SaveCursorsLocked()) return;
                         }
                     }
                     if (!enabled) continue;
@@ -153,7 +164,9 @@ namespace Bot.ChromeNs
                     var latest = floor;
                     foreach (var entry in matching)
                     {
-                        AutoDeliveryCoordinator.Enqueue(entry.Snapshot);
+                        // Do not advance the durable event cursor unless the corresponding
+                        // queue state was safely persisted or the event was intentionally ignored.
+                        if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;
                         if (entry.SeenAt > latest) latest = entry.SeenAt;
                     }
                     if (latest > floor)
@@ -161,7 +174,7 @@ namespace Bot.ChromeNs
                         lock (Sync)
                         {
                             cursor.LastSeenAt = latest;
-                            SaveCursorsLocked();
+                            if (!SaveCursorsLocked()) return;
                         }
                     }
                 }
@@ -219,27 +232,36 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static CursorState LoadCursors()
+        private static CursorState LoadCursors(out bool loadedSuccessfully)
         {
+            loadedSuccessfully = false;
             try
             {
                 var path = CursorPath();
-                if (!File.Exists(path)) return new CursorState();
+                if (!File.Exists(path))
+                {
+                    loadedSuccessfully = true;
+                    return new CursorState();
+                }
                 var state = JsonConvert.DeserializeObject<CursorState>(File.ReadAllText(path, Encoding.UTF8));
-                if (state == null || state.Schema != 1) return new CursorState();
-                if (state.Sellers == null) state.Sellers = new List<SellerCursor>();
+                if (state == null || state.Schema != 1 || state.Sellers == null)
+                {
+                    Log.ErrorWithMaxCount("自动发货订单事件游标结构无效；拒绝重置或覆盖现有游标文件。", 10);
+                    return new CursorState();
+                }
+                loadedSuccessfully = true;
                 return state;
             }
-            catch
+            catch (Exception ex)
             {
-                // Reset-to-now behavior in GetCursorLocked is fail-safe: a corrupted cursor can skip
-                // old events, but can never cause historical orders to be auto-shipped.
+                Log.ErrorWithMaxCount("读取自动发货订单事件游标失败；保留原文件并暂停事件消费：" + ex.Message, 10);
                 return new CursorState();
             }
         }
 
         private static bool SaveCursorsLocked()
         {
+            if (_cursorStateUnavailable) return false;
             try
             {
                 var path = CursorPath();
@@ -251,7 +273,8 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("保存自动发货订单事件游标失败：" + ex.Message, 10);
+                _cursorStateUnavailable = true;
+                Log.ErrorWithMaxCount("保存自动发货订单事件游标失败；暂停事件消费以防丢失订单：" + ex.Message, 10);
                 return false;
             }
         }

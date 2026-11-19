@@ -117,24 +117,32 @@ namespace Bot.ChromeNs
             Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
         }
 
-        public static void Enqueue(OrderSnapshot snapshot)
+        public static bool IsOperational()
         {
-            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller) || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
             Initialize();
-            if (_stateLoadFailed) return;
+            bool queueReady;
+            lock (Sync) queueReady = !_stateLoadFailed && _state != null && _state.Pending != null;
+            return queueReady && AutoDeliveryConfirmationLedger.IsOperational();
+        }
+
+        public static bool Enqueue(OrderSnapshot snapshot)
+        {
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller) || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return true;
+            Initialize();
+            if (_stateLoadFailed) return false;
             if (!AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId))
             {
                 Log.ErrorWithMaxCount("自动发货拒绝非安全订单号：仅允许16-24位纯数字真实订单号。orderId=" + (snapshot.OrderId ?? string.Empty), 20);
-                return;
+                return true;
             }
             if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
             {
                 Log.Info("自动发货订单已有长期确认防重记录，拒绝重新入队: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", repeatConfirm=false");
-                return;
+                return AutoDeliveryConfirmationLedger.IsOperational();
             }
             var cfg = AutoDeliverySettings.Load(snapshot.Seller);
-            if (cfg == null || !cfg.Enabled) return;
-            if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return;
+            if (cfg == null || !cfg.Enabled) return true;
+            if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
 
             var now = DateTime.Now;
             var anchor = ResolveAnchor(snapshot, now);
@@ -143,7 +151,8 @@ namespace Bot.ChromeNs
             var key = BuildKey(snapshot.Seller, snapshot.OrderId);
             lock (Sync)
             {
-                if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId)) return;
+                if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.Seller, snapshot.OrderId))
+                    return AutoDeliveryConfirmationLedger.IsOperational();
                 var existing = _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
                 if (existing == null)
                 {
@@ -173,9 +182,10 @@ namespace Bot.ChromeNs
                     Log.Info("虚拟商品自动发货任务已用新订单状态刷新: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", due=" + existing.DueAt.ToString("yyyy-MM-dd HH:mm:ss") + ", confirmationIntent=" + existing.ConfirmationIntentAt.HasValue);
                 }
                 CleanupExpiredLocked(now);
-                SaveStateLocked();
+                if (!SaveStateLocked()) return false;
             }
             ScheduleWorker();
+            return true;
         }
 
         public static void ReconfigureSeller(string seller, bool enabled, int delayMinutes)

@@ -191,4 +191,42 @@ def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_
         assert "Interlocked.Exchange(ref _initialized" not in initializer
         assert initializer.index("if (_initialized != 0) return;") < initializer.index("_initialized = 1;")
     assert runtime_init.index("_state = LoadState(out loadedSuccessfully);") < runtime_init.index("new Timer(")
-    assert seed_init.index("_cursors = LoadCursors();") < seed_init.index("new Timer(")
+    assert seed_init.index("_cursors = LoadCursors(out loadedSuccessfully);") < seed_init.index("new Timer(")
+
+
+def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwriting():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    initialize = seed[seed.index("public static void Initialize"):seed.index("public static void MarkConfiguration")]
+    loader = seed[seed.index("private static CursorState LoadCursors"):seed.index("private static bool SaveCursorsLocked")]
+    save = seed[seed.index("private static bool SaveCursorsLocked"):seed.index("private static string DataRoot")]
+    tick = seed[seed.index("private static void Tick"):seed.index("private static SellerCursor GetCursorLocked")]
+
+    assert "LoadCursors(out loadedSuccessfully)" in initialize
+    assert "if (!loadedSuccessfully)" in initialize
+    assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
+    assert "private static bool _cursorStateUnavailable;" in seed
+    assert "state == null || state.Schema != 1 || state.Sellers == null" in loader
+    assert "loadedSuccessfully = false;" in loader
+    assert "return new CursorState();" in loader
+    assert "if (_cursorStateUnavailable) return;" in tick
+    assert "if (!SaveCursorsLocked()) return;" in tick
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
+    assert "暂停事件消费" in loader
+    assert "_cursorStateUnavailable = true;" in save
+
+
+def test_event_cursor_does_not_advance_when_queue_persistence_is_unavailable():
+    coordinator = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    operational = coordinator[coordinator.index("public static bool IsOperational"):coordinator.index("public static bool Enqueue")]
+    enqueue = coordinator[coordinator.index("public static bool Enqueue"):coordinator.index("public static void ReconfigureSeller")]
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    tick = seed[seed.index("private static void Tick"):seed.index("private static SellerCursor GetCursorLocked")]
+
+    assert "public static bool IsOperational()" in operational
+    assert "return queueReady && AutoDeliveryConfirmationLedger.IsOperational();" in operational
+    assert "public static bool Enqueue(OrderSnapshot snapshot)" in enqueue
+    assert "if (!SaveStateLocked()) return false;" in enqueue
+    assert "return AutoDeliveryConfirmationLedger.IsOperational();" in enqueue
+    assert "if (!AutoDeliveryCoordinator.IsOperational())" in tick
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
+    assert tick.index("AutoDeliveryCoordinator.Enqueue(entry.Snapshot)") < tick.index("cursor.LastSeenAt = latest;")
