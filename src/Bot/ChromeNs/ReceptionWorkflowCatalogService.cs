@@ -115,11 +115,17 @@ namespace Bot.ChromeNs
                     if (!timeout.HasValue || timeout < 0 || timeout > 10080)
                         throw new InvalidDataException("步骤超时超出范围");
                     var required = step["required_evidence"] as JArray;
-                    if (required == null || required.Count > 10)
-                        throw new InvalidDataException("缺少必要证据或证据种类过多");
+                    if (required == null || required.Count < 1 || required.Count > 10)
+                        throw new InvalidDataException("每个流程步骤必须声明1到10种必要证据");
+                    var evidenceKinds = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var kind in required)
-                        if (kind.Type != JTokenType.String || !AllowedEvidence.Contains(Convert.ToString(kind)))
+                    {
+                        if (kind == null || kind.Type != JTokenType.String
+                            || !AllowedEvidence.Contains(Convert.ToString(kind)))
                             throw new InvalidDataException("证据类型不受支持");
+                        if (!evidenceKinds.Add(Convert.ToString(kind)))
+                            throw new InvalidDataException("同一步骤不允许重复声明相同证据类型");
+                    }
                     if (!ValidKey(Convert.ToString(step["next_state"])))
                         throw new InvalidDataException("下一状态无效");
                 }
