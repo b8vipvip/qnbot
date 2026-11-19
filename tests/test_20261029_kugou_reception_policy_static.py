@@ -281,3 +281,24 @@ def test_offline_shop_scope_uses_display_name_only_when_it_matches_the_exact_pro
     assert "sellerMatches" in resolver
     assert "if (!sellerMatches && !displayNameMatches)" in resolver
     assert "return ResolveRuntimeByShopKey(sellerNick)" in resolver
+
+
+def test_expired_shop_detection_cache_entries_are_pruned_without_racing_refreshes():
+    policy = src(POLICY)
+    cleanup = policy[
+        policy.index("private static void CleanupExpiredShopCache"):
+        policy.index("internal static ShopContext ResolveShopForSeller")
+    ]
+    applies = policy[
+        policy.index("public static bool Applies"):
+        policy.index("internal static bool RequiresManualKnowledgeReview")
+    ]
+
+    assert "Interlocked.Read(ref _lastShopCacheSweepUtcTicks)" in cleanup
+    assert "Interlocked.CompareExchange(" in cleanup
+    assert "TimeSpan.FromMinutes(1).Ticks" in cleanup
+    assert "pair.Value.ExpiresUtc <= now" in cleanup
+    assert "ICollection<KeyValuePair<string, ShopDetection>>" in cleanup
+    assert "exactEntries.Remove(pair)" in cleanup
+    assert "CleanupExpiredShopCache();" in applies
+    assert applies.index("CleanupExpiredShopCache();") < applies.index("Shops.TryGetValue(cacheKey")
