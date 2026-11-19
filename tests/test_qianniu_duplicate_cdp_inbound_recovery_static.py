@@ -337,8 +337,8 @@ def test_final_duplicate_cdp_dispatch_is_serialized_with_source_identity_transit
     assert "SessionTransitionLocks" in bridge
     assert "Enumerable.Range(0, 64).Select(_ => new object()).ToArray()" in bridge
     assert "lock (GetSessionTransitionLock(sessionId))" in mark
-    assert "lock (GetSessionTransitionLock(item.SourceSession))" in deliver
-    assert deliver.index("lock (GetSessionTransitionLock(item.SourceSession))") < deliver.index(
+    assert "WithSessionTransitionLocks(item.SourceSession, target.SessionId" in deliver
+    assert deliver.index("WithSessionTransitionLocks(item.SourceSession, target.SessionId") < deliver.index(
         "target.DispatchInboundEvent(item.Type, item.Response)"
     )
     assert "if (IsSessionIdentityTransitioning(item.SourceSession)" in deliver
@@ -393,8 +393,8 @@ def test_final_dispatch_revalidates_the_exact_current_shopkey_inside_transition_
         bridge.index("private static void DrainPending")
     ]
     lock_body = deliver[
-        deliver.index("lock (GetSessionTransitionLock(item.SourceSession))"):
-        deliver.index("Log.Info(\"重复千牛CDP入站消息已按ShopKey转交权威会话")
+        deliver.index("WithSessionTransitionLocks(item.SourceSession, target.SessionId"):
+        deliver.index("if (!accepted) return false;")
     ]
 
     assert "var finalMappedShopKey = server.GetShopKeyForSession(item.SourceSession);" in lock_body
@@ -455,7 +455,7 @@ def test_direct_cdpcclient_dispatch_cannot_bypass_shopkey_identity_transition_ga
     # execute responses still complete the in-flight identity-discovery request before
     # business-event gating, so a retired socket can safely discover its new ShopKey.
     assert socket_dispatch.index('if (e.Type == "execute")') < socket_dispatch.index(
-        "DispatchInboundEvent(e.Type, response)"
+        "TryDispatchRawInbound(this, e.Type, response)"
     )
 
 
@@ -483,7 +483,7 @@ def test_raw_and_forwarded_cdp_dispatch_share_identity_transition_locks():
     ]
     raw_dispatch = bridge[
         bridge.index("internal static bool TryDispatchRawInbound"):
-        bridge.index("private static bool IsRecoverableInboundType")
+        bridge.index("private static void ReleaseAcceptedFingerprint")
     ]
     forwarded = bridge[
         bridge.index("private static bool TryDeliverLive"):
