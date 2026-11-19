@@ -118,6 +118,9 @@ namespace Bot.ChromeNs
         internal const int AbsoluteGenerationAgeSeconds = BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + 20;
         private static readonly ConcurrentDictionary<string, SessionState> Sessions =
             new ConcurrentDictionary<string, SessionState>(StringComparer.Ordinal);
+        // A global monotonic sequence prevents a pruned/recreated buyer session from reusing
+        // an old generation id while the independent deadline watchdog still has its snapshot.
+        private static long _generationSequence;
 
         static BuyerSessionAgent()
         {
@@ -182,8 +185,8 @@ namespace Bot.ChromeNs
 
                 RememberMessageKeyLocked(state, messageKey);
                 hadParallelGeneration = state.ActiveGenerations.Count > 0;
-                state.Generation++;
-                generation = state.Generation;
+                generation = Interlocked.Increment(ref _generationSequence);
+                state.Generation = generation;
                 acceptedAtUtc = DateTime.UtcNow;
                 var cts = new CancellationTokenSource();
                 state.GenerationCancellation = cts;

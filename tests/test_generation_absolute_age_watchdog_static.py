@@ -54,3 +54,20 @@ def test_generation_watchdog_is_not_triggered_by_human_reply():
     assert "WatchSession(shopKey, seller, buyer);" in source
     assert "SellerHumanReply" in source
     assert "false, shopKey);" in source
+
+
+def test_generation_watchdog_removes_only_exact_watch_snapshots_and_ids_survive_session_pruning():
+    agent = text("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+
+    assert "private static long _generationSequence;" in agent
+    assert "Interlocked.Increment(ref _generationSequence)" in agent
+    assert "state.Generation = generation" in agent
+    assert "private static bool RemoveExact<TValue>" in source
+    assert "((ICollection<KeyValuePair<string, TValue>>)dictionary).Remove(snapshot)" in source
+    assert "RemoveExact(WatchedGenerations, pair)" in source
+    assert "RemoveExact(WatchedSessions, pair)" in source
+    assert "return new WatchedGeneration" in source
+    assert "return new WatchedSession" in source
+    assert "WatchedGenerations.TryRemove(pair.Key" not in source
+    assert "WatchedSessions.TryRemove(pair.Key" not in source
