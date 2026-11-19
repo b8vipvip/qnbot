@@ -97,8 +97,13 @@ namespace Bot.ChromeNs
                     var buyerKey = Digest(seller + "\n" + buyer);
                     var sourceKey = Digest(seller + "\n" + buyer + "\n" + (messageId ?? ""));
                     var sourceHash = Digest(evidenceText ?? "");
+                    // A single source message can change state later (for example,
+                    // an image is withdrawn after it was first analyzed). Include the
+                    // observation state in the event identity so the later transition is
+                    // not swallowed as a duplicate of the earlier observation.
                     var id = Digest(buyerKey + "|" + (sessionId ?? "") + "|" + kind
-                        + "|" + sourceKey + "|" + sourceHash);
+                        + "|" + sourceKey + "|" + sourceHash + "|" + (observation ?? "")
+                        + "|" + (stage ?? "") + "|" + (authority ?? ""));
                     if (records.Any(x => x != null && x.Id == id)) return;
                     records.Add(new EvidenceRow
                     {
