@@ -72,7 +72,7 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, KeyedGateEntry>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> OffHoursDeliveredUntil =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-        private static int _offHoursCleanupCounter;
+        private static long _lastOffHoursCleanupUtcTicks;
 
         private static KeyedGateEntry AddGateReference(
             ConcurrentDictionary<string, KeyedGateEntry> entries, string key)
@@ -152,8 +152,15 @@ namespace Bot.ChromeNs
 
         private static void CleanupExpiredOffHoursDeliveredUntil()
         {
-            // Run a bounded-cost sweep every 128 buyer messages, not on every message.
-            if ((Interlocked.Increment(ref _offHoursCleanupCounter) & 0x7F) != 0) return;
+            // Sweep at most once per minute, but also clean up on the first message
+            // after an idle period so sparse buyer traffic cannot retain expired keys.
+            var nowUtcTicks = DateTime.UtcNow.Ticks;
+            var previousTicks = Interlocked.Read(ref _lastOffHoursCleanupUtcTicks);
+            if (nowUtcTicks - previousTicks < TimeSpan.FromMinutes(1).Ticks
+                || Interlocked.CompareExchange(
+                    ref _lastOffHoursCleanupUtcTicks, nowUtcTicks, previousTicks) != previousTicks)
+                return;
+
             var now = DateTime.Now;
             var exactEntries = (ICollection<KeyValuePair<string, DateTime>>)OffHoursDeliveredUntil;
             foreach (var pair in OffHoursDeliveredUntil)
