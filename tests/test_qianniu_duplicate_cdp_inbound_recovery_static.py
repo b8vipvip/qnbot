@@ -86,7 +86,8 @@ def test_duplicate_cdp_bridge_deduplicates_exact_cross_page_replays_with_bounded
     assert "StableHash64(raw)" in bridge
     assert "RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)" in bridge
     assert "MaybeCleanupTransientState(now)" in bridge
-    assert "RecentInboundFingerprints.TryRemove(pair.Key, out ignored)" in bridge
+    assert "((ICollection<KeyValuePair<string, DateTime>>)RecentInboundFingerprints)" in bridge
+    assert ".Remove(pair);" in bridge
 
     # The bridge fingerprints the complete event payload, not just human-visible text, so two
     # legitimate same-text messages with different ids/timestamps are not collapsed together.
@@ -255,16 +256,16 @@ def test_identity_transition_marker_is_set_before_old_shopkey_mapping_is_removed
 def test_shop_identity_binding_is_periodically_revalidated_even_when_display_nicks_match():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     method = server[
-        server.index("private bool ShouldRefreshStatusBinding"):
+        server.index("private long ShouldRefreshStatusBinding"):
         server.index("private async Task TryBindStatusConversation")
     ]
     assert "StatusBindingRefreshInterval = TimeSpan.FromSeconds(30)" in server
     assert "_lastStatusBindingRefreshUtc" in server
-    assert "if (!TryReserveStatusBindingRefresh(sessionId, DateTime.UtcNow, keyChanged)) return false;" in method
+    assert "if (!TryReserveStatusBindingRefresh(sessionId, DateTime.UtcNow, keyChanged)) return 0;" in method
     assert "_lastStatusBindings[sessionId] = key;" in method
     assert "else if (!wasAuthoritative)" in server
-    assert "if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick))" in server
-    assert "Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick))" in server
+    assert "var bindingGeneration = ShouldRefreshStatusBinding(" in server
+    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration))" in server
 
 
 

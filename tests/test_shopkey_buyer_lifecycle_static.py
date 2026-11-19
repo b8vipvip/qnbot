@@ -59,7 +59,7 @@ def test_authority_disconnect_promotes_the_best_connected_standby_immediately():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     release = server[
         server.index("private void ReleaseShopSession"):
-        server.index("private bool ShouldRefreshStatusBinding")
+        server.index("private long ShouldRefreshStatusBinding")
     ]
     promotion = server[
         server.index("private async Task TryPromoteAvailableStandbyAsync"):
