@@ -44,7 +44,8 @@ def test_ordinary_fixed_rule_gate_never_fail_opens_into_ai_after_timeout():
     assert "WaitAsync(1800)" not in method
     assert "已放行消息合并/AI链路" not in method
     assert "GetCancellationToken(" in method
-    assert "await gate.WaitAsync(generationToken)" in method
+    assert "AcquireKeyedGateAsync(BuyerGates, key, generationToken)" in method
+    assert "gateLease.Dispose()" in method
     assert "固定规则串行等待期间generation已失效" in method
 
 
