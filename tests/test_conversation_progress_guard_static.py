@@ -18,17 +18,19 @@ def test_import_export_bootstrap_is_explicitly_initialized():
     assert app.index("KnowledgePolicyProfileUi.Initialize();") < app.index("RulePolicyImportExportUi.InitializeForApp();")
 
 
-def test_progress_guard_tracks_completed_order_steps_without_sensitive_storage():
+def test_progress_guard_tracks_state_without_persisting_sensitive_values():
     source = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
     config = policy()
     assert "HasOrderEvidence" in source
     assert "DeviceAccountConfirmed" in source
     assert "HasPhoneNumber" in source
     assert "HasVerificationCode" in source
-    assert "CurrentInputKind = \"phone_number\"" in source
-    assert "CurrentInputKind = \"verification_code\"" in source
-    assert "回复中不得复述完整手机号" in config["prompts"]["phone"]
-    assert "不得在回复中复述验证码" in config["prompts"]["code"]
+    assert 'CurrentInputKind = "phone_number"' in source
+    assert 'CurrentInputKind = "verification_code"' in source
+    assert 'AddFact(state, progress.HasPhoneNumber, T("facts.phone"))' in source
+    assert 'AddFact(state, progress.HasVerificationCode, T("facts.code"))' in source
+    assert config["facts"] == {}
+    assert config["prompts"] == {}
 
 
 def test_router_filters_regressive_knowledge_and_forces_contextual_flow():
@@ -38,28 +40,26 @@ def test_router_filters_regressive_knowledge_and_forces_contextual_flow():
     assert "禁止固定知识直答" in router
 
 
-def test_validator_blocks_repeated_screenshot_and_order_requests():
+def test_validator_uses_shop_configured_messages_for_repeated_or_regressive_requests():
     validator = read("src/Bot/ChromeNs/PreSendAnswerValidator.cs")
     guard = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
-    issues = policy()["validationIssues"]
+    config = policy()
     assert "ConversationProgressGuardService.AddValidationIssues" in validator
-    assert "回复却再次索要相同截图或照片" in issues["repeatScreenshot"]
-    assert "买家已经下单，回复却再次要求下单" in issues["repeatOrder"]
-    assert "当前消息是在承接代充手机号/验证码流程" in issues["flowRegression"]
-    assert "validationIssues.repeatScreenshot" in guard
-    assert "validationIssues.repeatOrder" in guard
+    assert 'T("validationIssues.repeatScreenshot")' in guard
+    assert 'T("validationIssues.repeatOrder")' in guard
+    assert 'T("validationIssues.flowRegression")' in guard
+    assert config["validationIssues"] == {}
 
 
-def test_preorder_general_question_does_not_force_device_photo():
+def test_general_inquiry_does_not_force_a_business_specific_evidence_request_by_default():
     guard = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
     config = policy()
     assert "!p.HasOrderEvidence" in guard
     assert "!p.ExplicitCompatibilityQuestion" in guard
     assert "!p.AsksScreenshotTarget" in guard
     assert "!p.AsksPurchaseTarget" in guard
-    assert "一般售前咨询未询问设备兼容性" in config["validationIssues"]["preSaleScreenshot"]
-    assert "不要主动强制先发设备截图" in config["prompts"]["preSaleGeneral"]
-    assert "不要无关地要求先下单" in config["prompts"]["preSaleGeneral"]
+    assert config["prompts"] == {}
+    assert config["stages"]["preSaleGeneral"]["stage"] == "一般咨询"
 
 
 def test_progress_guard_is_in_shared_build_targets():
