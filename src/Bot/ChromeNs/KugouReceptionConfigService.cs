@@ -415,6 +415,25 @@ namespace Bot.ChromeNs
             return ReadDocument(shop).ToString(Formatting.Indented);
         }
 
+        // A lightweight revision token lets the policy cache notice profile changes
+        // made by another Bot process without reparsing the JSON on every buyer message.
+        internal static string GetProfileRevision(ShopContext shop)
+        {
+            try
+            {
+                var info = new FileInfo(PathForShop(shop));
+                info.Refresh();
+                return info.Exists
+                    ? info.LastWriteTimeUtc.Ticks.ToString() + ":" + info.Length.ToString()
+                    : "missing";
+            }
+            catch
+            {
+                // Empty means "do not trust a cached match"; callers must recompute.
+                return string.Empty;
+            }
+        }
+
         internal static KugouReceptionConfig GetConfig(ShopContext shop)
         {
             try { return ToConfig(ReadDocument(shop)); }
