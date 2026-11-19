@@ -51,3 +51,17 @@ def test_v2_legacy_learning_sync_coalesces_updates_without_dropping_midflight_ch
     assert "while (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored));" in queue
     assert "if (PendingShopSynchronizations.TryRemove(shop.ShopKey, out ignored))" in queue
     assert "QueueSynchronizeShop(shop, seller);" in queue
+
+
+
+def test_knowledge_v2_corrupt_list_json_fails_closed_instead_of_becoming_empty_metadata():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    parser = repository[
+        repository.index("private static List<string> ParseList"):
+        repository.index("private static void MirrorOneToLegacy")
+    ]
+    assert "string.IsNullOrWhiteSpace(json)" in parser
+    assert "JsonConvert.DeserializeObject<List<string>>(json)" in parser
+    assert "throw new InvalidDataException" in parser
+    assert "静默丢失知识元数据" in parser
+    assert "catch { return new List<string>(); }" not in parser

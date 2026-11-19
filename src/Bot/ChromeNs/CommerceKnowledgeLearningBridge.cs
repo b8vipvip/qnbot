@@ -74,8 +74,21 @@ namespace Bot.ChromeNs
             if (report == null || string.IsNullOrWhiteSpace(report.Seller)
                 || string.IsNullOrWhiteSpace(report.Buyer) || string.IsNullOrWhiteSpace(report.SuggestionsJson)) return;
 
-            var shop = ShopContextLocator.ResolveBySellerNick(report.Seller);
+            // The report already carries its authoritative ShopKey. Resolving by display nickname
+            // is ambiguous when two accounts share the same seller nickname and can bind to the wrong
+            // shop if a different account is currently active.
+            if (string.IsNullOrWhiteSpace(report.ShopKey)) return;
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(report.ShopKey);
             if (shop == null) return;
+            if (!string.Equals(
+                (shop.SellerNick ?? string.Empty).Trim(),
+                report.Seller.Trim(),
+                StringComparison.Ordinal))
+            {
+                Log.ErrorWithMaxCount(
+                    "Commerce场景知识治理拒绝Seller与ShopKey不匹配的报告: report=" + report.Id, 10);
+                return;
+            }
 
             using (ShopSettingsScope.Enter(shop))
             {

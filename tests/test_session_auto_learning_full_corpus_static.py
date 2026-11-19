@@ -303,7 +303,9 @@ def test_remote_history_never_infers_end_from_missing_hasmore_or_empty_page_with
 
     assert 'var hasMoreKnown = resultObject != null' in method
     assert 'TryReadInt(resultObject["hasMore"], out hasMore)' in method
-    assert "if (hasMoreKnown && hasMore > 0)" in method
+    assert "if (!hasMoreKnown)" in method
+    assert "if (hasMore > 0)" in method
+    assert 'history_empty_page_missing_has_more' in method
     assert 'result.ErrorCode = "history_empty_page_with_more"' in method
     assert "if (hasMoreKnown && hasMore == 0)" in method
     assert "if (hasMore == 0 && messages.Count < LearningHistoryPageSize)" not in method
@@ -379,3 +381,36 @@ def test_invalid_message_list_shape_is_not_coerced_to_a_complete_empty_page():
     assert "var messages = messagesToken.ToObject<List<QNChatMessage>>();" in method
     assert "if (messages == null)" in method
     assert 'result.ErrorCode = "history_page_invalid_messages"' in method
+
+
+def test_session_summary_retries_only_transient_upstream_failures_once():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<JObject> AnalyzeAsync"):
+        service.index("private static string BuildTranscript")
+    ]
+
+    assert "for (var attempt = 0; attempt < 2; attempt++)" in analyze
+    assert "IsRetryableKnowledgeCorpusError(error)" in analyze
+    assert "await Task.Delay(1200);" in analyze
+    assert "return ParseObject(result.Answer);" in analyze
+    assert "JSON/schema errors are deterministic input failures" in analyze
+    assert "throw new InvalidOperationException(\"会话复盘AI请求重试后仍不可用\");" in analyze
+
+
+
+def test_empty_history_page_without_explicit_hasmore_is_not_complete():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("internal static async Task<ConversationHistoryRefreshResult> RefreshLearningHistoryCompleteAsync"):
+        context.index("private static bool TryReadInt")
+    ]
+    empty_page = method[
+        method.index("if (messages.Count == 0)"):
+        method.index("if (messages.Any(x => x == null))")
+    ]
+    assert "if (!hasMoreKnown)" in empty_page
+    assert 'history_empty_page_missing_has_more' in empty_page
+    assert 'empty_page_missing_has_more' in empty_page
+    assert "result.IsComplete = true;" not in empty_page[:empty_page.index("if (hasMore > 0)")]
+    assert "result.StopReason = \"server_end\";" in empty_page
