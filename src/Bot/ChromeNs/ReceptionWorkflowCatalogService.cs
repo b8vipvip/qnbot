@@ -31,7 +31,10 @@ namespace Bot.ChromeNs
         private static string PathForShop(string seller)
         {
             var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
-            if (shop == null) throw new InvalidOperationException("店铺身份无法验证，不允许保存流程");
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !shop.HasStableSellerId)
+                throw new InvalidOperationException("店铺身份不稳定或未绑定唯一ShopKey，不允许保存流程草稿");
             using (ShopSettingsScope.Enter(shop))
             {
                 var dir = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());

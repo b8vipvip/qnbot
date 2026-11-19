@@ -61,3 +61,17 @@ def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
     assert 'File.Copy(path, path + ".backup."' in save
 
 
+
+
+
+def test_workflow_draft_storage_requires_stable_shop_identity_and_shopkey():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    path = service[
+        service.index("private static string PathForShop"):
+        service.index("private static JObject Default")
+    ]
+
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
+    assert "!shop.HasStableSellerId" in path
+    assert "不允许保存流程草稿" in path

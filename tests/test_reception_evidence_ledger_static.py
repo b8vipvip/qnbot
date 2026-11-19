@@ -66,3 +66,17 @@ def test_evidence_audit_read_failure_is_not_misreported_as_an_empty_ledger():
     assert "catch (Exception ex)" not in audit
     assert "if (t.IsFaulted)" in refresh
     assert '_status.Text = "读取失败";' in refresh
+
+
+
+def test_evidence_ledger_requires_stable_seller_identity_and_nonempty_shopkey():
+    code = source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
+    path = code[
+        code.index("private static string PathForSeller"):
+        code.index("/// <summary>", code.index("private static string PathForSeller"))
+    ]
+
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
+    assert "!shop.HasStableSellerId" in path
+    assert "拒绝证据写入" in path

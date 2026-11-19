@@ -49,7 +49,10 @@ namespace Bot.ChromeNs
         private static string PathForSeller(string seller)
         {
             var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
-            if (shop == null) throw new InvalidOperationException("未能确认店铺范围，拒绝证据写入");
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !shop.HasStableSellerId)
+                throw new InvalidOperationException("店铺身份不稳定或未绑定唯一ShopKey，拒绝证据写入");
             using (ShopSettingsScope.Enter(shop))
             {
                 var parent = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
