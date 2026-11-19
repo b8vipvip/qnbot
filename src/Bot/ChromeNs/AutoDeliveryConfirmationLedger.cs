@@ -52,10 +52,15 @@ namespace Bot.ChromeNs
             {
                 if (_initialized) return;
                 _state = LoadState();
-                CleanupLocked(DateTime.Now);
-                var migrated = MigratePendingConfirmationIntentsLocked();
-                if ((migrated || !File.Exists(StatePath())) && !SaveLocked())
-                    _failClosed = true;
+                if (!_failClosed)
+                {
+                    CleanupLocked(DateTime.Now);
+                    var migrated = MigratePendingConfirmationIntentsLocked();
+                    // Never replace an unreadable/invalid ledger, even if legacy queue
+                    // migration found records. A partial replacement could erase old barriers.
+                    if (!_failClosed && (migrated || !File.Exists(StatePath())) && !SaveLocked())
+                        _failClosed = true;
+                }
                 _initialized = true;
                 Log.Info("自动发货长期确认防重账本已加载: records=" + _state.Records.Count
                     + ", retentionDays=" + (int)Retention.TotalDays
@@ -218,13 +223,12 @@ namespace Bot.ChromeNs
                 var path = StatePath();
                 if (!File.Exists(path)) return new LedgerState();
                 var loaded = JsonConvert.DeserializeObject<LedgerState>(File.ReadAllText(path, Encoding.UTF8));
-                if (loaded == null || loaded.Schema != 1)
+                if (loaded == null || loaded.Schema != 1 || loaded.Records == null)
                 {
                     _failClosed = true;
-                    Log.ErrorWithMaxCount("自动发货长期确认防重账本结构无效；本次运行禁止新的自动确认。", 10);
+                    Log.ErrorWithMaxCount("自动发货长期确认防重账本结构无效（包括 Records 缺失或为 null）；本次运行禁止新的自动确认且保留原文件。", 10);
                     return new LedgerState();
                 }
-                if (loaded.Records == null) loaded.Records = new List<ConfirmationRecord>();
                 return loaded;
             }
             catch (Exception ex)
