@@ -587,8 +587,8 @@ def test_checkpoint_resume_revalidates_candidate_batch_and_live_message_evidence
 
     assert "batches[batchIndex - 1].Any" in restore
     assert "result.CompletedBatchIndices.Contains(batchIndex - 1)" in restore
-    assert "candidate.EvidenceMessageIds.All(humanMessageIds.Contains)" in restore
-    assert "candidate.EvidenceMessageIds.All(allMessageIds.Contains)" in restore
+    assert "evidenceIds.All(humanMessageIds.Contains)" in restore
+    assert "evidenceIds.All(allMessageIds.Contains)" in restore
     assert 'candidate.EvidenceType, "conversation_synthesis"' in restore
     assert 'candidate.Action != "update"' in restore
     assert "candidate.SourceFingerprint, result.SourceFingerprint" in restore
