@@ -488,13 +488,16 @@ def test_startup_restores_latest_unexpired_circuit_before_scheduling_all_session
     ]
 
     assert "string.IsNullOrWhiteSpace(report.ShopKey)" in restore
-    assert "!TryGetPersistedKnowledgeCorpusCircuitOpenUntil(report.Error, out openUntilUtc)" in restore
+    assert "report.Error, out openUntilUtc" in restore
+    assert 'ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]' in restore
+    assert "coverageDeadline > openUntilUtc" in restore
     assert "KnowledgeCorpusCircuitBreakers.GetOrAdd(\n                    report.ShopKey" in restore
     assert "if (openUntilUtc <= state.OpenUntilUtc) continue;" in restore
     assert "state.OpenUntilUtc = openUntilUtc;" in restore
-    assert recovery.index("RestoreKnowledgeCorpusCircuitBreakers(reports);") < recovery.index(
+    assert recovery.index("RestoreKnowledgeCorpusCircuitBreakers(allReports);") < recovery.index(
         "foreach (var report in reports)"
     )
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
     assert recovery.index("TryGetKnowledgeCorpusCircuitOpenUntil(session.ShopKey") < recovery.index(
         "Schedule(session, due);"
     )
@@ -623,3 +626,22 @@ def test_ai_learning_confidence_must_be_finite_and_inside_zero_to_one():
     assert 'ParseConfidence(item["confidence"])' in suggestions
     assert "double.IsNaN(suggestion.Confidence)" in can_apply
     assert "suggestion.Confidence > 1.0" in can_apply
+
+
+def test_superseded_learning_session_keeps_open_shop_circuit_deadline_for_restart():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    requeue = service[
+        service.index("private static void Requeue("):
+        service.index("private static void CompleteSkipped")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending"):
+        service.index("private static void CleanupReports")
+    ]
+
+    assert "TryGetPersistedKnowledgeCorpusCircuitOpenUntil(" in requeue
+    assert 'ParseCoverage(report.InputCoverageJson)["knowledgeCorpusError"]' in requeue
+    assert "report.Error = hasCircuitDeadline" in requeue
+    assert '"requeue_conflict_new_session_active"' in requeue
+    assert "RestoreKnowledgeCorpusCircuitBreakers(allReports);" in recovery
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
