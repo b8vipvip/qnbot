@@ -147,8 +147,9 @@ def test_shop_ai_settings_payload_is_dpapi_protected_and_shop_key_bound():
     assert "[JsonIgnore]" in source
     assert "document.ShopKey, _shop.ShopKey" in source
     assert "Array.Clear" in source
-    assert "File.Replace" in source
-    assert "File.Copy(temp, path, true)" in source
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in source
+    assert 'path + ".bak"' in source
+    assert "File.Copy(temp, path, true)" not in source
     assert "ConcurrentDictionary<string, object>" in source
 
 

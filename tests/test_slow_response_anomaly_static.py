@@ -69,3 +69,16 @@ def test_report_contains_ai_diagnosis_and_wecom_delivery_status():
         assert field in service
     assert "最近运行日志尾部" in service
     assert "自动AI分析调用失败" in service
+
+
+def test_report_read_failure_never_overwrites_existing_anomaly_history():
+    service = read("src/Bot/ChromeNs/SlowResponseAnomalyService.cs")
+    save = service[service.index("private static void SaveOrUpdate"):service.index("private static List<SlowResponseAnomalyReport> LoadReportsUnsafe")]
+    loader = service[service.index("private static bool TryLoadReportsUnsafe"):service.index("private static void SaveReportsUnsafe")]
+
+    assert "TryLoadReportsUnsafe(out reports)" in save
+    assert "if (!TryLoadReportsUnsafe(out reports))" in save
+    assert "return;" in save
+    assert "reports = null;" in loader
+    assert "return false;" in loader
+    assert "return TryLoadReportsUnsafe(out reports)" in service

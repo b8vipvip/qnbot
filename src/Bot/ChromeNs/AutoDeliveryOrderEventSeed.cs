@@ -234,50 +234,19 @@ namespace Bot.ChromeNs
 
         private static bool SaveCursorsLocked()
         {
-            var temp = string.Empty;
             try
             {
                 var path = CursorPath();
-                temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllText(
-                    temp,
-                    JsonConvert.SerializeObject(_cursors, Formatting.Indented),
-                    new UTF8Encoding(false));
-                if (File.Exists(path))
-                {
-                    try
-                    {
-                        File.Replace(temp, path, null, true);
-                    }
-                    catch (PlatformNotSupportedException)
-                    {
-                        File.Copy(temp, path, true);
-                        File.Delete(temp);
-                    }
-                    catch (IOException)
-                    {
-                        File.Copy(temp, path, true);
-                        File.Delete(temp);
-                    }
-                }
-                else
-                {
-                    File.Move(temp, path);
-                }
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                    path, JsonConvert.SerializeObject(_cursors, Formatting.Indented), 3, 50, out error))
+                    throw new IOException("原子保存失败：" + error);
                 return true;
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("保存自动发货订单事件游标失败：" + ex.Message, 10);
                 return false;
-            }
-            finally
-            {
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(temp) && File.Exists(temp)) File.Delete(temp);
-                }
-                catch { }
             }
         }
 
