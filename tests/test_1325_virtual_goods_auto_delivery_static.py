@@ -79,7 +79,7 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     assert "MigratePendingConfirmationIntentsLocked" in ledger
     assert 'token["ConfirmationIntentAt"]' in ledger
 
-    enqueue = runtime.index("public static void Enqueue")
+    enqueue = runtime.index("public static bool Enqueue")
     has_intent = runtime.index("AutoDeliveryConfirmationLedger.HasIntent", enqueue)
     queue_lookup = runtime.index("var existing = _state.Pending.FirstOrDefault", has_intent)
     assert enqueue < has_intent < queue_lookup
@@ -137,7 +137,7 @@ def test_delayed_jobs_and_order_event_cursor_are_durable_and_non_retroactive():
     assert '"virtual-goods-auto-delivery-event-cursor.json"' in seed
     assert "cursor.LastSeenAt = DateTime.Now;" in seed
     assert "OrderEventType.Created" in seed and "OrderEventType.Paid" in seed
-    assert "AutoDeliveryCoordinator.Enqueue(entry.Snapshot);" in seed
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in seed
     assert "AutoDeliveryConfirmationLedger.IsOperational()" in seed
     assert "暂停消费新订单事件且不推进游标" in seed
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in seed
@@ -163,10 +163,10 @@ def test_auto_delivery_sources_are_included_in_normal_and_wpf_temp_builds():
 
 def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pending_tasks():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
     loader = runtime[runtime.index("private static StateDocument LoadState"):runtime.index("private static bool SaveStateLocked")]
 
-    assert "private static bool _stateLoadFailed;" in runtime
+    assert "private static volatile bool _stateLoadFailed;" in runtime
     assert "LoadState(out loadedSuccessfully)" in initialize
     assert "if (!loadedSuccessfully)" in initialize
     assert "if (!SaveStateLocked())" in initialize
@@ -181,7 +181,7 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
 
 def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_load():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    runtime_init = runtime[runtime.index("public static void Initialize"):runtime.index("public static void Enqueue")]
+    runtime_init = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
     seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
     seed_init = seed[seed.index("public static void Initialize"):seed.index("public static void MarkConfiguration")]
 
@@ -191,4 +191,44 @@ def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_
         assert "Interlocked.Exchange(ref _initialized" not in initializer
         assert initializer.index("if (_initialized != 0) return;") < initializer.index("_initialized = 1;")
     assert runtime_init.index("_state = LoadState(out loadedSuccessfully);") < runtime_init.index("new Timer(")
-    assert seed_init.index("_cursors = LoadCursors();") < seed_init.index("new Timer(")
+    assert seed_init.index("_cursors = LoadCursors(out loadedSuccessfully);") < seed_init.index("new Timer(")
+
+
+def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwriting():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    initialize = seed[seed.index("public static void Initialize"):seed.index("public static void MarkConfiguration")]
+    loader = seed[seed.index("private static CursorState LoadCursors"):seed.index("private static bool SaveCursorsLocked")]
+    save = seed[seed.index("private static bool SaveCursorsLocked"):seed.index("private static string DataRoot")]
+    tick = seed[seed.index("private static void Tick"):seed.index("private static SellerCursor GetCursorLocked")]
+
+    assert "LoadCursors(out loadedSuccessfully)" in initialize
+    assert "if (!loadedSuccessfully)" in initialize
+    assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
+    assert "private static volatile bool _cursorStateUnavailable;" in seed
+    assert "state == null || state.Schema != 1 || state.Sellers == null" in loader
+    assert "loadedSuccessfully = false;" in loader
+    assert "return new CursorState();" in loader
+    assert "if (_cursorStateUnavailable) return;" in tick
+    assert "if (!SaveCursorsLocked()) return;" in tick
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
+    assert "暂停事件消费" in loader
+    assert "_cursorStateUnavailable = true;" in save
+
+
+def test_event_cursor_does_not_advance_when_queue_persistence_is_unavailable():
+    coordinator = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    operational = coordinator[coordinator.index("public static bool IsOperational"):coordinator.index("public static bool Enqueue")]
+    enqueue = coordinator[coordinator.index("public static bool Enqueue"):coordinator.index("public static void ReconfigureSeller")]
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    tick = seed[seed.index("private static void Tick"):seed.index("private static SellerCursor GetCursorLocked")]
+
+    assert "public static bool IsOperational()" in operational
+    assert "return queueReady && AutoDeliveryConfirmationLedger.IsOperational();" in operational
+    assert "public static bool Enqueue(OrderSnapshot snapshot)" in enqueue
+    assert "if (!SaveStateLocked()) return false;" in enqueue
+    assert "if (cfg == null) return false;" in enqueue
+    assert "if (!cfg.Enabled) return true;" in enqueue
+    assert "return AutoDeliveryConfirmationLedger.IsOperational();" in enqueue
+    assert "|| !AutoDeliveryCoordinator.IsOperational()" in tick
+    assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
+    assert tick.index("AutoDeliveryCoordinator.Enqueue(entry.Snapshot)") < tick.index("cursor.LastSeenAt = latest;")
