@@ -159,12 +159,18 @@ def test_full_corpus_ai_scans_are_serialized_per_shop_to_avoid_duplicate_fanout(
         service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
     ]
 
-    assert "ConcurrentDictionary<string, SemaphoreSlim> CorpusAnalysisGates" in service
-    assert "CorpusAnalysisGates.GetOrAdd(" in finalize
-    assert "await corpusGate.WaitAsync();" in finalize
+    assert "ConcurrentDictionary<string, ShopGateEntry> CorpusAnalysisGates" in service
+    assert "AddShopGateReference(CorpusAnalysisGates, shopKey)" in service
+    assert "await entry.Gate.WaitAsync().ConfigureAwait(false)" in service
+    assert "entry.References++;" in service
+    assert "entry.References--;" in service
+    assert "entry.References != 0" in service
+    assert "ICollection<KeyValuePair<string, ShopGateEntry>>" in service
+    assert "entry.Gate.Dispose();" in service
+    assert "await AcquireShopGateAsync(session.ShopKey)" in finalize
+    assert "corpusGateLease.Dispose();" in finalize
     assert "finally" in finalize
-    assert "corpusGate.Release();" in finalize
-    assert finalize.index("await corpusGate.WaitAsync();") < finalize.index("analysis = await AnalyzeAsync(")
+    assert finalize.index("await AcquireShopGateAsync(session.ShopKey)") < finalize.index("analysis = await AnalyzeAsync(")
     assert finalize.index("analysis = await AnalyzeAsync(") < finalize.index("AnalyzeKnowledgeCorpusAsync(")
 
 
