@@ -1769,6 +1769,7 @@ namespace Bot.ChromeNs
                         + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
                 }
             };
+            var lastRetryableError = string.Empty;
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 StructuredChatResult result;
@@ -1781,6 +1782,7 @@ namespace Bot.ChromeNs
                 {
                     var error = ex.Message ?? string.Empty;
                     if (!IsRetryableKnowledgeCorpusError(error)) throw;
+                    lastRetryableError = error;
                     if (attempt == 1) break;
                     await Task.Delay(1200);
                     continue;
@@ -1791,6 +1793,7 @@ namespace Bot.ChromeNs
                     var error = result == null ? "AI复盘结果为空" : result.Error;
                     if (!IsRetryableKnowledgeCorpusError(error))
                         throw new Exception(result == null ? "AI复盘结果为空" : result.Error);
+                    lastRetryableError = error;
                     if (attempt == 1) break;
                     await Task.Delay(1200);
                     continue;
@@ -1799,7 +1802,10 @@ namespace Bot.ChromeNs
                 // JSON/schema errors are deterministic input failures; do not retry them.
                 return ParseObject(result.Answer);
             }
-            throw new InvalidOperationException("会话复盘AI请求重试后仍不可用");
+            // Preserve the upstream failure code so FinalizeAsync can classify it,
+            // increment this ShopKey's circuit breaker, and requeue the report.
+            throw new InvalidOperationException(
+                "会话复盘AI请求重试后仍不可用: " + Clean(lastRetryableError, 500));
         }
 
         private static string BuildTranscript(List<ConversationContextTurn> turns, List<BotConversationHistoryEntity> cards)

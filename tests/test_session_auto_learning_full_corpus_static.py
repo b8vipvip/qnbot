@@ -552,3 +552,24 @@ def test_empty_history_page_without_explicit_hasmore_is_not_complete():
     assert 'empty_page_missing_has_more' in empty_page
     assert "result.IsComplete = true;" not in empty_page[:empty_page.index("if (hasMore > 0)")]
     assert "result.StopReason = \"server_end\";" in empty_page
+
+
+
+def test_session_summary_preserves_retryable_upstream_error_for_shop_circuit_breaker():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<JObject> AnalyzeAsync"):
+        service.index("private static string BuildTranscript")
+    ]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult>")
+    ]
+
+    assert "var lastRetryableError = string.Empty;" in analyze
+    assert analyze.count("lastRetryableError = error;") == 2
+    assert "Clean(lastRetryableError, 500)" in analyze
+    assert "会话复盘AI请求重试后仍不可用:" in analyze
+    assert "RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message" in finalize
+    assert "IsRetryableKnowledgeCorpusError(ex.Message)" in finalize
+    assert "ai_upstream_circuit_open_until:" in finalize
