@@ -197,27 +197,34 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void MarkResolved(string shopKey, string seller, string orderId, string resolution)
+        public static bool MarkResolved(string shopKey, string seller, string orderId, string resolution)
         {
             Initialize();
-            if (string.IsNullOrWhiteSpace(shopKey) || !IsSafeOrderId(orderId)) return;
+            if (string.IsNullOrWhiteSpace(shopKey) || !IsSafeOrderId(orderId)) return false;
             var key = BuildKey(shopKey, seller, orderId);
             lock (Sync)
             {
                 var path = StatePath();
                 using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
-                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return;
+                    // A missing/unreadable ledger is not proof that the at-most-once
+                    // barrier was durably resolved. Keep the queue's read-only task.
+                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;
                     var record = _state.Records.FirstOrDefault(x => x != null
                         && string.Equals(x.Key, key, StringComparison.Ordinal));
-                    if (record == null) return;
+                    if (record == null) return false;
                     record.Resolution = string.IsNullOrWhiteSpace(resolution)
                         ? "resolved"
                         : resolution.Trim();
                     record.ResolvedAt = DateTime.Now;
                     var keepUntil = DateTime.Now.Add(Retention);
                     if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
-                    if (!SaveLocked()) _failClosed = true;
+                    if (!SaveLocked())
+                    {
+                        _failClosed = true;
+                        return false;
+                    }
+                    return true;
                 }
             }
         }
