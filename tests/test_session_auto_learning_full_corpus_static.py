@@ -65,8 +65,10 @@ def test_corpus_candidates_require_real_human_message_ids_and_are_bound_to_sourc
         service.index("private static void CollectEvidenceMessageIds")
     ]
 
-    assert "evidenceIds.All(humanMessageIds.Contains)" in parser
-    assert "evidenceIds.All(allMessageIds.Contains)" in parser
+    assert "evidenceIds.All(promptHumanMessageIds.Contains)" in parser
+    assert "evidenceIds.All(promptAllMessageIds.Contains)" in parser
+    assert 'GetOrCreatePromptIdentifier(promptIdentifiers, "msg", turn.MessageKey)' in transcript
+    assert "Redact(Clean(x, 120))" not in transcript
     assert "KnowledgeId = record.Id" in parser
     assert "SourceFingerprint = sourceFingerprint" in parser
     assert "EvidenceMessageIds = evidenceIds" in parser
@@ -665,3 +667,44 @@ def test_learning_timeline_clone_preserves_native_identity_aliases_and_feed_prov
     assert "PreciseTimeTicks = source.PreciseTimeTicks" in clone
     assert "SeenLive = source.SeenLive" in clone
     assert "SeenHistory = source.SeenHistory" in clone
+
+
+
+def test_corpus_prompt_uses_random_local_aliases_and_restores_real_evidence_ids_before_checkpointing():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analysis = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    helpers = service[
+        service.index("private static PromptIdentifierContext RestorePromptIdentifierContext"):
+        service.index("private static async Task<KnowledgeCorpusBatchResult> AnalyzeKnowledgeCorpusBatchAsync")
+    ]
+    batch = service[
+        service.index("private static async Task<KnowledgeCorpusBatchResult> AnalyzeKnowledgeCorpusBatchAsync"):
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages")
+    ]
+    prompt = service[
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages"):
+        service.index("private static bool TryParseKnowledgeCorpusBatch")
+    ]
+    parser = service[
+        service.index("private static bool TryParseKnowledgeCorpusBatch"):
+        service.index("private static bool IsRetryableKnowledgeCorpusError")
+    ]
+
+    assert 'Guid.NewGuid().ToString("N")' in helpers
+    assert "knowledgeCorpusPromptIdentifierMap" in analysis
+    assert "SerializePromptIdentifierContext(promptIdentifiers)" in analysis
+    assert "RestoreSourceEvidenceMessageIds(" in analysis
+    assert "candidate.EvidenceMessageIds = restored" in helpers
+    assert "promptAllMessageIds" in batch and "promptHumanMessageIds" in batch
+    assert "evidenceIds.All(promptHumanMessageIds.Contains)" in parser
+    assert "evidenceIds.All(promptAllMessageIds.Contains)" in parser
+    assert "匿名message_id token" in prompt
+    assert "随机匿名token" in prompt
+    assert 'GetOrCreatePromptIdentifier(promptIdentifiers, "product", x)' in prompt
+    assert 'GetOrCreatePromptIdentifier(promptIdentifiers, "source", record.SourceId)' in prompt
+    assert '["intent"] = Redact(record.Intent)' in prompt
+    assert '["predicate"] = Redact(record.Predicate)' in prompt
+    assert "KnowledgeCorpusPromptVersion = 2" in service
