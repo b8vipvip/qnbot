@@ -112,3 +112,21 @@ def test_auto_update_recovery_remains_non_destructive():
     assert "Process.Start" not in recovery
     assert "Mouse.Click" not in recovery
     assert "不自动重启千牛" in recovery
+
+def test_authoritative_shop_session_requires_live_physical_websocket():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    authority = server[
+        server.index("internal bool IsAuthoritativeShopSession"):
+        server.index("private void ReleaseShopSession")
+    ]
+    closed = server[
+        server.index("webSocket.SessionClosed += (session, value) =>"):
+        server.index("webSocket.NewMessageReceived", server.index("webSocket.SessionClosed += (session, value) =>"))
+    ]
+
+    assert "_connectedSessions.ContainsKey(sessionId)" in authority
+    assert "_connectedSessions.TryRemove(session.SessionID, out _);" in closed
+    assert "ReleaseShopSession(session.SessionID);" in closed
+    assert closed.index("_connectedSessions.TryRemove(session.SessionID, out _);") < closed.index(
+        "ReleaseShopSession(session.SessionID);"
+    )
