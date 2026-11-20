@@ -130,3 +130,19 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "steps.terminal.outcome == 'success'" in upload
     assert "steps.terminal.outcome == 'success'" in receipt
     assert "steps.terminal.outcome == 'success'" in summary
+
+
+def test_release_waits_for_exact_sha_api_control_plane_ci_before_publishing():
+    release = read(".github/workflows/publish-bot-auto-update-release.yml")
+
+    gate = release[
+        release.index("- name: Require exact-SHA API control plane CI"):
+        release.index("- name: Download complete x64 artifact")
+    ]
+    artifact = release.index("- name: Download complete x64 artifact")
+    api_gate = release.index("- name: Require exact-SHA API control plane CI")
+    assert api_gate < artifact
+    assert 'steps.build.outputs.head_sha' in gate
+    assert 'select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $source_sha)' in gate
+    assert '[[ "$conclusion" == "success" ]]' in gate
+    assert 'Timed out waiting for API control plane CI on exact release SHA' in gate
