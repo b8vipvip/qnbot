@@ -612,7 +612,11 @@ namespace Bot.ChromeNs
 
             try
             {
-                var endAt = DateTime.Now;
+                // The session boundary is the original last-activity + inactivity window,
+                // not the time this process happens to recover the task. If the Bot was
+                // offline for hours, using DateTime.Now would merge later buyer rounds into
+                // this report and contaminate full-corpus learning evidence.
+                var endAt = ResolveSessionWindowEnd(session);
                 var from = session.StartedAt.AddMinutes(-1);
                 ConversationHistoryRefreshResult historyCoverage;
                 List<ConversationContextTurn> turns;
@@ -1011,6 +1015,16 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("接待自动学习失败: seller=" + session.Seller
                     + ", buyer=" + session.Buyer + ", error=" + ex.Message, 20);
             }
+        }
+
+        private static DateTime ResolveSessionWindowEnd(ActiveSession session)
+        {
+            if (session == null) return DateTime.MinValue;
+            var lastActivity = session.LastActivityAt;
+            if (lastActivity == DateTime.MinValue) lastActivity = session.LastBuyerAt;
+            if (lastActivity == DateTime.MinValue) lastActivity = session.StartedAt;
+            if (lastActivity == DateTime.MinValue) return DateTime.MinValue;
+            return lastActivity.AddMinutes(InactivityMinutes);
         }
 
         private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync(
