@@ -247,3 +247,19 @@ def test_pr_ci_workflow_run_finishing_after_merge_still_updates_pr_ci_gate():
     assert "and not merged" not in failed
     assert "elif pr_number and branch != default_branch and not _release_workflow(workflow_name):" in effective
     assert 'effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")' in effective
+
+def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_evidence():
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    validation = reconcile[
+        reconcile.index("- name: Resolve and dispatch canonical post-merge validation gate"):
+        reconcile.index("- name: Wait for terminal post-merge validation gates")
+    ]
+
+    assert 'runs_before="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"' in validation
+    assert "existing_success=" in validation
+    assert 'if [[ "$current_main" != "$MERGE_SHA" ]]; then' in validation
+    assert 'git merge-base --is-ancestor "$MERGE_SHA" "$current_main"' in validation
+    assert '[[ -n "$existing_success" ]]' in validation
+    assert "no successful exact-SHA validation exists" in validation
+    assert "reusing exact-SHA validation run" in validation
+    assert 'gh workflow run "$primary_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"' in validation
