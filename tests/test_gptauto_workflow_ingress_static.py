@@ -80,10 +80,15 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'Publish Bot auto-update release' in reconcile
     assert 'release-path=$release_path' in reconcile
     assert 'release-name=$release_name' in reconcile
+    assert 'release-workflow-id=$release_workflow_id' in reconcile
     assert 'RELEASE_PATH: ${{ steps.validation-plan.outputs.release-path }}' in reconcile
     assert 'RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}' in reconcile
+    assert 'RELEASE_WORKFLOW_ID: ${{ steps.validation-plan.outputs.release-workflow-id }}' in reconcile
     assert '-f source_sha="$MERGE_SHA"' in reconcile
-    assert 'select(.name == $workflow and .head_sha == $sha' in reconcile
+    assert 'select(.name == $workflow and .display_title == $title' in reconcile
+    assert 'actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100' in reconcile
+    assert 'run-name: Publish Bot auto-update release' in release
+    assert 'github.event.workflow_run.head_sha || github.event.inputs.source_sha' in release
     assert 'event == "workflow_run"' in reconcile
     assert 'event == "workflow_dispatch"' in reconcile
     assert 'inputs.source_sha' in release

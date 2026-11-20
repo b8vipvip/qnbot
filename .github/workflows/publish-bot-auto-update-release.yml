@@ -1,4 +1,5 @@
 name: Publish Bot auto-update release
+run-name: Publish Bot auto-update release (${{ github.event.workflow_run.head_sha || github.event.inputs.source_sha || github.sha }})
 
 on:
   workflow_run:
