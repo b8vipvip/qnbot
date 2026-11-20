@@ -221,8 +221,10 @@ function Read-RuntimeAcceptanceSnapshot {
 
         $shopRows = @()
         foreach ($shop in @($snapshot.Shops)) {
-            if ([string]$shop.ShopRef -notmatch '^shop#[0-9a-f]{16}$'
-                -or [string]$shop.OwnerSessionRef -notmatch '^session#[0-9a-f]{16}$') {
+            if (
+                [string]$shop.ShopRef -notmatch '^shop#[0-9a-f]{16}$' -or
+                [string]$shop.OwnerSessionRef -notmatch '^session#[0-9a-f]{16}$'
+            ) {
                 continue
             }
             $standbyRows = @()
