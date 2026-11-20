@@ -140,6 +140,15 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - Follow-up diagnostics now report AliRender command-line visibility, tolerate quoted renderer/debug-port arguments, list Qianniu-owned loopback listener candidates without probing them when bench_im identity is unknown, and read product version/tag/source SHA from the package-root `release-info.json` instead of presenting the assembly compatibility version as the product version.
 - The diagnostic follow-up source/tests are on master after the stable release and require exact-SHA CI/Windows build before they are used as the next field diagnostic. They are not included in `bot-v1.1.2460`.
 
+### 4.2 2026-11-20 continued repair
+
+- GPTAuto Reconcile recovery: Executor no longer treats an old `gptauto-reconcile-dispatched` comment as terminal proof. It skips a recovery dispatch only when the matching task has a durable `Completion Lease is RELEASED`, `Terminal state: DONE`, and exact `Merge SHA` receipt. Otherwise it re-dispatches and updates the existing handoff comment.
+- Historical Reconcile task still needs an explicit recovery run: PR #434, task `GA-ddf0aa319783`, merge SHA `483b07f03eeeeef5e9339b286d2c179378489ccc`, `release_required=false`. Its earlier Reconcile run `44677995005` failed during terminal capture because it searched only for canonical PR workflow `CI`; the fixed exact-head aggregation is on master, but the old task's Completion Lease remains ACTIVE until Reconcile is manually run again and publishes terminal DONE evidence.
+- Knowledge V2 write gate: base session suggestions and reply-style profile updates are now both blocked unless the full Knowledge V2 corpus analysis completes with a stable source revision. Incomplete coverage/version drift cannot write any learned content. `EnableAutomaticWrites` remains hard-disabled.
+- Virtual-goods delivery recovery: read-only verification now classifies seller/ShopKey identity failures and exceptions as `ConfirmationUncertain`, so repeated read-only failures reach the existing five-attempt manual-review path instead of retrying forever as generic Deferred. The consumed confirmation ledger remains a no-repeat barrier; this does not authorize another confirmation click.
+- Exact master SHA: `8fc1c21440f351ce336a58f2751ef16afae4cd97`. API Full Gate passed: Fast Gate `1682 passed, 16 skipped`, API package tests `141 passed`, Windows Static Gate passed. Windows x64 build `44752223276` was still running at the time of this update.
+- These source changes are after stable `bot-v1.1.2460`; do not treat them as installed on the user's client. No real Qianniu runtime acceptance was claimed.
+
 ## 5. Validation and release rules / 验收与发布规则
 
 1. 源码修复必须有回归测试；Windows 专属脚本必须通过 Windows PowerShell 5.1 parser。
