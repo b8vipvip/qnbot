@@ -63,10 +63,6 @@ jobs:
           [[ -n "$primary" ]] || { echo "::error::Unable to resolve product validation workflow name for $primary_path"; exit 1; }
 
           current_main="$(gh api "repos/$REPOSITORY/commits/$DEFAULT_BRANCH" --jq '.sha')"
-          [[ "$current_main" == "$MERGE_SHA" ]] || {
-            echo "::error::Default branch moved to $current_main before post-merge validation for $MERGE_SHA; refusing to validate a different commit"
-            exit 1
-          }
 
           printf '%s\n' "$primary" > /tmp/gptauto-required-workflows.txt
           echo "required-workflows=$primary" >> "$GITHUB_OUTPUT"
@@ -74,11 +70,23 @@ jobs:
           echo "workflow-path=$primary_path" >> "$GITHUB_OUTPUT"
           echo "Canonical post-merge validation workflow: $primary ($primary_path)"
 
-          # Reuse exact-SHA success evidence if it already exists. Otherwise
-          # dispatch exactly one workflow_dispatch run and bind later validation
-          # to the returned run generation rather than polling for registration.
+          # Reuse exact-SHA success evidence if it already exists. A later
+          # default-branch commit must not make a previously validated merge
+          # unrecoverable; however, never dispatch CI on a different SHA and
+          # pretend that it validates this task's merge.
           runs_before="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
           existing_success="$(jq -r --arg workflow "$primary" '[.workflow_runs[] | select(.name == $workflow and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs_before")"
+          if [[ "$current_main" != "$MERGE_SHA" ]]; then
+            git merge-base --is-ancestor "$MERGE_SHA" "$current_main" || {
+              echo "::error::Merge SHA $MERGE_SHA is not an ancestor of current default branch $current_main"
+              exit 1
+            }
+            [[ -n "$existing_success" ]] || {
+              echo "::error::Default branch advanced to $current_main and no successful exact-SHA validation exists for $MERGE_SHA; refusing to validate a different commit"
+              exit 1
+            }
+            echo "Default branch advanced to $current_main; reusing exact-SHA validation run $existing_success for historical merge $MERGE_SHA."
+          fi
           if [[ -n "$existing_success" ]]; then
             echo "validation-run-id=$existing_success" >> "$GITHUB_OUTPUT"
             echo "Reusing exact-SHA post-merge validation run $existing_success."
