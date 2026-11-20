@@ -480,3 +480,18 @@ def test_auto_delivery_queue_retains_read_only_barrier_until_ledger_resolution_i
         process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"):
         process.index("default:", process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"))
     ]
+
+
+def test_read_only_auto_delivery_recovery_failures_count_toward_manual_review():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    execute = runtime[
+        runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        runtime.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")
+    ]
+    uncertain = execute[execute.index("catch (Exception ex)", execute.index('ReadModalStateAsync("confirm")')):]
+
+    assert 'AutoDeliveryAttemptResult.Uncertain("只读复核无法确认当前客服与任务店铺身份一致")' in execute
+    assert 'AutoDeliveryAttemptResult.Uncertain("只读复核无法验证当前千牛会话ShopKey："' in execute
+    assert 'AutoDeliveryAttemptResult.Uncertain("只读复核发现当前千牛会话ShopKey与订单任务不一致")' in execute
+    assert 'AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message)' in uncertain
+    assert 'verificationOnly=" + verificationOnly' in uncertain
