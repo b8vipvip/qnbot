@@ -427,11 +427,19 @@ namespace Bot.ChromeNs
             switch (result.Outcome)
             {
                 case AutoDeliveryAttemptOutcome.Completed:
-                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "completed");
+                    if (!TryResolveConfirmationIntent(record, "completed"))
+                    {
+                        DeferRecord(record, TimeSpan.FromHours(1), "订单已核实完成，但防重账本终态未能持久化；保留只读复核任务");
+                        break;
+                    }
                     RemoveRecord(record, "已确认完成：" + result.Reason);
                     break;
                 case AutoDeliveryAttemptOutcome.TerminalNoAction:
-                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "terminal:" + result.Reason);
+                    if (!TryResolveConfirmationIntent(record, "terminal:" + result.Reason))
+                    {
+                        DeferRecord(record, TimeSpan.FromHours(1), "订单无需执行，但防重账本终态未能持久化；保留只读复核任务");
+                        break;
+                    }
                     RemoveRecord(record, "订单无需再执行：" + result.Reason);
                     break;
                 case AutoDeliveryAttemptOutcome.ConfirmationUncertain:
@@ -443,9 +451,9 @@ namespace Bot.ChromeNs
                         live.ConfirmationUncertainCount++;
                         if (live.ConfirmationUncertainCount >= 5)
                         {
-                            _state.Pending.Remove(live);
+                            live.NextAttemptAt = DateTime.Now.AddHours(1);
                             stop = true;
-                            Log.Error("自动发货确认结果连续不确定，已停止队列任务；长期防重账本仍保留且不会重复确认: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", reason=" + result.Reason);
+                            Log.Error("自动发货确认结果连续不确定，准备转人工复核；在账本终态持久化前保留只读队列屏障: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", reason=" + result.Reason);
                         }
                         else
                         {
@@ -454,7 +462,13 @@ namespace Bot.ChromeNs
                         }
                         SaveStateLocked();
                     }
-                    if (stop && AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)) AutoDeliveryConfirmationLedger.MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "manual_review_required");
+                    if (stop)
+                    {
+                        if (TryResolveConfirmationIntent(record, "manual_review_required"))
+                            RemoveRecord(record, "确认结果连续不确定，已转人工复核；自动确认屏障继续保留");
+                        else
+                            DeferRecord(record, TimeSpan.FromHours(1), "人工复核状态未能持久化，保留只读防重屏障");
+                    }
                     break;
                 default:
                     if (IsSilentPreflightReason(result.Reason))
@@ -540,6 +554,14 @@ namespace Bot.ChromeNs
                     record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId);
         }
 
+        private static bool TryResolveConfirmationIntent(PendingRecord record, string resolution)
+        {
+            if (!HasConfirmationIntent(record)) return true;
+            if (record == null || record.Snapshot == null) return false;
+            return AutoDeliveryConfirmationLedger.MarkResolved(
+                record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId, resolution);
+        }
+
         private static PendingRecord FindLiveRecordLocked(string key)
         {
             return _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
@@ -561,13 +583,19 @@ namespace Bot.ChromeNs
                 {
                     if (HasConfirmationIntent(item))
                     {
-                        AutoDeliveryConfirmationLedger.MarkResolved(
-                            item.Snapshot.ShopKey, item.Snapshot.Seller, item.Snapshot.OrderId,
-                            "manual_review_required");
+                        if (!TryResolveConfirmationIntent(item, "manual_review_required"))
+                        {
+                            // Keep the expired task as a read-only recovery barrier until
+                            // its manual-review resolution is durably recorded in the ledger.
+                            item.NextAttemptAt = now.AddHours(1);
+                            Log.Error("自动发货人工复核状态未能持久化，保留只读队列屏障并稍后重试: seller="
+                                + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId);
+                            continue;
+                        }
                         Log.Error("虚拟商品自动发货只读复核任务超过24小时，已转人工复核；长期防重账本继续阻止重复确认: seller="
                             + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId);
                     }
-                    else
+                    else if (item != null && item.Snapshot != null)
                     {
                         Log.Info("虚拟商品自动发货队列任务已过期并停止: seller="
                             + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId);
