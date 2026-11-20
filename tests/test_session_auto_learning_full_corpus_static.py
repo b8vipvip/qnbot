@@ -786,3 +786,68 @@ def test_history_and_knowledge_corpus_retry_budgets_are_independent_and_restart_
     assert "LearningRetryCount = learningRetryCount" in recovery
     assert 'coverage["historyRetryCount"] = session.HistoryRetryCount' in snapshot
     assert 'coverage["learningRetryCount"] = session.LearningRetryCount' in snapshot
+
+
+
+def test_checkpoint_write_failure_cannot_promote_knowledge_v2_to_complete_or_enable_writes():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    catch_block = analyze[
+        analyze.index("catch (Exception ex)"):
+        analyze.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    assert "result.Complete = false;" in catch_block
+    assert 'coverage["knowledgeCorpusComplete"] = false;' in catch_block
+    assert "SaveReport(report);" in analyze
+    assert "private const bool EnableAutomaticWrites = false;" in service
+    assert "var retryCorpus = !corpusComplete && session.LearningRetryCount < 3;" in finalize
+    assert "Requeue(session, \"等待Knowledge V2全库补偿重试\")" in finalize
+
+
+def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_batch_contract():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    resume = analyze[
+        analyze.index("var canResume ="):
+        analyze.index("if (!canResume)")
+    ]
+
+    for required in (
+        "knowledgeCorpusSourceFingerprint",
+        "knowledgeCorpusTranscriptFingerprint",
+        "KnowledgeCorpusBatchSize",
+        "KnowledgeCorpusPromptVersion",
+        "knowledgeCorpusSessionSummary",
+        "knowledgeCorpusCompletedBatchIndices",
+    ):
+        assert required in resume
+    assert "result.CompletedBatchIndices.Add(completedIndex)" in resume
+    assert "batches[batchIndex - 1].Any" in resume
+    assert "evidenceIds.All(humanMessageIds.Contains)" in resume
+    assert "candidate.SourceFingerprint, result.SourceFingerprint" in resume
+
+
+def test_pending_learning_recovery_only_resumes_durable_unfinished_reports_and_deduplicates_latest():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    recovery = service[
+        service.index("private static void ResumePending()"):
+        service.index("private static void CleanupReports")
+    ]
+
+    assert "allReports.Where(x => x.CompletedAtTicks == 0)" in recovery
+    assert "order by UpdatedAtTicks desc" in recovery
+    assert "var resumedKeys = new HashSet<string>(StringComparer.Ordinal);" in recovery
+    assert "if (!resumedKeys.Add(key))" in recovery
+    assert "superseded_pending_session_duplicate" in recovery
+    assert "legacy_report_shop_scope_unavailable" in recovery

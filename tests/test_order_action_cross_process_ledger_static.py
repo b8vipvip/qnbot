@@ -129,3 +129,45 @@ def test_live_inflight_order_reply_barrier_never_expires_while_owner_process_is_
     assert "(!x.InFlight && x.Until <= now)" in begin
     assert "if (priorAction != null && priorAction.InFlight)" in begin
     assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
+
+
+
+def test_order_reply_recovery_timer_keeps_unknown_delivery_fail_closed_after_restart():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    initialize = code[
+        code.index("internal static void Initialize()"):
+        code.index("private static void RecoverOrphanedInFlightActions")
+    ]
+    recovery = code[
+        code.index("private static void RecoverOrphanedInFlightActions"):
+        code.index("public static bool TryCreatePlan")
+    ]
+    begin = code[
+        code.index("internal static bool TryBeginExecution"):
+        code.index("internal static void MarkDeliveryUncertain")
+    ]
+
+    assert "RecoverOrphanedInFlightActions();" in initialize
+    assert "TimeSpan.FromMinutes(1)" in initialize
+    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in recovery
+    assert "if (IsActionOwnerProcessAlive(record)) continue;" in recovery
+    assert "record.DeliveryUncertain = true;" in recovery
+    assert "record.InFlight = false;" in recovery
+    assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
+    assert 'reason = "action_delivery_uncertain";' in begin
+    assert "return false;" in begin[begin.index('reason = "action_delivery_uncertain";'):]
+
+
+def test_order_reply_process_identity_uses_pid_and_start_time_to_avoid_pid_reuse_false_owner():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    helper = code[
+        code.index("private static bool TryGetCurrentProcessIdentity"):
+        code.index("private static bool SaveActionStateLocked")
+    ]
+
+    assert "Process.GetCurrentProcess()" in helper
+    assert "process.StartTime.ToUniversalTime().Ticks" in helper
+    assert "Process.GetProcessById(record.ProcessId)" in helper
+    assert "process.HasExited" in helper
+    assert "record.ProcessStartTimeUtcTicks" in helper
+    assert "TimeSpan.FromSeconds(2).Ticks" in helper

@@ -396,3 +396,26 @@ def test_auto_delivery_worker_never_executes_without_a_durable_queue_checkpoint(
     assert "if (_stateLoadFailed) return;" in worker
     assert "_stateLoadFailed = true;" in save
     assert "已暂停自动发货" in save
+
+
+
+def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwrites_source():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    initialize = runtime[
+        runtime.index("public static void Initialize()"):
+        runtime.index("public static bool IsOperational()")
+    ]
+    loader = runtime[
+        runtime.index("private static StateDocument LoadState"):
+        runtime.index("private static bool SaveStateLocked")
+    ]
+
+    assert "LoadState(out loadedSuccessfully)" in initialize
+    assert "if (!loadedSuccessfully)" in initialize
+    assert "_stateLoadFailed = true;" in initialize
+    failed_branch = initialize[initialize.index("if (!loadedSuccessfully)"):]
+    assert "return;" in failed_branch
+    assert "_timer = new Timer(" not in failed_branch
+    assert "拒绝重置或覆盖现有任务文件" in loader
+    assert "保留原文件" in loader
+    assert "loadedSuccessfully = true;" not in loader[loader.index("catch (Exception ex)"):]
