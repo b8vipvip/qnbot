@@ -369,3 +369,9 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
 
     assert "private static bool ReloadStateForMutationLocked()" in ledger
     assert "Caller must hold the named cross-process mutex" in ledger
+    reload = ledger[
+        ledger.index("private static bool ReloadStateForMutationLocked"):
+        ledger.index("private static void CleanupLocked")
+    ]
+    assert "if (!File.Exists(path))" in reload
+    assert "禁止新的自动确认" in reload
