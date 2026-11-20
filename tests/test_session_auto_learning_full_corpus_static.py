@@ -838,6 +838,29 @@ def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_ba
     assert "candidate.SourceFingerprint, result.SourceFingerprint" in resume
 
 
+
+def test_recovered_learning_session_uses_original_inactivity_boundary_not_restart_time():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static DateTime ResolveSessionWindowEnd")
+    ]
+    resolver = service[
+        service.index("private static DateTime ResolveSessionWindowEnd"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    assert "var endAt = ResolveSessionWindowEnd(session);" in finalize
+    assert "RefreshRemoteHistoryCompleteAsync(" in finalize
+    assert "GetTurnsBetween(" in finalize
+    assert "LoadRangeComplete(" in finalize
+    assert "session.LastActivityAt" in resolver
+    assert "session.LastBuyerAt" in resolver
+    assert "session.StartedAt" in resolver
+    assert "AddMinutes(InactivityMinutes)" in resolver
+    assert "DateTime.Now" not in resolver
+
+
 def test_pending_learning_recovery_only_resumes_durable_unfinished_reports_and_deduplicates_latest():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     recovery = service[
