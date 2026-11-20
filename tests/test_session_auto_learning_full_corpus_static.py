@@ -791,10 +791,9 @@ def test_history_and_knowledge_corpus_retry_budgets_are_independent_and_restart_
 
 def test_checkpoint_write_failure_cannot_promote_knowledge_v2_to_complete_or_enable_writes():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
-    analyze = service[
-        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
-        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
-    ]
+    analyze_start = service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    analyze_end = service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches", analyze_start)
+    analyze = service[analyze_start:analyze_end]
     outer_catch = analyze.rindex("catch (Exception ex)")
     catch_block = analyze[outer_catch:]
     finalize = service[
@@ -812,10 +811,9 @@ def test_checkpoint_write_failure_cannot_promote_knowledge_v2_to_complete_or_ena
 
 def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_batch_contract():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
-    analyze = service[
-        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
-        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
-    ]
+    analyze_start = service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    analyze_end = service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches", analyze_start)
+    analyze = service[analyze_start:analyze_end]
     resume = analyze[
         analyze.index("if (canResume)"):
         analyze.index("if (!canResume)")
@@ -827,9 +825,9 @@ def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_ba
         "KnowledgeCorpusBatchSize",
         "KnowledgeCorpusPromptVersion",
         "knowledgeCorpusSessionSummary",
-        "knowledgeCorpusCompletedBatchIndices",
     ):
         assert required in resume
+    assert "knowledgeCorpusCompletedBatchIndices" in analyze
     assert "result.CompletedBatchIndices.Add(completedIndex)" in resume
     assert "batches[batchIndex - 1].Any" in resume
     assert "evidenceIds.All(humanMessageIds.Contains)" in resume

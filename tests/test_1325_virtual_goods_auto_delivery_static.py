@@ -414,8 +414,9 @@ def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwr
     assert "if (!loadedSuccessfully)" in initialize
     assert "_stateLoadFailed = true;" in initialize
     failed_branch = initialize[initialize.index("if (!loadedSuccessfully)"):]
-    assert "return;" in failed_branch
-    assert "_timer = new Timer(" not in failed_branch
+    return_index = failed_branch.index("return;")
+    assert return_index < failed_branch.index("CleanupExpiredLocked")
+    assert return_index < failed_branch.index("_timer = new Timer(")
     assert "拒绝重置或覆盖现有任务文件" in loader
     assert "保留原文件" in loader
     assert "loadedSuccessfully = true;" not in loader[loader.index("catch (Exception ex)"):]
