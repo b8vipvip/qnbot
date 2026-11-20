@@ -23,7 +23,16 @@ def canonical_phase(task: Task) -> str:
     current_head = str(task.metadata.get("current_pr_head_sha") or task.metadata.get("head_sha") or "")
     current_event = not (event_head and current_head and event_head != current_head)
     merge_sha = str(task.metadata.get("merge_sha") or "")
-    terminal_evidence_version = int(task.metadata.get("terminal_done_evidence_version") or 1)
+    raw_terminal_evidence_version = task.metadata.get("terminal_done_evidence_version")
+    try:
+        terminal_evidence_version = (
+            1 if raw_terminal_evidence_version in (None, "") else int(raw_terminal_evidence_version)
+        )
+    except (TypeError, ValueError):
+        # Malformed version metadata is not legacy evidence; require the strict v2 fields.
+        terminal_evidence_version = 2
+    if terminal_evidence_version < 1:
+        terminal_evidence_version = 2
     versioned_terminal_evidence_complete = (
         terminal_evidence_version < 2
         or (
