@@ -54,15 +54,31 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_initialized) return;
-                _state = LoadState();
-                if (!_failClosed)
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
-                    CleanupLocked(DateTime.Now);
-                    var migrated = MigratePendingConfirmationIntentsLocked();
-                    // Never replace an unreadable/invalid ledger, even if legacy queue
-                    // migration found records. A partial replacement could erase old barriers.
-                    if (!_failClosed && (migrated || _migrationRequired || !File.Exists(StatePath())) && !SaveLocked())
+                    if (!lease.Acquired)
+                    {
+                        _state = new LedgerState();
                         _failClosed = true;
+                        Log.ErrorWithMaxCount("获取自动发货长期确认账本跨进程锁失败；本次运行禁止新的自动确认。", 10);
+                    }
+                    else
+                    {
+                        _state = LoadState();
+                        if (!_failClosed)
+                        {
+                            CleanupLocked(DateTime.Now);
+                            var migrated = MigratePendingConfirmationIntentsLocked();
+                            // Never replace an unreadable/invalid ledger, even if legacy queue
+                            // migration found records. A partial replacement could erase old barriers.
+                            if (!_failClosed && (migrated || _migrationRequired || !File.Exists(path)))
+                            {
+                                if (!SaveLocked()) _failClosed = true;
+                                else _migrationRequired = false;
+                            }
+                        }
+                    }
                 }
                 _initialized = true;
                 Log.Info("自动发货长期确认防重账本已加载: records=" + _state.Records.Count
@@ -76,8 +92,13 @@ namespace Bot.ChromeNs
             Initialize();
             lock (Sync)
             {
-                CleanupLocked(DateTime.Now);
-                return !_failClosed && !IsAtCapacityLocked();
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
+                {
+                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;
+                    CleanupLocked(DateTime.Now);
+                    return !_failClosed && !IsAtCapacityLocked();
+                }
             }
         }
 
@@ -100,18 +121,22 @@ namespace Bot.ChromeNs
             var legacyKey = BuildLegacyKey(seller, orderId);
             lock (Sync)
             {
-                if (_failClosed) return true;
-                CleanupLocked(DateTime.Now);
-                // A full ledger cannot safely answer "no intent" for an unseen order:
-                // all new irreversible confirmations must stop until capacity is available.
-                if (IsAtCapacityLocked())
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
-                    Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；保留全部防重记录并暂停新的自动确认。", 10);
-                    return true;
+                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return true;
+                    CleanupLocked(DateTime.Now);
+                    // A full ledger cannot safely answer "no intent" for an unseen order:
+                    // all new irreversible confirmations must stop until capacity is available.
+                    if (IsAtCapacityLocked())
+                    {
+                        Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；保留全部防重记录并暂停新的自动确认。", 10);
+                        return true;
+                    }
+                    return _state.Records.Any(x => x != null
+                        && (string.Equals(x.Key, key, StringComparison.Ordinal)
+                            || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)));
                 }
-                return _state.Records.Any(x => x != null
-                    && (string.Equals(x.Key, key, StringComparison.Ordinal)
-                        || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)));
             }
         }
 
@@ -131,34 +156,43 @@ namespace Bot.ChromeNs
 
             lock (Sync)
             {
-                if (_failClosed) return false;
-                CleanupLocked(DateTime.Now);
-                if (_state.Records.Any(x => x != null
-                    && (string.Equals(x.Key, key, StringComparison.Ordinal)
-                        || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))) return false;
-                if (IsAtCapacityLocked())
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
-                    Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；拒绝写入新确认意图，禁止执行确认发货。", 10);
+                    if (!lease.Acquired)
+                    {
+                        Log.ErrorWithMaxCount("获取自动发货确认意图跨进程锁失败；禁止执行确认发货。", 10);
+                        return false;
+                    }
+                    if (!ReloadStateForMutationLocked()) return false;
+                    CleanupLocked(DateTime.Now);
+                    if (_state.Records.Any(x => x != null
+                        && (string.Equals(x.Key, key, StringComparison.Ordinal)
+                            || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))) return false;
+                    if (IsAtCapacityLocked())
+                    {
+                        Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；拒绝写入新确认意图，禁止执行确认发货。", 10);
+                        return false;
+                    }
+
+                    var record = new ConfirmationRecord
+                    {
+                        Key = key,
+                        ShopKey = shopKey,
+                        Seller = seller,
+                        OrderId = orderId,
+                        IntentAt = intentAt == DateTime.MinValue ? DateTime.Now : intentAt,
+                        KeepUntil = DateTime.Now.Add(Retention),
+                        Resolution = "intent_persisted",
+                        ResolvedAt = null
+                    };
+                    _state.Records.Add(record);
+                    if (SaveLocked()) return true;
+
+                    _state.Records.Remove(record);
+                    _failClosed = true;
                     return false;
                 }
-
-                var record = new ConfirmationRecord
-                {
-                    Key = key,
-                    ShopKey = shopKey,
-                    Seller = seller,
-                    OrderId = orderId,
-                    IntentAt = intentAt == DateTime.MinValue ? DateTime.Now : intentAt,
-                    KeepUntil = DateTime.Now.Add(Retention),
-                    Resolution = "intent_persisted",
-                    ResolvedAt = null
-                };
-                _state.Records.Add(record);
-                if (SaveLocked()) return true;
-
-                _state.Records.Remove(record);
-                _failClosed = true;
-                return false;
             }
         }
 
@@ -169,17 +203,21 @@ namespace Bot.ChromeNs
             var key = BuildKey(shopKey, seller, orderId);
             lock (Sync)
             {
-                if (_failClosed) return;
-                var record = _state.Records.FirstOrDefault(x => x != null
-                    && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (record == null) return;
-                record.Resolution = string.IsNullOrWhiteSpace(resolution)
-                    ? "resolved"
-                    : resolution.Trim();
-                record.ResolvedAt = DateTime.Now;
-                var keepUntil = DateTime.Now.Add(Retention);
-                if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
-                if (!SaveLocked()) _failClosed = true;
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
+                {
+                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return;
+                    var record = _state.Records.FirstOrDefault(x => x != null
+                        && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    if (record == null) return;
+                    record.Resolution = string.IsNullOrWhiteSpace(resolution)
+                        ? "resolved"
+                        : resolution.Trim();
+                    record.ResolvedAt = DateTime.Now;
+                    var keepUntil = DateTime.Now.Add(Retention);
+                    if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
+                    if (!SaveLocked()) _failClosed = true;
+                }
             }
         }
 
@@ -299,6 +337,35 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("读取自动发货长期确认防重账本失败；本次运行将禁止新的自动确认：" + ex.Message, 10);
                 return new LedgerState();
             }
+        }
+
+        // Caller must hold the named cross-process mutex. Reloading before each ledger
+        // transaction prevents one Bot process from overwriting another process's new barrier.
+        private static bool ReloadStateForMutationLocked()
+        {
+            if (_failClosed) return false;
+            var path = StatePath();
+            if (!File.Exists(path))
+            {
+                _failClosed = true;
+                Log.ErrorWithMaxCount("自动发货长期确认账本在运行期间丢失；禁止新的自动确认。", 10);
+                return false;
+            }
+
+            _migrationRequired = false;
+            _state = LoadState();
+            if (_failClosed) return false;
+            CleanupLocked(DateTime.Now);
+            if (_migrationRequired)
+            {
+                var migrated = MigratePendingConfirmationIntentsLocked();
+                if (!_failClosed && (migrated || _migrationRequired))
+                {
+                    if (!SaveLocked()) _failClosed = true;
+                    else _migrationRequired = false;
+                }
+            }
+            return !_failClosed;
         }
 
         private static void CleanupLocked(DateTime now)
