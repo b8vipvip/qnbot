@@ -31,7 +31,7 @@ def test_first_inquiry_reply_is_shop_scoped_and_customizable():
     assert 'EnabledKey = "FirstInquiryFixedReplyEnabled"' in source
     assert 'AnswerKey = "FirstInquiryFixedReplyAnswer"' in source
     assert "ShopSettingsScope.Current" in source
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick" in source
     assert "PersistentParams.TrySaveParam2Key" in source
     assert "PersistentParams.GetParam2Key" in source
 
