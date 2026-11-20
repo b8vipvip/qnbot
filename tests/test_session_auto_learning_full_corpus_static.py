@@ -814,6 +814,10 @@ def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_ba
     analyze_start = service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
     analyze_end = service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches", analyze_start)
     analyze = service[analyze_start:analyze_end]
+    eligibility = analyze[
+        analyze.index("var canResume ="):
+        analyze.index("if (canResume)")
+    ]
     resume = analyze[
         analyze.index("if (canResume)"):
         analyze.index("if (!canResume)")
@@ -826,7 +830,7 @@ def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_ba
         "KnowledgeCorpusPromptVersion",
         "knowledgeCorpusSessionSummary",
     ):
-        assert required in resume
+        assert required in eligibility
     assert "knowledgeCorpusCompletedBatchIndices" in analyze
     assert "result.CompletedBatchIndices.Add(completedIndex)" in resume
     assert "batches[batchIndex - 1].Any" in resume
