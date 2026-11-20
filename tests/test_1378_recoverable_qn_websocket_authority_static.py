@@ -47,7 +47,7 @@ def test_status_arbitration_uses_exact_shopkey_and_rebinds_authority():
     assert "IsAuthoritativeShopSession(sessionShopKey, session.SessionID)" in status
     assert "else if (!wasAuthoritative)" in status
     assert "同一ShopKey的重复千牛WebSocket页面" in status
-    assert 'Task.Run(() => TryInitSession(session, "status"));' in status
+    assert 'Task.Run(() => TryInitSession(session, "status", identityProbeGeneration));' in status
     assert "var bindingGeneration = ShouldRefreshStatusBinding(" in status
     assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration));" in status
     assert "TryClaimShopSession(loginNick" not in status
@@ -72,7 +72,7 @@ def test_authority_promotion_reapplies_duplicate_cap_per_shopkey():
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in promotion
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in promotion
     assert "verifiedShop.ShopKey, shopKey" in promotion
-    assert "TryClaimShopSession(verifiedShop.ShopKey, sessionId)" in promotion
+    assert "TryClaimShopSession(verifiedShop.ShopKey, sessionId, expectedIdentityProbeGeneration)" in promotion
     assert "QN.GetByShopIdentity(user.Result)" in promotion
     assert "CDPClient.PreferRuntimeSession(" in promotion
 
@@ -85,10 +85,10 @@ def test_first_page_initializes_from_its_own_cdp_login_identity():
     ]
     init = server[server.index("private async Task TryInitSession"):]
     assert "if (!wasInitialized)" in status
-    assert 'Task.Run(() => TryInitSession(session, "status"));' in status
+    assert 'Task.Run(() => TryInitSession(session, "status", identityProbeGeneration));' in status
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in init
     assert "QN.GetByShopIdentity(user.Result)" in init
-    assert "TryClaimShopSession(shopKey, session.SessionID)" in init
+    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration)" in init
     assert "cdp.ShopKey = shopKey;" in init
 
 

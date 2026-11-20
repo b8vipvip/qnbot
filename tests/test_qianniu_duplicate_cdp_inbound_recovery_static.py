@@ -287,7 +287,7 @@ def test_periodic_sweeper_revalidates_exact_shopkey_for_every_connected_websocke
     assert "_initializing.ContainsKey(pair.Key)" in refresh
     assert "_closingDuplicateSessions.ContainsKey(pair.Key)" in refresh
     assert "TryReserveStatusBindingRefresh(pair.Key, now, false)" in refresh
-    assert "_statusBindingGenerations.TryGetValue(pair.Key, out bindingGeneration)" in refresh
+    assert "_shopIdentityProbeGenerations.TryGetValue(pair.Key, out bindingGeneration)" in refresh
     assert "Task.Run(() => TryRevalidateShopIdentity(session, bindingGeneration))" in refresh
     assert "private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)" in server
     assert "var user = await cdp.GetCurrentUser().ConfigureAwait(false);" in server
@@ -558,9 +558,35 @@ def test_periodic_shop_identity_probe_cannot_overwrite_a_newer_status_generation
         server.index("private async Task TryBindStatusConversation")
     ]
 
-    assert "long? expectedBindingGeneration = null" in claim
-    assert "currentBindingGeneration != expectedBindingGeneration.Value" in claim
+    assert "long? expectedIdentityProbeGeneration = null" in claim
+    assert "currentIdentityProbeGeneration != expectedIdentityProbeGeneration.Value" in claim
     assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in revalidate
     assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in revalidate
     assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in revalidate
     assert "QN.GetByShopIdentity(user.Result)" in revalidate
+
+
+
+def test_every_status_heartbeat_invalidates_old_shop_identity_reads_even_when_display_nicks_match():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    status = server[
+        server.index('if (wMsg.Type == "qnbotStatus")'):
+        server.index('else if (wMsg.Type == "imsdkApiScan")')
+    ]
+    init = server[
+        server.index("private async Task TryInitSession"):
+        server.index("private static bool IsLoopbackListenerActive")
+    ]
+    promotion = server[
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync"):
+        server.index("private bool IsWebSocketSessionConnected")
+    ]
+
+    assert "var identityProbeGeneration = BeginShopIdentityProbe(session.SessionID)" in status
+    assert 'TryInitSession(session, "status", identityProbeGeneration)' in status
+    assert "private long BeginShopIdentityProbe(string sessionId)" in server
+    assert "NextShopIdentityProbeGenerationLocked(sessionId)" in server
+    assert "IsCurrentShopIdentityProbe(session.SessionID, identityProbeGeneration)" in init
+    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration)" in init
+    assert "expectedIdentityProbeGeneration: identityProbeGeneration" in status or "expectedIdentityProbeGeneration: identityProbeGeneration" in server
+    assert "IsCurrentShopIdentityProbeLocked(sessionId, expectedIdentityProbeGeneration.Value)" in promotion

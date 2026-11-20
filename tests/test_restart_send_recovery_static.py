@@ -49,7 +49,7 @@ def test_restart_recovery_does_not_reinitialize_same_authority_forever_but_rebin
     assert "_lastStatusBindings" in source
     assert "ShouldRefreshStatusBinding" in source
     assert "var wasInitialized = _initialized.ContainsKey(session.SessionID);" in source
-    assert "Task.Run(() => TryInitSession(session, \"status\"))" in source
+    assert "Task.Run(() => TryInitSession(session, \"status\", identityProbeGeneration))" in source
     assert "else if (!wasAuthoritative)" in source
     assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration))" in source
 
