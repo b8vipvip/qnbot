@@ -9,8 +9,8 @@ Last updated / 最后更新：2026-11-20
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：`bot-v1.1.2460`
-- Release：GitHub Release tag `bot-v1.1.2460`
+- Latest stable client：`bot-v1.1.2470`
+- Release：GitHub Release tag `bot-v1.1.2470`
 - Release target：`7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`
 - x64 package SHA-256：`98df42ddf2130bc61923fca033f5deaa049ade495fa61143ee319849f5177533`
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
@@ -147,7 +147,7 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - Knowledge V2 write gate: base session suggestions and reply-style profile updates are now both blocked unless the full Knowledge V2 corpus analysis completes with a stable source revision. Incomplete coverage/version drift cannot write any learned content. `EnableAutomaticWrites` remains hard-disabled.
 - Virtual-goods delivery recovery: read-only verification now classifies seller/ShopKey identity failures and exceptions as `ConfirmationUncertain`, so repeated read-only failures reach the existing five-attempt manual-review path instead of retrying forever as generic Deferred. The consumed confirmation ledger remains a no-repeat barrier; this does not authorize another confirmation click.
 - Validated product-source SHA: `8fc1c21440f351ce336a58f2751ef16afae4cd97`. API Full Gate passed: Fast Gate `1682 passed, 16 skipped`, API package tests `141 passed`, Windows Static Gate passed, and Windows x64 build `44752223276` completed successfully. Documentation-only handoff updates followed this source SHA.
-- These source changes are after stable `bot-v1.1.2460`; do not treat them as installed on the user's client. No real Qianniu runtime acceptance was claimed.
+- Release `bot-v1.1.2470` was published for exact product-source SHA `8fc1c21440f351ce336a58f2751ef16afae4cd97`; x64 package SHA-256: `30ac46a1791f986e05bc836adcd67a7d74ef9db6d88d22705aa66539bc419830`. These fixes are included in 2470, but local installation and real Qianniu runtime acceptance remain unverified.
 
 ## 5. Validation and release rules / 验收与发布规则
 
