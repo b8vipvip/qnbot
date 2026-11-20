@@ -709,7 +709,7 @@ def test_corpus_prompt_uses_random_local_aliases_and_restores_real_evidence_ids_
     assert 'GetOrCreatePromptIdentifier(promptIdentifiers, "source", record.SourceId)' in prompt
     assert '["intent"] = Redact(record.Intent)' in prompt
     assert '["predicate"] = Redact(record.Predicate)' in prompt
-    assert "KnowledgeCorpusPromptVersion = 2" in service
+    assert "KnowledgeCorpusPromptVersion = 3" in service
 
 
 
