@@ -108,6 +108,7 @@ namespace Bot.ChromeNs
         public bool IsBuyerFollowUp { get; set; }
         public string TriggerText { get; set; }
         public DateTime TriggerTime { get; set; }
+        public bool DeliveryUncertain { get; set; }
     }
 
     internal sealed class OrderPlacedReplyResolution
@@ -702,6 +703,7 @@ namespace Bot.ChromeNs
         internal static void MarkDeliveryUncertain(OrderPlacedReplyPlan plan, string reason)
         {
             if (plan == null) return;
+            plan.DeliveryUncertain = true;
             lock (ActionSync)
             {
                 ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
@@ -731,7 +733,7 @@ namespace Bot.ChromeNs
                     existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
                     existing.FollowUp = plan.IsBuyerFollowUp;
-                    existing.Until = DateTime.Now.AddMinutes(10);
+                    existing.Until = DateTime.Now.AddHours(720);
                     existing.Delivered = false;
                     existing.DeliveryUncertain = true;
                     existing.InFlight = false;
@@ -739,15 +741,15 @@ namespace Bot.ChromeNs
                 }
             }
             Log.ErrorWithMaxCount(
-                "订单发送状态不确定，10分钟内禁止自动重发以避免重复: seller=" + plan.Seller
+                "订单发送状态不确定，已锁定30天并要求人工复核，禁止自动重发: seller=" + plan.Seller
                 + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                 + ", reason=" + (reason ?? string.Empty),
                 20);
         }
 
-        internal static void FinishExecution(OrderPlacedReplyPlan plan, bool delivered, int sentSegments)
+        internal static bool FinishExecution(OrderPlacedReplyPlan plan, bool delivered, int sentSegments)
         {
-            if (plan == null) return;
+            if (plan == null) return false;
             lock (ActionSync)
             {
                 ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
@@ -756,26 +758,22 @@ namespace Bot.ChromeNs
                 {
                     if (!lease.Acquired)
                     {
-                        Log.ErrorWithMaxCount("完成订单动作时跨进程锁超时；durable in-flight将按10分钟安全窗口自然过期。", 20);
-                        return;
+                        Log.ErrorWithMaxCount("完成订单动作时跨进程锁超时；发送结果无法可靠落盘，后续必须按不确定状态处理。", 20);
+                        return false;
                     }
                     string reloadError;
                     if (!ReloadAndMergeActionStateLocked(path, out reloadError))
                     {
                         Log.ErrorWithMaxCount("完成订单动作时无法可靠读取动作ledger；不覆盖磁盘状态，让既有in-flight安全窗口自然过期。 error="
                             + Short(reloadError, 220), 20);
-                        return;
+                        return false;
                     }
                     var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
                     if (existing != null) existing.InFlight = false;
 
-                    if (delivered || sentSegments > 0)
+                    if (delivered || sentSegments > 0 || plan.DeliveryUncertain)
                     {
                         var now = DateTime.Now;
-                        var hours = plan.IsBuyerFollowUp
-                            ? 720
-                            : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
-                        var until = delivered ? now.AddHours(hours) : now.AddMinutes(10);
                         if (existing == null)
                         {
                             existing = new OrderReplyActionRecord();
@@ -786,13 +784,30 @@ namespace Bot.ChromeNs
                         existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                         existing.OrderId = plan.OrderId.Trim();
                         existing.FollowUp = plan.IsBuyerFollowUp;
-                        existing.Until = until;
-                        existing.Delivered = delivered || sentSegments > 0;
-                        existing.DeliveryUncertain = false;
                         existing.InFlight = false;
+
+                        if (delivered)
+                        {
+                            var hours = plan.IsBuyerFollowUp
+                                ? 720
+                                : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
+                            existing.Until = now.AddHours(hours);
+                            existing.Delivered = true;
+                            existing.DeliveryUncertain = false;
+                        }
+                        else
+                        {
+                            // A partial send, remote-history outage, or exception after a send
+                            // attempt is never safe to retry automatically. Preserve an at-most-once
+                            // barrier for the maximum supported dedup horizon and require review.
+                            existing.Until = now.AddHours(720);
+                            existing.Delivered = false;
+                            existing.DeliveryUncertain = true;
+                        }
                     }
+
                     _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
-                    SaveActionStateLocked(path);
+                    return SaveActionStateLocked(path);
                 }
             }
         }
@@ -1219,6 +1234,7 @@ namespace Bot.ChromeNs
                 }
                 if (remote == RemoteSellerEchoVerification.Unavailable)
                 {
+                    plan.DeliveryUncertain = true;
                     OrderPlacedAutoReplyService.MarkDeliveryUncertain(
                         plan,
                         "live_echo_missing_and_remote_history_unavailable");
@@ -1343,10 +1359,9 @@ namespace Bot.ChromeNs
                 if (plan != null)
                 {
                     // Only a durably delivered action may extend the normal long reservation.
-                    // In-flight/precision-risk/uncertain outcomes are not delivery success. In
-                    // particular, delivery-uncertain has its own 10-minute durable safety window;
-                    // converting it to Complete(true) here would suppress a legitimate retry for
-                    // the full order dedup period (often 24h).
+                    // In-flight/precision-risk/uncertain outcomes are not delivery success.
+                    // Delivery-uncertain is held for the maximum dedup horizon and requires
+                    // manual review; it must not age into an automatic resend.
                     if (string.Equals(actionReason, "action_already_delivered", StringComparison.Ordinal))
                     {
                         OrderPlacedAutoReplyService.Complete(plan, true);
@@ -1354,6 +1369,12 @@ namespace Bot.ChromeNs
                     else if (!string.Equals(actionReason, "action_inflight", StringComparison.Ordinal))
                     {
                         OrderPlacedAutoReplyService.Complete(plan, false);
+                    }
+                    if (string.Equals(actionReason, "action_delivery_uncertain", StringComparison.Ordinal))
+                    {
+                        OrderAttentionUiService.SetReplyResult(plan.Snapshot, false);
+                        AddSkippedConversation(plan.Seller, plan.Buyer, BuildPlanQuestion(plan),
+                            "订单自动回复发送状态不确定，已锁定人工复核，30天内禁止自动重发");
                     }
                     Log.Info("下单自动回复动作级幂等已阻止重复执行: seller=" + plan.Seller
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
@@ -1364,6 +1385,7 @@ namespace Bot.ChromeNs
 
             using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer, plan == null ? string.Empty : plan.ShopKey))
             {
+                var sendAttemptStarted = false;
                 try
                 {
                     var resolution = await OrderPlacedAutoReplyService.ResolveAsync(plan);
@@ -1424,11 +1446,13 @@ namespace Bot.ChromeNs
                     bool sendOk;
                     if (preserveTemplateLayout)
                     {
+                        sendAttemptStarted = true;
                         presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);
                         sendOk = presetSendResult.Success;
                     }
                     else
                     {
+                        sendAttemptStarted = true;
                         sendOk = await SendMandatoryOrderTextAsync(plan, answer);
                     }
 
@@ -1439,10 +1463,13 @@ namespace Bot.ChromeNs
                         OrderGuidanceDeliveryGuard.MarkDelivered(plan, plan.IsBuyerFollowUp ? "Bot强制补发" : "Bot强制订单规则发送");
                         ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
                     }
-                    OrderPlacedAutoReplyService.FinishExecution(
-                        plan,
-                        sendOk,
-                        presetSendResult == null ? (sendOk ? 1 : 0) : presetSendResult.SentSegments);
+                    var sentSegments = presetSendResult == null ? (sendOk ? 1 : 0) : presetSendResult.SentSegments;
+                    var finishPersisted = OrderPlacedAutoReplyService.FinishExecution(plan, sendOk, sentSegments);
+                    if (!finishPersisted && (sendOk || sentSegments > 0 || plan.DeliveryUncertain))
+                    {
+                        OrderPlacedAutoReplyService.MarkDeliveryUncertain(plan, "delivery_result_persistence_failed");
+                    }
+                    sendAttemptStarted = false;
                     if (ctl != null)
                     {
                         var successDetail = plan.IsBuyerFollowUp
@@ -1454,10 +1481,22 @@ namespace Bot.ChromeNs
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                         + ", delivered=" + sendOk + ", manualReplyIgnored=true");
                 }
-                catch
+                catch (Exception ex)
                 {
                     OrderPlacedAutoReplyService.Complete(plan, false);
-                    OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                    if (sendAttemptStarted)
+                    {
+                        plan.DeliveryUncertain = true;
+                        OrderPlacedAutoReplyService.MarkDeliveryUncertain(
+                            plan, "exception_after_send_attempt:" + ex.GetType().Name);
+                        // Retry persistence after the first uncertain-state write. The
+                        // original in-flight reservation remains the fallback if both writes fail.
+                        OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                    }
+                    else
+                    {
+                        OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                    }
                     throw;
                 }
             }

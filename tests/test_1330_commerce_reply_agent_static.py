@@ -159,3 +159,41 @@ def test_commerce_change_does_not_touch_reliable_send_implementation():
     assert "SendTextWithRetryAsync" not in joined
     assert "QNRpa" not in joined
     assert "CDPClient" not in joined
+
+
+
+def test_order_reply_partial_or_exception_send_is_held_for_manual_review():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert "public bool DeliveryUncertain { get; set; }" in code
+
+    mark = code[
+        code.index("internal static void MarkDeliveryUncertain"):
+        code.index("internal static bool FinishExecution")
+    ]
+    finish = code[
+        code.index("internal static bool FinishExecution"):
+        code.index("private static void ObserveCanonicalOrderId")
+    ]
+    send = code[
+        code.index("private async Task<bool> SendMandatoryOrderTextAsync"):
+        code.index("private async Task<bool> IsOrderPresetSegmentAlreadySatisfiedAsync")
+    ]
+    process = code[
+        code.index("private async Task ProcessOrderPlacedReplyInShopScopeAsync"):
+        code.index("private static string BuildPlanQuestion")
+    ]
+
+    assert "plan.DeliveryUncertain = true;" in mark
+    assert "existing.Until = DateTime.Now.AddHours(720);" in mark
+    assert "30天" in mark
+    assert "plan.DeliveryUncertain = true;" in send
+    assert "sentSegments > 0 || plan.DeliveryUncertain" in finish
+    assert "existing.Until = now.AddHours(720);" in finish
+    assert "existing.DeliveryUncertain = true;" in finish
+    assert "return SaveActionStateLocked(path);" in finish
+    assert "var sendAttemptStarted = false;" in process
+    assert "sendAttemptStarted = true;" in process
+    assert "exception_after_send_attempt:" in process
+    assert "OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);" in process
+    assert "if (!finishPersisted && (sendOk || sentSegments > 0 || plan.DeliveryUncertain))" in process
+    assert "30天内禁止自动重发" in process
