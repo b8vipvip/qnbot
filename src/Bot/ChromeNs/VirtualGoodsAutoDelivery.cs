@@ -780,13 +780,22 @@ namespace Bot.ChromeNs
             if (snapshot == null || !AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId)) return AutoDeliveryAttemptResult.Terminal("订单号不是16-24位纯数字安全格式");
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0 || !DirectOrderIdentityResolver.IdentityEquals(seller, snapshot.Seller))
-                return AutoDeliveryAttemptResult.Deferred("当前客服与任务店铺不一致");
+                return verificationOnly
+                    ? AutoDeliveryAttemptResult.Uncertain("只读复核无法确认当前客服与任务店铺身份一致")
+                    : AutoDeliveryAttemptResult.Deferred("当前客服与任务店铺不一致");
             ShopContext runtimeShop;
             try { runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(this); }
-            catch (Exception ex) { return AutoDeliveryAttemptResult.Deferred("无法验证当前千牛会话ShopKey：" + ex.Message); }
+            catch (Exception ex)
+            {
+                return verificationOnly
+                    ? AutoDeliveryAttemptResult.Uncertain("只读复核无法验证当前千牛会话ShopKey：" + ex.Message)
+                    : AutoDeliveryAttemptResult.Deferred("无法验证当前千牛会话ShopKey：" + ex.Message);
+            }
             if (runtimeShop == null || string.IsNullOrWhiteSpace(snapshot.ShopKey)
                 || !string.Equals(runtimeShop.ShopKey, snapshot.ShopKey, StringComparison.Ordinal))
-                return AutoDeliveryAttemptResult.Deferred("当前千牛会话ShopKey与订单任务不一致");
+                return verificationOnly
+                    ? AutoDeliveryAttemptResult.Uncertain("只读复核发现当前千牛会话ShopKey与订单任务不一致")
+                    : AutoDeliveryAttemptResult.Deferred("当前千牛会话ShopKey与订单任务不一致");
             if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId))
                 verificationOnly = true;
             if (!verificationOnly && !AutoDeliverySettings.Load(seller).Enabled)
@@ -890,8 +899,10 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("虚拟商品自动发货执行异常: seller=" + seller + ", orderId=" + snapshot.OrderId + ", verificationOnly=false, error=" + ex.Message);
-                    return AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
+                    Log.Info("虚拟商品自动发货执行异常: seller=" + seller + ", orderId=" + snapshot.OrderId + ", verificationOnly=" + verificationOnly + ", error=" + ex.Message);
+                    return verificationOnly
+                        ? AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message)
+                        : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
                 }
                 finally { _sendGate.Release(); }
             }
