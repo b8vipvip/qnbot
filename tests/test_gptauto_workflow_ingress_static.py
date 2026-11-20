@@ -131,17 +131,29 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "validation_conclusion=" in terminal and "'.conclusion // \"\"'" in terminal
     assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
     assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
-    assert "event=pull_request&status=completed" in terminal
-    assert '--arg workflow "$VALIDATION_WORKFLOW"' in terminal
-    assert 'pr_ci_head_sha="$(jq -r' in terminal
-    assert 'pr_ci_event="$(jq -r' in terminal
-    assert 'pr_ci_status="$(jq -r' in terminal
-    assert 'pr_ci_conclusion="$(jq -r' in terminal
-    assert '"$pr_ci_head_sha" == "$pr_head_sha"' in terminal
-    assert '"$pr_ci_event" == "pull_request"' in terminal
-    assert '"$pr_ci_status" == "completed"' in terminal
-    assert '"$pr_ci_conclusion" == "success"' in terminal
+
+
+
+
+
+
+
+
+
+
     assert '--pr-ci-status "$pr_ci_status"' in terminal
+    assert "pr_gate_rows=" in terminal
+    assert 'select(.head_sha == $head)' in terminal
+    assert 'select(.event == "pull_request")' in terminal
+    assert 'select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")' in terminal
+    assert "| group_by(.name)" in terminal
+    assert "pr_ci_invalid_rows=" in terminal
+    assert '(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")' in terminal
+    assert '[.[].id | tostring] | join(",")' in terminal
+    assert 'pr_ci_status="completed"' in terminal
+    assert 'pr_ci_conclusion="success"' in terminal
+    assert "canonical post-merge workflow" in terminal
+    assert 'pr_ci_run_id="$(jq -r' in terminal
     assert "steps.terminal.outcome == 'success'" in receipt
     assert "steps.terminal.outcome == 'success'" in upload
     assert "steps.lease-receipt.outcome == 'success'" in upload
@@ -235,3 +247,20 @@ def test_pr_ci_workflow_run_finishing_after_merge_still_updates_pr_ci_gate():
     assert "and not merged" not in failed
     assert "elif pr_number and branch != default_branch and not _release_workflow(workflow_name):" in effective
     assert 'effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")' in effective
+
+def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_evidence():
+    """Do not lose a completed merge when later master commits exist."""
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    validation = reconcile[
+        reconcile.index("- name: Resolve and dispatch canonical post-merge validation gate"):
+        reconcile.index("- name: Wait for terminal post-merge validation gates")
+    ]
+
+    assert 'runs_before="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"' in validation
+    assert "existing_success=" in validation
+    assert 'if [[ "$current_main" != "$MERGE_SHA" ]]; then' in validation
+    assert 'git merge-base --is-ancestor "$MERGE_SHA" "$current_main"' in validation
+    assert '[[ -n "$existing_success" ]]' in validation
+    assert "no successful exact-SHA validation exists" in validation
+    assert "reusing exact-SHA validation run" in validation
+    assert 'gh workflow run "$primary_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"' in validation
