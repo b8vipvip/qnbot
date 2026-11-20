@@ -247,9 +247,9 @@ jobs:
             runs="$(gh api "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100")"
             # Reuse an automatic workflow_run or a previous successful dispatch;
             # never launch a second publisher while the exact-SHA run is active.
-            release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg title "$release_title" '[.workflow_runs[] | select(.name == $workflow and .display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            release_run_id="$(jq -r --arg title "$release_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
             if [[ -z "$release_run_id" ]]; then
-              release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg title "$release_title" '[.workflow_runs[] | select(.name == $workflow and .display_title == $title and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+              release_run_id="$(jq -r --arg title "$release_title" '[.workflow_runs[] | select(.display_title == $title and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
             fi
 
             # The Windows build completion fires the automatic publisher. Give it
@@ -258,7 +258,7 @@ jobs:
               registration_deadline=$((SECONDS + 45))
               while (( SECONDS < registration_deadline )); do
                 runs="$(gh api "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100")"
-                release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg title "$release_title" '[.workflow_runs[] | select(.name == $workflow and .display_title == $title and .event == "workflow_run" and (.status != "completed" or .conclusion == "success"))] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+                release_run_id="$(jq -r --arg title "$release_title" '[.workflow_runs[] | select(.display_title == $title and .event == "workflow_run" and (.status != "completed" or .conclusion == "success"))] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
                 [[ -n "$release_run_id" ]] && break
                 sleep 3
               done
@@ -270,14 +270,14 @@ jobs:
                 echo "::error::$DEFAULT_BRANCH moved to $current_main before release dispatch; refusing to publish a different commit"
                 exit 1
               }
-              baseline="$(jq -r --arg workflow "$RELEASE_NAME" '[.workflow_runs[] | select(.name == $workflow) | .id] | max // 0' <<<"$runs")"
+              baseline="$(jq -r '[.workflow_runs[].id] | max // 0' <<<"$runs")"
               gh workflow run "$RELEASE_PATH" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f source_sha="$MERGE_SHA"
               echo "Dispatched exact-SHA release workflow $RELEASE_PATH for $MERGE_SHA."
 
               registration_deadline=$((SECONDS + 90))
               while (( SECONDS < registration_deadline )); do
                 runs="$(gh api "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100")"
-                release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg title "$release_title" --argjson baseline "$baseline" '[.workflow_runs[] | select(.name == $workflow and .display_title == $title and .event == "workflow_dispatch" and .id > $baseline)] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+                release_run_id="$(jq -r --arg title "$release_title" --argjson baseline "$baseline" '[.workflow_runs[] | select(.display_title == $title and .event == "workflow_dispatch" and .id > $baseline)] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
                 [[ -n "$release_run_id" ]] && break
                 sleep 3
               done
@@ -308,7 +308,7 @@ jobs:
             }
           else
             runs="$(gh api "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100")"
-            release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg title "$release_title" '[.workflow_runs[] | select(.name == $workflow and .display_title == $title and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            release_run_id="$(jq -r --arg title "$release_title" '[.workflow_runs[] | select(.display_title == $title and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
             [[ -n "$release_run_id" ]] || {
               echo "::error::Published release targets $MERGE_SHA but no successful $RELEASE_NAME run can be identified."
               exit 1

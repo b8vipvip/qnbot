@@ -85,7 +85,9 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}' in reconcile
     assert 'RELEASE_WORKFLOW_ID: ${{ steps.validation-plan.outputs.release-workflow-id }}' in reconcile
     assert '-f source_sha="$MERGE_SHA"' in reconcile
-    assert 'select(.name == $workflow and .display_title == $title' in reconcile
+    assert 'select(.display_title == $title' in reconcile
+    assert 'select(.name == $workflow and .display_title == $title' not in reconcile
+    assert 'baseline="$(jq -r \'[.workflow_runs[].id] | max // 0\' <<<"$runs")"' in reconcile
     assert 'actions/workflows/$RELEASE_WORKFLOW_ID/runs?per_page=100' in reconcile
     assert 'run-name: Publish Bot auto-update release' in release
     assert 'github.event.workflow_run.head_sha || github.event.inputs.source_sha' in release
