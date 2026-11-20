@@ -795,10 +795,8 @@ def test_checkpoint_write_failure_cannot_promote_knowledge_v2_to_complete_or_ena
         service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
         service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
     ]
-    catch_block = analyze[
-        analyze.index("catch (Exception ex)"):
-        analyze.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
-    ]
+    outer_catch = analyze.rindex("catch (Exception ex)")
+    catch_block = analyze[outer_catch:]
     finalize = service[
         service.index("private static async Task FinalizeAsync"):
         service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
@@ -819,7 +817,7 @@ def test_corpus_checkpoint_resume_requires_exact_source_transcript_prompt_and_ba
         service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
     ]
     resume = analyze[
-        analyze.index("var canResume ="):
+        analyze.index("if (canResume)"):
         analyze.index("if (!canResume)")
     ]
 
