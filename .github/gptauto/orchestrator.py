@@ -23,11 +23,30 @@ def canonical_phase(task: Task) -> str:
     current_head = str(task.metadata.get("current_pr_head_sha") or task.metadata.get("head_sha") or "")
     current_event = not (event_head and current_head and event_head != current_head)
     merge_sha = str(task.metadata.get("merge_sha") or "")
+    terminal_evidence_version = int(task.metadata.get("terminal_done_evidence_version") or 1)
+    versioned_terminal_evidence_complete = (
+        terminal_evidence_version < 2
+        or (
+            bool(str(task.metadata.get("terminal_done_main_ci_run_id") or "").strip())
+            and bool(str(task.metadata.get("terminal_done_reconcile_run_id") or "").strip())
+            and task.metadata.get("terminal_done_release_required") is not None
+            and (
+                not bool(task.metadata.get("terminal_done_release_required"))
+                or (
+                    task.metadata.get("terminal_done_release_published") is True
+                    and bool(str(task.metadata.get("terminal_done_release_run_id") or "").strip())
+                    and bool(str(task.metadata.get("terminal_done_release_id") or "").strip())
+                    and bool(str(task.metadata.get("terminal_done_release_tag") or "").strip())
+                )
+            )
+        )
+    )
     terminal_reconciled = (
         bool(merge_sha)
         and str(task.metadata.get("terminal_done_provenance") or "") == "reconciler"
         and str(task.metadata.get("terminal_done_merge_sha") or "") == merge_sha
         and bool(str(task.metadata.get("terminal_done_pr_ci_run_id") or "").strip())
+        and versioned_terminal_evidence_complete
     )
     # A successful Reconcile receipt is immutable for this exact merge SHA.
     # Later Observer events may add evidence, but cannot reopen or bypass it.
