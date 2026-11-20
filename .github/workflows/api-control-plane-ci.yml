@@ -11,6 +11,8 @@ on:
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
       - .github/workflows/ci.yml
+      - .github/workflows/windows-build.yml
+      - scripts/Invoke-QnBotAcceptanceDiagnostics.ps1
   pull_request:
     paths:
       - services/api-control-plane/**
@@ -19,6 +21,8 @@ on:
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
       - .github/workflows/ci.yml
+      - .github/workflows/windows-build.yml
+      - scripts/Invoke-QnBotAcceptanceDiagnostics.ps1
   workflow_dispatch:
 
 permissions:

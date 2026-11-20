@@ -11,6 +11,7 @@ on:
       - 'tests/**'
       - 'scripts/Invoke-QnBotAcceptanceDiagnostics.ps1'
       - '.github/workflows/windows-build.yml'
+      - '.github/workflows/api-control-plane-ci.yml'
       - '.github/workflows/ci.yml'
   push:
     branches: [master]
@@ -20,6 +21,7 @@ on:
       - 'tests/**'
       - 'scripts/Invoke-QnBotAcceptanceDiagnostics.ps1'
       - '.github/workflows/windows-build.yml'
+      - '.github/workflows/api-control-plane-ci.yml'
       - '.github/workflows/ci.yml'
 
 permissions:
