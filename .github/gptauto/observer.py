@@ -345,6 +345,7 @@ def capture(
             "blocked_reason": effective_blocked_reason,
             "terminal_done_provenance": "reconciler" if terminal_reconcile_evidence else "",
             "terminal_done_merge_sha": merge_sha if terminal_reconcile_evidence else "",
+            "terminal_done_pr_ci_run_id": str(pr_ci_run_id or "") if terminal_reconcile_evidence else "",
             "terminal_reconcile_run_id": str(run_id or "") if terminal_reconcile_evidence else "",
         },
     )

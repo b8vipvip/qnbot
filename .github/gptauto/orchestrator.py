@@ -27,6 +27,7 @@ def canonical_phase(task: Task) -> str:
         bool(merge_sha)
         and str(task.metadata.get("terminal_done_provenance") or "") == "reconciler"
         and str(task.metadata.get("terminal_done_merge_sha") or "") == merge_sha
+        and bool(str(task.metadata.get("terminal_done_pr_ci_run_id") or "").strip())
     )
     # A successful Reconcile receipt is immutable for this exact merge SHA.
     # Later Observer events may add evidence, but cannot reopen or bypass it.
@@ -64,7 +65,10 @@ def canonical_phase(task: Task) -> str:
             return "PR_CI"
         return "MERGE"
     pr_ci = _step(task, Gate.PR_CI)
-    if pr_ci and pr_ci.required and pr_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:
+    if pr_ci and pr_ci.required and (
+        pr_ci.status != GateStatus.PASSED
+        or not str(task.metadata.get("pr_ci_run_id") or "").strip()
+    ):
         return "PR_CI"
     if main_ci and main_ci.required and main_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:
         return "POST_MERGE_CI"

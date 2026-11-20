@@ -176,6 +176,7 @@ def test_merged_tasks_cannot_become_terminal_without_reconcile_provenance():
     assert '"terminal_done_provenance": "reconciler" if terminal_reconcile_evidence else ""' in observer
     assert 'str(task.metadata.get("terminal_done_provenance") or "") == "reconciler"' in orchestrator
     assert 'str(task.metadata.get("terminal_done_merge_sha") or "") == merge_sha' in orchestrator
+    assert 'bool(str(task.metadata.get("terminal_done_pr_ci_run_id") or "").strip())' in orchestrator
     assert 'return "RECONCILE"' in orchestrator
     assert '"WAITING_GITHUB", "RECONCILE"' in orchestrator
 
@@ -208,7 +209,9 @@ def test_reconcile_cannot_bypass_required_pr_ci_and_executor_waits_for_it():
 
     assert 'bool(str(pr_ci_run_id or "").strip())' in observer
     assert 'str(pr_ci_status or "").strip().lower() == "completed"' in observer
-    assert "if pr_ci and pr_ci.required and pr_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:" in orchestrator
+    assert '"terminal_done_pr_ci_run_id": str(pr_ci_run_id or "") if terminal_reconcile_evidence else ""' in observer
+    assert "if pr_ci and pr_ci.required and (" in orchestrator
+    assert 'not str(task.metadata.get("pr_ci_run_id") or "").strip()' in orchestrator
     assert 'return "PR_CI"' in orchestrator
     assert '"PR_CI", "POST_MERGE_CI"' in orchestrator
     assert 'authority["phase"] == "PR_CI"' in executor
