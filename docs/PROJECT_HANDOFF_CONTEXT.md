@@ -3,7 +3,7 @@
 更新时间：2026-11-20  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前正式客户端：`bot-v1.1.2460`  
+当前正式客户端：`bot-v1.1.2470`  
 统一未完成事项：Issue #366
 
 ## 1. 当前目标
@@ -30,12 +30,12 @@
 
 ## 3. Current release baseline
 
-- Latest stable release：`bot-v1.1.2460`
-- Release target：`7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`
-- x64 package SHA-256：`98df42ddf2130bc61923fca033f5deaa049ade495fa61143ee319849f5177533`
+- Latest stable release：`bot-v1.1.2470`
+- Release target：`8fc1c21440f351ce336a58f2751ef16afae4cd97`
+- x64 package SHA-256：`30ac46a1791f986e05bc836adcd67a7d74ef9db6d88d22705aa66539bc419830`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
 - Validated product-source SHA: `8fc1c21440f351ce336a58f2751ef16afae4cd97`; API Full Gate passed (Fast Gate 1682 passed / 16 skipped, API package tests 141 passed, Windows Static Gate passed) and Windows x64 build run `44752223276` completed successfully. Later master commits in this sequence are documentation-only.
-- Post-release source changes on master now: (1) GPTAuto Reconcile dispatch markers are not treated as DONE unless a matching RELEASED + terminal DONE + exact merge SHA receipt exists; (2) incomplete Knowledge V2 corpus blocks session suggestions and style-profile automatic writes; (3) read-only auto-delivery verification failures escalate as uncertain/manual-review instead of unbounded generic deferral. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
+- Release `bot-v1.1.2470` includes the GPTAuto Reconcile recovery marker fix, Knowledge V2 full-corpus write gate, and read-only auto-delivery manual-review escalation. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
 - Historical GPTAuto task PR #434 (`GA-ddf0aa319783`, merge `483b07f03eeeeef5e9339b286d2c179378489ccc`, release_required=false) remains ACTIVE after Reconcile run `44677995005` failed at terminal capture. Current master can retry the handoff, but a new Reconcile workflow_dispatch with the original task/PR/merge inputs is still required to obtain terminal DONE evidence.
 - 2026-11-20 上传的 Windows 诊断显示：Bot-owned 41010 正常、1 个权威会话、0 个重复 standby；bench_im/CDP 目标尚未识别。后续诊断脚本正在补充命令行可见性、loopback 候选端口和 release-info.json 产品版本识别，尚需 exact-SHA CI/Windows build。
 - 生产安装仍需要管理员/用户明确操作；CI 不得触发生产主机部署。
@@ -44,7 +44,7 @@
 
 - 当前没有开放 PR；#426/#429/#430/#431 已合并到 master。
 - 唯一开放的普通跟踪 Issue 为 #366；不新建普通 Issue 或分支。
-- 下一步应使用 `bot-v1.1.2460` 真实运行证据继续验收；后续 master 源码修复须先通过精确 SHA CI/Windows build。
+- 下一步应使用 `bot-v1.1.2470` 真实运行证据继续验收；后续 master 源码修复须先通过精确 SHA CI/Windows build。
 
 ## 5. Architecture
 
