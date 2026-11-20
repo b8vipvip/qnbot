@@ -305,3 +305,21 @@ def test_reconcile_terminal_state_requires_versioned_post_merge_and_release_rece
     assert "versioned_terminal_evidence_complete" in terminal
     assert "task.metadata.get(\"terminal_done_release_published\") is True" in terminal
     assert "bool(str(task.metadata.get(\"terminal_done_main_ci_run_id\") or \"\").strip())" in terminal
+
+
+def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
+    executor = read(".github/workflows/gptauto-executor.yml")
+    adoption = executor[
+        executor.index("- name: Adopt externally merged completion lease"):
+        executor.index("- name:", executor.index("- name: Adopt externally merged completion lease") + 10)
+    ]
+
+    # A historical dispatch marker is not proof that Reconcile reached DONE.
+    assert 'completion_marker="<!-- gptauto-completion-lease:$TASK_ID -->"' in adoption
+    assert 'grep -Fq "Completion Lease is RELEASED"' in adoption
+    assert 'grep -Fq "Terminal state: DONE"' in adoption
+    assert 'grep -Fq "Merge SHA: $MERGE_SHA"' in adoption
+    assert 'gh workflow run gptauto-reconcile.yml' in adoption
+    assert 'gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
+    assert 'if grep -Fq "$marker" <<<"$existing"; then' not in adoption
+    assert "previous dispatch marker was not treated as completion" in adoption
