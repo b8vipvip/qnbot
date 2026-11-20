@@ -894,3 +894,13 @@ def test_read_only_acceptance_diagnostics_never_connects_to_non_loopback_cdp_tar
     assert "returnByValue = $true" in probe
     assert "document.cookie" not in probe
     assert "window._vs && window._vs.loginID" in probe
+
+def test_legacy_knowledge_center_history_filters_session_reports_before_limit():
+    ui = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    refresh = ui[
+        ui.index("public void RefreshData()"):
+        ui.index("private void OnRecordsChanged()")
+    ]
+
+    assert "ConversationSessionLearningService.GetReportsForShop(shopKey, seller, 500)" in refresh
+    assert "ConversationSessionLearningService.GetReports(500)" not in refresh
