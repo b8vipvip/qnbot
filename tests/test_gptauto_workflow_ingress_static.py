@@ -122,9 +122,9 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "steps.release-proof.outcome == 'success'" in terminal
     assert 'VALIDATION_WORKFLOW: ${{ steps.validation-plan.outputs.validation-workflow }}' in terminal
     assert '[[ -n "$MAIN_CI_RUN_ID" && -n "$VALIDATION_WORKFLOW" ]]' in terminal
-    assert 'validation_head_sha="$(jq -r '.head_sha // ""' <<<"$validation_row")"' in terminal
-    assert 'validation_name="$(jq -r '.name // ""' <<<"$validation_row")"' in terminal
-    assert 'validation_conclusion="$(jq -r '.conclusion // ""' <<<"$validation_row")"' in terminal
+    assert "validation_head_sha=" in terminal and "'.head_sha // \"\"'" in terminal
+    assert "validation_name=" in terminal and "'.name // \"\"'" in terminal
+    assert "validation_conclusion=" in terminal and "'.conclusion // \"\"'" in terminal
     assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
     assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
     assert "steps.terminal.outcome == 'success'" in upload
