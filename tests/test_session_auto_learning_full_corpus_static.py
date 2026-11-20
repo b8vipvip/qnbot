@@ -874,3 +874,25 @@ def test_pending_learning_recovery_only_resumes_durable_unfinished_reports_and_d
     assert "if (!resumedKeys.Add(key))" in recovery
     assert "superseded_pending_session_duplicate" in recovery
     assert "legacy_report_shop_scope_unavailable" in recovery
+
+
+def test_incomplete_knowledge_v2_corpus_blocks_all_automatic_learning_writes():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+
+    corpus_gate = finalize.index(
+        "var corpusComplete = corpusAnalysis != null && corpusAnalysis.Complete;"
+    )
+    style_write = finalize.index("SaveStyleProfile(session.Seller, styleAfter);")
+    suggestion_loop = finalize.index("foreach (var suggestion in suggestions)")
+    knowledge_write = finalize.index(
+        "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
+    )
+
+    assert corpus_gate < style_write < knowledge_write
+    assert "if (EnableAutomaticWrites\n                    && corpusComplete" in finalize
+    assert "if (!corpusComplete)" in finalize[suggestion_loop:knowledge_write]
+    assert "禁止自动写入生产知识库" in finalize[suggestion_loop:knowledge_write]
