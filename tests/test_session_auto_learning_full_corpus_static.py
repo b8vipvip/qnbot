@@ -741,7 +741,7 @@ def test_corpus_prompt_never_exposes_raw_knowledge_record_ids():
 
 
 def test_live_session_learning_rejects_mismatched_shop_scope():
-    service = text("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     observe = service[
         service.index("public static void ObserveLiveMessage"):
         service.index("public static string BuildReplyStylePromptAddon")

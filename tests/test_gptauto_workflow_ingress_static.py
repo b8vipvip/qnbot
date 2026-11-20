@@ -105,14 +105,18 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
 
     terminal = reconcile[
         reconcile.index("- name: Capture terminal DONE evidence directly"):
-        reconcile.index("- uses: ./.github/actions/upload-gptauto-log")
-    ]
-    upload = reconcile[
-        reconcile.index("- uses: ./.github/actions/upload-gptauto-log"):
         reconcile.index("- name: Publish terminal foreground receipt")
     ]
     receipt = reconcile[
         reconcile.index("- name: Publish terminal foreground receipt"):
+        reconcile.index("- uses: ./.github/actions/upload-gptauto-log")
+    ]
+    upload = reconcile[
+        reconcile.index("- uses: ./.github/actions/upload-gptauto-log"):
+        reconcile.index("- name: Reopen lease if terminal persistence failed")
+    ]
+    rollback = reconcile[
+        reconcile.index("- name: Reopen lease if terminal persistence failed"):
         reconcile.index("- name: Terminal receipt summary")
     ]
     summary = reconcile[reconcile.index("- name: Terminal receipt summary"):]
@@ -127,8 +131,11 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "validation_conclusion=" in terminal and "'.conclusion // \"\"'" in terminal
     assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
     assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
-    assert "steps.terminal.outcome == 'success'" in upload
     assert "steps.terminal.outcome == 'success'" in receipt
+    assert "steps.terminal.outcome == 'success'" in upload
+    assert "steps.lease-receipt.outcome == 'success'" in upload
+    assert "failure() && steps.terminal.outcome == 'success'" in rollback
+    assert "Completion Lease is ACTIVE" in rollback
     assert "steps.terminal.outcome == 'success'" in summary
 
 
