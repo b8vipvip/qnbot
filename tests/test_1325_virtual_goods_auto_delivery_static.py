@@ -449,3 +449,34 @@ def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_neve
     assert "live.ConfirmationUncertainCount++;" in uncertain
     assert "live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);" in uncertain
     assert 'MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "manual_review_required")' in uncertain
+
+def test_auto_delivery_queue_retains_read_only_barrier_until_ledger_resolution_is_durable():
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    resolve = ledger[
+        ledger.index("public static bool MarkResolved"):
+        ledger.index("private static bool MigratePendingConfirmationIntentsLocked")
+    ]
+    cleanup = runtime[
+        runtime.index("private static void CleanupExpiredLocked"):
+        runtime.index("private static DateTime ResolveAnchor")
+    ]
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+
+    assert "public static bool MarkResolved(" in resolve
+    assert "if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;" in resolve
+    assert "if (record == null) return false;" in resolve
+    assert "if (!SaveLocked())" in resolve
+    assert "return true;" in resolve
+    assert "TryResolveConfirmationIntent(item, \"manual_review_required\")" in cleanup
+    assert "保留只读队列屏障" in cleanup
+    assert "TryResolveConfirmationIntent(record, \"completed\")" in process
+    assert "TryResolveConfirmationIntent(record, \"terminal:\" + result.Reason)" in process
+    assert "人工复核状态未能持久化，保留只读防重屏障" in process
+    assert "_state.Pending.Remove(live);" not in process[
+        process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"):
+        process.index("default:", process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"))
+    ]
