@@ -300,6 +300,8 @@ def test_reconcile_terminal_state_requires_versioned_post_merge_and_release_rece
         assert 'task.metadata.get("' + field + '")' in terminal
 
     assert "terminal_evidence_version < 2" in terminal
+    assert "except (TypeError, ValueError)" in terminal
+    assert "Malformed version metadata is not legacy evidence" in terminal
     assert "versioned_terminal_evidence_complete" in terminal
     assert "task.metadata.get(\"terminal_done_release_published\") is True" in terminal
     assert "bool(str(task.metadata.get(\"terminal_done_main_ci_run_id\") or \"\").strip())" in terminal
