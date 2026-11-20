@@ -669,7 +669,7 @@ namespace Bot.ChromeNs
                     durable.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     durable.OrderId = plan.OrderId.Trim();
                     durable.FollowUp = plan.IsBuyerFollowUp;
-                    durable.Until = now.AddMinutes(10);
+                    durable.Until = now.AddHours(720);
                     durable.Delivered = false;
                     durable.DeliveryUncertain = false;
                     durable.InFlight = true;
@@ -737,7 +737,15 @@ namespace Bot.ChromeNs
                     existing.Delivered = false;
                     existing.DeliveryUncertain = true;
                     existing.InFlight = false;
-                    SaveActionStateLocked(path);
+                    if (!SaveActionStateLocked(path))
+                    {
+                        // TryBeginExecution now persists a 30-day in-flight lease before any
+                        // send attempt. If this post-send uncertainty write fails, the old
+                        // durable lease still blocks every process for the full review horizon.
+                        Log.ErrorWithMaxCount(
+                            "订单发送不确定状态未能更新；保留发送前已持久化的30天in-flight屏障，禁止自动重发。", 20);
+                        return;
+                    }
                 }
             }
             Log.ErrorWithMaxCount(

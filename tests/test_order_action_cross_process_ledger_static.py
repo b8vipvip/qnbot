@@ -43,9 +43,27 @@ def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first
 
 def test_finish_and_uncertain_paths_clear_durable_inflight_under_same_mutex():
     code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
-    uncertain = code[code.index("internal static void MarkDeliveryUncertain"):code.index("internal static void FinishExecution")]
-    finish = code[code.index("internal static void FinishExecution"):code.index("private static void ObserveCanonicalOrderId")]
+    uncertain = code[code.index("internal static void MarkDeliveryUncertain"):code.index("internal static bool FinishExecution")]
+    finish = code[code.index("internal static bool FinishExecution"):code.index("private static void ObserveCanonicalOrderId")]
     assert "existing.InFlight = false" in uncertain
     assert "existing.DeliveryUncertain = true" in uncertain
     assert "existing.InFlight = false" in finish
     assert 'CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000)' in finish
+
+def test_uncertain_reply_keeps_long_pre_send_barrier_when_post_send_persist_fails():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    begin = code[
+        code.index("internal static bool TryBeginExecution"):
+        code.index("internal static void MarkDeliveryUncertain")
+    ]
+    uncertain = code[
+        code.index("internal static void MarkDeliveryUncertain"):
+        code.index("internal static bool FinishExecution")
+    ]
+
+    # The durable lease is written before the external side effect. If the later
+    # uncertain-state write fails, the existing disk record must still block retries.
+    assert "durable.Until = now.AddHours(720);" in begin
+    assert "if (!SaveActionStateLocked(path))" in uncertain
+    assert "发送前已持久化的30天in-flight屏障" in uncertain
+    assert "durable.Until = now.AddMinutes(10);" not in begin
