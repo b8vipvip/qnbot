@@ -342,3 +342,30 @@ def test_confirmation_ledger_capacity_never_evicts_existing_at_most_once_barrier
     ]
     assert "KeepUntil = DateTime.Now.Add(Retention)" in migration
     assert "TrimLocked" not in migration
+
+
+
+def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+
+    for start, end in (
+        ("public static void Initialize", "public static bool IsOperational"),
+        ("public static bool IsOperational", "public static bool IsSafeOrderId"),
+        ("public static bool HasIntent", "public static bool TryRecordIntent"),
+        ("public static bool TryRecordIntent", "public static void MarkResolved"),
+        ("public static void MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
+    ):
+        block = ledger[ledger.index(start):ledger.index(end, ledger.index(start))]
+        assert 'CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000)' in block
+
+    for start, end in (
+        ("public static bool IsOperational", "public static bool IsSafeOrderId"),
+        ("public static bool HasIntent", "public static bool TryRecordIntent"),
+        ("public static bool TryRecordIntent", "public static void MarkResolved"),
+        ("public static void MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
+    ):
+        block = ledger[ledger.index(start):ledger.index(end, ledger.index(start))]
+        assert "ReloadStateForMutationLocked()" in block
+
+    assert "private static bool ReloadStateForMutationLocked()" in ledger
+    assert "Caller must hold the named cross-process mutex" in ledger
