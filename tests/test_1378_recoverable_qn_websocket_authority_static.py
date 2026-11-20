@@ -49,7 +49,7 @@ def test_status_arbitration_uses_exact_shopkey_and_rebinds_authority():
     assert "同一ShopKey的重复千牛WebSocket页面" in status
     assert 'Task.Run(() => TryInitSession(session, "status", identityProbeGeneration));' in status
     assert "var bindingGeneration = ShouldRefreshStatusBinding(" in status
-    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration));" in status
+    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration, identityProbeGeneration));" in status
     assert "TryClaimShopSession(loginNick" not in status
 
 

@@ -337,6 +337,6 @@ def test_async_status_binding_uses_per_session_generation_to_reject_out_of_order
     assert "IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)" in bind
     assert "lock (_sellerSessionSync)" in bind
     assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in bind
-    assert "TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration)" in server
+    assert "TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration, identityProbeGeneration)" in server
     assert "BeginStatusBindingAttempt(session.SessionID)" in server
     assert "NextStatusBindingGenerationLocked(session.SessionID)" in server

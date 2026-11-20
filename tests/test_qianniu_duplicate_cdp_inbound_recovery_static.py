@@ -265,7 +265,7 @@ def test_shop_identity_binding_is_periodically_revalidated_even_when_display_nic
     assert "_lastStatusBindings[sessionId] = key;" in method
     assert "else if (!wasAuthoritative)" in server
     assert "var bindingGeneration = ShouldRefreshStatusBinding(" in server
-    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration))" in server
+    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration, identityProbeGeneration))" in server
 
 
 
@@ -579,7 +579,7 @@ def test_every_status_heartbeat_invalidates_old_shop_identity_reads_even_when_di
     ]
     promotion = server[
         server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync"):
-        server.index("private bool IsWebSocketSessionConnected")
+        server.index("internal bool IsWebSocketSessionConnected")
     ]
 
     assert "var identityProbeGeneration = BeginShopIdentityProbe(session.SessionID)" in status

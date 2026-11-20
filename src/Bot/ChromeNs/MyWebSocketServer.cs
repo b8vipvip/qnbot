@@ -818,10 +818,14 @@ namespace Bot.ChromeNs
                     // GetCurrentUser is asynchronous; ignore a late result if a newer
                     // status event has already superseded this physical socket's request.
                     if (!IsCurrentStatusBindingGenerationLocked(session.SessionID, bindingGeneration)
-                        || !IsCurrentShopIdentityProbeLocked(session.SessionID, identityProbeGeneration)
                         || !_connectedSessions.ContainsKey(session.SessionID)
                         || cdp.IsInvalidated)
                         return;
+                    if (!IsCurrentShopIdentityProbeLocked(session.SessionID, identityProbeGeneration))
+                    {
+                        ForgetStatusBindingAttempt(session, loginNick, conversationNick);
+                        return;
+                    }
 
                     claimed = TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration);
                     if (claimed

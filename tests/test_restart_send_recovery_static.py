@@ -51,14 +51,14 @@ def test_restart_recovery_does_not_reinitialize_same_authority_forever_but_rebin
     assert "var wasInitialized = _initialized.ContainsKey(session.SessionID);" in source
     assert "Task.Run(() => TryInitSession(session, \"status\", identityProbeGeneration))" in source
     assert "else if (!wasAuthoritative)" in source
-    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration))" in source
+    assert "Task.Run(() => TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration, identityProbeGeneration))" in source
 
 
 def test_status_binding_failure_releases_only_its_own_suppression_key_for_retry():
     source = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     helper = source[source.index("private void ForgetStatusBindingAttempt"):source.index("private void RevalidateConnectedShopSessions")]
     bind = source[source.index("private async Task TryBindStatusConversation"):source.index("private async Task TryInitSession")]
-    invalid_user = bind[bind.index("if (user == null"):bind.index("var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity")]
+    invalid_user = bind[bind.index("if (!IsCurrentShopIdentityProbe"):bind.index("var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity")]
     failure_catch = bind[bind.index("catch (Exception ex)"):]
 
     assert "ICollection<KeyValuePair<string, string>>" in helper
