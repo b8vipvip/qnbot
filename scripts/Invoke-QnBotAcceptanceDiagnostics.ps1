@@ -595,7 +595,19 @@ $markdown = @(
     ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
     ('- CDP endpoints inspected: ' + $cdpEndpoints.Count),
     '',
-    '## CDP / IMSDK',
+    '## CDP / IMSDK'
+)
+if ($cdpEndpoints.Count -eq 0) {
+    $markdown += '- No unambiguous local CDP debug endpoint was detected.'
+} else {
+    foreach ($endpoint in $cdpEndpoints) {
+        $markdown += ('- Port ' + $endpoint.Port + ': ' + $endpoint.Status + '; pages=' + $endpoint.PageTargetCount + '; bench_im URL matches=' + $endpoint.BenchImUrlTargetCount)
+        foreach ($probe in $endpoint.Probes) {
+            $markdown += ('  - Probe=' + $probe.Status + '; imsdk=' + $probe.ImsdkType + '; invoke=' + $probe.InvokeType + '; on=' + $probe.OnType + '; loginID present=' + $probe.LoginIdPresent)
+        }
+    }
+}
+$markdown += @(
     '',
     '## ShopKey runtime mappings',
     ('- Runtime snapshot: ' + $runtimeSnapshot.Status + $(if ($null -ne $runtimeSnapshot.AgeSeconds) { '; ageSeconds=' + $runtimeSnapshot.AgeSeconds } else { '' }))
@@ -611,16 +623,6 @@ if ($runtimeSnapshot.Status -eq 'fresh') {
     }
 } else {
     $markdown += '- Runtime ShopKey mapping snapshot unavailable or stale; no mapping conclusion is made.'
-}
-if ($cdpEndpoints.Count -eq 0) {
-    $markdown += '- No unambiguous local CDP debug endpoint was detected.'
-} else {
-    foreach ($endpoint in $cdpEndpoints) {
-        $markdown += ('- Port ' + $endpoint.Port + ': ' + $endpoint.Status + '; pages=' + $endpoint.PageTargetCount + '; bench_im URL matches=' + $endpoint.BenchImUrlTargetCount)
-        foreach ($probe in $endpoint.Probes) {
-            $markdown += ('  - Probe=' + $probe.Status + '; imsdk=' + $probe.ImsdkType + '; invoke=' + $probe.InvokeType + '; on=' + $probe.OnType + '; loginID present=' + $probe.LoginIdPresent)
-        }
-    }
 }
 $markdown += @(
     '',
