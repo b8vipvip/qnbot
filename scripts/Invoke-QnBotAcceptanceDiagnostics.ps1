@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 function Get-RemoteDebuggingPort {
     param([string]$CommandLine)
     if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $null }
-    $match = [regex]::Match($CommandLine, '(?i)--remote-debugging-port(?:=|\s+)(\d+)')
+    $match = [regex]::Match($CommandLine, '(?i)(?:^|[\s"])--remote-debugging-port(?:=|\s+)"?(\d+)"?(?=$|[\s"])')
     if (-not $match.Success) { return $null }
     $port = 0
     if ([int]::TryParse($match.Groups[1].Value, [ref]$port) -and $port -ge 1 -and $port -le 65535) {
@@ -40,7 +40,7 @@ function Get-RemoteDebuggingPort {
 function Test-BenchImRenderer {
     param([string]$CommandLine)
     if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
-    return [regex]::IsMatch($CommandLine, '(?i)--render_id(?:=|\s+)bench_im(?:\s|$)')
+    return [regex]::IsMatch($CommandLine, '(?i)(?:^|[\s"])--render_id(?:=|\s+)"?bench_im"?(?=$|[\s"])')
 }
 
 function Test-LoopbackPort {
@@ -378,6 +378,7 @@ foreach ($process in $cimProcesses) {
         Name = [string]$process.Name
         Pid = $pidValue
         ParentPid = [int]$process.ParentProcessId
+        CommandLineAvailable = -not [string]::IsNullOrWhiteSpace([string]$process.CommandLine)
         IsBenchImRenderer = [bool]$isBenchIm
         RemoteDebuggingPort = $debugPort
         StartedAt = $startedAt
@@ -421,6 +422,19 @@ $runtimeSnapshot = Read-RuntimeAcceptanceSnapshot -Path $RuntimeSnapshotPath -Bo
 $webSocketOwnedByBot = @($webSocketListeners | Where-Object {
     $botPids -contains [int]$_.OwningProcess
 }).Count -gt 0
+$qianniuProcessIds = @($cimProcesses | Where-Object {
+    $_.Name -ieq 'AliWorkbench.exe' -or $_.Name -ieq 'AliRender.exe' -or $_.Name -ieq 'wwcmd.exe'
+} | ForEach-Object { [int]$_.ProcessId })
+$qianniuLoopbackListenerCandidates = @($listenerRows | Where-Object {
+    $_.AddressKind -eq 'loopback' -and $_.LocalPort -ne 41010 -and
+        $qianniuProcessIds -contains [int]$_.OwningProcess
+} | ForEach-Object {
+    $owner = $processById[[int]$_.OwningProcess]
+    [pscustomobject]@{
+        Port = [int]$_.LocalPort
+        OwnerProcessName = if ($owner -ne $null) { [string]$owner.Name } else { 'unknown' }
+    }
+} | Sort-Object Port, OwnerProcessName -Unique)
 
 $cdpEndpoints = @()
 if ($benchImRenderers.Count -gt 0) {
@@ -497,13 +511,22 @@ if ($os -ne $null) {
 $botCount = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' }).Count
 $workbenchCount = @($cimProcesses | Where-Object { $_.Name -ieq 'AliWorkbench.exe' }).Count
 $renderCount = @($cimProcesses | Where-Object { $_.Name -ieq 'AliRender.exe' }).Count
+$aliRenderProcesses = @($cimProcesses | Where-Object { $_.Name -ieq 'AliRender.exe' })
+$renderCommandLineVisibleCount = @($aliRenderProcesses | Where-Object {
+    -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine)
+}).Count
+$renderCommandLineUnavailableCount = $renderCount - $renderCommandLineVisibleCount
 
 $botCheckStatus = 'not_running'
 if ($botCount -gt 0) { $botCheckStatus = 'present' }
 $workbenchCheckStatus = 'not_running'
 if ($workbenchCount -gt 0) { $workbenchCheckStatus = 'present' }
 $rendererCheckStatus = 'not_detected'
-if ($benchImRenderers.Count -gt 0) { $rendererCheckStatus = 'present' }
+if ($benchImRenderers.Count -gt 0) {
+    $rendererCheckStatus = 'present'
+} elseif ($renderCommandLineUnavailableCount -gt 0) {
+    $rendererCheckStatus = 'indeterminate_command_line_visibility'
+}
 $webSocketCheckStatus = 'not_reachable'
 if ($webSocketReachable) { $webSocketCheckStatus = 'listener_not_confirmed_as_bot' }
 if ($webSocketReachable -and $webSocketOwnedByBot) { $webSocketCheckStatus = 'listening_and_bot_owned' }
@@ -533,6 +556,8 @@ $report = [ordered]@{
         BotProcessCount = $botCount
         QianniuWorkbenchProcessCount = $workbenchCount
         AliRenderProcessCount = $renderCount
+        AliRenderCommandLineVisibleCount = $renderCommandLineVisibleCount
+        AliRenderCommandLineUnavailableCount = $renderCommandLineUnavailableCount
         BenchImRendererCount = $benchImRenderers.Count
         Processes = $processReports
         ProcessInspectionErrorType = $cimErrorType
@@ -546,6 +571,7 @@ $report = [ordered]@{
             OwnerProcessNames = $webSocketOwnerNames
         }
         CdpEndpoints = $cdpEndpoints
+        QianniuLoopbackListenerCandidates = $qianniuLoopbackListenerCandidates
     }
     Checks = @(
         [pscustomobject]@{ Name = 'Bot process'; Status = $botCheckStatus }
@@ -571,7 +597,7 @@ $report = [ordered]@{
     }
     Limitations = @(
         '此报告只做本机只读探测，不会发送测试消息，也不能证明真实买家消息已经送达。',
-        'CDP仅在定位到bench_im渲染进程及其本机调试端口时探测；目标不唯一时会跳过，不猜测页面身份。',
+        'CDP仅在定位到bench_im渲染进程及其本机调试端口时探测；目标不唯一时会跳过，不猜测页面身份。未识别bench_im时只列出千牛进程拥有的loopback监听候选端口，不连接探测。',
         '需要真实千牛会话的切店、重连、消息投递、知识学习和人工接管仍需单独验收。'
     )
 }
@@ -590,7 +616,10 @@ $markdown = @(
     ('- Bot.exe processes: ' + $botCount),
     ('- AliWorkbench.exe processes: ' + $workbenchCount),
     ('- AliRender.exe processes: ' + $renderCount),
+    ('- AliRender command lines visible: ' + $renderCommandLineVisibleCount + ' / ' + $renderCount),
+    ('- AliRender command lines unavailable: ' + $renderCommandLineUnavailableCount),
     ('- bench_im renderers: ' + $benchImRenderers.Count),
+    ('- Qianniu-owned loopback listener candidates (not probed without bench_im identity): ' + $qianniuLoopbackListenerCandidates.Count),
     ('- Bot version: ' + $(if ($botVersion) { $botVersion } else { 'not detected' })),
     ('- WebSocket 127.0.0.1:41010 reachable: ' + $webSocketReachable),
     ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
@@ -600,6 +629,9 @@ $markdown = @(
 )
 if ($cdpEndpoints.Count -eq 0) {
     $markdown += '- No unambiguous local CDP debug endpoint was detected.'
+    foreach ($candidate in $qianniuLoopbackListenerCandidates) {
+        $markdown += ('- Candidate loopback port ' + $candidate.Port + ' owned by ' + $candidate.OwnerProcessName + '; not probed because bench_im identity was not established.')
+    }
 } else {
     foreach ($endpoint in $cdpEndpoints) {
         $markdown += ('- Port ' + $endpoint.Port + ': ' + $endpoint.Status + '; pages=' + $endpoint.PageTargetCount + '; bench_im URL matches=' + $endpoint.BenchImUrlTargetCount)
