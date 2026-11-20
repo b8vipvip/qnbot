@@ -290,7 +290,7 @@ def test_periodic_sweeper_revalidates_exact_shopkey_for_every_connected_websocke
     assert "_statusBindingGenerations.TryGetValue(pair.Key, out bindingGeneration)" in refresh
     assert "Task.Run(() => TryRevalidateShopIdentity(session, bindingGeneration))" in refresh
     assert "private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)" in server
-    assert "var user = await cdp.GetCurrentUser();" in server
+    assert "var user = await cdp.GetCurrentUser().ConfigureAwait(false);" in server
     assert "ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert '"periodic_shop_identity_revalidation"' in server
     assert "TargetId/ShopKey" in refresh
@@ -300,29 +300,28 @@ def test_periodic_sweeper_revalidates_exact_shopkey_for_every_connected_websocke
 def test_periodic_identity_revalidation_does_not_resurrect_closed_websocket_sessions():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     method = server[
-        server.index("private async Task TryRevalidateShopIdentity"):
-        server.index("private bool TryReserveStatusBindingRefresh")
+        server.index("private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)"):
+        server.index("private async Task TryBindStatusConversation")
     ]
 
-    assert "if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;" in method
-    assert "if (!_connectedSessions.ContainsKey(session.SessionID)" in method
-    assert "TryClaimShopSession(shopKey, session.SessionID)" in method
-    assert "&& _connectedSessions.ContainsKey(session.SessionID)" in method
-
+    assert "if (session == null" in method
+    assert "IsCurrentShopIdentityProbe(session.SessionID, bindingGeneration)" in method
+    assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in method
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in method
 
 
 def test_duplicate_identity_revalidation_checks_connection_before_restoring_client_binding():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     method = server[
-        server.index("private async Task TryRevalidateShopIdentity"):
-        server.index("private bool TryReserveStatusBindingRefresh")
+        server.index("private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)"):
+        server.index("private async Task TryBindStatusConversation")
     ]
 
-    assert "if (_connectedSessions.ContainsKey(session.SessionID)" in method
-    assert method.index("TryClaimShopSession(shopKey, session.SessionID)") < method.index(
-        "if (_connectedSessions.ContainsKey(session.SessionID)\n                    && _sessionShopKeys.TryGetValue"
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in method
+    assert "if (!IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in method
+    assert method.index("TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)") < method.index(
+        "qn.CDP = cdp;"
     )
-
 
 
 def test_final_duplicate_cdp_dispatch_is_serialized_with_source_identity_transition():
@@ -555,8 +554,8 @@ def test_periodic_shop_identity_probe_cannot_overwrite_a_newer_status_generation
         server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
     ]
     revalidate = server[
-        server.index("private async Task TryRevalidateShopIdentity"):
-        server.index("private bool TryReserveStatusBindingRefresh")
+        server.index("private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)"):
+        server.index("private async Task TryBindStatusConversation")
     ]
 
     assert "long? expectedBindingGeneration = null" in claim

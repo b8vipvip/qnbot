@@ -564,54 +564,6 @@ namespace Bot.ChromeNs
                 + DiagnosticRef("shop", shopKey) + ", reason=" + (reason ?? string.Empty));
         }
 
-        private async Task TryRevalidateShopIdentity(WebSocketSession session)
-        {
-            if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;
-            try
-            {
-                var cdp = GetOrCreateClient(session);
-                var user = await cdp.GetCurrentUser();
-                if (!_connectedSessions.ContainsKey(session.SessionID)
-                    || user == null || user.Result == null || string.IsNullOrWhiteSpace(user.Result.Nick))
-                    return;
-
-                var shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result);
-                var shopKey = shop.ShopKey;
-                var qn = QN.GetByShopIdentity(user.Result);
-                var sellerNick = qn.Seller == null ? user.Result.Nick : qn.Seller.Nick;
-                if (TryClaimShopSession(shopKey, session.SessionID)
-                    && _connectedSessions.ContainsKey(session.SessionID))
-                {
-                    cdp.ShopKey = shopKey;
-                    cdp.IsShopIdentityRetired = false;
-                    cdp.Nick = sellerNick;
-                    qn.CDP = cdp;
-                    CDPClient.PreferRuntimeSession(
-                        shopKey, sellerNick, session.SessionID, string.Empty, "periodic_shop_identity_revalidation");
-                    _initialized[session.SessionID] = true;
-                    return;
-                }
-
-                // A verified duplicate/standby is still bound to the exact ShopKey,
-                // even though it is not allowed to own the QN runtime.
-                string mappedShopKey;
-                if (_connectedSessions.ContainsKey(session.SessionID)
-                    && _sessionShopKeys.TryGetValue(session.SessionID, out mappedShopKey)
-                    && string.Equals(mappedShopKey, shopKey, StringComparison.Ordinal))
-                {
-                    cdp.ShopKey = shopKey;
-                    cdp.IsShopIdentityRetired = false;
-                    cdp.Nick = sellerNick;
-                    _initialized[session.SessionID] = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info("千牛WebSocket周期性ShopKey身份复核失败: sessionRef="
-                    + DiagnosticRef("session", session.SessionID) + ", error=" + ex.Message);
-            }
-        }
-
         private bool TryReserveStatusBindingRefresh(string sessionId, DateTime now, bool force)
         {
             while (true)
@@ -714,8 +666,8 @@ namespace Bot.ChromeNs
                     _statusBindingGenerations.TryGetValue(pair.Key, out bindingGeneration);
                 }
 
-                // A newer qnbotStatus event increments this generation and invalidates
-                // any older asynchronous CDP identity read.
+                // Exact CDP TargetId/ShopKey verification; a newer qnbotStatus event
+                // increments this generation and invalidates any older asynchronous read.
                 Task.Run(() => TryRevalidateShopIdentity(session, bindingGeneration));
             }
         }
@@ -784,7 +736,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool TryReserveStatusBindingRefresh(        private async Task TryBindStatusConversation(
+        private async Task TryBindStatusConversation(
             WebSocketSession session, string loginNick, string conversationNick, long bindingGeneration)
         {
             if (session == null || bindingGeneration <= 0) return;
