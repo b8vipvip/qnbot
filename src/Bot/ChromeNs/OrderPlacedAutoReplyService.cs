@@ -152,6 +152,74 @@ namespace Bot.ChromeNs
         private static readonly object ActionSync = new object();
         private static readonly List<OrderReplyActionRecord> ActiveActions = new List<OrderReplyActionRecord>();
         private static OrderReplyActionState _actionState;
+        private static Timer _actionRecoveryTimer;
+
+        internal static void Initialize()
+        {
+            RecoverOrphanedInFlightActions();
+            lock (ActionSync)
+            {
+                if (_actionRecoveryTimer == null)
+                    _actionRecoveryTimer = new Timer(
+                        _ => RecoverOrphanedInFlightActions(),
+                        null,
+                        TimeSpan.FromMinutes(1),
+                        TimeSpan.FromMinutes(1));
+            }
+        }
+
+        private static void RecoverOrphanedInFlightActions()
+        {
+            lock (ActionSync)
+            {
+                var path = GetActionStatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000))
+                {
+                    if (!lease.Acquired)
+                    {
+                        Log.ErrorWithMaxCount("订单自动回复恢复扫描无法取得跨进程动作锁；发送路径继续fail-closed。", 10);
+                        return;
+                    }
+
+                    string reloadError;
+                    if (!ReloadAndMergeActionStateLocked(path, out reloadError))
+                    {
+                        Log.ErrorWithMaxCount("订单自动回复恢复扫描无法可靠读取动作ledger；保留原状态并fail-closed。 error="
+                            + Short(reloadError, 220), 10);
+                        return;
+                    }
+
+                    var now = DateTime.Now;
+                    var changed = false;
+                    foreach (var record in _actionState.Records.Where(x => x != null && x.InFlight).ToList())
+                    {
+                        if (record.Delivered || record.DeliveryUncertain)
+                        {
+                            record.InFlight = false;
+                            record.ProcessId = 0;
+                            record.ProcessStartTimeUtcTicks = 0;
+                            changed = true;
+                            continue;
+                        }
+                        if (IsActionOwnerProcessAlive(record)) continue;
+
+                        record.InFlight = false;
+                        record.DeliveryUncertain = true;
+                        record.Delivered = false;
+                        var reviewUntil = now.AddHours(720);
+                        if (record.Until < reviewUntil) record.Until = reviewUntil;
+                        record.ProcessId = 0;
+                        record.ProcessStartTimeUtcTicks = 0;
+                        changed = true;
+                        Log.ErrorWithMaxCount(
+                            "启动/周期恢复发现订单自动回复原执行进程已退出；已转30天人工复核屏障，禁止自动重发: orderId="
+                            + record.OrderId, 20);
+                    }
+
+                    if (changed) SaveActionStateLocked(path);
+                }
+            }
+        }
 
         public static bool TryCreatePlan(
             QNChatMessage message,
@@ -618,8 +686,11 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     var now = DateTime.Now;
-                    ActiveActions.RemoveAll(x => x == null || x.Until <= now);
-                    _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
+                    // An in-flight action must not expire while its owner process is alive.
+                    // Even after the nominal review window, the process identity is checked
+                    // before any at-most-once barrier can be discarded.
+                    ActiveActions.RemoveAll(x => x == null || (!x.InFlight && x.Until <= now));
+                    _actionState.Records.RemoveAll(x => x == null || (!x.InFlight && x.Until <= now));
 
                     var canonical = FindCanonicalOrderIdLocked(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
                     if (!string.IsNullOrWhiteSpace(canonical)
@@ -656,7 +727,7 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     var priorAction = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
-                    if (priorAction != null && priorAction.InFlight && priorAction.Until > now)
+                    if (priorAction != null && priorAction.InFlight)
                     {
                         if (IsActionOwnerProcessAlive(priorAction))
                         {
@@ -670,7 +741,8 @@ namespace Bot.ChromeNs
                         priorAction.InFlight = false;
                         priorAction.DeliveryUncertain = true;
                         priorAction.Delivered = false;
-                        priorAction.Until = now.AddHours(720);
+                        var reviewUntil = now.AddHours(720);
+                        if (priorAction.Until < reviewUntil) priorAction.Until = reviewUntil;
                         priorAction.ProcessId = 0;
                         priorAction.ProcessStartTimeUtcTicks = 0;
                         if (!SaveActionStateLocked(path))

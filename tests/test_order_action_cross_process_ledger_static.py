@@ -91,3 +91,40 @@ def test_orphaned_order_reply_inflight_is_recovered_to_manual_review_not_resend(
     assert "priorAction.Until = now.AddHours(720)" in begin
     assert "Process.GetProcessById(record.ProcessId)" in helpers
     assert "process.StartTime.ToUniversalTime().Ticks" in helpers
+
+
+
+def test_orphaned_order_reply_actions_are_recovered_on_startup_and_periodically():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    bootstrap = read("src/Bot/AutoDeliveryAppBootstrap.cs")
+    initialize = code[
+        code.index("internal static void Initialize()"):
+        code.index("private static void RecoverOrphanedInFlightActions")
+    ]
+    recovery = code[
+        code.index("private static void RecoverOrphanedInFlightActions"):
+        code.index("public static bool TryCreatePlan")
+    ]
+
+    assert "OrderPlacedAutoReplyService.Initialize();" in bootstrap
+    assert "RecoverOrphanedInFlightActions();" in initialize
+    assert "new Timer(" in initialize
+    assert "TimeSpan.FromMinutes(1)" in initialize
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000)' in recovery
+    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in recovery
+    assert "IsActionOwnerProcessAlive(record)" in recovery
+    assert "record.DeliveryUncertain = true;" in recovery
+    assert "record.ProcessId = 0;" in recovery
+    assert "SaveActionStateLocked(path)" in recovery
+
+
+def test_live_inflight_order_reply_barrier_never_expires_while_owner_process_is_alive():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    begin = code[
+        code.index("internal static bool TryBeginExecution"):
+        code.index("internal static void MarkDeliveryUncertain")
+    ]
+
+    assert "(!x.InFlight && x.Until <= now)" in begin
+    assert "if (priorAction != null && priorAction.InFlight)" in begin
+    assert "if (IsActionOwnerProcessAlive(priorAction))" in begin

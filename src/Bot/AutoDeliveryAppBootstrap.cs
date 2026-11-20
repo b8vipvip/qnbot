@@ -17,6 +17,7 @@ namespace Bot.ChromeNs
         public static object InitializeForApp()
         {
             AutoDeliveryCoordinator.Initialize();
+            OrderPlacedAutoReplyService.Initialize();
             AutoDeliveryOrderEventSeed.Initialize();
             return new object();
         }
