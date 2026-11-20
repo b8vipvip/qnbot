@@ -249,6 +249,7 @@ def test_pr_ci_workflow_run_finishing_after_merge_still_updates_pr_ci_gate():
     assert 'effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")' in effective
 
 def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_evidence():
+    """Do not lose a completed merge when later master commits exist."""
     reconcile = read(".github/workflows/gptauto-reconcile.yml")
     validation = reconcile[
         reconcile.index("- name: Resolve and dispatch canonical post-merge validation gate"):
