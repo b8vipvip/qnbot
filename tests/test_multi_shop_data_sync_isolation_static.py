@@ -171,3 +171,27 @@ def test_raw_qn_message_pipeline_enters_exact_source_shop_scope():
     assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in qn
     assert "using (ShopSettingsScope.Enter(shop))" in qn
     assert "ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeBySeller(this))" in recovery
+
+
+
+def test_reply_dedup_and_buyer_alias_never_share_unresolved_nickname_scope_across_shops():
+    alias = read("src/Bot/ChromeNs/BuyerIdentityAliasService.cs")
+    dedup = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+
+    alias_scope = alias[
+        alias.index("private static string ScopeKey"):
+        alias.index("private static bool Same", alias.index("private static string ScopeKey"))
+    ]
+    dedup_scope = dedup[
+        dedup.index("private static string ScopeKey"):
+        dedup.index("private static void Cleanup", dedup.index("private static string ScopeKey"))
+    ]
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in alias_scope
+    assert "catch (AmbiguousShopIdentityException) { return string.Empty; }" in alias_scope
+    assert "legacy-" in alias_scope  # legacy only when no matching registered identity exists
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in dedup_scope
+    assert "catch { return string.Empty; }" in dedup_scope
+    assert "var key = Key(seller, buyer);" in dedup
+    assert "if (key.Length == 0) return;" in dedup
+    assert "if (key.Length == 0) return false;" in dedup
+    assert 'return shopKey + "|" +' in dedup

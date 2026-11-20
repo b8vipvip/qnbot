@@ -49,6 +49,28 @@ namespace Bot.ChromeNs
             bool preserveTrustedAnswer)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!string.IsNullOrWhiteSpace(seller))
+            {
+                var currentShop = ShopSettingsScope.Current;
+                ShopContext resolvedShop;
+                try { resolvedShop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
+                catch
+                {
+                    return BuildBlockedResult("无法确认当前店铺身份，已阻止跨店答案校验。");
+                }
+                if (resolvedShop == null || string.IsNullOrWhiteSpace(resolvedShop.ShopKey)
+                    || (currentShop != null
+                        && !string.Equals(currentShop.ShopKey, resolvedShop.ShopKey, StringComparison.Ordinal)))
+                    return BuildBlockedResult("当前店铺身份与回复来源不一致，已阻止发送。");
+                if (currentShop == null)
+                {
+                    using (ShopSettingsScope.Enter(resolvedShop))
+                    {
+                        return EnsureDistinct(seller, buyer, question, candidateAnswer,
+                            cancellationToken, preserveTrustedAnswer);
+                    }
+                }
+            }
             if (preserveTrustedAnswer)
             {
                 // Knowledge V2 has already made the production-authority decision. Do not run a
@@ -193,7 +215,9 @@ namespace Bot.ChromeNs
         {
             if (string.IsNullOrWhiteSpace(answer)
                 || answer.StartsWith("错误：", StringComparison.Ordinal)) return;
-            LastDelivered[Key(seller, buyer)] = new DeliveredAnswerStamp
+            var key = Key(seller, buyer);
+            if (key.Length == 0) return;
+            LastDelivered[key] = new DeliveredAnswerStamp
             {
                 Answer = BotOutboundMessageFormatter.EnsureAiMarker(answer),
                 SentAt = DateTime.Now
@@ -209,8 +233,10 @@ namespace Bot.ChromeNs
         {
             answer = string.Empty;
             sentAt = DateTime.MinValue;
+            var key = Key(seller, buyer);
+            if (key.Length == 0) return false;
             DeliveredAnswerStamp stamp;
-            if (LastDelivered.TryGetValue(Key(seller, buyer), out stamp)
+            if (LastDelivered.TryGetValue(key, out stamp)
                 && stamp != null
                 && stamp.SentAt >= DateTime.Now.AddMinutes(-30)
                 && !string.IsNullOrWhiteSpace(stamp.Answer))
@@ -399,16 +425,31 @@ namespace Bot.ChromeNs
 
         private static string Key(string seller, string buyer)
         {
-            return ScopeKey(seller) + "|" + (seller ?? string.Empty).Trim().ToLowerInvariant()
+            var shopKey = ScopeKey(seller);
+            if (shopKey.Length == 0) return string.Empty;
+            return shopKey + "|" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "|" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
 
         private static string ScopeKey(string seller)
         {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return string.Empty;
             var current = ShopSettingsScope.Current;
-            if (current != null) return current.ShopKey;
+            if (current != null)
+            {
+                try
+                {
+                    var resolved = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+                    return resolved != null
+                        && string.Equals(current.ShopKey, resolved.ShopKey, StringComparison.Ordinal)
+                        ? current.ShopKey
+                        : string.Empty;
+                }
+                catch { return string.Empty; }
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
-            catch { return "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant(); }
+            catch { return string.Empty; }
         }
 
         private static void Cleanup()
@@ -441,21 +482,27 @@ namespace Bot.ChromeNs
             knowledge = null;
             score = 0;
 
-            ShopContext shop = null;
-            if (ShopSettingsScope.Current == null && !string.IsNullOrWhiteSpace(seller))
-            {
-                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
-                catch { shop = null; }
-            }
+            var current = ShopSettingsScope.Current;
+            if (current == null && string.IsNullOrWhiteSpace(seller))
+                return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
 
-            if (shop != null)
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
+            catch
             {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
-                }
+                // A nickname that is missing, ambiguous, or mismatched cannot authorize
+                // access to a legacy/global knowledge base.
+                return false;
             }
-            return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return false;
+            if (current != null
+                && !string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                return false;
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                return TryResolveCore(seller, buyer, question, aiError, out answer, out knowledge, out score);
+            }
         }
 
         private static bool TryResolveCore(

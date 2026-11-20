@@ -105,3 +105,25 @@ def test_streaming_reply_circuit_open_and_ai_failure_only_use_non_withdrawn_safe
     assert "AI熔断离线安全兜底" in service
     assert "已阻止自动发送并建议转人工" in service
     assert "ConversationContextStore.IsWithdrawnAnswer(seller, buyer, directAnswer)" in service
+
+
+
+def test_pre_send_dedup_requires_verified_shop_scope_before_knowledge_or_ai_fallback():
+    source = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    start = source.index(
+        "public static ReplyDeduplicationResult EnsureDistinct(\n"
+        "            string seller,\n"
+        "            string buyer,\n"
+        "            string question,\n"
+        "            string candidateAnswer,\n"
+        "            CancellationToken"
+    )
+    preserve = source.index("if (preserveTrustedAnswer)", start)
+    fallback = source.index("AiFailureKnowledgeFallbackService.TryResolve(", start)
+    scope_guard = source[start:preserve]
+
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in scope_guard
+    assert "using (ShopSettingsScope.Enter(resolvedShop))" in scope_guard
+    assert "return EnsureDistinct(seller, buyer, question, candidateAnswer," in scope_guard
+    assert "return BuildBlockedResult(" in scope_guard
+    assert start < preserve < fallback

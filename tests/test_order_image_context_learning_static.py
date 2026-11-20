@@ -67,3 +67,24 @@ def test_new_runtime_files_are_included_in_old_style_project_build():
         "ChromeNs\\OrderNotificationTraceBridge.cs",
     ]:
         assert path in targets
+
+
+
+def test_buyer_alias_storage_is_scoped_to_a_verified_shopkey_and_rejects_ambiguous_nicknames():
+    source = read("src/Bot/ChromeNs/BuyerIdentityAliasService.cs")
+    observe = source[
+        source.index("public static void Observe(string seller"):
+        source.index("public static string ResolveConversationKey")
+    ]
+    scope = source[
+        source.index("private static string ScopeKey"):
+        source.index("private static bool Same", source.index("private static string ScopeKey"))
+    ]
+
+    assert "var shopKey = ScopeKey(seller);" in observe
+    assert "if (shopKey.Length == 0) return;" in observe
+    assert "Key(shopKey, seller, internalNick)" in observe
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in scope
+    assert "catch (AmbiguousShopIdentityException) { return string.Empty; }" in scope
+    assert 'return "legacy-" + seller.ToLowerInvariant();' in scope
+    assert "private static string Key(string shopKey, string seller, string alias)" in source

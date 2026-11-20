@@ -49,26 +49,32 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || internalNick.Length == 0 || Same(internalNick, seller)) return;
             if (Same(display, seller)) display = string.Empty;
 
+            var shopKey = ScopeKey(seller);
+            if (shopKey.Length == 0) return;
+
             AliasRecord old;
-            Aliases.TryGetValue(Key(seller, internalNick), out old);
-            if (old == null && display.Length > 0) Aliases.TryGetValue(Key(seller, display), out old);
+            Aliases.TryGetValue(Key(shopKey, seller, internalNick), out old);
+            if (old == null && display.Length > 0)
+                Aliases.TryGetValue(Key(shopKey, seller, display), out old);
             if (old == null)
             {
                 var canonicalInternal = CanonicalIdentity(internalNick);
                 if (!SameRaw(canonicalInternal, internalNick))
-                    Aliases.TryGetValue(Key(seller, canonicalInternal), out old);
+                    Aliases.TryGetValue(Key(shopKey, seller, canonicalInternal), out old);
             }
             var record = old ?? new AliasRecord();
-            record.ShopKey = ScopeKey(seller);
+            record.ShopKey = shopKey;
             record.Seller = seller;
             record.InternalNick = internalNick;
             if (display.Length > 0) record.Display = display;
             if (targetId.Length > 0) record.TargetId = targetId;
             record.UpdatedAt = DateTime.Now;
 
-            StoreAlias(seller, internalNick, record);
-            if (!string.IsNullOrWhiteSpace(record.Display)) StoreAlias(seller, record.Display, record);
-            if (!string.IsNullOrWhiteSpace(record.TargetId)) StoreAlias(seller, record.TargetId, record);
+            StoreAlias(shopKey, seller, internalNick, record);
+            if (!string.IsNullOrWhiteSpace(record.Display))
+                StoreAlias(shopKey, seller, record.Display, record);
+            if (!string.IsNullOrWhiteSpace(record.TargetId))
+                StoreAlias(shopKey, seller, record.TargetId, record);
             Cleanup();
         }
 
@@ -113,40 +119,56 @@ namespace Bot.ChromeNs
         {
             seller = Clean(seller);
             value = Clean(value);
+            var shopKey = ScopeKey(seller);
+            if (shopKey.Length == 0) return null;
             AliasRecord record;
-            if (Aliases.TryGetValue(Key(seller, value), out record)) return record;
+            if (Aliases.TryGetValue(Key(shopKey, seller, value), out record)) return record;
 
             var canonical = CanonicalIdentity(value);
             if (!SameRaw(canonical, value)
-                && Aliases.TryGetValue(Key(seller, canonical), out record))
+                && Aliases.TryGetValue(Key(shopKey, seller, canonical), out record))
             {
                 return record;
             }
             return null;
         }
 
-        private static void StoreAlias(string seller, string alias, AliasRecord record)
+        private static void StoreAlias(string shopKey, string seller, string alias, AliasRecord record)
         {
             alias = Clean(alias);
-            if (alias.Length == 0 || record == null) return;
-            Aliases[Key(seller, alias)] = record;
+            if (shopKey.Length == 0 || alias.Length == 0 || record == null) return;
+            Aliases[Key(shopKey, seller, alias)] = record;
 
             var canonical = CanonicalIdentity(alias);
             if (!SameRaw(canonical, alias) && canonical.Length > 0)
-                Aliases[Key(seller, canonical)] = record;
+                Aliases[Key(shopKey, seller, canonical)] = record;
         }
 
-        private static string Key(string seller, string alias)
+        private static string Key(string shopKey, string seller, string alias)
         {
-            return ScopeKey(seller) + "#" + Clean(seller) + "#" + Clean(alias);
+            return shopKey + "#" + Clean(seller) + "#" + Clean(alias);
         }
 
         private static string ScopeKey(string seller)
         {
+            seller = Clean(seller);
+            if (seller.Length == 0) return string.Empty;
             var current = ShopSettingsScope.Current;
-            if (current != null) return current.ShopKey;
+            if (current != null)
+            {
+                try
+                {
+                    var resolved = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+                    return resolved != null
+                        && string.Equals(current.ShopKey, resolved.ShopKey, StringComparison.Ordinal)
+                        ? current.ShopKey
+                        : string.Empty;
+                }
+                catch { return string.Empty; }
+            }
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
-            catch { return "legacy-" + Clean(seller).ToLowerInvariant(); }
+            catch (AmbiguousShopIdentityException) { return string.Empty; }
+            catch { return "legacy-" + seller.ToLowerInvariant(); }
         }
 
         private static bool Same(string left, string right)
