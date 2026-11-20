@@ -656,7 +656,11 @@ namespace Bot.ChromeNs
             sessionId = (sessionId ?? string.Empty).Trim();
             if (shopKey.Length == 0 || sessionId.Length == 0) return false;
             string owner;
-            return _shopSessions.TryGetValue(shopKey, out owner)
+            // SessionClosed removes the physical connection before releasing the ShopKey
+            // owner mapping. Requiring the live socket here closes that race window so a
+            // native send cannot pass authority validation on a disconnected WebSocket.
+            return _connectedSessions.ContainsKey(sessionId)
+                && _shopSessions.TryGetValue(shopKey, out owner)
                 && string.Equals(owner, sessionId, StringComparison.Ordinal);
         }
 
