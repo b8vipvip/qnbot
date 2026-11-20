@@ -36,8 +36,8 @@ def test_managed_catalog_is_shop_scoped_and_survives_a_full_refresh():
     assert "products[local.ItemId] = local" in service
     assert "products.Remove(hidden)" in service
     assert "internal static void SaveManagedCatalog" in service
-    assert "RuleStore(seller).SetString(ManagedProductsKey" in service
-    assert "var gate = Gates.GetOrAdd(seller" in service
+    assert "RuleStore(shopKey).SetString(ManagedProductsKey" in service
+    assert "var gate = Gates.GetOrAdd(shopKey" in service
     assert "ValidateItemUrl(row.ItemId, row.Url)" in service
     assert "hidden.Add(id)" in service
     assert "hidden.Remove(row.ItemId)" in service
@@ -55,7 +55,7 @@ def test_editing_bot_catalog_never_changes_live_taobao_inventory():
     assert "ItemId不能修改" in view or "商品ID不能修改" in view
     assert "原订单专属答案将失去匹配依据" in view
     assert "public void Save(string seller)" in view
-    assert "RuleStore(seller).SetString(ManagedProductsKey" in service
+    assert "RuleStore(shopKey).SetString(ManagedProductsKey" in service
     assert 'RuleStore(seller).SetString(RulesKey' in service  # separate reply-store path
 
 

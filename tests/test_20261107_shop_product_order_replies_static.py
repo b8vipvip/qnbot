@@ -24,7 +24,11 @@ def test_shop_cache_fail_closed_and_seven_day_refresh():
     assert "TimeSpan.FromDays(7)" in service
     assert "TimeSpan.FromHours(1)" in service
     assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in service
-    assert "QN.FindExistingBySellerNick(seller)" in service
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in service
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId)" in service
+    assert "QN.FindExistingBySellerNick(seller)" not in service
+    assert "Gates.GetOrAdd(shopKey" in service
+    assert "Pollers.GetOrAdd(shopKey" in service
     assert "ShopCatalogMtopReader.FetchAsync(qn.CDP)" in service
     assert "fetched.Products == null || fetched.Products.Count == 0" in service
     assert "File.Replace(temp, path, null)" in service

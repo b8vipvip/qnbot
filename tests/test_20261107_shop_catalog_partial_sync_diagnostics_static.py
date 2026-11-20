@@ -49,9 +49,9 @@ def test_optional_manual_product_is_shop_scoped_and_survives_partial_refresh():
     assert "AddManualProduct(string seller, string productUrl, string productTitle)" in service
     assert "IsTaobaoItemHost(uri.Host)" in service
     assert "ManualProductsKey" in service
-    assert "GetOrAdd(seller, _ => new SemaphoreSlim(1, 1))" in service
+    assert "GetOrAdd(shopKey, _ => new SemaphoreSlim(1, 1))" in service
     assert "ShopScopedSettingsStore" in service
-    assert "RuleStore(seller).SetString(ManualProductsKey" in service
+    assert "RuleStore(shopKey).SetString(ManualProductsKey" in service
     assert "ManuallyAdded = true" in service
     assert "!x.ManuallyAdded" in service
     assert "RemoveManualProduct(string seller, string itemId)" in service
