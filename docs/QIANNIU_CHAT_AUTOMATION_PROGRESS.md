@@ -9,10 +9,10 @@ Last updated / 最后更新：2026-11-20
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：`bot-v1.1.2380`
-- Release：GitHub Release tag `bot-v1.1.2380`
-- Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
-- x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
+- Latest stable client：`bot-v1.1.2460`
+- Release：GitHub Release tag `bot-v1.1.2460`
+- Release target：`7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`
+- x64 package SHA-256：`98df42ddf2130bc61923fca033f5deaa049ade495fa61143ee319849f5177533`
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -114,8 +114,10 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 报告包括：
 - Windows / PowerShell / .NET Framework 版本；
 - Bot、AliWorkbench、AliRender、wwcmd 进程数及资源指标；
-- 是否找到 `--render_id=bench_im` 渲染进程；
+- 是否找到 `--render_id=bench_im` 渲染进程，并区分进程命令行可见/不可见；
+- Bot 产品版本优先从安装包根目录 `release-info.json` 读取，程序集 `1.1.0.0` 仅作为兼容回退；同时输出 Release tag 与源 SHA；
 - 本地 41010 WebSocket listener、loopback 可达性及进程归属；
+- 未确认 bench_im 身份时，只列出千牛进程拥有的 loopback 监听候选端口，不连接探测；
 - 能够唯一关联时，通过 loopback CDP 只读检查页面 `document.readyState`、`typeof window.imsdk`、`invoke`、`on` 和 loginID/QN 是否存在；
 - JSON 与 Markdown 两种报告。
 
@@ -123,12 +125,20 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - 不读取或导出聊天正文、客户昵称、订单、Cookie、Token、原始日志、截图、完整命令行或页面 URL。
 - 命令行仅在内存中用于识别 renderer 和调试端口，报告只保存布尔值/端口号。
 - 只连接 `127.0.0.1`，CDP 只执行属性类型/布尔值读取，不发送消息、不修改设置、不停止进程、不上传文件。
-- 如果 CDP 目标无法唯一关联，工具跳过探测并明确报告，不猜测页面身份。
+- 如果 CDP 目标无法唯一关联，工具跳过探测并明确报告，不猜测页面身份；命令行不可见会显示为 indeterminate，而不是误报为未发现。
 - 该工具不能证明真实消息已送达；真实买家消息、切店、重连和知识学习仍需现场验收。
 
 已有可选长时采样脚本：
 - `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程。
 - `scripts/Collect-QnBotGcTrace.ps1`：管理员权限下有界 CLR GC ETW；ETL 可能含同机其他 .NET 程序事件，分享前需自行审查。
+
+### 4.1 2026-11-20 Windows diagnostic follow-up
+
+- Stable client baseline: `bot-v1.1.2460`, release target `7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`.
+- The uploaded runtime sample had one connected authoritative session, no duplicate standby, and Bot-owned loopback WebSocket 41010. It did not identify a bench_im renderer or unambiguous CDP endpoint.
+- Corrected the runtime snapshot counter so `RecoverableStandbySessions` counts actual duplicate standby sessions that also advertise recoverable capability; `StandbyCapabilitySessions` separately counts all capable sessions, including the owner.
+- Follow-up diagnostics now report AliRender command-line visibility, tolerate quoted renderer/debug-port arguments, list Qianniu-owned loopback listener candidates without probing them when bench_im identity is unknown, and read product version/tag/source SHA from the package-root `release-info.json` instead of presenting the assembly compatibility version as the product version.
+- The diagnostic follow-up source/tests are on master after the stable release and require exact-SHA CI/Windows build before they are used as the next field diagnostic. They are not included in `bot-v1.1.2460`.
 
 ## 5. Validation and release rules / 验收与发布规则
 
