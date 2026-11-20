@@ -810,6 +810,14 @@ def test_acceptance_diagnostics_is_read_only_and_redacts_customer_and_account_da
     assert r'(?i)(?:^|[\s"])--render_id(?:=|\s+)"?bench_im"?(?=$|[\s"])' in script
     assert r'(?i)(?:^|[\s"])--remote-debugging-port(?:=|\s+)"?(\d+)"?(?=$|[\s"])' in script
     assert "CommandLineAvailable = -not [string]::IsNullOrWhiteSpace" in script
+    assert "function Get-BotReleaseIdentity" in script
+    assert "release-info.json" in script
+    assert "BotReleaseTag = $botReleaseTag" in script
+    assert "BotReleaseCommit = $botReleaseCommit" in script
+    assert "BotVersionSource = $botVersionSource" in script
+    assert "VersionSource = $versionSource" in script
+    assert "assembly_file_version" in script
+    assert "release_manifest" in script
     assert "AliRenderCommandLineVisibleCount" in script
     assert "AliRenderCommandLineUnavailableCount" in script
     assert "QianniuLoopbackListenerCandidates" in script
