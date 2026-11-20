@@ -877,6 +877,8 @@ def test_read_only_acceptance_diagnostics_runtime_snapshot_is_privacy_minimized_
     assert "WriteAllTextAtomic" in snapshot
     assert "ProcessId = processId" in snapshot
     assert "ProcessStartTimeUtcTicks = processStartTimeUtcTicks" in snapshot
+    assert "RecoverableStandbySessions = _duplicateShopSessions.Count(x => _recoverableStandbySessions.ContainsKey(x.Key))" in snapshot
+    assert "StandbyCapabilitySessions = _recoverableStandbySessions.Count" in snapshot
     for forbidden in ("Seller =", "Buyer =", "ShopKey ="):
         assert forbidden not in snapshot
     assert "SessionRef =" in snapshot
