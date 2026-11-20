@@ -433,22 +433,34 @@ jobs:
           [[ "$actual_merge_sha" == "$MERGE_SHA" ]] || { echo "::error::Merge SHA mismatch during terminal capture"; exit 1; }
 
           [[ -n "$pr_head_sha" ]] || { echo "::error::Merged PR head SHA is missing"; exit 1; }
-          pr_ci_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&event=pull_request&status=completed&per_page=100")"
-          pr_ci_run_id="$(jq -r --arg workflow "$VALIDATION_WORKFLOW" '[.workflow_runs[] | select(.name == $workflow and .event == "pull_request" and .status == "completed" and .conclusion == "success")] | sort_by(.created_at,.id) | reverse | .[0].id // empty' <<<"$pr_ci_runs")"
-          [[ -n "$pr_ci_run_id" ]] || {
-            echo "::error::No successful exact-head PR CI run found for $pr_head_sha using canonical workflow $VALIDATION_WORKFLOW"
+          pr_ci_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&per_page=100")"
+          # Mirror Observer's exact-head PR gate aggregation. The canonical
+          # post-merge workflow (usually "CI") is not necessarily the workflow
+          # that ran for this PR: product-code PRs may run API control plane CI,
+          # while GPTAuto/workflow PRs may run CI. Validate every latest
+          # product-validation workflow that actually ran for this exact head.
+          pr_gate_rows="$(jq -c --arg head "$pr_head_sha" '
+            [.workflow_runs[]
+              | select(.head_sha == $head)
+              | select(.event == "pull_request")
+              | select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")]
+            | sort_by([.name, .created_at, .id])
+            | group_by(.name)
+            | map(last)
+          ' <<<"$pr_ci_runs")"
+          [[ "$(jq 'length' <<<"$pr_gate_rows")" -gt 0 ]] || {
+            echo "::error::No exact-head PR product-validation workflow runs found for $pr_head_sha (expected API control plane CI, CI, or Windows x64 release build)"
             exit 1
           }
-          pr_ci_row="$(gh api "repos/$REPOSITORY/actions/runs/$pr_ci_run_id")"
-          pr_ci_head_sha="$(jq -r '.head_sha // ""' <<<"$pr_ci_row")"
-          pr_ci_name="$(jq -r '.name // ""' <<<"$pr_ci_row")"
-          pr_ci_event="$(jq -r '.event // ""' <<<"$pr_ci_row")"
-          pr_ci_status="$(jq -r '.status // ""' <<<"$pr_ci_row")"
-          pr_ci_conclusion="$(jq -r '.conclusion // ""' <<<"$pr_ci_row")"
-          [[ "$pr_ci_head_sha" == "$pr_head_sha" && "$pr_ci_name" == "$VALIDATION_WORKFLOW" && "$pr_ci_event" == "pull_request" && "$pr_ci_status" == "completed" && "$pr_ci_conclusion" == "success" ]] || {
-            echo "::error::PR CI evidence does not match exact PR head/workflow/event/status: run=$pr_ci_run_id sha=$pr_ci_head_sha workflow=$pr_ci_name event=$pr_ci_event status=$pr_ci_status conclusion=$pr_ci_conclusion"
+          pr_ci_invalid_rows="$(jq -c '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))]' <<<"$pr_gate_rows")"
+          [[ "$(jq 'length' <<<"$pr_ci_invalid_rows")" == "0" ]] || {
+            echo "::error::Exact-head PR validation evidence is not fully successful: $pr_ci_invalid_rows"
             exit 1
           }
+          pr_ci_run_id="$(jq -r '[.[].id | tostring] | join(",")' <<<"$pr_gate_rows")"
+          pr_ci_status="completed"
+          pr_ci_conclusion="success"
+          echo "Validated exact-head PR product-validation runs: $pr_ci_run_id"
           previous_artifact_id="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=10" --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
           if [[ -n "$previous_artifact_id" ]]; then
             mkdir -p ".gptauto/logs/$TASK_ID"

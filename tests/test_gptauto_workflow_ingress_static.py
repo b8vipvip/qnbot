@@ -131,17 +131,29 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "validation_conclusion=" in terminal and "'.conclusion // \"\"'" in terminal
     assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
     assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
-    assert "event=pull_request&status=completed" in terminal
-    assert '--arg workflow "$VALIDATION_WORKFLOW"' in terminal
-    assert 'pr_ci_head_sha="$(jq -r' in terminal
-    assert 'pr_ci_event="$(jq -r' in terminal
-    assert 'pr_ci_status="$(jq -r' in terminal
-    assert 'pr_ci_conclusion="$(jq -r' in terminal
-    assert '"$pr_ci_head_sha" == "$pr_head_sha"' in terminal
-    assert '"$pr_ci_event" == "pull_request"' in terminal
-    assert '"$pr_ci_status" == "completed"' in terminal
-    assert '"$pr_ci_conclusion" == "success"' in terminal
+
+
+
+
+
+
+
+
+
+
     assert '--pr-ci-status "$pr_ci_status"' in terminal
+    assert "pr_gate_rows=" in terminal
+    assert 'select(.head_sha == $head)' in terminal
+    assert 'select(.event == "pull_request")' in terminal
+    assert 'select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")' in terminal
+    assert "| group_by(.name)" in terminal
+    assert "pr_ci_invalid_rows=" in terminal
+    assert '(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")' in terminal
+    assert '[.[].id | tostring] | join(",")' in terminal
+    assert 'pr_ci_status="completed"' in terminal
+    assert 'pr_ci_conclusion="success"' in terminal
+    assert "canonical post-merge workflow" in terminal
+    assert 'pr_ci_run_id="$(jq -r' in terminal
     assert "steps.terminal.outcome == 'success'" in receipt
     assert "steps.terminal.outcome == 'success'" in upload
     assert "steps.lease-receipt.outcome == 'success'" in upload
