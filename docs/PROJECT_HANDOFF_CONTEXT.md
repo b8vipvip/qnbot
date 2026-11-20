@@ -3,7 +3,7 @@
 更新时间：2026-11-20  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前正式客户端：`bot-v1.1.2380`  
+当前正式客户端：`bot-v1.1.2460`  
 统一未完成事项：Issue #366
 
 ## 1. 当前目标
@@ -30,10 +30,11 @@
 
 ## 3. Current release baseline
 
-- Latest stable release：`bot-v1.1.2380`
-- Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
-- x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
+- Latest stable release：`bot-v1.1.2460`
+- Release target：`7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`
+- x64 package SHA-256：`98df42ddf2130bc61923fca033f5deaa049ade495fa61143ee319849f5177533`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
+- 2026-11-20 上传的 Windows 诊断显示：Bot-owned 41010 正常、1 个权威会话、0 个重复 standby；bench_im/CDP 目标尚未识别。后续诊断脚本正在补充命令行可见性、loopback 候选端口和 release-info.json 产品版本识别，尚需 exact-SHA CI/Windows build。
 - 生产安装仍需要管理员/用户明确操作；CI 不得触发生产主机部署。
 
 ## 4. Repository status
