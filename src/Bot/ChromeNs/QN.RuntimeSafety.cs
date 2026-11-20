@@ -62,12 +62,14 @@ namespace Bot.ChromeNs
 
         public static void Save(string seller, bool enabled, string answer)
         {
-            RunInShopScope(seller, delegate
+            var saved = RunInShopScope(seller, delegate
             {
                 BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(EnabledKey, SettingsScope, enabled ? "true" : "false");
                 BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(AnswerKey, SettingsScope, (answer ?? string.Empty).Trim());
                 return true;
             });
+            if (!saved)
+                throw new InvalidOperationException("无法确认首条咨询固定回复配置所属店铺，已阻止保存到全局设置。");
         }
 
         public static bool TryPrepare(string seller, string buyer, string currentQuestion, IncomingMessageDecision decision, out string answer)
@@ -475,15 +477,29 @@ namespace Bot.ChromeNs
         private static T RunInShopScope<T>(string seller, Func<T> action)
         {
             if (action == null) return default(T);
-            if (ShopSettingsScope.Current != null) return action();
-            ShopContext shop = null;
-            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
-            catch
+            // Empty-seller calls are the explicit legacy-global compatibility path.
+            // A non-empty identity must resolve to the exact current ShopKey; failure
+            // must never execute a read/write against the unscoped global store.
+            if (string.IsNullOrWhiteSpace(seller)) return action();
+
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
+            catch (Exception ex)
             {
-                try { shop = ShopContextLocator.ResolveBySellerNick(seller); }
-                catch { shop = null; }
+                Log.Info("首条咨询固定回复已阻止未确认店铺作用域: " + ex.GetType().Name);
+                return default(T);
             }
-            if (shop == null) return action();
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+                return default(T);
+
+            var current = ShopSettingsScope.Current;
+            if (current != null)
+            {
+                if (!string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    return default(T);
+                return action();
+            }
+
             using (ShopSettingsScope.Enter(shop)) return action();
         }
     }

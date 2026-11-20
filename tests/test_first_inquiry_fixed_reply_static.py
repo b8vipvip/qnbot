@@ -236,3 +236,25 @@ def test_delayed_exact_seller_echo_cancels_retry_and_false_failure():
     assert "按真实送达处理并取消重复发送" in retry
     assert "最终失败判定前收到延迟卖家回显，改判真实送达" in retry
     assert retry.index("HasRecentSellerEcho(buyer, text, sendStartedAt)") < retry.index("ok = await SendTextAsync(buyer, text);", retry.index("for (var i = 0"))
+
+
+
+def test_first_inquiry_settings_never_fall_back_to_global_for_unresolved_nonempty_seller():
+    service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    resolver = service[
+        service.index("private static T RunInShopScope"):
+        service.index("\n    }\n\n    public partial class QN", service.index("private static T RunInShopScope"))
+    ]
+    save = service[
+        service.index("public static void Save(string seller"):
+        service.index("public static bool TryPrepare", service.index("public static void Save(string seller"))
+    ]
+
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in resolver
+    assert "if (string.IsNullOrWhiteSpace(seller)) return action();" in resolver
+    assert "return default(T);" in resolver
+    assert "if (shop == null) return action();" not in resolver
+    assert "if (current != null)" in resolver
+    assert "current.ShopKey, shop.ShopKey" in resolver
+    assert "if (!saved)" in save
+    assert "已阻止保存到全局设置" in save
