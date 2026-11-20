@@ -277,3 +277,29 @@ def test_skipped_or_neutral_pr_workflows_cannot_satisfy_product_validation():
         assert '.conclusion != "success"' in workflow
     assert 'and .conclusion != "neutral"' not in observer
     assert 'and .conclusion != "neutral"' not in reconcile
+
+def test_reconcile_terminal_state_requires_versioned_post_merge_and_release_receipts():
+    observer = read(".github/gptauto/observer.py")
+    orchestrator = read(".github/gptauto/orchestrator.py")
+    terminal = orchestrator[
+        orchestrator.index("def canonical_phase"):
+        orchestrator.index("def canonicalize_task")
+    ]
+
+    for field in (
+        "terminal_done_main_ci_run_id",
+        "terminal_done_release_required",
+        "terminal_done_release_published",
+        "terminal_done_release_run_id",
+        "terminal_done_release_id",
+        "terminal_done_release_tag",
+        "terminal_done_reconcile_run_id",
+        "terminal_done_evidence_version",
+    ):
+        assert '"' + field + '"' in observer
+        assert 'task.metadata.get("' + field + '")' in terminal
+
+    assert "terminal_evidence_version < 2" in terminal
+    assert "versioned_terminal_evidence_complete" in terminal
+    assert "task.metadata.get(\"terminal_done_release_published\") is True" in terminal
+    assert "bool(str(task.metadata.get(\"terminal_done_main_ci_run_id\") or \"\").strip())" in terminal
