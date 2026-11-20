@@ -267,6 +267,7 @@ function Read-RuntimeAcceptanceSnapshot {
             AuthoritativeShopCount = [int]$rawCounts.AuthoritativeShopCount
             DuplicateSessions = [int]$rawCounts.DuplicateSessions
             RecoverableStandbySessions = [int]$rawCounts.RecoverableStandbySessions
+            StandbyCapabilitySessions = [int]$rawCounts.StandbyCapabilitySessions
             InitializedSessions = [int]$rawCounts.InitializedSessions
             ClientSessions = [int]$rawCounts.ClientSessions
             UnmappedConnectedSessions = [int]$rawCounts.UnmappedConnectedSessions
@@ -614,7 +615,7 @@ $markdown += @(
 )
 if ($runtimeSnapshot.Status -eq 'fresh') {
     $counts = $runtimeSnapshot.Counts
-    $markdown += ('- Connected sessions=' + $counts.ConnectedSessions + '; authoritative shops=' + $counts.AuthoritativeShopCount + '; duplicate sessions=' + $counts.DuplicateSessions + '; recoverable standbys=' + $counts.RecoverableStandbySessions + '; unmapped connected=' + $counts.UnmappedConnectedSessions)
+    $markdown += ('- Connected sessions=' + $counts.ConnectedSessions + '; authoritative shops=' + $counts.AuthoritativeShopCount + '; duplicate sessions=' + $counts.DuplicateSessions + '; recoverable standbys=' + $counts.RecoverableStandbySessions + '; standby-capable sessions=' + $counts.StandbyCapabilitySessions + '; unmapped connected=' + $counts.UnmappedConnectedSessions)
     foreach ($shop in $runtimeSnapshot.Shops) {
         $markdown += ('- ' + $shop.ShopRef + ': owner=' + $shop.OwnerSessionRef + '; connected=' + $shop.OwnerConnected + '; initialized=' + $shop.OwnerInitialized + '; client=' + $shop.OwnerClientPresent + '; invalidated=' + $shop.OwnerClientInvalidated + '; retired=' + $shop.OwnerClientIdentityRetired + '; standbys=' + $shop.StandbyCount + '; recoverable=' + $shop.RecoverableStandbyCount)
         foreach ($standby in $shop.Standbys) {
