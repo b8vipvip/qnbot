@@ -10,7 +10,7 @@ Last updated / 最后更新：2026-11-20
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
 - Latest stable client：`bot-v1.1.2380`
-- Release：<https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2380>
+- Release：GitHub Release tag `bot-v1.1.2380`
 - Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
 - x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
@@ -25,6 +25,8 @@ Last updated / 最后更新：2026-11-20
 
 ### 2.2 Generation and reliable send
 - 买家 burst coalescing、generation cancellation 和绝对生命周期 watchdog 已实现。
+- generation 从 `BuyerActionAccepted` 起登记；55 秒绝对期限覆盖 Observed/Coalescing/Processing/Generating/Ready/Sending/Waiting 整个生命周期，只有终态才移除。
+- CDP execute gate 排队上限约 1.5 秒；active buyer 确认有 9 秒总 wall-clock deadline。
 - 正常文本 AI 预算约 50 秒；accepted generation 的绝对年龄门禁覆盖到 Ready/Sending/Waiting。
 - CDP execute gate 有界等待；发送前验证 seller/buyer/current conversation 和 ShopKey。
 - Bot-owned exact draft、可信提交证据、卖家 echo / delivery verification 和防盲目重复发送已进入生产链路。
@@ -54,7 +56,7 @@ Last updated / 最后更新：2026-11-20
 ## 3. Remaining runtime acceptance / 尚需真实运行验收
 
 ### P0 — Message channel and mirror
-关联原 Issue：[#307](https://github.com/b8vipvip/qnbot/issues/307)
+关联原 Issue：原 Issue #307
 
 - 最新正式版运行时，确认买家消息可收到正确 buyer + 正文。
 - 检查 Bot Web 历史消息首次同步后持续显示，切换买家不串屏。
@@ -70,7 +72,7 @@ Last updated / 最后更新：2026-11-20
 - 以上必须以真实客户端和长时间运行结果验收，不能只看 CI。
 
 ### P1 — Knowledge V2 full learning
-关联原 Issue：[#339](https://github.com/b8vipvip/qnbot/issues/339) 和 #431。
+关联原 Issue：原 Issue #339 和 #431。
 
 - 150+ 条真实测试会话完整历史；全部知识条目逐批覆盖，不能只分析检索命中片段。
 - 重启后复用有效检查点；知识库修订漂移后必须重新分析。
@@ -79,7 +81,7 @@ Last updated / 最后更新：2026-11-20
 - 自动写入保持关闭，直到原子事务、备份、回滚、审批主体和灰度验收全部完成。
 
 ### P1 — General reception workflow Agent
-关联原 Issue：[#346](https://github.com/b8vipvip/qnbot/issues/346)。
+关联原 Issue：原 Issue #346。
 
 - 当前流程模型以 ShopKey/商品/SKU/版本隔离的草稿和证据账本为基础。
 - 尚需可信审批主体、授权调度器、正式发布/回滚、只读订单工具和完整图文证据闭环。

@@ -4,7 +4,7 @@
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
 当前正式客户端：`bot-v1.1.2380`  
-统一未完成事项：[#366](https://github.com/b8vipvip/qnbot/issues/366)
+统一未完成事项：Issue #366
 
 ## 1. 当前目标
 
@@ -30,13 +30,19 @@
 
 ## 3. Current release baseline
 
-- Latest stable release：[`bot-v1.1.2380`](https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2380)
+- Latest stable release：`bot-v1.1.2380`
 - Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
 - x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
 - 生产安装仍需要管理员/用户明确操作；CI 不得触发生产主机部署。
 
-## 4. Architecture
+## 4. Repository status
+
+- 当前没有开放 PR；#426/#429/#430/#431 已合并到 master。
+- 唯一开放的普通跟踪 Issue 为 #366；不新建普通 Issue 或分支。
+- 下一步应使用 `bot-v1.1.2380` 真实运行证据继续验收；后续 master 源码修复须先通过精确 SHA CI/Windows build。
+
+## 5. Architecture
 
 - Windows WPF Bot：`src/Bot/`
 - Qianniu WebSocket/CDP/QN and send chain：`src/Bot/ChromeNs/`
@@ -60,7 +66,7 @@ Qianniu renderer
   → verified submission + seller echo / delivery evidence
 ```
 
-## 5. Current implementation state
+## 6. Current implementation state
 
 - Multi-shop runtime coordinator uses exact ShopKey / CDP SessionId / TargetId and focused WebView proof.
 - Generation watchdog, bounded CDP execute gate, active buyer confirmation deadline and reliable-send evidence checks are in the production source.
@@ -69,7 +75,7 @@ Qianniu renderer
 - PRs #426/#429/#430/#431 are already merged into master and included in the 1.1.2379 lineage; 1.1.2380 adds the ShopKey catalog refresh/settings fix.
 - GPTAuto Release discovery, exact source SHA build selection and dynamic display_title correlation have been corrected in master; end-to-end Reconcile terminal evidence remains pending.
 
-## 6. Next acceptance work
+## 7. Next acceptance work
 
 ### P0 — message channel and mirror (#307)
 - Confirm latest supported Qianniu client receives buyer identity + message body.
@@ -101,7 +107,7 @@ Qianniu renderer
 - Verify exact source SHA, Windows build association, dynamic release run title and terminal Completion Lease state.
 - Observer success alone is not terminal completion.
 
-## 7. Windows read-only diagnostics
+## 8. Windows read-only diagnostics
 
 Run from repository root:
 
@@ -117,7 +123,7 @@ Optional existing samplers:
 - `scripts/Collect-QnBotMemory.ps1`: process/system memory, CPU, handles and threads.
 - `scripts/Collect-QnBotGcTrace.ps1`: bounded CLR GC ETW; the ETL may contain events from other .NET apps and must be reviewed before sharing.
 
-## 8. Acceptance and issue management
+## 9. Acceptance and issue management
 
 - #366 remains the only unified open issue.
 - Do not create new ordinary issues or branches; continue direct source fixes and update #366.
