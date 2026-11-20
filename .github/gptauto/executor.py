@@ -172,6 +172,19 @@ def next_action(task: Task) -> dict:
             },
         )
 
+    if authority["phase"] == "PR_CI":
+        return _with_lease(
+            task,
+            {
+                "action": "lease_wait",
+                "reason": "Waiting for the required exact-head PR CI success evidence before merge/Reconcile",
+                "task_id": task.task_id,
+                "pr_number": str(meta.get("pr_number") or ""),
+                "head_sha": current_head,
+                "pr_ci_run_id": str(meta.get("pr_ci_run_id") or ""),
+            },
+        )
+
     steps = {step.gate: step for step in task.plan}
     pr_ci = steps.get(Gate.PR_CI)
     merge = steps.get(Gate.MERGE)

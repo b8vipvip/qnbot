@@ -131,6 +131,17 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert "validation_conclusion=" in terminal and "'.conclusion // \"\"'" in terminal
     assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
     assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
+    assert "event=pull_request&status=completed" in terminal
+    assert '--arg workflow "$VALIDATION_WORKFLOW"' in terminal
+    assert 'pr_ci_head_sha="$(jq -r' in terminal
+    assert 'pr_ci_event="$(jq -r' in terminal
+    assert 'pr_ci_status="$(jq -r' in terminal
+    assert 'pr_ci_conclusion="$(jq -r' in terminal
+    assert '"$pr_ci_head_sha" == "$pr_head_sha"' in terminal
+    assert '"$pr_ci_event" == "pull_request"' in terminal
+    assert '"$pr_ci_status" == "completed"' in terminal
+    assert '"$pr_ci_conclusion" == "success"' in terminal
+    assert '--pr-ci-status "$pr_ci_status"' in terminal
     assert "steps.terminal.outcome == 'success'" in receipt
     assert "steps.terminal.outcome == 'success'" in upload
     assert "steps.lease-receipt.outcome == 'success'" in upload
@@ -187,3 +198,18 @@ def test_terminal_reconcile_receipt_is_mandatory_and_verified_before_state_uploa
     assert "Completion Lease comment was not durably updated to RELEASED" in receipt
     assert "failure() && steps.terminal.outcome == 'success'" in receipt
     assert "Unable to restore active Completion Lease" in receipt
+
+
+
+def test_reconcile_cannot_bypass_required_pr_ci_and_executor_waits_for_it():
+    observer = read(".github/gptauto/observer.py")
+    orchestrator = read(".github/gptauto/orchestrator.py")
+    executor = read(".github/gptauto/executor.py")
+
+    assert 'bool(str(pr_ci_run_id or "").strip())' in observer
+    assert 'str(pr_ci_status or "").strip().lower() == "completed"' in observer
+    assert "if pr_ci and pr_ci.required and pr_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:" in orchestrator
+    assert 'return "PR_CI"' in orchestrator
+    assert '"PR_CI", "POST_MERGE_CI"' in orchestrator
+    assert 'authority["phase"] == "PR_CI"' in executor
+    assert "Waiting for the required exact-head PR CI success evidence" in executor

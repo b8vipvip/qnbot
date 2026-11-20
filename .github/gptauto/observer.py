@@ -145,6 +145,9 @@ def capture(
         evidence_provenance == "reconciler"
         and merged
         and bool(str(merge_sha or "").strip())
+        and _passed(pr_ci_conclusion)
+        and str(pr_ci_status or "").strip().lower() == "completed"
+        and bool(str(pr_ci_run_id or "").strip())
         and _passed(main_ci_conclusion)
         and bool(str(main_ci_run_id or "").strip())
         and (

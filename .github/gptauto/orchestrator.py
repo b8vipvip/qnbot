@@ -63,6 +63,9 @@ def canonical_phase(task: Task) -> str:
         if pr_ci and pr_ci.status in {GateStatus.WAITING, GateStatus.PENDING}:
             return "PR_CI"
         return "MERGE"
+    pr_ci = _step(task, Gate.PR_CI)
+    if pr_ci and pr_ci.required and pr_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:
+        return "PR_CI"
     if main_ci and main_ci.required and main_ci.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:
         return "POST_MERGE_CI"
     if bool(task.metadata.get("release_required")):
@@ -87,7 +90,7 @@ def canonicalize_task(task: Task) -> dict:
         task.state = State.DONE
     elif phase == "REPAIR_REQUIRED":
         task.state = State.EXECUTE
-    elif phase in {"POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB", "RECONCILE"}:
+    elif phase in {"PR_CI", "POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB", "RECONCILE"}:
         task.state = State.VERIFY
     elif phase == "USER_ACTION_REQUIRED":
         task.state = State.BLOCKED
