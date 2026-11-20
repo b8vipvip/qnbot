@@ -247,7 +247,8 @@ namespace Bot.ChromeNs
                 }
                 if (changed)
                 {
-                    TrimLocked();
+                    // Preserve every migrated at-most-once barrier. If migration reaches
+                    // the ledger capacity, new confirmations are paused by IsAtCapacityLocked.
                     Log.Info("已将旧自动发货队列中的确认防重屏障迁移到长期账本，避免升级后重复确认。");
                 }
             }
