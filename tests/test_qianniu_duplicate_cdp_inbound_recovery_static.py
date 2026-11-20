@@ -307,7 +307,7 @@ def test_periodic_identity_revalidation_does_not_resurrect_closed_websocket_sess
     assert "if (session == null" in method
     assert "IsCurrentShopIdentityProbe(session.SessionID, bindingGeneration)" in method
     assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in method
-    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in method
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in method
 
 
 def test_duplicate_identity_revalidation_checks_connection_before_restoring_client_binding():
@@ -317,9 +317,9 @@ def test_duplicate_identity_revalidation_checks_connection_before_restoring_clie
         server.index("private async Task TryBindStatusConversation")
     ]
 
-    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in method
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in method
     assert "if (!IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in method
-    assert method.index("TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)") < method.index(
+    assert method.index("TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>") < method.index(
         "qn.CDP = cdp;"
     )
 
@@ -560,7 +560,7 @@ def test_periodic_shop_identity_probe_cannot_overwrite_a_newer_status_generation
 
     assert "long? expectedIdentityProbeGeneration = null" in claim
     assert "currentIdentityProbeGeneration != expectedIdentityProbeGeneration.Value" in claim
-    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in revalidate
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in revalidate
     assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in revalidate
     assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in revalidate
     assert "QN.GetByShopIdentity(user.Result)" in revalidate
@@ -587,7 +587,7 @@ def test_every_status_heartbeat_invalidates_old_shop_identity_reads_even_when_di
     assert "private long BeginShopIdentityProbe(string sessionId)" in server
     assert "NextShopIdentityProbeGenerationLocked(sessionId)" in server
     assert "IsCurrentShopIdentityProbe(session.SessionID, identityProbeGeneration)" in init
-    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration)" in init
+    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration, () =>" in init
     assert "expectedIdentityProbeGeneration: identityProbeGeneration" in status or "expectedIdentityProbeGeneration: identityProbeGeneration" in server
     assert "IsCurrentShopIdentityProbeLocked(sessionId, expectedIdentityProbeGeneration.Value)" in promotion
 
@@ -616,7 +616,7 @@ def test_initial_identity_claim_and_qn_binding_are_atomic_against_new_status_eve
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     init = server[
         server.index("private async Task TryInitSession(WebSocketSession session, string reason, long identityProbeGeneration)"):
-        server.index("private void OnSessionClosed")
+        server.index("private static bool IsLoopbackListenerActive")
     ]
 
     assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration, () =>" in init

@@ -88,7 +88,7 @@ def test_first_page_initializes_from_its_own_cdp_login_identity():
     assert 'Task.Run(() => TryInitSession(session, "status", identityProbeGeneration));' in status
     assert "ResolveRuntimeBySellerIdentity(user.Result)" in init
     assert "QN.GetByShopIdentity(user.Result)" in init
-    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration)" in init
+    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration, () =>" in init
     assert "cdp.ShopKey = shopKey;" in init
 
 

@@ -88,7 +88,8 @@ def test_orphaned_order_reply_inflight_is_recovered_to_manual_review_not_resend(
     assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
     assert "priorAction.DeliveryUncertain = true" in begin
     assert 'reason = "action_delivery_uncertain"' in begin
-    assert "priorAction.Until = now.AddHours(720)" in begin
+    assert "var reviewUntil = now.AddHours(720);" in begin
+    assert "if (priorAction.Until < reviewUntil) priorAction.Until = reviewUntil;" in begin
     assert "Process.GetProcessById(record.ProcessId)" in helpers
     assert "process.StartTime.ToUniversalTime().Ticks" in helpers
 
