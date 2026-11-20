@@ -43,8 +43,8 @@ def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first
 
 def test_finish_and_uncertain_paths_clear_durable_inflight_under_same_mutex():
     code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
-    uncertain = code[code.index("internal static void MarkDeliveryUncertain"):code.index("internal static void FinishExecution")]
-    finish = code[code.index("internal static void FinishExecution"):code.index("private static void ObserveCanonicalOrderId")]
+    uncertain = code[code.index("internal static void MarkDeliveryUncertain"):code.index("internal static bool FinishExecution")]
+    finish = code[code.index("internal static bool FinishExecution"):code.index("private static void ObserveCanonicalOrderId")]
     assert "existing.InFlight = false" in uncertain
     assert "existing.DeliveryUncertain = true" in uncertain
     assert "existing.InFlight = false" in finish
