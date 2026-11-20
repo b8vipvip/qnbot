@@ -264,7 +264,8 @@ def test_incomplete_corpus_scans_remain_pending_and_retry_from_checkpoint_up_to_
         service.index("private static void CompleteSkipped")
     ]
 
-    assert "var retryCorpus = !corpusComplete && session.RetryCount < 3" in finalize
+    assert "var retryCorpus = !corpusComplete && session.LearningRetryCount < 3" in finalize
+    assert "session.LearningRetryCount++" in finalize
     assert "report.CompletedAtTicks = 0" in finalize
     assert "report.RetryCount = session.RetryCount" in finalize
     assert "Requeue(session, \"等待Knowledge V2全库补偿重试\")" in finalize
@@ -447,7 +448,7 @@ def test_primary_session_ai_502_is_requeued_instead_of_becoming_terminal_learnin
     ]
     assert "RegisterKnowledgeCorpusAiFailure(session.ShopKey, aiException.Message" in finalize
     assert "if (IsRetryableKnowledgeCorpusError(ex.Message)" in finalize
-    assert "session.RetryCount < 3" in finalize
+    assert "session.LearningRetryCount < 3" in finalize
     assert "ai_upstream_retryable:" in finalize
     assert 'Requeue(session, "等待AI上游恢复后再次复盘", TimeSpan.FromMinutes(1))' in finalize
     assert 'report.CompletedAtTicks = 0;' in finalize
@@ -751,3 +752,37 @@ def test_live_session_learning_rejects_mismatched_shop_scope():
     assert "shop.SellerNick, seller, StringComparison.Ordinal" in observe
     assert "ShopSettingsScope.Current.ShopKey, shop.ShopKey" in observe
     assert "拒绝卖家与当前ShopKey作用域不匹配" in observe
+
+
+
+def test_history_and_knowledge_corpus_retry_budgets_are_independent_and_restart_persistent():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    finalize = service[
+        service.index("private static async Task FinalizeAsync"):
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync")
+    ]
+    recovery = service[
+        service.index("private static void ResumePending()"):
+        service.index("private static void CleanupReports()")
+    ]
+    snapshot = service[
+        service.index("private static void SaveSnapshot"):
+        service.index("private static ConversationSessionLearningReportEntity NewReport")
+    ]
+
+    assert "public int HistoryRetryCount;" in service
+    assert "public int LearningRetryCount;" in service
+    assert "session.HistoryRetryCount < 3" in finalize
+    assert "session.HistoryRetryCount++" in finalize
+    assert "session.LearningRetryCount < 3" in finalize
+    assert "session.LearningRetryCount++" in finalize
+    assert 'initialCoverage["historyRetryCount"] = session.HistoryRetryCount' in finalize
+    assert 'initialCoverage["learningRetryCount"] = session.LearningRetryCount' in finalize
+    assert 'retryCoverage["historyRetryCount"] = session.HistoryRetryCount' in finalize
+    assert 'retryCoverage["learningRetryCount"] = session.LearningRetryCount' in finalize
+    assert 'retryCoverage.Value<int?>("historyRetryCount")' in recovery
+    assert 'retryCoverage.Value<int?>("learningRetryCount")' in recovery
+    assert "HistoryRetryCount = historyRetryCount" in recovery
+    assert "LearningRetryCount = learningRetryCount" in recovery
+    assert 'coverage["historyRetryCount"] = session.HistoryRetryCount' in snapshot
+    assert 'coverage["learningRetryCount"] = session.LearningRetryCount' in snapshot

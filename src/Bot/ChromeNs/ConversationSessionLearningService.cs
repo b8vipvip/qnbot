@@ -114,6 +114,8 @@ namespace Bot.ChromeNs
             public DateTime StartedAt;
             public DateTime LastBuyerAt;
             public DateTime LastActivityAt;
+            public int HistoryRetryCount;
+            public int LearningRetryCount;
             public int RetryCount;
             public Timer Timer;
         }
@@ -389,6 +391,8 @@ namespace Bot.ChromeNs
 
                         session.LastBuyerAt = now;
                         session.LastActivityAt = now;
+                        session.HistoryRetryCount = 0;
+                        session.LearningRetryCount = 0;
                         session.RetryCount = 0;
                         if (!string.IsNullOrWhiteSpace(ccode)) session.CCode = ccode;
                         SaveSnapshot(session, "等待接待结束");
@@ -646,6 +650,13 @@ namespace Bot.ChromeNs
                 }
                 var report = LoadReport(session.EntityId) ?? NewReport(session);
                 var previousCoverage = ParseCoverage(report.InputCoverageJson);
+                session.HistoryRetryCount = Math.Max(
+                    session.HistoryRetryCount,
+                    Math.Max(0, previousCoverage.Value<int?>("historyRetryCount") ?? 0));
+                session.LearningRetryCount = Math.Max(
+                    session.LearningRetryCount,
+                    Math.Max(0, previousCoverage.Value<int?>("learningRetryCount") ?? 0));
+                session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
                 var initialCoverage = new JObject
                 {
                     ["historyComplete"] = historyCoverage != null && historyCoverage.IsComplete,
@@ -702,19 +713,27 @@ namespace Bot.ChromeNs
                 // A restored checkpoint is reusable, but it is not yet complete for
                 // this resumed attempt until history and transcript fingerprints pass.
                 initialCoverage["knowledgeCorpusComplete"] = false;
+                initialCoverage["historyRetryCount"] = session.HistoryRetryCount;
+                initialCoverage["learningRetryCount"] = session.LearningRetryCount;
                 report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
+                report.RetryCount = session.RetryCount;
                 report.UpdatedAtTicks = DateTime.Now.Ticks;
 
                 if (historyCoverage == null || !historyCoverage.IsComplete)
                 {
-                    if (session.RetryCount < 3
+                    if (session.HistoryRetryCount < 3
                         && historyCoverage != null
                         && historyCoverage.ErrorCode != "missing_conversation_scope"
                         && historyCoverage.ErrorCode != "invalid_session_window"
                         && historyCoverage.ErrorCode != "missing_conversation_code")
                     {
-                        session.RetryCount++;
-                        report.Status = "等待完整历史恢复";
+                        session.HistoryRetryCount++;
+                        session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
+                        initialCoverage["historyRetryCount"] = session.HistoryRetryCount;
+                        initialCoverage["learningRetryCount"] = session.LearningRetryCount;
+                        report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
+                        report.RetryCount = session.RetryCount;
+                        report.Status = "等待完整历史恢复(" + session.HistoryRetryCount + "/3)";
                         report.Error = "history_coverage_incomplete:" + historyCoverage.ErrorCode;
                         SaveReport(report);
                         NotifyChanged();
@@ -736,10 +755,15 @@ namespace Bot.ChromeNs
                 if (turns.Count(x => x.Role == "user" && !x.Withdrawn) < 1
                     || turns.Count(x => x.Role == "assistant") < 1)
                 {
-                    if (session.RetryCount < 3)
+                    if (session.HistoryRetryCount < 3)
                     {
-                        session.RetryCount++;
-                        report.Status = "等待完整双方聊天记录";
+                        session.HistoryRetryCount++;
+                        session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
+                        initialCoverage["historyRetryCount"] = session.HistoryRetryCount;
+                        initialCoverage["learningRetryCount"] = session.LearningRetryCount;
+                        report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
+                        report.RetryCount = session.RetryCount;
+                        report.Status = "等待完整双方聊天记录(" + session.HistoryRetryCount + "/3)";
                         report.Error = "session_timeline_incomplete";
                         SaveReport(report);
                         NotifyChanged();
@@ -827,6 +851,8 @@ namespace Bot.ChromeNs
                 }
 
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
+                session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
+                report.RetryCount = session.RetryCount;
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
                 if (EnableAutomaticWrites
                     && CountHumanSellerTurns(turns, cards) >= 2
@@ -906,12 +932,17 @@ namespace Bot.ChromeNs
                 report.SkippedCount = skipped + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted;
                 report.Error = corpusComplete ? string.Empty
                     : "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500);
-                var retryCorpus = !corpusComplete && session.RetryCount < 3;
+                var retryCorpus = !corpusComplete && session.LearningRetryCount < 3;
                 if (retryCorpus)
                 {
-                    session.RetryCount++;
+                    session.LearningRetryCount++;
+                    session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
                     report.RetryCount = session.RetryCount;
-                    report.Status = "V2全库覆盖不完整，等待补偿重试(" + session.RetryCount + "/3)";
+                    var retryCoverage = ParseCoverage(report.InputCoverageJson);
+                    retryCoverage["historyRetryCount"] = session.HistoryRetryCount;
+                    retryCoverage["learningRetryCount"] = session.LearningRetryCount;
+                    report.InputCoverageJson = retryCoverage.ToString(Formatting.None);
+                    report.Status = "V2全库覆盖不完整，等待补偿重试(" + session.LearningRetryCount + "/3)";
                     report.CompletedAtTicks = 0;
                 }
                 else
@@ -952,10 +983,15 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                if (IsRetryableKnowledgeCorpusError(ex.Message) && session.RetryCount < 3)
+                if (IsRetryableKnowledgeCorpusError(ex.Message) && session.LearningRetryCount < 3)
                 {
-                    session.RetryCount++;
-                    report.Status = "AI上游暂时不可用，等待重试(" + session.RetryCount + "/3)";
+                    session.LearningRetryCount++;
+                    session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
+                    var retryCoverage = ParseCoverage(report.InputCoverageJson);
+                    retryCoverage["historyRetryCount"] = session.HistoryRetryCount;
+                    retryCoverage["learningRetryCount"] = session.LearningRetryCount;
+                    report.InputCoverageJson = retryCoverage.ToString(Formatting.None);
+                    report.Status = "AI上游暂时不可用，等待重试(" + session.LearningRetryCount + "/3)";
                     report.Error = "ai_upstream_retryable:" + Clean(ex.Message, 1200);
                     report.CompletedAtTicks = 0;
                     report.RetryCount = session.RetryCount;
@@ -2438,7 +2474,12 @@ namespace Bot.ChromeNs
             report.Status = status;
             report.LastBuyerAtTicks = session.LastBuyerAt.Ticks;
             report.LastActivityAtTicks = session.LastActivityAt.Ticks;
+            session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
             report.RetryCount = session.RetryCount;
+            var coverage = ParseCoverage(report.InputCoverageJson);
+            coverage["historyRetryCount"] = session.HistoryRetryCount;
+            coverage["learningRetryCount"] = session.LearningRetryCount;
+            report.InputCoverageJson = coverage.ToString(Formatting.None);
             report.UpdatedAtTicks = DateTime.Now.Ticks;
             SaveReport(report);
             NotifyChanged();
@@ -2674,6 +2715,21 @@ namespace Bot.ChromeNs
                         SaveReport(report);
                         continue;
                     }
+                    var retryCoverage = ParseCoverage(report.InputCoverageJson);
+                    var historyRetryCount = Math.Max(0, retryCoverage.Value<int?>("historyRetryCount") ?? 0);
+                    var learningRetryCount = Math.Max(0, retryCoverage.Value<int?>("learningRetryCount") ?? 0);
+                    if (retryCoverage.Property("historyRetryCount") == null
+                        && retryCoverage.Property("learningRetryCount") == null
+                        && report.RetryCount > 0)
+                    {
+                        var legacyHistoryFailure = (report.Error ?? string.Empty).StartsWith("history_", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(report.Error, "session_timeline_incomplete", StringComparison.Ordinal)
+                            || (report.Status ?? string.Empty).IndexOf("历史", StringComparison.Ordinal) >= 0
+                            || (report.Status ?? string.Empty).IndexOf("双方", StringComparison.Ordinal) >= 0;
+                        if (legacyHistoryFailure) historyRetryCount = Math.Max(0, report.RetryCount);
+                        else learningRetryCount = Math.Max(0, report.RetryCount);
+                    }
+
                     var session = new ActiveSession
                     {
                         EntityId = report.EntityId,
@@ -2684,7 +2740,9 @@ namespace Bot.ChromeNs
                         StartedAt = FromTicks(report.SessionStartedAtTicks),
                         LastBuyerAt = FromTicks(report.LastBuyerAtTicks),
                         LastActivityAt = FromTicks(report.LastActivityAtTicks),
-                        RetryCount = report.RetryCount
+                        HistoryRetryCount = historyRetryCount,
+                        LearningRetryCount = learningRetryCount,
+                        RetryCount = historyRetryCount + learningRetryCount
                     };
                     if (session.StartedAt == DateTime.MinValue) session.StartedAt = DateTime.Now;
                     if (session.LastBuyerAt == DateTime.MinValue) session.LastBuyerAt = session.StartedAt;

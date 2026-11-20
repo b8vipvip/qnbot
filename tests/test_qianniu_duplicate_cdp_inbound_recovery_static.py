@@ -287,8 +287,9 @@ def test_periodic_sweeper_revalidates_exact_shopkey_for_every_connected_websocke
     assert "_initializing.ContainsKey(pair.Key)" in refresh
     assert "_closingDuplicateSessions.ContainsKey(pair.Key)" in refresh
     assert "TryReserveStatusBindingRefresh(pair.Key, now, false)" in refresh
-    assert "Task.Run(() => TryRevalidateShopIdentity(session))" in refresh
-    assert "private async Task TryRevalidateShopIdentity(WebSocketSession session)" in server
+    assert "_statusBindingGenerations.TryGetValue(pair.Key, out bindingGeneration)" in refresh
+    assert "Task.Run(() => TryRevalidateShopIdentity(session, bindingGeneration))" in refresh
+    assert "private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)" in server
     assert "var user = await cdp.GetCurrentUser();" in server
     assert "ShopContextLocator.ResolveRuntimeBySellerIdentity(user.Result)" in server
     assert '"periodic_shop_identity_revalidation"' in server
@@ -544,3 +545,23 @@ def test_transient_cache_cleanup_removes_only_the_exact_stale_snapshot():
     assert "RecentInboundFingerprints.TryRemove(pair.Key" not in cleanup
     assert "SessionSellers.TryRemove(pair.Key" not in cleanup
     assert "RecentInboundFingerprints.TryRemove(pair.Key" not in trim
+
+
+
+def test_periodic_shop_identity_probe_cannot_overwrite_a_newer_status_generation():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    claim = server[
+        server.index("private bool TryClaimShopSession"):
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
+    ]
+    revalidate = server[
+        server.index("private async Task TryRevalidateShopIdentity"):
+        server.index("private bool TryReserveStatusBindingRefresh")
+    ]
+
+    assert "long? expectedBindingGeneration = null" in claim
+    assert "currentBindingGeneration != expectedBindingGeneration.Value" in claim
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration)" in revalidate
+    assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in revalidate
+    assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in revalidate
+    assert "QN.GetByShopIdentity(user.Result)" in revalidate
