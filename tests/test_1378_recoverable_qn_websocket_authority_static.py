@@ -121,7 +121,7 @@ def test_authoritative_shop_session_requires_live_physical_websocket():
     ]
     closed = server[
         server.index("webSocket.SessionClosed += (session, value) =>"):
-        server.index("webSocket.NewMessageReceived", server.index("webSocket.SessionClosed += (session, value) =>"))
+        server.index("var config = new ServerConfig()", server.index("webSocket.SessionClosed += (session, value) =>"))
     ]
 
     assert "_connectedSessions.ContainsKey(sessionId)" in authority
