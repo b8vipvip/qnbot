@@ -434,10 +434,10 @@ jobs:
 
           [[ -n "$pr_head_sha" ]] || { echo "::error::Merged PR head SHA is missing"; exit 1; }
           pr_ci_runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$pr_head_sha&per_page=100")"
-          # Mirror Observer's exact-head PR gate aggregation. The canonical post-merge
-          # workflow (usually "CI") is not necessarily the workflow
-          # that ran for this PR: product-code PRs may run API control plane CI,
-          # while GPTAuto/workflow PRs may run CI. Validate every latest
+          # Mirror Observer's exact-head PR gate aggregation. The canonical post-merge workflow
+          # (usually "CI") is not necessarily the workflow that ran for this PR:
+          # product-code PRs may run API control plane CI, while GPTAuto/workflow PRs
+          # may run CI. Validate every latest
           # product-validation workflow that actually ran for this exact head.
           pr_gate_rows="$(jq -c --arg head "$pr_head_sha" '
             [.workflow_runs[]
