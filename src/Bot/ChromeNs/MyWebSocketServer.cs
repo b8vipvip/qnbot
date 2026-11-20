@@ -225,7 +225,9 @@ namespace Bot.ChromeNs
                                 ConnectedSessions = _connectedSessions.Count,
                                 AuthoritativeShopCount = _shopSessions.Count,
                                 DuplicateSessions = _duplicateShopSessions.Count,
-                                RecoverableStandbySessions = _recoverableStandbySessions.Count,
+                                // The capability set also contains the authoritative owner; count actual standby sessions only from duplicate mappings.
+                                RecoverableStandbySessions = _duplicateShopSessions.Count(x => _recoverableStandbySessions.ContainsKey(x.Key)),
+                                StandbyCapabilitySessions = _recoverableStandbySessions.Count,
                                 InitializedSessions = _initialized.Count,
                                 ClientSessions = _clients.Count,
                                 UnmappedConnectedSessions = unmappedConnected
