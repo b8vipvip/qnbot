@@ -172,7 +172,6 @@ def capture(
         event == "workflow_run"
         and workflow_success
         and bool(pr_number)
-        and not merged
         and branch != default_branch
         and not _release_workflow(workflow_name)
     )
@@ -182,7 +181,6 @@ def capture(
         event == "workflow_run"
         and workflow_conclusion_lc in _FAILURES
         and bool(pr_number)
-        and not merged
         and branch != default_branch
         and not _release_workflow(workflow_name)
     )
@@ -195,12 +193,12 @@ def capture(
     effective_pr_ci_run_id = str(pr_ci_run_id or "")
     effective_main_ci_run_id = str(main_ci_run_id or "")
     effective_release_run_id = str(release_run_id or "")
-    if event == "workflow_run" and workflow_success:
-        if _release_workflow(workflow_name):
+    if event == "workflow_run":
+        if _release_workflow(workflow_name) and workflow_success:
             effective_release_run_id = effective_release_run_id or str(run_id or "")
-        elif merged and branch == default_branch:
+        elif merged and branch == default_branch and workflow_success:
             effective_main_ci_run_id = effective_main_ci_run_id or str(run_id or "")
-        elif pr_number and not merged and branch != default_branch:
+        elif pr_number and branch != default_branch and not _release_workflow(workflow_name):
             effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")
 
     plan = [

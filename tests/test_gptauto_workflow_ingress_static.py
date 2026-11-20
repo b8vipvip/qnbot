@@ -216,3 +216,22 @@ def test_reconcile_cannot_bypass_required_pr_ci_and_executor_waits_for_it():
     assert '"PR_CI", "POST_MERGE_CI"' in orchestrator
     assert 'authority["phase"] == "PR_CI"' in executor
     assert "Waiting for the required exact-head PR CI success evidence" in executor
+
+
+
+def test_pr_ci_workflow_run_finishing_after_merge_still_updates_pr_ci_gate():
+    observer = read(".github/gptauto/observer.py")
+    done = observer[
+        observer.index("pr_ci_done ="):
+        observer.index("# A Draft PR")
+    ]
+    failed = done[done.index("pr_ci_failed ="):]
+    effective = observer[
+        observer.index("effective_pr_ci_run_id ="):
+        observer.index("plan = [")
+    ]
+
+    assert "and not merged" not in done
+    assert "and not merged" not in failed
+    assert "elif pr_number and branch != default_branch and not _release_workflow(workflow_name):" in effective
+    assert 'effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")' in effective
