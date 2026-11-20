@@ -2501,12 +2501,20 @@ namespace Bot.ChromeNs
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return string.Empty;
-            var shop = ShopSettingsScope.Current;
+            var current = ShopSettingsScope.Current;
+            var shop = current;
             if (shop == null)
             {
                 try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
                 catch { return string.Empty; }
             }
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !shop.HasStableSellerId
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || (current != null
+                    && !string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal)))
+                return string.Empty;
             return shop.ShopKey + "#" + seller;
         }
 
