@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
@@ -57,6 +59,8 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan DuplicateSessionSweepInterval = TimeSpan.FromSeconds(30);
         private int _duplicateSessionSweeperStarted;
         private WebSocketServer _webSocketServer;
+        // Process-local salt: aliases correlate only within this Bot lifetime and are never persisted.
+        private static readonly byte[] RuntimeAcceptanceDiagnosticSalt = CreateRuntimeAcceptanceDiagnosticSalt();
 
         static MyWebSocketServer()
         {
@@ -95,6 +99,156 @@ namespace Bot.ChromeNs
                 }
             }
             return (kind ?? "id") + "#" + hash.ToString("x16").Substring(0, 10);
+        }
+
+        private static byte[] CreateRuntimeAcceptanceDiagnosticSalt()
+        {
+            var salt = new byte[32];
+            try
+            {
+                using (var random = RandomNumberGenerator.Create())
+                    random.GetBytes(salt);
+            }
+            catch
+            {
+                var first = Guid.NewGuid().ToByteArray();
+                var second = Guid.NewGuid().ToByteArray();
+                Buffer.BlockCopy(first, 0, salt, 0, first.Length);
+                Buffer.BlockCopy(second, 0, salt, first.Length, second.Length);
+            }
+            return salt;
+        }
+
+        private static string RuntimeAcceptanceDiagnosticRef(string kind, string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return (kind ?? "id") + "#none";
+            using (var hmac = new HMACSHA256(RuntimeAcceptanceDiagnosticSalt))
+            {
+                var digest = hmac.ComputeHash(Encoding.UTF8.GetBytes(value));
+                return (kind ?? "id") + "#"
+                    + BitConverter.ToString(digest, 0, 8).Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+
+        private int? GetRuntimeSessionActivityAgeSeconds(string sessionId, DateTime nowUtc)
+        {
+            DateTime lastActivity;
+            if (!_sessionLastActivityUtc.TryGetValue(sessionId, out lastActivity)) return null;
+            return Math.Max(0, (int)Math.Floor((nowUtc - lastActivity).TotalSeconds));
+        }
+
+        private void WriteReadOnlyAcceptanceSnapshot()
+        {
+            try
+            {
+                var nowUtc = DateTime.UtcNow;
+                object snapshot;
+                using (var process = Process.GetCurrentProcess())
+                {
+                    var processId = process.Id;
+                    var processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+                    lock (_sellerSessionSync)
+                    {
+                        var mappedSessionIds = new HashSet<string>(_sessionShopKeys.Keys, StringComparer.Ordinal);
+                        var shopRows = new List<object>();
+                        foreach (var shopPair in _shopSessions.OrderBy(x => x.Key, StringComparer.Ordinal))
+                        {
+                            var shopKey = shopPair.Key;
+                            var ownerSessionId = shopPair.Value ?? string.Empty;
+                            CDPClient ownerClient;
+                            var hasOwnerClient = _clients.TryGetValue(ownerSessionId, out ownerClient)
+                                && ownerClient != null;
+                            long ownerIdentityGeneration;
+                            long ownerStatusGeneration;
+                            _shopIdentityProbeGenerations.TryGetValue(ownerSessionId, out ownerIdentityGeneration);
+                            _statusBindingGenerations.TryGetValue(ownerSessionId, out ownerStatusGeneration);
+
+                            var standbys = new List<object>();
+                            var recoverableStandbyCount = 0;
+                            foreach (var standby in _duplicateShopSessions
+                                .Where(x => string.Equals(x.Value, shopKey, StringComparison.Ordinal))
+                                .OrderBy(x => x.Key, StringComparer.Ordinal))
+                            {
+                                CDPClient standbyClient;
+                                var hasStandbyClient = _clients.TryGetValue(standby.Key, out standbyClient)
+                                    && standbyClient != null;
+                                var recoverable = _recoverableStandbySessions.ContainsKey(standby.Key);
+                                if (recoverable) recoverableStandbyCount++;
+                                long identityGeneration;
+                                long statusGeneration;
+                                _shopIdentityProbeGenerations.TryGetValue(standby.Key, out identityGeneration);
+                                _statusBindingGenerations.TryGetValue(standby.Key, out statusGeneration);
+                                standbys.Add(new
+                                {
+                                    SessionRef = RuntimeAcceptanceDiagnosticRef("session", standby.Key),
+                                    Connected = _connectedSessions.ContainsKey(standby.Key),
+                                    Recoverable = recoverable,
+                                    Initialized = _initialized.ContainsKey(standby.Key),
+                                    ClientPresent = hasStandbyClient,
+                                    ClientInvalidated = hasStandbyClient && standbyClient.IsInvalidated,
+                                    ClientIdentityRetired = hasStandbyClient && standbyClient.IsShopIdentityRetired,
+                                    Closing = _closingDuplicateSessions.ContainsKey(standby.Key),
+                                    IdentityProbeGeneration = identityGeneration,
+                                    StatusBindingGeneration = statusGeneration,
+                                    LastActivityAgeSeconds = GetRuntimeSessionActivityAgeSeconds(standby.Key, nowUtc)
+                                });
+                            }
+
+                            shopRows.Add(new
+                            {
+                                ShopRef = RuntimeAcceptanceDiagnosticRef("shop", shopKey),
+                                OwnerSessionRef = RuntimeAcceptanceDiagnosticRef("session", ownerSessionId),
+                                OwnerConnected = _connectedSessions.ContainsKey(ownerSessionId),
+                                OwnerInitialized = _initialized.ContainsKey(ownerSessionId),
+                                OwnerClientPresent = hasOwnerClient,
+                                OwnerClientInvalidated = hasOwnerClient && ownerClient.IsInvalidated,
+                                OwnerClientIdentityRetired = hasOwnerClient && ownerClient.IsShopIdentityRetired,
+                                OwnerIdentityProbeGeneration = ownerIdentityGeneration,
+                                OwnerStatusBindingGeneration = ownerStatusGeneration,
+                                OwnerLastActivityAgeSeconds = GetRuntimeSessionActivityAgeSeconds(ownerSessionId, nowUtc),
+                                StandbyCount = standbys.Count,
+                                RecoverableStandbyCount = recoverableStandbyCount,
+                                Standbys = standbys
+                            });
+                        }
+
+                        var unmappedConnected = _connectedSessions.Keys.Count(x => !mappedSessionIds.Contains(x));
+                        snapshot = new
+                        {
+                            SchemaVersion = 1,
+                            CollectedAtUtc = nowUtc.ToString("o"),
+                            ProcessId = processId,
+                            ProcessStartTimeUtcTicks = processStartTimeUtcTicks,
+                            Counts = new
+                            {
+                                ConnectedSessions = _connectedSessions.Count,
+                                AuthoritativeShopCount = _shopSessions.Count,
+                                DuplicateSessions = _duplicateShopSessions.Count,
+                                RecoverableStandbySessions = _recoverableStandbySessions.Count,
+                                InitializedSessions = _initialized.Count,
+                                ClientSessions = _clients.Count,
+                                UnmappedConnectedSessions = unmappedConnected
+                            },
+                            Shops = shopRows
+                        };
+                    }
+                }
+
+                var directory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "QianniuAiBot", "diagnostics");
+                var path = Path.Combine(directory, "runtime-snapshot.json");
+                string error;
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                    path, JsonConvert.SerializeObject(snapshot, Formatting.None), 2, 40, out error))
+                    Log.ErrorWithMaxCount("只读千牛验收运行态快照写入失败；不影响业务运行。", 5);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("只读千牛验收运行态快照采集失败；不影响业务运行。 errorType="
+                    + ex.GetType().Name, 5);
+            }
         }
 
         private void TouchSession(WebSocketSession session)
@@ -194,6 +348,7 @@ namespace Bot.ChromeNs
                         }
                         foreach (var pair in stale)
                             ScheduleDuplicateSessionClose(pair.Key, pair.Value, "duplicate_idle_standby");
+                        WriteReadOnlyAcceptanceSnapshot();
                     }
                     catch (Exception ex)
                     {
@@ -1342,6 +1497,7 @@ namespace Bot.ChromeNs
                     // can become collectible before any injected page connects during startup races.
                     _webSocketServer = webSocket;
                     StartDuplicateSessionSweeper();
+                    WriteReadOnlyAcceptanceSnapshot();
                     BotConnectionDiagnostics.RecordWebSocketServerStarted();
                     Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");
                 }
