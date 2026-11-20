@@ -340,6 +340,7 @@ namespace Bot.ChromeNs
             {
                 while (true)
                 {
+                    if (_stateLoadFailed) return;
                     PendingRecord record;
                     var now = DateTime.Now;
                     lock (Sync)
@@ -353,7 +354,9 @@ namespace Bot.ChromeNs
                         }
                         record.NextAttemptAt = now.Add(RetryDelay);
                         record.Attempts++;
-                        SaveStateLocked();
+                        // Never begin an order operation if the queue's recovery checkpoint
+                        // could not be durably written before handing work to the executor.
+                        if (!SaveStateLocked()) return;
                     }
                     await ProcessRecordAsync(record).ConfigureAwait(false);
                     await Task.Delay(100).ConfigureAwait(false);
@@ -671,7 +674,8 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("保存虚拟商品自动发货任务状态失败：" + ex.Message, 10);
+                _stateLoadFailed = true;
+                Log.ErrorWithMaxCount("保存虚拟商品自动发货任务状态失败；已暂停自动发货并保留长期确认防重屏障：" + ex.Message, 10);
                 return false;
             }
         }

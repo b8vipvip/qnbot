@@ -375,3 +375,24 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
     ]
     assert "if (!File.Exists(path))" in reload
     assert "禁止新的自动确认" in reload
+
+
+
+def test_auto_delivery_worker_never_executes_without_a_durable_queue_checkpoint():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    worker = runtime[
+        runtime.index("private static async Task RunWorkerAsync"):
+        runtime.index("private static async Task ProcessRecordAsync")
+    ]
+    save = runtime[
+        runtime.index("private static bool SaveStateLocked"):
+        runtime.index("private static OrderSnapshot CloneSnapshot")
+    ]
+
+    reserve = worker.index("record.NextAttemptAt = now.Add(RetryDelay);")
+    persist = worker.index("if (!SaveStateLocked()) return;", reserve)
+    execute = worker.index("await ProcessRecordAsync(record).ConfigureAwait(false);", persist)
+    assert reserve < persist < execute
+    assert "if (_stateLoadFailed) return;" in worker
+    assert "_stateLoadFailed = true;" in save
+    assert "已暂停自动发货" in save
