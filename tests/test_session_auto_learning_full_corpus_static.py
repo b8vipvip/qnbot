@@ -70,6 +70,8 @@ def test_corpus_candidates_require_real_human_message_ids_and_are_bound_to_sourc
     assert 'GetOrCreatePromptIdentifier(promptIdentifiers, "msg", turn.MessageKey)' in transcript
     assert "Redact(Clean(x, 120))" not in transcript
     assert "KnowledgeId = record.Id" in parser
+    assert 'promptId.StartsWith("knowledge_", StringComparison.Ordinal)' in parser
+    assert "promptIdentifiers.PromptToSource.TryGetValue(promptId, out id)" in parser
     assert "SourceFingerprint = sourceFingerprint" in parser
     assert "EvidenceMessageIds = evidenceIds" in parser
     assert "turn.MessageKey" in transcript
@@ -708,3 +710,30 @@ def test_corpus_prompt_uses_random_local_aliases_and_restores_real_evidence_ids_
     assert '["intent"] = Redact(record.Intent)' in prompt
     assert '["predicate"] = Redact(record.Predicate)' in prompt
     assert "KnowledgeCorpusPromptVersion = 2" in service
+
+
+
+def test_corpus_prompt_never_exposes_raw_knowledge_record_ids():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    helpers = service[
+        service.index("private static PromptIdentifierContext RestorePromptIdentifierContext"):
+        service.index("private static string GetOrCreatePromptIdentifier")
+    ]
+    prompt = service[
+        service.index("private static JArray BuildKnowledgeCorpusBatchMessages"):
+        service.index("private static bool TryParseKnowledgeCorpusBatch")
+    ]
+    parser = service[
+        service.index("private static bool TryParseKnowledgeCorpusBatch"):
+        service.index("private static bool IsRetryableKnowledgeCorpusError")
+    ]
+
+    assert "KnowledgeCorpusPromptVersion = 3" in service
+    assert 'promptId.StartsWith("knowledge_", StringComparison.Ordinal)' in helpers
+    assert '["id"] = GetOrCreatePromptIdentifier(promptIdentifiers, "knowledge", record.Id)' in prompt
+    assert "匿名knowledge token" in prompt
+    assert 'promptId.StartsWith("knowledge_", StringComparison.Ordinal)' in parser
+    assert "promptIdentifiers.PromptToSource.TryGetValue(promptId, out id)" in parser
+    assert "expected.TryGetValue(id, out record)" in parser
+    assert "KnowledgeId = record.Id" in parser
+    assert '["id"] = record.Id ?? string.Empty' not in prompt
