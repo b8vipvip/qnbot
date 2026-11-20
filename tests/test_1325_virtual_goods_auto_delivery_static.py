@@ -322,7 +322,7 @@ def test_confirmation_ledger_capacity_never_evicts_existing_at_most_once_barrier
     ]
     record_intent = ledger[
         ledger.index("public static bool TryRecordIntent"):
-        ledger.index("public static void MarkResolved")
+        ledger.index("public static bool MarkResolved")
     ]
 
     # Capacity is a fail-closed admission limit, never a license to discard an
@@ -352,8 +352,8 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
         ("public static void Initialize", "public static bool IsOperational"),
         ("public static bool IsOperational", "public static bool IsSafeOrderId"),
         ("public static bool HasIntent", "public static bool TryRecordIntent"),
-        ("public static bool TryRecordIntent", "public static void MarkResolved"),
-        ("public static void MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
+        ("public static bool TryRecordIntent", "public static bool MarkResolved"),
+        ("public static bool MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
     ):
         block = ledger[ledger.index(start):ledger.index(end, ledger.index(start))]
         assert 'CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000)' in block
@@ -361,8 +361,8 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
     for start, end in (
         ("public static bool IsOperational", "public static bool IsSafeOrderId"),
         ("public static bool HasIntent", "public static bool TryRecordIntent"),
-        ("public static bool TryRecordIntent", "public static void MarkResolved"),
-        ("public static void MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
+        ("public static bool TryRecordIntent", "public static bool MarkResolved"),
+        ("public static bool MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
     ):
         block = ledger[ledger.index(start):ledger.index(end, ledger.index(start))]
         assert "ReloadStateForMutationLocked()" in block
@@ -448,7 +448,7 @@ def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_neve
     assert "repeatConfirm=false" in execute
     assert "live.ConfirmationUncertainCount++;" in uncertain
     assert "live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);" in uncertain
-    assert 'MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "manual_review_required")' in uncertain
+    assert 'TryResolveConfirmationIntent(record, "manual_review_required")' in uncertain
 
 def test_auto_delivery_queue_retains_read_only_barrier_until_ledger_resolution_is_durable():
     ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
