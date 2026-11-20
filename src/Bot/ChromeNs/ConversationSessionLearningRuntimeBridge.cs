@@ -200,9 +200,7 @@ namespace Bot.ChromeNs
                 try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
                 catch { return; }
             }
-            var scopedMessageKey = shop.ShopKey + "|" + messageKey;
-            if (!string.IsNullOrWhiteSpace(messageKey)
-                && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
 
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)
@@ -217,6 +215,14 @@ namespace Bot.ChromeNs
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
             var buyer = from == seller ? to : (to == seller ? from : string.Empty);
             if (string.IsNullOrWhiteSpace(buyer)) return;
+
+            // Do not consume the message fingerprint until its exact shop, seller and buyer
+            // identities are known. A standby CDP page may deliver the same payload before
+            // the authoritative QN binding is ready; that early copy must not suppress the
+            // later identity-complete event from the owning session.
+            var scopedMessageKey = shop.ShopKey + "|" + messageKey;
+            if (!string.IsNullOrWhiteSpace(messageKey)
+                && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
 
             var isBuyer = from == buyer && to == seller;
             if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))
@@ -377,10 +383,12 @@ namespace Bot.ChromeNs
         {
             if (Seen.Count < 5000) return;
             var cutoff = DateTime.Now.AddHours(-2);
-            foreach (var key in Seen.Where(x => x.Value < cutoff).Select(x => x.Key).Take(2500).ToList())
+            foreach (var pair in Seen.Where(x => x.Value < cutoff).Take(2500).ToList())
             {
-                DateTime ignored;
-                Seen.TryRemove(key, out ignored);
+                // Timer callbacks can overlap. Remove only the exact stale timestamp
+                // observed by this sweep, never a newer value re-added under the same key.
+                ((ICollection<KeyValuePair<string, DateTime>>)Seen)
+                    .Remove(new KeyValuePair<string, DateTime>(pair.Key, pair.Value));
             }
         }
     }

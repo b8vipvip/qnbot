@@ -1,6 +1,8 @@
 # 项目进度、总架构与功能清单
 
-最后更新：2026-07-20
+最后更新：2026-11-20
+
+> 当前稳定客户端为 `bot-v1.1.2380`；最新源码/运行验收状态以 [千牛聊天自动化进度](QIANNIU_CHAT_AUTOMATION_PROGRESS.md) 和统一跟踪 [Issue #366](https://github.com/b8vipvip/qnbot/issues/366) 为准。源码、CI、Release 和 Windows/千牛实机验收必须分别记录。
 
 本文档是当前生产架构、能力边界和开发进度的统一入口。千牛 UIA / IMSDK 研究细节继续参见 `docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md` 和 `docs/QIANNIU_MESSAGE_LIFECYCLE_VALIDATION.md`。
 

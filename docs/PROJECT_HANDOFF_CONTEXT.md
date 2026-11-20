@@ -1,120 +1,128 @@
 # Qianniu AI Bot 项目交接上下文
 
-更新时间：2026-09-04 16:40 +08:00 之后  
+更新时间：2026-11-20  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前稳定基线：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`（PR #220 已合并）  
-当前正式客户端：`bot-v1.1.1213`
+当前正式客户端：`bot-v1.1.2380`  
+统一未完成事项：[#366](https://github.com/b8vipvip/qnbot/issues/366)
 
 ## 1. 当前目标
 
-继续以真实千牛运行日志和生产代码为准，优先保证：generation wall-clock deadline/cancellation、正确 seller/buyer 会话、Bot-owned exact draft、真实卖家回显/送达证据、订单幂等、Knowledge V2/人工学习、服务端 OCR，以及 CDP/WebSocket 生命周期稳定性。
+继续以当前 master 源码、精确 SHA 的 GitHub Actions 和最新正式客户端的真实运行证据为准，优先保证：
 
-原则：不为测试而修；静态测试锁定生产语义；运行时竞态必须继续用新正式版本真实日志复核。
+1. 买家消息接收、buyer/seller/ShopKey 身份和 Bot Web 消息镜像；
+2. 多店铺 CDP 会话隔离、重连和长期资源生命周期；
+3. Knowledge V2 完整会话、全语料覆盖、检查点恢复和安全候选；
+4. 通用接待流程 Agent 的证据、审批、授权、回滚闭环；
+5. GPTAuto Reconcile / Release 工作流精确 SHA 关联。
 
-## 2. 已完成并进入 master 的关键修复
+不得将源码实现、CI 通过、Release 发布和 Windows/千牛实机验收混为同一个完成状态。
 
-### 2.1 OCR / Smart Reply / Knowledge
-- 服务端 `/api/runtime/v1/ocr` 已实现并复用客户端 bearer 鉴权；
-- Windows 正式包不再携带本地 OCR worker/model；
-- OCR 优先使用本店 `ShopControlPlaneConnectionStore` URL/token；
-- Semantic Embedding 前台已 true async，子 deadline 约 2.2 秒并继承 generation cancellation；
-- Knowledge V2 FactKey 已细化；
-- 人工答案学习、发送失败诊断、慢响应诊断统一使用 quote/escape-aware structured JSON 恢复器。
+## 2. Repository instructions and safety
 
-### 2.2 订单 / 固定回复
-- OrderEventHub 跨进程原子持久化；
-- order action durable ledger；
-- 固定回复按业务动作和 segment 幂等；
-- 必要订单字段在旧消费者之前进行有界 enrichment；
-- 订单/CDP 入站重复 payload 已增加长窗精确去重。
+- 修改前先读 `.github/GPTAUTO_SMART_UPDATE.md`、本交接文档、`docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md`；涉及发送链时再读 `docs/QIANNIU_SEND_RELIABILITY_INCIDENTS.md`。
+- 生产消息接收仍以注入脚本、WebSocket 41010、CDP/QN 事件为主；UIA v2 / IMSDK 研究工具不得未经真实验证接入主链。
+- 不使用固定 AliRender PID；通过命令行中的 `--render_id=bench_im` 识别 renderer。
+- 真实发送测试默认 dry-run，必须显式确认，只能一次发送且不得自动重试。
+- 不提交真实客户名称、账号标识、聊天正文、截图、订单/SKU 或令牌。
+- 用户的 PowerShell/PSReadLine 不适合粘贴长多行命令；优先提交脚本并提供短命令。
+- 所有高风险付款、账户、退款、履约和隐私动作必须 fail-closed。
 
-### 2.3 可靠发送
-- 发送前验证 seller/buyer/current conversation；
-- Bot-owned exact draft 写入和确认；
-- CDP DOM / 安全 HWND / UIA 分层发送；
-- fallback 前重新验证目标会话和 owned draft；
-- 卖家 echo / delivery verification 仍是最终成功证据；
-- 已提交但等待回显时禁止盲目二次发送；
-- 平台“服务态度提醒”走安全处理，不把“继续发送”作为普通自动 fallback；
-- stale/cancelled Bot-owned draft 使用精确安全清理，不触碰人工草稿。
+## 3. Current release baseline
 
-### 2.4 generation / runtime deadline
-- 正常文本 AI 总预算保持 50 秒；
-- PR #208 增加 ThreadPool starvation guard；
-- PR #209 增加 dedicated-thread generation absolute-age watchdog；
-- PR #220 修复 watchdog 仍可能被事件环淘汰或快速 `Generating -> Ready` 绕过的问题：
-  - generation watch 不再依赖 `RecentEvents` 64 条诊断环存活；
-  - 从 `BuyerActionAccepted` 起登记仍活动 generation，而不是等待采样到 `Generating`；
-  - 55 秒覆盖 `Observed/Coalescing/Processing/Generating/Ready/Sending/Waiting` 整个端到端生命周期；
-  - `Completed/Cancelled/Failed` 才移除 watch；
-  - accepted event 时间异常时进行安全归一化。
+- Latest stable release：[`bot-v1.1.2380`](https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2380)
+- Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
+- x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
+- 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
+- 生产安装仍需要管理员/用户明确操作；CI 不得触发生产主机部署。
 
-### 2.5 CDP / 发送锁分钟级放大
-PR #220 基于 `bot-v1.1.1197` 真实运行日志继续修复：
-- CDP `_executeGate` 增加 1.5 秒排队上限；
-- 仍保持单 WebSocket single-flight，不通过增加并发规避问题；
-- `EnsureActiveBuyerForSendAsync` 保留最多 22 次快速确认，但增加 9 秒总 wall-clock deadline；
-- 避免底层 CDP 8 秒级慢请求在多轮确认中把 `_sendGate` 占用到数分钟。
+## 4. Architecture
 
-### 2.6 图片续问
-- 图片续问允许 15 秒来源时间轻微 clock skew；
-- 重绑最近图片时保留原 `BuyerSessionAgent`、`SessionGeneration`、continuation context 和 generation cancellation token；
-- 防止图片派生 lease 脱离原 generation 生命周期。
+- Windows WPF Bot：`src/Bot/`
+- Qianniu WebSocket/CDP/QN and send chain：`src/Bot/ChromeNs/`
+- Knowledge Center V2：`src/Bot/Knowledge/`
+- Shop identity and control-plane scope：`src/Bot/ShopScope/`
+- Ubuntu FastAPI control plane：`services/api-control-plane/`
+- Discovery lab：`tools/qn_discovery_lab/`
+- Windows diagnostics：`scripts/`
+- Regression contracts：`tests/`
 
-## 3. 2026-09-04 最新 CI / 发布状态
+生产接收主链：
 
-PR #220 最终 head：`ae4e6a60daae1238151ee7ed22e1568547efabc3`。
+```text
+Qianniu renderer
+  → injected script / local WebSocket 41010
+  → physical CDP session + ShopKey authority
+  → buyer/seller conversation identity
+  → message dedupe / burst coalescing / generation
+  → Knowledge V2 / AI
+  → Bot-owned draft + active conversation guard
+  → verified submission + seller echo / delivery evidence
+```
 
-合并前已确认：
-- Windows CI：成功；
-- API control plane CI：成功；
-- Windows x64 Release build：成功；
-- repository static tests、Windows PowerShell 5.1 updater parser、MSBuild x64、完整运行包组装与验证均通过。
+## 5. Current implementation state
 
-合并后：
-- master merge SHA：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`；
-- 正式 release：`bot-v1.1.1213`；
-- release target commit：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`；
-- x64 安装包 SHA-256：`933cba62c3f8e93eec47b34ec24f851adb9fa5661c8f0cd8f55596d5a1607122`；
-- rescue updater asset 已随正式 release 发布。
+- Multi-shop runtime coordinator uses exact ShopKey / CDP SessionId / TargetId and focused WebView proof.
+- Generation watchdog, bounded CDP execute gate, active buyer confirmation deadline and reliable-send evidence checks are in the production source.
+- Knowledge V2 session learning uses five-minute inactivity, complete paginated history, full-corpus batches, durable checkpoints, source/transcript fingerprints and per-ShopKey circuit breakers.
+- Knowledge V2 automatic writes remain disabled (dry-run). No production write enablement without transaction/backup/rollback and real Windows canary.
+- PRs #426/#429/#430/#431 are already merged into master and included in the 1.1.2379 lineage; 1.1.2380 adds the ShopKey catalog refresh/settings fix.
+- GPTAuto Release discovery, exact source SHA build selection and dynamic display_title correlation have been corrected in master; end-to-end Reconcile terminal evidence remains pending.
 
-## 4. 当前仍需继续验证的真实问题
+## 6. Next acceptance work
 
-### P1 — 需要 `bot-v1.1.1213` 新运行日志验证
+### P0 — message channel and mirror (#307)
+- Confirm latest supported Qianniu client receives buyer identity + message body.
+- Verify Bot Web history persists after initial sync and buyer switching never cross-renders old messages.
+- Verify reconnect, restart, multi-window and multiple account behavior.
+- Inspect AliRender bench_im, CDP target, IMSDK typeof probes and local 41010 ownership.
 
-重点证据：
-1. generation 从买家动作开始后的绝对年龄是否稳定在约 55 秒内被硬截止；
-2. 是否还存在数分钟后 `Ready -> Sending -> Completed` 的迟到 generation；
-3. `Ready/Sending/Waiting` 状态是否仍受同一 generation deadline 约束；
-4. CDP execute gate 拥塞时是否在约 1.5 秒内 fail-fast，而不是静默排队几十秒；
-5. 目标买家确认异常时是否在约 9 秒总预算内结束，而不是占用 `_sendGate` 数分钟；
-6. 图片续问是否保持原 generation cancellation，且轻微来源时间逆序不再误判过期；
-7. 发送成功仍必须有可信 submission/卖家 echo/delivery verification 证据；
-8. OCR 是否稳定使用 `shop-control-plane`；
-9. CDP 页面通道是否长期持续单调增长。
+### P1 — multi-shop and long-running stability (#426/#429/#430/#341)
+- A→B→A shop switching, same seller nickname across shops, stale frames and reconnect.
+- Private profile v1→v2 migration, backup/restore and cross-process edits.
+- Neutral defaults for new shops; old-shop strategy preserved; dangerous actions disabled.
+- Duplicate standby channels, event subscription count, process memory/handles/threads under sustained operation.
 
-没有 `1.1.1213` 新真实日志前，不把这些运行时竞态写成“线上已证明彻底消失”。
+### P1 — Knowledge V2 full learning (#339/#431)
+- 150+ turns, complete timeline, all current V2 records covered in batches.
+- Restart checkpoint resume, source revision drift, upstream 502/503 and scheduler invariant circuit recovery.
+- Human evidence IDs must map to the exact current transcript.
+- Keep automatic writes disabled until human approval, atomic transaction, backup and rollback are verified.
 
-### P2 — CDP / WebSocket 生命周期继续观察
+### P1 — reception workflow Agent (#346)
+- Persisted multi-shop/product/SKU/version workflow state.
+- Trusted text/image/OCR/order evidence chain.
+- Authenticated approver and authorized scheduler; manual takeover and rollback.
+- Shadow decisions → human review → small canary → reversible release.
+- High-risk actions remain disabled by default.
 
-目前没有足够新证据证明页面通道存在持续资源泄漏。不要仅因为历史心跳数字较大就重写生命周期；只有 `1.1.1213` 长时日志出现持续单调增长、旧 session 不释放或 target 数量无上界时，再按 session/target 创建、订阅、转交、释放链定位。
+### P1 — GPTAuto Reconcile
+- Dispatch one real Reconcile task after the workflow fixes.
+- Verify exact source SHA, Windows build association, dynamic release run title and terminal Completion Lease state.
+- Observer success alone is not terminal completion.
 
-## 5. 当前仓库结论
+## 7. Windows read-only diagnostics
 
-- PR #219、#220 已合并；
-- 2026-09-03/04 近期修复分支抽查均为 `ahead=0`，有效提交已进入 master；
-- 当前没有开放 PR；
-- 旧 `PENDING-RUNTIME-FIXES-20260902.md` 的内容已被后续 PR 完成或被当前真实日志结论取代，应删除，避免下一轮重复修旧问题；
-- 当前运行时主线没有新的、已被真实日志证明但尚未编码的 P0 修复；下一步应使用 `bot-v1.1.1213` 真实运行日志继续挖掘。
+Run from repository root:
 
-历史功能型 open issues 与本轮运行时稳定性工作分开处理，不应把旧规划 issue 当作当前生产事故证据。
+```powershell
+powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
+```
 
-## 6. 下一步执行顺序
+The script reports OS/.NET version, Bot/Qianniu process counts and resource metrics, bench_im renderer presence, local 41010 ownership/reachability, and a loopback-only read-only CDP probe for `window.imsdk`, `invoke`, and `on` when the target can be identified unambiguously.
 
-1. 客户端更新到 `bot-v1.1.1213`；
-2. 进行真实买家文本、图片、订单、长耗时 AI、连续多消息、会话切换和平台提醒测试；
-3. 保持运行足够长时间以观察 CDP/page-channel 生命周期；
-4. 导出完整运行日志；
-5. 只根据新日志中的新证据继续修复；
-6. 若运行时稳定，再单独从 open feature issues 选择下一项产品能力开发。
+It writes JSON and Markdown under `%LOCALAPPDATA%\QianniuAiBot\diagnostics\`. It does not collect chat text, account nicknames, cookies, tokens, target URLs, raw command lines, raw logs or screenshots; it does not send messages, modify settings, stop processes or upload reports.
+
+Optional existing samplers:
+- `scripts/Collect-QnBotMemory.ps1`: process/system memory, CPU, handles and threads.
+- `scripts/Collect-QnBotGcTrace.ps1`: bounded CLR GC ETW; the ETL may contain events from other .NET apps and must be reviewed before sharing.
+
+## 8. Acceptance and issue management
+
+- #366 remains the only unified open issue.
+- Do not create new ordinary issues or branches; continue direct source fixes and update #366.
+- Every source fix gets regression coverage.
+- Every Windows script must pass the Windows PowerShell 5.1 parser.
+- Exact-SHA CI and x64 build are required before release.
+- Real runtime behavior still requires real Windows/Qianniu evidence.
+- Keep dry-run and fail-closed defaults until the relevant safety acceptance gates pass.

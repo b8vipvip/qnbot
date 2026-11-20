@@ -67,6 +67,13 @@ jobs:
       - name: Run updater handoff sensor regression tests
         shell: powershell
         run: .\tests\windows\test-updater-handoff-authority.ps1
+      - name: Validate read-only acceptance diagnostics with Windows PowerShell 5.1 parser
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts\Invoke-QnBotAcceptanceDiagnostics.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Format-List *; throw "Invoke-QnBotAcceptanceDiagnostics.ps1 has Windows PowerShell 5.1 parser errors." }
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Restore NuGet packages

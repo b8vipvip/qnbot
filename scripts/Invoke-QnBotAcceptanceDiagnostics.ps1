@@ -1,0 +1,456 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+    Read-only Windows acceptance diagnostics for QianNiu AI Bot.
+.DESCRIPTION
+    Samples Bot/Qianniu process health, the local 41010 WebSocket listener,
+    and a loopback-only CDP page probe for window.imsdk/invoke/on.
+    It does not send chat messages, change settings, stop processes, collect
+    logs, save command lines, or upload data. CDP Runtime.evaluate is read-only.
+.EXAMPLE
+    powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
+#>
+[CmdletBinding()]
+param(
+    [string]$OutputDirectory = ''
+)
+
+$ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics'
+}
+New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+
+function Get-RemoteDebuggingPort {
+    param([string]$CommandLine)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $null }
+    $match = [regex]::Match($CommandLine, '(?i)--remote-debugging-port(?:=|\s+)(\d+)')
+    if (-not $match.Success) { return $null }
+    $port = 0
+    if ([int]::TryParse($match.Groups[1].Value, [ref]$port) -and $port -ge 1 -and $port -le 65535) {
+        return $port
+    }
+    return $null
+}
+
+function Test-BenchImRenderer {
+    param([string]$CommandLine)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+    return [regex]::IsMatch($CommandLine, '(?i)--render_id(?:=|\s+)bench_im(?:\s|$)')
+}
+
+function Test-LoopbackPort {
+    param([int]$Port, [int]$TimeoutMs = 1200)
+    if ($Port -lt 1 -or $Port -gt 65535) { return $false }
+    $client = New-Object System.Net.Sockets.TcpClient
+    $waitHandle = $null
+    try {
+        $pending = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        $waitHandle = $pending.AsyncWaitHandle
+        if (-not $waitHandle.WaitOne($TimeoutMs, $false)) { return $false }
+        $client.EndConnect($pending)
+        return $client.Connected
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($waitHandle -ne $null) { $waitHandle.Close() }
+        $client.Close()
+    }
+}
+
+function Invoke-LocalJsonGet {
+    param([string]$Url)
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.Method = 'GET'
+    $request.Proxy = $null
+    $request.Timeout = 1800
+    $request.ReadWriteTimeout = 1800
+    $request.KeepAlive = $false
+    $response = $null
+    $reader = $null
+    try {
+        $response = $request.GetResponse()
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        $body = $reader.ReadToEnd()
+        return (ConvertFrom-Json -InputObject $body -ErrorAction Stop)
+    }
+    finally {
+        if ($reader -ne $null) { $reader.Dispose() }
+        if ($response -ne $null) { $response.Dispose() }
+    }
+}
+
+function Invoke-CdpReadonlyProbe {
+    param([string]$WebSocketUrl)
+    $uri = $null
+    if (-not [Uri]::TryCreate($WebSocketUrl, [UriKind]::Absolute, [ref]$uri)
+        -or $uri.Scheme -ne 'ws' -or -not $uri.IsLoopback) {
+        return [pscustomobject]@{ Status = 'rejected_non_loopback'; ErrorType = $null }
+    }
+
+    $socket = $null
+    $cancellation = $null
+    try {
+        $socket = New-Object System.Net.WebSockets.ClientWebSocket
+        $cancellation = New-Object System.Threading.CancellationTokenSource
+        $cancellation.CancelAfter(4000)
+        $socket.ConnectAsync($uri, $cancellation.Token).GetAwaiter().GetResult()
+
+        $expression = 'JSON.stringify({documentReadyState:document.readyState,imsdkType:typeof window.imsdk,invokeType:typeof (window.imsdk && window.imsdk.invoke),onType:typeof (window.imsdk && window.imsdk.on),loginIdPresent:!!(window._vs && window._vs.loginID),qnPresent:!!window.QN})'
+        $payload = @{
+            id = 1
+            method = 'Runtime.evaluate'
+            params = @{
+                expression = $expression
+                returnByValue = $true
+                awaitPromise = $false
+            }
+        } | ConvertTo-Json -Depth 6 -Compress
+
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+        $sendSegment = [System.ArraySegment[byte]]::new($bytes, 0, $bytes.Length)
+        $socket.SendAsync(
+            $sendSegment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            $cancellation.Token
+        ).GetAwaiter().GetResult() | Out-Null
+
+        $buffer = New-Object byte[] 8192
+        $receiveSegment = [System.ArraySegment[byte]]::new($buffer, 0, $buffer.Length)
+        for ($attempt = 0; $attempt -lt 12; $attempt++) {
+            $builder = New-Object System.Text.StringBuilder
+            do {
+                $frame = $socket.ReceiveAsync($receiveSegment, $cancellation.Token).GetAwaiter().GetResult()
+                if ($frame.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                    return [pscustomobject]@{ Status = 'closed'; ErrorType = $null }
+                }
+                $builder.Append([System.Text.Encoding]::UTF8.GetString($buffer, 0, $frame.Count)) | Out-Null
+            } while (-not $frame.EndOfMessage)
+
+            $message = ConvertFrom-Json -InputObject $builder.ToString() -ErrorAction Stop
+            if ($message.id -ne 1) { continue }
+            $value = $message.result.result.value
+            if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                return [pscustomobject]@{ Status = 'empty_result'; ErrorType = $null }
+            }
+            $state = ConvertFrom-Json -InputObject ([string]$value) -ErrorAction Stop
+            return [pscustomobject]@{
+                Status = 'ok'
+                ErrorType = $null
+                DocumentReadyState = [string]$state.documentReadyState
+                ImsdkType = [string]$state.imsdkType
+                InvokeType = [string]$state.invokeType
+                OnType = [string]$state.onType
+                LoginIdPresent = [bool]$state.loginIdPresent
+                QnPresent = [bool]$state.qnPresent
+            }
+        }
+        return [pscustomobject]@{ Status = 'response_not_observed'; ErrorType = $null }
+    }
+    catch {
+        return [pscustomobject]@{
+            Status = 'failed'
+            ErrorType = $_.Exception.GetType().Name
+        }
+    }
+    finally {
+        if ($socket -ne $null) { $socket.Dispose() }
+        if ($cancellation -ne $null) { $cancellation.Dispose() }
+    }
+}
+
+$processNames = @('Bot.exe', 'AliWorkbench.exe', 'AliRender.exe', 'wwcmd.exe')
+$cimProcesses = @()
+$cimErrorType = $null
+try {
+    $cimProcesses = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+        Where-Object { $processNames -contains $_.Name })
+}
+catch {
+    $cimErrorType = $_.Exception.GetType().Name
+}
+
+$listenerRows = @()
+$listenerMethod = 'Get-NetTCPConnection'
+try {
+    $listenerRows = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
+        ForEach-Object {
+            [pscustomobject]@{
+                LocalPort = [int]$_.LocalPort
+                OwningProcess = [int]$_.OwningProcess
+                AddressKind = if ([System.Net.IPAddress]::IsLoopback([System.Net.IPAddress]::Parse([string]$_.LocalAddress))) {
+                    'loopback'
+                } elseif ([string]$_.LocalAddress -in @('0.0.0.0', '::')) {
+                    'all_interfaces'
+                } else {
+                    'other'
+                }
+            }
+        })
+}
+catch {
+    $listenerMethod = 'netstat'
+    try {
+        foreach ($line in (& netstat.exe -ano -p tcp 2>$null)) {
+            if ($line -match '^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+                $listenerRows += [pscustomobject]@{
+                    LocalPort = [int]$Matches[1]
+                    OwningProcess = [int]$Matches[2]
+                    AddressKind = 'unknown'
+                }
+            }
+        }
+    }
+    catch {
+        $listenerMethod = 'unavailable'
+    }
+}
+
+$processReports = @()
+$processById = @{}
+foreach ($process in $cimProcesses) {
+    $pidValue = [int]$process.ProcessId
+    $processById[$pidValue] = $process
+}
+$benchImRenderers = @($cimProcesses | Where-Object {
+    $_.Name -ieq 'AliRender.exe' -and (Test-BenchImRenderer -CommandLine ([string]$_.CommandLine))
+})
+$botVersion = $null
+
+foreach ($process in $cimProcesses) {
+    $pidValue = [int]$process.ProcessId
+    $live = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+    $startedAt = $null
+    $workingSetMiB = $null
+    $privateMiB = $null
+    $handleCount = $null
+    $threadCount = $null
+    $cpuSeconds = $null
+    if ($live -ne $null) {
+        try { $startedAt = $live.StartTime.ToString('o') } catch {}
+        try { $workingSetMiB = [math]::Round($live.WorkingSet64 / 1MB, 1) } catch {}
+        try { $privateMiB = [math]::Round($live.PrivateMemorySize64 / 1MB, 1) } catch {}
+        try { $handleCount = $live.HandleCount } catch {}
+        try { $threadCount = $live.Threads.Count } catch {}
+        try { $cpuSeconds = [math]::Round([double]$live.CPU, 2) } catch {}
+    }
+
+    $isBenchIm = Test-BenchImRenderer -CommandLine ([string]$process.CommandLine)
+    $debugPort = Get-RemoteDebuggingPort -CommandLine ([string]$process.CommandLine)
+    if ($process.Name -ieq 'Bot.exe' -and [string]::IsNullOrWhiteSpace($botVersion) -and $process.ExecutablePath) {
+        try {
+            $botVersion = (Get-Item -LiteralPath $process.ExecutablePath -ErrorAction Stop).VersionInfo.FileVersion
+        }
+        catch {}
+    }
+
+    $processReports += [pscustomobject]@{
+        Name = [string]$process.Name
+        Pid = $pidValue
+        ParentPid = [int]$process.ParentProcessId
+        IsBenchImRenderer = [bool]$isBenchIm
+        RemoteDebuggingPort = $debugPort
+        StartedAt = $startedAt
+        WorkingSetMiB = $workingSetMiB
+        PrivateMiB = $privateMiB
+        HandleCount = $handleCount
+        ThreadCount = $threadCount
+        CpuSeconds = $cpuSeconds
+    }
+}
+
+$benchImPids = @($benchImRenderers | ForEach-Object { [int]$_.ProcessId })
+$debugPorts = @()
+foreach ($renderer in $benchImRenderers) {
+    $rendererPort = Get-RemoteDebuggingPort -CommandLine ([string]$renderer.CommandLine)
+    if ($rendererPort) { $debugPorts += $rendererPort }
+
+    $parent = $processById[[int]$renderer.ParentProcessId]
+    if ($parent -ne $null) {
+        $parentPort = Get-RemoteDebuggingPort -CommandLine ([string]$parent.CommandLine)
+        if ($parentPort) { $debugPorts += $parentPort }
+        foreach ($listener in $listenerRows | Where-Object { $_.OwningProcess -eq [int]$parent.ProcessId }) {
+            if ($listener.LocalPort -ne 41010) { $debugPorts += [int]$listener.LocalPort }
+        }
+    }
+    foreach ($listener in $listenerRows | Where-Object { $_.OwningProcess -eq [int]$renderer.ProcessId }) {
+        if ($listener.LocalPort -ne 41010) { $debugPorts += [int]$listener.LocalPort }
+    }
+}
+$debugPorts = @($debugPorts | Where-Object { $_ -ge 1 -and $_ -le 65535 } | Sort-Object -Unique)
+
+$webSocketListeners = @($listenerRows | Where-Object { $_.LocalPort -eq 41010 })
+$webSocketOwnerNames = @()
+foreach ($listener in $webSocketListeners) {
+    $owner = $processById[[int]$listener.OwningProcess]
+    if ($owner -ne $null) { $webSocketOwnerNames += [string]$owner.Name }
+}
+$webSocketReachable = Test-LoopbackPort -Port 41010
+$botPids = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' } | ForEach-Object { [int]$_.ProcessId })
+$webSocketOwnedByBot = @($webSocketListeners | Where-Object { $botPids -contains [int]$_.OwningProcess }).Count -gt 0
+
+$cdpEndpoints = @()
+if ($benchImRenderers.Count -gt 0) {
+    foreach ($port in $debugPorts) {
+        $version = $null
+        $targets = @()
+        try {
+            $version = Invoke-LocalJsonGet -Url ("http://127.0.0.1:{0}/json/version" -f $port)
+            $targets = @(Invoke-LocalJsonGet -Url ("http://127.0.0.1:{0}/json/list" -f $port))
+            $pages = @($targets | Where-Object {
+                $_.type -eq 'page' -and -not [string]::IsNullOrWhiteSpace([string]$_.webSocketDebuggerUrl)
+            })
+            $benchPages = @($pages | Where-Object { [string]$_.url -match '(?i)bench_im' })
+            $selectedPages = @()
+            if ($benchPages.Count -gt 0) {
+                $selectedPages = $benchPages
+            } elseif ($benchImRenderers.Count -eq 1 -and $pages.Count -eq 1) {
+                $selectedPages = $pages
+            }
+
+            $probes = @()
+            foreach ($target in ($selectedPages | Select-Object -First 2)) {
+                $probes += Invoke-CdpReadonlyProbe -WebSocketUrl ([string]$target.webSocketDebuggerUrl)
+            }
+            $cdpEndpoints += [pscustomobject]@{
+                Port = [int]$port
+                Reachable = Test-LoopbackPort -Port ([int]$port)
+                Browser = [string]$version.Browser
+                ProtocolVersion = [string]$version.'Protocol-Version'
+                PageTargetCount = $pages.Count
+                BenchImUrlTargetCount = $benchPages.Count
+                ProbeTargetCount = $probes.Count
+                Probes = $probes
+                Status = if ($probes.Count -gt 0) { 'probed' } else { 'target_not_unambiguously_matched' }
+            }
+        }
+        catch {
+            $cdpEndpoints += [pscustomobject]@{
+                Port = [int]$port
+                Reachable = Test-LoopbackPort -Port ([int]$port)
+                Browser = $null
+                ProtocolVersion = $null
+                PageTargetCount = 0
+                BenchImUrlTargetCount = 0
+                ProbeTargetCount = 0
+                Probes = @()
+                Status = 'unavailable'
+                ErrorType = $_.Exception.GetType().Name
+            }
+        }
+    }
+}
+
+$os = $null
+try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop } catch {}
+$frameworkRelease = $null
+try {
+    $framework = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -Name Release -ErrorAction Stop
+    $frameworkRelease = [int]$framework.Release
+}
+catch {}
+
+$botCount = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' }).Count
+$workbenchCount = @($cimProcesses | Where-Object { $_.Name -ieq 'AliWorkbench.exe' }).Count
+$renderCount = @($cimProcesses | Where-Object { $_.Name -ieq 'AliRender.exe' }).Count
+
+$report = [ordered]@{
+    SchemaVersion = 1
+    CollectedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+    Machine = [ordered]@{
+        OsCaption = if ($os) { [string]$os.Caption } else { $null }
+        OsVersion = if ($os) { [string]$os.Version } else { $null }
+        OsBuild = if ($os) { [string]$os.BuildNumber } else { $null }
+        OsArchitecture = if ($os) { [string]$os.OSArchitecture } else { $null }
+        PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+        DotNetFrameworkV4Release = $frameworkRelease
+    }
+    Application = [ordered]@{
+        BotVersion = $botVersion
+        BotProcessCount = $botCount
+        QianniuWorkbenchProcessCount = $workbenchCount
+        AliRenderProcessCount = $renderCount
+        BenchImRendererCount = $benchImRenderers.Count
+        Processes = $processReports
+        ProcessInspectionErrorType = $cimErrorType
+    }
+    Connectivity = [ordered]@{
+        ListenerInspectionMethod = $listenerMethod
+        WebSocket41010 = [ordered]@{
+            ListenerCount = $webSocketListeners.Count
+            LoopbackReachable = $webSocketReachable
+            OwnedByBotProcess = $webSocketOwnedByBot
+            OwnerProcessNames = $webSocketOwnerNames
+        }
+        CdpEndpoints = $cdpEndpoints
+    }
+    Checks = @(
+        [pscustomobject]@{ Name = 'Bot process'; Status = if ($botCount -gt 0) { 'present' } else { 'not_running' } }
+        [pscustomobject]@{ Name = 'Qianniu workbench'; Status = if ($workbenchCount -gt 0) { 'present' } else { 'not_running' } }
+        [pscustomobject]@{ Name = 'bench_im renderer'; Status = if ($benchImRenderers.Count -gt 0) { 'present' } else { 'not_detected' } }
+        [pscustomobject]@{ Name = 'WebSocket 41010'; Status = if ($webSocketReachable -and $webSocketOwnedByBot) { 'listening_and_bot_owned' } elseif ($webSocketReachable) { 'listener_not_confirmed_as_bot' } else { 'not_reachable' } }
+        [pscustomobject]@{ Name = 'CDP/IMSDK probe'; Status = if (@($cdpEndpoints | Where-Object { @($_.Probes | Where-Object { $_.Status -eq 'ok' }).Count -gt 0 }).Count -gt 0) { 'probed' } elseif ($cdpEndpoints.Count -gt 0) { 'endpoint_found_probe_incomplete' } else { 'not_detected' } }
+    )
+    Privacy = [ordered]@{
+        CustomerMessagesIncluded = $false
+        CredentialsIncluded = $false
+        CookiesIncluded = $false
+        TargetUrlsIncluded = $false
+        RawCommandLinesIncluded = $false
+        RawLogsIncluded = $false
+        ScreenshotsIncluded = $false
+        Uploaded = $false
+        Note = '只保存进程资源计数、端口状态、CDP目标数量和IMSDK属性类型/布尔值；不保存聊天正文、账号昵称、目标URL、命令行、Cookie、令牌、原始日志或截图。'
+    }
+    Limitations = @(
+        '此报告只做本机只读探测，不会发送测试消息，也不能证明真实买家消息已经送达。',
+        'CDP仅在定位到bench_im渲染进程及其本机调试端口时探测；目标不唯一时会跳过，不猜测页面身份。',
+        '需要真实千牛会话的切店、重连、消息投递、知识学习和人工接管仍需单独验收。'
+    )
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$jsonPath = Join-Path $OutputDirectory ('qnbot-acceptance-' + $stamp + '.json')
+$markdownPath = Join-Path $OutputDirectory ('qnbot-acceptance-' + $stamp + '.md')
+$report | ConvertTo-Json -Depth 9 | Out-File -LiteralPath $jsonPath -Encoding UTF8
+
+$markdown = @(
+    '# qnbot Windows Acceptance Diagnostics',
+    '',
+    ('Collected UTC: ' + $report.CollectedAtUtc),
+    '',
+    '## Summary',
+    ('- Bot.exe processes: ' + $botCount),
+    ('- AliWorkbench.exe processes: ' + $workbenchCount),
+    ('- AliRender.exe processes: ' + $renderCount),
+    ('- bench_im renderers: ' + $benchImRenderers.Count),
+    ('- Bot version: ' + $(if ($botVersion) { $botVersion } else { 'not detected' })),
+    ('- WebSocket 127.0.0.1:41010 reachable: ' + $webSocketReachable),
+    ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
+    ('- CDP endpoints inspected: ' + $cdpEndpoints.Count),
+    '',
+    '## CDP / IMSDK',
+    $(if ($cdpEndpoints.Count -eq 0) { '- No unambiguous local CDP debug endpoint was detected.' } else {
+        ($cdpEndpoints | ForEach-Object {
+            '- Port ' + $_.Port + ': ' + $_.Status + '; pages=' + $_.PageTargetCount + '; bench_im URL matches=' + $_.BenchImUrlTargetCount
+            $_.Probes | ForEach-Object {
+                '  - Probe=' + $_.Status + '; imsdk=' + $_.ImsdkType + '; invoke=' + $_.InvokeType + '; on=' + $_.OnType + '; loginID present=' + $_.LoginIdPresent
+            }
+        })
+    }),
+    '',
+    '## Privacy',
+    '- Customer messages, account nicknames, credentials, cookies, target URLs, raw command lines, raw logs and screenshots are excluded.',
+    '- No network upload or chat send is performed. CDP requests are loopback-only and read-only.',
+    '',
+    '## Limitations',
+    ($report.Limitations | ForEach-Object { '- ' + $_ })
+)
+$markdown | Out-File -LiteralPath $markdownPath -Encoding UTF8
+
+Write-Host ('JSON report: ' + $jsonPath)
+Write-Host ('Markdown report: ' + $markdownPath)
+Write-Host ('Bot=' + $botCount + '; Qianniu=' + $workbenchCount + '; bench_im=' + $benchImRenderers.Count + '; WS41010=' + $webSocketReachable)

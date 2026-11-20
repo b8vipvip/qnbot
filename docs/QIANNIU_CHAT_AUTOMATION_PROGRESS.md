@@ -2,140 +2,146 @@
 
 Last updated / 最后更新：2026-11-20
 
-本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把历史实验 TODO 当作当前生产 TODO。
+本文件记录当前生产基线、源码已完成项、尚需真实 Windows/千牛验收的项目，以及本轮新增的只读诊断工具。所有状态区分“源码实现”“CI/构建通过”“正式发布”“真实客户端验收”，不能互相替代。
 
 ## 1. Current production baseline / 当前生产基线
 
-- Default branch / 默认分支：`master`
-- Current source/workflow implementation commit / 本轮源码与工作流修复提交：`dce1e34a685286e9c3e0b8513710e700f551d316`
-- Current formal release / 当前正式版本：`bot-v1.1.2380`
-- Release target commit：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
+- Repository：`b8vipvip/qnbot`
+- Default branch：`master`
+- Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
+- Latest stable client：`bot-v1.1.2380`
+- Release：<https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2380>
+- Release target：`839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae`
 - x64 package SHA-256：`b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9`
-- 当前正式版的 Windows x64 release build、API control plane CI 均通过；当前发布信息以 GitHub Release `bot-v1.1.2380` 为准。
+- master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
-## 2. Completed / 已完成
+## 2. Completed source capabilities / 已实现的源码能力
 
-### 2.1 Chat event ingestion / 聊天事件接入
-- WebSocket / CDP business session discovery 已完成；
-- 买家文本、订单卡片、图片消息进入统一处理链；
-- 非买家会话隔离已完成；
-- 重复 CDP 页面 exact payload 已增加长窗去重，避免恢复窗口重复入站。
+### 2.1 Message ingestion and session identity
+- 生产消息接收仍以注入脚本、WebSocket 41010、CDP/QN 事件为主。
+- 买家文本、图片、订单等事件进入统一处理链；非买家会话隔离、精确消息去重和会话身份校验已实现。
+- 多店运行时协调器以 ShopKey、物理 CDP SessionId、TargetId 和聚焦 WebView 证据仲裁活动店铺；不允许仅凭卖家昵称授权跨店操作。
+- CDP 关闭会话会释放对应 client、等待请求和店铺偏好；重复页面按店铺身份保留必要的可恢复 standby。
 
-### 2.2 Coalescing / Generation
-- 买家 burst coalescing 已实现；
-- 前置规则等待有上限；
-- generation cancellation / fail-open 已实现；
-- 正常文本 AI 总预算仍为 50 秒；
-- PR #208 增加 ThreadPool starvation guard；
-- PR #209 增加 dedicated background thread absolute-age watchdog；
-- PR #220 将 watchdog 从“采样到 `Generating` 才登记”升级为“从 `BuyerActionAccepted` 起登记活动 generation”；
-- 55 秒绝对期限覆盖 `Observed/Coalescing/Processing/Generating/Ready/Sending/Waiting`，终态才移除；
-- watch registry 不再依赖 64 条 `RecentEvents` 诊断环，因此不会因高密度事件淘汰 accepted event 而失效。
+### 2.2 Generation and reliable send
+- 买家 burst coalescing、generation cancellation 和绝对生命周期 watchdog 已实现。
+- 正常文本 AI 预算约 50 秒；accepted generation 的绝对年龄门禁覆盖到 Ready/Sending/Waiting。
+- CDP execute gate 有界等待；发送前验证 seller/buyer/current conversation 和 ShopKey。
+- Bot-owned exact draft、可信提交证据、卖家 echo / delivery verification 和防盲目重复发送已进入生产链路。
+- 平台提醒、人工接管、stale generation 和不确定提交保持 fail-closed。
 
-### 2.3 Smart Reply / Knowledge
-- Semantic Embedding 前台 true async；
-- embedding 子 deadline 约 2.2 秒；
-- Knowledge V2 FactKey 已细化；
-- 人工答案学习与异常诊断 JSON 解析已切换为结构化恢复器；
-- Knowledge V2 迟到答案在进入 Ready 前有 generation freshness / age barrier。
+### 2.3 Knowledge V2 and conversation learning
+- 会话静默 5 分钟后进入完整历史复盘；远端历史分页、时间线和 Bot 卡片使用同一 ShopKey 范围。
+- 完整历史缺失、消息数不一致、时间戳未知或知识语料版本漂移时 fail-closed。
+- Knowledge V2 全库按批次对照，记录消息/语料覆盖率、批次检查点、模型/协议、版本指纹及候选证据。
+- 上游错误按 ShopKey 熔断并支持断点续跑。
+- **生产自动写入仍保持关闭（dry-run）**。没有完成原子更新/回滚、人工审核授权和 Windows 灰度验收前，不得启用自动写入。
+- 高风险店铺规则、账户、付款、隐私和履约事实必须保留人工审核。
 
-### 2.4 Order events / 订单事件
-- OrderEventHub 跨进程原子持久化完成；
-- order action durable ledger 完成；
-- 固定回复按 segment / 业务动作幂等；
-- 必要订单字段 enrichment 有界执行；
-- 订单/CDP 入站重复 payload 有精确去重保护。
+### 2.4 Multi-shop and catalog
+- #426：CDP 身份切换、旧队列/迟到帧隔离。
+- #429：ShopKey 私有配置、证据账本和流程草稿校验。
+- #430：新店中性默认、旧店策略兼容和缓存生命周期。
+- #431：Knowledge V2 熔断、完整语料断点和并发门资源管理。
+- 商品目录刷新已使用稳定 ShopKey、权威 CDP 会话和响应后的 SessionId 复核；后台刷新不切换当前千牛工作台。
 
-### 2.5 Reliable send / 可靠发送
-- Bot-owned exact draft 校验；
-- CDP / 安全 HWND / UIA 分层发送；
-- fallback 前重新验证 seller/buyer/current conversation 和 owned draft；
-- verified submission / seller echo / delivery verification 作为成功证据；
-- 已提交等待回显时禁止盲目 resend；
-- stale/cancelled Bot-owned draft 使用精确安全清理；
-- 平台“服务态度提醒”走安全处理，不把“继续发送”作为普通自动 fallback；
-- PR #220 给 CDP `_executeGate` 增加 1.5 秒排队上限；
-- `EnsureActiveBuyerForSendAsync` 保留最多 22 次快速确认，但增加 9 秒总 wall-clock deadline。
+### 2.5 GPTAuto / release
+- Reconcile 能按实际发布工作流发现 `Publish Bot auto-update release`。
+- 手动发布按精确 source SHA 选取成功的 Windows x64 构建。
+- 发布运行通过 workflow ID 和源 SHA display_title 关联；动态名称不再被静态工作流名称条件误过滤。
+- 这些是发布流程代码门禁；仍需一次新的 Reconcile 任务真实派发并获得终态证据。
 
-### 2.6 Vision / OCR
-- 本地 OCR worker/model 已从 Windows release 移除；
-- 服务端 `/api/runtime/v1/ocr` 已实现；
-- 客户端使用本店 `ShopControlPlaneConnectionStore` URL/token 自动解析 OCR endpoint；
-- 图片续问允许 15 秒来源 clock skew；
-- 图片派生 lease 保留原 `BuyerSessionAgent`、`SessionGeneration`、continuation context 和 cancellation token。
+## 3. Remaining runtime acceptance / 尚需真实运行验收
 
-## 3. Remaining runtime work / 当前剩余运行时工作
+### P0 — Message channel and mirror
+关联原 Issue：[#307](https://github.com/b8vipvip/qnbot/issues/307)
 
-### P0 — `bot-v1.1.2243` message mirror confirmation / 消息镜像确认
+- 最新正式版运行时，确认买家消息可收到正确 buyer + 正文。
+- 检查 Bot Web 历史消息首次同步后持续显示，切换买家不串屏。
+- 断线重连、千牛重启、多个窗口/账号切换后不丢失、不重复。
+- 诊断 `AliRender --render_id=bench_im`、CDP target、`window.imsdk` / `invoke` / `on`、本地 41010 listener。
+- 历史 #307 的千牛版本/设置线索不是当前版本验收证据。
 
-当前需要一份更新到正式版后的完整运行日志，重点确认：
-- Bot Web 消息区完成首次同步后，等待 3～5 秒仍持续显示当前买家的历史消息，不再短暂闪现后变成“暂无聊天消息”；
-- 切换买家后，消息列表与右侧会话始终对应同一个 buyer/session，不出现旧会话覆盖新会话。
+### P1 — Multi-shop and lifecycle
+- #426：店铺 A→B→A、同昵称不同店、物理 WebSocket 切换、旧 session 迟到帧。
+- #429：同昵称多店、v1→v2 禁用态迁移、私有配置备份/恢复、外部进程修改后及时生效、证据撤回记录。
+- #430：新店中性默认、升级保留旧配置、危险动作默认关闭。
+- #341：多标签/多窗口循环后重复 standby 通道、订阅数量、内存/句柄/线程趋势；固定回复同义编译失败不能改变用户原文或触发错误发送。
+- 以上必须以真实客户端和长时间运行结果验收，不能只看 CI。
 
-### P1 — `bot-v1.1.2243` runtime verification / 新版真实日志验证
+### P1 — Knowledge V2 full learning
+关联原 Issue：[#339](https://github.com/b8vipvip/qnbot/issues/339) 和 #431。
 
-下一份完整日志重点检查：
-- 55 秒 absolute-age deadline 是否从 buyer action 起稳定生效；
-- 是否仍出现数分钟迟到 generation；
-- `Ready/Sending/Waiting` 是否仍受同一 deadline 约束；
-- CDP execute gate 拥塞是否在约 1.5 秒内 fail-fast；
-- active buyer confirmation 异常是否在约 9 秒总预算内结束；
-- 图片续问是否保留 generation cancellation 且不因轻微时钟逆序误判过期；
-- 发送成功是否继续具有可信 submission/卖家 echo/delivery verification；
-- OCR 是否使用 `shop-control-plane`；
-- CDP 页面通道是否持续单调增长。
+- 150+ 条真实测试会话完整历史；全部知识条目逐批覆盖，不能只分析检索命中片段。
+- 重启后复用有效检查点；知识库修订漂移后必须重新分析。
+- 模拟/观察 502、503、scheduler invariant 错误；确认 ShopKey 独立熔断、冷却、半开探测和重启恢复。
+- 证明人工证据 ID 属于当前完整时间线；弱证据/高风险候选拒绝。
+- 自动写入保持关闭，直到原子事务、备份、回滚、审批主体和灰度验收全部完成。
 
-### P2 — CDP lifecycle observation / 生命周期观察
+### P1 — General reception workflow Agent
+关联原 Issue：[#346](https://github.com/b8vipvip/qnbot/issues/346)。
 
-当前没有足够证据证明 page-channel 持续泄漏。保持观察；只有 `1.1.2243` 长时日志出现持续增长、旧 target/session 不释放时才继续改生命周期代码。
+- 当前流程模型以 ShopKey/商品/SKU/版本隔离的草稿和证据账本为基础。
+- 尚需可信审批主体、授权调度器、正式发布/回滚、只读订单工具和完整图文证据闭环。
+- 影子决策→人工复核→小流量灰度；高风险操作默认关闭。
+- 不得把草稿可保存等同于 Agent 已能安全执行生产流程。
 
-### P3 — Merged code awaiting real-client acceptance / 已合并代码待实机验收
+### P1 — GPTAuto Reconcile end-to-end
+- 在修复后的 master 上真实 dispatch 一次 Reconcile。
+- 验证源 SHA、Windows 构建关联、发布工作流动态 display_title、Completion Lease 最终状态。
+- Observer 成功或 Executor workflow 启动都不能单独视为任务完成。
 
-以下改造已于 2026-11-19 合并到 master，并包含在正式版 bot-v1.1.2379（target c98fad57e21692435cde2b4c20a72ac67b490a73）中；后续 bot-v1.1.2380 继续包含本轮 ShopKey 商品目录修复：
-- #426：CDP raw inbound 与重复会话转发的身份切换锁；需要真实 A→B 店铺切换确认旧会话不再接收业务事件。
-- #429：私有接待配置按 ShopKey 隔离；需要多店铺及离线配置打开验证。
-- #430：中性默认业务策略和无 scope fail-closed；需要旧配置升级与新店铺初始化验证。
-- #431：AI 上游熔断与重启恢复；需要 502/503 故障注入和恢复验证。
+### P1 — Product catalog runtime
+- 真实在线店铺验证完整目录/部分目录合并、手动刷新、断线重连恢复和多店切换不串店。
+- 确认后台刷新不会切换用户当前千牛工作台。
 
-以上 PR 已合并并进入正式版，不再属于 Draft PR。真实客户端验收仍未完成；CI 和 Release 通过只证明代码与构建契约，不代表运行时验收完成。
-## 4. Validation rule / 验证规则
+## 4. New read-only Windows diagnostics / 新增只读 Windows 诊断工具
 
-任何“已修复”至少满足其一：
+脚本：`scripts/Invoke-QnBotAcceptanceDiagnostics.ps1`
 
-1. 生产代码 + CI/静态契约证明；或
-2. 新版本真实运行日志证明。
+在仓库根目录运行：
 
-对于运行时竞态、真实发送、平台 UI、CDP 生命周期等问题，CI 通过不等于线上已验证，必须继续用新正式版本日志复核。
+```powershell
+powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
+```
 
-## 5. Next execution / 下一步
+默认输出到：
 
-1. 客户端更新到 `bot-v1.1.2380`，先验证消息镜像持续显示；
-2. 做真实买家文本、图片、订单、长耗时 AI、连续多消息、A→B 店铺切换与平台提醒测试；
-3. 保持长时运行以观察 CDP/page-channel 生命周期；
-4. 对 #429/#430/#431 分别完成多店铺隔离、策略迁移和上游故障恢复验收；
-5. 导出完整日志；已合并、已发布不等于实机通过，不得把仍需运行验收的模块标记完成。
+`%LOCALAPPDATA%\QianniuAiBot\diagnostics\`
 
-## 6. 2026-11-20 source-level audit / 源码审计
+报告包括：
+- Windows / PowerShell / .NET Framework 版本；
+- Bot、AliWorkbench、AliRender、wwcmd 进程数及资源指标；
+- 是否找到 `--render_id=bench_im` 渲染进程；
+- 本地 41010 WebSocket listener、loopback 可达性及进程归属；
+- 能够唯一关联时，通过 loopback CDP 只读检查页面 `document.readyState`、`typeof window.imsdk`、`invoke`、`on` 和 loginID/QN 是否存在；
+- JSON 与 Markdown 两种报告。
 
-### 已修复并发布
-- 商品目录刷新统一使用稳定 ShopKey 作为锁、缓存写入和定时任务键；通过 FindConnectedQnByShopKey 查找权威在线 CDP 会话，并在网络请求结束后再次校验 SessionId，防止旧会话结果覆盖当前缓存。
-- 商品目录后台刷新使用 storage-only shop scope，不切换用户当前千牛工作台；设置页不再额外创建第二个按昵称运行的定时器。
-- 设置页商品专属回复规则属于可选功能；其初始化异常已被隔离，不会阻断核心店铺设置页。新增回归测试保护该行为。
-- 以上商品目录修复由 commit 839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae 发布到正式版 bot-v1.1.2380。
+隐私与安全边界：
+- 不读取或导出聊天正文、客户昵称、订单、Cookie、Token、原始日志、截图、完整命令行或页面 URL。
+- 命令行仅在内存中用于识别 renderer 和调试端口，报告只保存布尔值/端口号。
+- 只连接 `127.0.0.1`，CDP 只执行属性类型/布尔值读取，不发送消息、不修改设置、不停止进程、不上传文件。
+- 如果 CDP 目标无法唯一关联，工具跳过探测并明确报告，不猜测页面身份。
+- 该工具不能证明真实消息已送达；真实买家消息、切店、重连和知识学习仍需现场验收。
 
-### 已修复并进入 master 的发布验收逻辑
-- GPTAuto Reconcile 按实际工作流路径/名称发现 Publish Bot auto-update release，不再错误假定工作流必须名为 Release。
-- 手动发布必须携带精确 source_sha，只选择同一 SHA 的成功 Windows x64 构建，避免误发其他 master 提交的旧构建产物。
-- 发布运行通过 workflow ID 和包含源 SHA 的 display_title 关联，避免把 workflow_run 自身的默认分支 SHA 误当成上游 Windows 构建 SHA。
-- 相关实现与静态回归测试由 commit dce1e34a685286e9c3e0b8513710e700f551d316 进入 master；尚未通过一次新的 GPTAuto Reconcile 实际 dispatch 做端到端运行验收。
+已有可选长时采样脚本：
+- `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程。
+- `scripts/Collect-QnBotGcTrace.ps1`：管理员权限下有界 CLR GC ETW；ETL 可能含同机其他 .NET 程序事件，分享前需自行审查。
 
-### 自动化验证
-- Fast Gate：1621 passed，16 skipped。
-- API control plane CI：Fast Gate、Windows Static Gate、Full Gate / Build Package 全部通过。
-- Windows x64 release build：通过。
-- GPTAuto Observer 与 GPTAuto Executor：通过。
-- 正式发布 bot-v1.1.2380：target 839bb1a4ccb2fbf42a4fc3b6fbebdeff0fb3fcae，x64 包 SHA-256 为 b810c4cd5f335c9b6a34d24422e358c0ad03c33d87ef741f7c82083c06b401a9。
+## 5. Validation and release rules / 验收与发布规则
 
-### 仍需真实 Windows/千牛验收
-- 商品目录刷新需要在真实在线店铺确认：缓存、完整目录/部分目录合并、手动刷新、断线重连后恢复，以及多店切换不串店。
-- #426/#429/#430/#431 的真实运行验收继续有效；正式发布和 CI 通过不能代替真实客户端证据。
+1. 源码修复必须有回归测试；Windows 专属脚本必须通过 Windows PowerShell 5.1 parser。
+2. CI 和构建必须针对精确 master SHA 通过。
+3. Windows/千牛行为、消息投递、真实 CDP 目标和资源趋势必须由真实运行证据验证。
+4. 诊断报告先由用户检查，脱敏后再提供；不要求上传原始日志或客户数据。
+5. Knowledge V2 自动写入、高风险接待流程动作保持关闭，直到审批/回滚闭环成立。
+6. 发布与生产安装是不同动作；GitHub Release 不能替代用户确认安装或部署。
+7. #366 是唯一统一追踪 Issue；不新增普通 Issue/分支，持续在 master 与 #366 更新。
+
+## 6. Next execution / 下一步
+
+1. 先完成 master 源码审计和回归测试。
+2. 使用只读诊断脚本准备一份不含客户内容的 Windows 状态报告。
+3. 依据报告和少量真实测试定位剩余消息通道/多店问题。
+4. 再完成 Knowledge V2 全库覆盖与断点恢复验收。
+5. 最后完成接待流程 Agent 审批、灰度与 GPTAuto Reconcile 端到端验收。

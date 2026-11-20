@@ -770,3 +770,65 @@ def test_commerce_learning_bridge_resolves_report_by_shopkey_not_nickname():
     assert "shop.SellerNick" in process
     assert "ResolveBySellerNick(report.Seller)" not in process
     assert "Seller与ShopKey不匹配" in process
+
+
+
+def test_learning_ingress_dedup_claim_waits_for_verified_shop_seller_and_buyer():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage("):
+        bridge.index("private static void InjectLearnedStyle(")
+    ]
+
+    assert observe.index("if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;") < observe.index(
+        "if (string.IsNullOrWhiteSpace(seller)) return;"
+    )
+    assert observe.index("if (string.IsNullOrWhiteSpace(seller)) return;") < observe.index(
+        "if (string.IsNullOrWhiteSpace(buyer)) return;"
+    )
+    assert observe.index("if (string.IsNullOrWhiteSpace(buyer)) return;") < observe.index("Seen.TryAdd(")
+    assert observe.index("Seen.TryAdd(") < observe.index("BuyerMessageArchiveService.Observe(")
+    assert "standby CDP page may deliver the same payload" in observe
+
+
+def test_learning_seen_cache_cleanup_removes_only_the_exact_stale_value():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    cleanup = bridge[
+        bridge.index("private static void CleanupSeen()"):
+        bridge.index("\n        }", bridge.index("private static void CleanupSeen()"))
+    ]
+
+    assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
+    assert "new KeyValuePair<string, DateTime>(pair.Key, pair.Value)" in cleanup
+    assert "Seen.TryRemove(key, out ignored)" not in cleanup
+
+
+def test_acceptance_diagnostics_is_read_only_and_redacts_customer_and_account_data():
+    script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+
+    assert "#requires -Version 5.1" in script
+    assert r"--render_id(?:=|\s+)bench_im" in script
+    assert "41010" in script
+    assert "Runtime.evaluate" in script
+    assert "typeof window.imsdk" in script
+    assert "window.imsdk && window.imsdk.invoke" in script
+    assert "window.imsdk && window.imsdk.on" in script
+    assert "Method = 'GET'" in script
+    assert "127.0.0.1" in script
+    assert "CommandLine" in script
+    assert "CustomerMessagesIncluded = $false" in script
+    assert "CredentialsIncluded = $false" in script
+    assert "TargetUrlsIncluded = $false" in script
+    assert "RawCommandLinesIncluded = $false" in script
+    for forbidden in [
+        "SendTimiMsg",
+        "SendTextAsync",
+        "SendSmartTipMsg",
+        "/v1/chat/completions",
+        "Authorization",
+        "Cookie",
+        "Get-Content",
+        "Invoke-WebRequest",
+        "Invoke-RestMethod",
+    ]:
+        assert forbidden not in script

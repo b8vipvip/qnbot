@@ -28,6 +28,20 @@
 - [`docs/PROJECT_STATUS_AND_ARCHITECTURE.md`](docs/PROJECT_STATUS_AND_ARCHITECTURE.md)
 - [`docs/KNOWLEDGE_CENTER_V2.md`](docs/KNOWLEDGE_CENTER_V2.md)
 
+## Windows 只读验收诊断
+
+可在仓库根目录执行以下短命令：
+
+```powershell
+powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
+```
+
+脚本会生成 JSON 和 Markdown 报告，检查 Bot/千牛进程、`bench_im` renderer、本地 WebSocket 41010，以及可唯一定位时的 loopback CDP/IMSDK 属性探测。报告默认保存在 `%LOCALAPPDATA%\QianniuAiBot\diagnostics\`。
+
+它不发送消息、不修改配置、不停止进程、不上传文件，也不收集聊天正文、账号昵称、Cookie、令牌、目标 URL、原始命令行或原始日志。真实消息投递、切店和重连仍须在测试店铺验收。
+
+详细验收范围见 [千牛自动化进度](docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md)。
+
 ## 总体架构
 
 ```text
