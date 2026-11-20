@@ -849,3 +849,47 @@ def test_reply_style_profile_requires_exact_stable_shop_scope():
     assert "shop.SellerNick, seller, StringComparison.Ordinal" in profile
     assert "current.ShopKey, shop.ShopKey, StringComparison.Ordinal" in profile
     assert "return string.Empty;" in profile
+
+
+
+def test_read_only_acceptance_diagnostics_runtime_snapshot_is_privacy_minimized_and_process_bound():
+    script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    snapshot = server[
+        server.index("private void WriteReadOnlyAcceptanceSnapshot"):
+        server.index("private void TouchSession(WebSocketSession session)")
+    ]
+
+    assert "RuntimeSnapshotPath" in script
+    assert "Read-RuntimeAcceptanceSnapshot" in script
+    assert "ProcessStartTimeUtcTicks" in script
+    assert "ageSeconds -gt 120" in script
+    assert "process_mismatch" in script
+    assert "RuntimeShopSessions = $runtimeSnapshot" in script
+    assert "ShopRef" in script and "OwnerSessionRef" in script
+    assert "Standbys = standbys" in snapshot
+    assert "RawShopKeysIncluded = $false" in script
+    assert "RawWebSocketSessionIdsIncluded = $false" in script
+    assert "RuntimeAcceptanceDiagnosticRef" in snapshot
+    assert "HMACSHA256" in server
+    assert "RuntimeAcceptanceDiagnosticSalt" in server
+    assert "runtime-snapshot.json" in server
+    assert "WriteAllTextAtomic" in snapshot
+    assert "ProcessId = processId" in snapshot
+    assert "ProcessStartTimeUtcTicks = processStartTimeUtcTicks" in snapshot
+    for forbidden in ("Seller =", "Buyer =", "ShopKey =", "SessionId ="):
+        assert forbidden not in snapshot
+
+
+def test_read_only_acceptance_diagnostics_never_connects_to_non_loopback_cdp_targets():
+    script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+    probe = script[
+        script.index("function Invoke-CdpReadonlyProbe"):
+        script.index("function Read-RuntimeAcceptanceSnapshot")
+    ]
+
+    assert "$uri.Scheme -ne 'ws' -or -not $uri.IsLoopback" in probe
+    assert "Runtime.evaluate" in probe
+    assert "returnByValue = $true" in probe
+    assert "document.cookie" not in probe
+    assert "window._vs && window._vs.loginID" in probe

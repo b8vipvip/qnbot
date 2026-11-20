@@ -36,7 +36,7 @@
 powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 ```
 
-脚本会生成 JSON 和 Markdown 报告，检查 Bot/千牛进程、`bench_im` renderer、本地 WebSocket 41010，以及可唯一定位时的 loopback CDP/IMSDK 属性探测。报告默认保存在 `%LOCALAPPDATA%\QianniuAiBot\diagnostics\`。
+脚本会生成 JSON 和 Markdown 报告，检查 Bot/千牛进程、`bench_im` renderer、本地 WebSocket 41010、loopback CDP/IMSDK 属性，并读取 Bot 每 30 秒生成的只读运行态快照。快照仅包含 HMAC 化的 ShopKey/会话引用、权威会话/standby 状态、身份代次及计数；只接受与当前 Bot PID 和启动时间匹配且不超过 120 秒的快照。报告默认保存在 `%LOCALAPPDATA%\QianniuAiBot\diagnostics\`。
 
 它不发送消息、不修改配置、不停止进程、不上传文件，也不收集聊天正文、账号昵称、Cookie、令牌、目标 URL、原始命令行或原始日志。真实消息投递、切店和重连仍须在测试店铺验收。
 

@@ -12,12 +12,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = ''
+    [string]$OutputDirectory = '',
+    [string]$RuntimeSnapshotPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics'
+}
+if ([string]::IsNullOrWhiteSpace($RuntimeSnapshotPath)) {
+    $RuntimeSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\runtime-snapshot.json'
 }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
@@ -168,6 +172,118 @@ function Invoke-CdpReadonlyProbe {
     }
 }
 
+function Read-RuntimeAcceptanceSnapshot {
+    param(
+        [string]$Path,
+        [object[]]$BotProcesses
+    )
+
+    $empty = [pscustomobject]@{
+        Status = 'not_found'
+        AgeSeconds = $null
+        ProcessId = $null
+        CollectedAtUtc = $null
+        Counts = $null
+        Shops = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $empty
+    }
+
+    try {
+        $snapshot = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($Path)) -ErrorAction Stop
+        if ($null -eq $snapshot -or [int]$snapshot.SchemaVersion -ne 1) {
+            $empty.Status = 'invalid_schema'
+            return $empty
+        }
+
+        $snapshotPid = [int]$snapshot.ProcessId
+        $matchingBot = @($BotProcesses | Where-Object { [int]$_.ProcessId -eq $snapshotPid } | Select-Object -First 1)
+        if ($matchingBot.Count -eq 0) {
+            $empty.Status = 'process_mismatch'
+            return $empty
+        }
+        $liveProcess = Get-Process -Id $snapshotPid -ErrorAction Stop
+        $actualStartTicks = $liveProcess.StartTime.ToUniversalTime().Ticks
+        $expectedStartTicks = [long]$snapshot.ProcessStartTimeUtcTicks
+        if ([math]::Abs([double]($actualStartTicks - $expectedStartTicks)) -gt [TimeSpan]::FromSeconds(2).Ticks) {
+            $empty.Status = 'process_mismatch'
+            return $empty
+        }
+
+        $collectedAt = [DateTime]::Parse([string]$snapshot.CollectedAtUtc).ToUniversalTime()
+        $ageSeconds = [int][math]::Floor(((Get-Date).ToUniversalTime() - $collectedAt).TotalSeconds)
+        if ($ageSeconds -lt -30 -or $ageSeconds -gt 120) {
+            $empty.Status = 'stale'
+            $empty.AgeSeconds = $ageSeconds
+            return $empty
+        }
+
+        $shopRows = @()
+        foreach ($shop in @($snapshot.Shops)) {
+            if ([string]$shop.ShopRef -notmatch '^shop#[0-9a-f]{16}$'
+                -or [string]$shop.OwnerSessionRef -notmatch '^session#[0-9a-f]{16}$') {
+                continue
+            }
+            $standbyRows = @()
+            foreach ($standby in @($shop.Standbys)) {
+                if ([string]$standby.SessionRef -notmatch '^session#[0-9a-f]{16}$') { continue }
+                $standbyRows += [pscustomobject]@{
+                    SessionRef = [string]$standby.SessionRef
+                    Connected = [bool]$standby.Connected
+                    Recoverable = [bool]$standby.Recoverable
+                    Initialized = [bool]$standby.Initialized
+                    ClientPresent = [bool]$standby.ClientPresent
+                    ClientInvalidated = [bool]$standby.ClientInvalidated
+                    ClientIdentityRetired = [bool]$standby.ClientIdentityRetired
+                    Closing = [bool]$standby.Closing
+                    IdentityProbeGeneration = [long]$standby.IdentityProbeGeneration
+                    StatusBindingGeneration = [long]$standby.StatusBindingGeneration
+                    LastActivityAgeSeconds = $standby.LastActivityAgeSeconds
+                }
+            }
+            $shopRows += [pscustomobject]@{
+                ShopRef = [string]$shop.ShopRef
+                OwnerSessionRef = [string]$shop.OwnerSessionRef
+                OwnerConnected = [bool]$shop.OwnerConnected
+                OwnerInitialized = [bool]$shop.OwnerInitialized
+                OwnerClientPresent = [bool]$shop.OwnerClientPresent
+                OwnerClientInvalidated = [bool]$shop.OwnerClientInvalidated
+                OwnerClientIdentityRetired = [bool]$shop.OwnerClientIdentityRetired
+                OwnerIdentityProbeGeneration = [long]$shop.OwnerIdentityProbeGeneration
+                OwnerStatusBindingGeneration = [long]$shop.OwnerStatusBindingGeneration
+                OwnerLastActivityAgeSeconds = $shop.OwnerLastActivityAgeSeconds
+                StandbyCount = [int]$shop.StandbyCount
+                RecoverableStandbyCount = [int]$shop.RecoverableStandbyCount
+                Standbys = $standbyRows
+            }
+        }
+
+        $rawCounts = $snapshot.Counts
+        $counts = [pscustomobject]@{
+            ConnectedSessions = [int]$rawCounts.ConnectedSessions
+            AuthoritativeShopCount = [int]$rawCounts.AuthoritativeShopCount
+            DuplicateSessions = [int]$rawCounts.DuplicateSessions
+            RecoverableStandbySessions = [int]$rawCounts.RecoverableStandbySessions
+            InitializedSessions = [int]$rawCounts.InitializedSessions
+            ClientSessions = [int]$rawCounts.ClientSessions
+            UnmappedConnectedSessions = [int]$rawCounts.UnmappedConnectedSessions
+        }
+        return [pscustomobject]@{
+            Status = 'fresh'
+            AgeSeconds = $ageSeconds
+            ProcessId = $snapshotPid
+            CollectedAtUtc = $collectedAt.ToString('o')
+            Counts = $counts
+            Shops = $shopRows
+        }
+    }
+    catch {
+        $empty.Status = 'invalid_or_unreadable'
+        return $empty
+    }
+}
+
 $processNames = @('Bot.exe', 'AliWorkbench.exe', 'AliRender.exe', 'wwcmd.exe')
 $cimProcesses = @()
 $cimErrorType = $null
@@ -296,7 +412,9 @@ foreach ($listener in $webSocketListeners) {
     if ($owner -ne $null) { $webSocketOwnerNames += [string]$owner.Name }
 }
 $webSocketReachable = Test-LoopbackPort -Port 41010
-$botPids = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' } | ForEach-Object { [int]$_.ProcessId })
+$botProcesses = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' })
+$botPids = @($botProcesses | ForEach-Object { [int]$_.ProcessId })
+$runtimeSnapshot = Read-RuntimeAcceptanceSnapshot -Path $RuntimeSnapshotPath -BotProcesses $botProcesses
 $webSocketOwnedByBot = @($webSocketListeners | Where-Object {
     $botPids -contains [int]$_.OwningProcess
 }).Count -gt 0
@@ -432,17 +550,21 @@ $report = [ordered]@{
         [pscustomobject]@{ Name = 'bench_im renderer'; Status = $rendererCheckStatus }
         [pscustomobject]@{ Name = 'WebSocket 41010'; Status = $webSocketCheckStatus }
         [pscustomobject]@{ Name = 'CDP/IMSDK probe'; Status = $cdpCheckStatus }
+        [pscustomobject]@{ Name = 'ShopKey runtime mapping'; Status = [string]$runtimeSnapshot.Status }
     )
+    RuntimeShopSessions = $runtimeSnapshot
     Privacy = [ordered]@{
         CustomerMessagesIncluded = $false
         CredentialsIncluded = $false
         CookiesIncluded = $false
         TargetUrlsIncluded = $false
         RawCommandLinesIncluded = $false
+        RawShopKeysIncluded = $false
+        RawWebSocketSessionIdsIncluded = $false
         RawLogsIncluded = $false
         ScreenshotsIncluded = $false
         Uploaded = $false
-        Note = '只保存进程资源计数、端口状态、CDP目标数量和IMSDK属性类型/布尔值；不保存聊天正文、账号昵称、目标URL、命令行、Cookie、令牌、原始日志或截图。'
+        Note = '只保存进程资源计数、端口状态、CDP目标数量、IMSDK属性类型/布尔值，以及进程生命周期内HMAC化的ShopKey/会话引用和状态计数；不保存聊天正文、账号昵称、原始ShopKey、原始会话ID、目标URL、命令行、Cookie、令牌、原始日志或截图。'
     }
     Limitations = @(
         '此报告只做本机只读探测，不会发送测试消息，也不能证明真实买家消息已经送达。',
@@ -471,8 +593,23 @@ $markdown = @(
     ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
     ('- CDP endpoints inspected: ' + $cdpEndpoints.Count),
     '',
-    '## CDP / IMSDK'
+    '## CDP / IMSDK',
+    '',
+    '## ShopKey runtime mappings',
+    ('- Runtime snapshot: ' + $runtimeSnapshot.Status + $(if ($null -ne $runtimeSnapshot.AgeSeconds) { '; ageSeconds=' + $runtimeSnapshot.AgeSeconds } else { '' }))
 )
+if ($runtimeSnapshot.Status -eq 'fresh') {
+    $counts = $runtimeSnapshot.Counts
+    $markdown += ('- Connected sessions=' + $counts.ConnectedSessions + '; authoritative shops=' + $counts.AuthoritativeShopCount + '; duplicate sessions=' + $counts.DuplicateSessions + '; recoverable standbys=' + $counts.RecoverableStandbySessions + '; unmapped connected=' + $counts.UnmappedConnectedSessions)
+    foreach ($shop in $runtimeSnapshot.Shops) {
+        $markdown += ('- ' + $shop.ShopRef + ': owner=' + $shop.OwnerSessionRef + '; connected=' + $shop.OwnerConnected + '; initialized=' + $shop.OwnerInitialized + '; client=' + $shop.OwnerClientPresent + '; invalidated=' + $shop.OwnerClientInvalidated + '; retired=' + $shop.OwnerClientIdentityRetired + '; standbys=' + $shop.StandbyCount + '; recoverable=' + $shop.RecoverableStandbyCount)
+        foreach ($standby in $shop.Standbys) {
+            $markdown += ('  - ' + $standby.SessionRef + ': connected=' + $standby.Connected + '; recoverable=' + $standby.Recoverable + '; initialized=' + $standby.Initialized + '; closing=' + $standby.Closing)
+        }
+    }
+} else {
+    $markdown += '- Runtime ShopKey mapping snapshot unavailable or stale; no mapping conclusion is made.'
+}
 if ($cdpEndpoints.Count -eq 0) {
     $markdown += '- No unambiguous local CDP debug endpoint was detected.'
 } else {
@@ -486,7 +623,8 @@ if ($cdpEndpoints.Count -eq 0) {
 $markdown += @(
     '',
     '## Privacy',
-    '- Customer messages, account nicknames, credentials, cookies, target URLs, raw command lines, raw logs and screenshots are excluded.',
+    '- Customer messages, account nicknames, credentials, cookies, target URLs, raw ShopKeys, raw WebSocket session IDs, raw command lines, raw logs and screenshots are excluded.',
+    '- Shop and session references are HMAC aliases with a process-local random salt; aliases are not stable across Bot restarts.',
     '- No network upload or chat send is performed. CDP requests are loopback-only and read-only.',
     '',
     '## Limitations'
