@@ -807,7 +807,14 @@ def test_acceptance_diagnostics_is_read_only_and_redacts_customer_and_account_da
     script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
 
     assert "#requires -Version 5.1" in script
-    assert r"--render_id(?:=|\s+)bench_im" in script
+    assert r'(?i)(?:^|[\s"])--render_id(?:=|\s+)"?bench_im"?(?=$|[\s"])' in script
+    assert r'(?i)(?:^|[\s"])--remote-debugging-port(?:=|\s+)"?(\d+)"?(?=$|[\s"])' in script
+    assert "CommandLineAvailable = -not [string]::IsNullOrWhiteSpace" in script
+    assert "AliRenderCommandLineVisibleCount" in script
+    assert "AliRenderCommandLineUnavailableCount" in script
+    assert "QianniuLoopbackListenerCandidates" in script
+    assert "$_.AddressKind -eq 'loopback'" in script
+    assert "not probed because bench_im identity was not established" in script
     assert "41010" in script
     assert "Runtime.evaluate" in script
     assert "typeof window.imsdk" in script
