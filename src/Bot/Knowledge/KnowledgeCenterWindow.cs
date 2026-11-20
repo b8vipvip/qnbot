@@ -363,10 +363,11 @@ namespace Bot.Knowledge
                         Summary = Short(x.Question, 120),
                         Source = x
                     }));
-                    rows.AddRange(ConversationSessionLearningService.GetReports(500)
-                        .Where(x => x != null
-                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
-                            && string.Equals(x.Seller, seller, StringComparison.Ordinal))
+                    // Filter by the verified shop in SQL before applying the
+                    // per-shop limit; a global 500-row cap can hide this shop's
+                    // older history when other shops are more active.
+                    rows.AddRange(ConversationSessionLearningService.GetReportsForShop(shopKey, seller, 500)
+                        .Where(x => x != null)
                         .Select(x => new Row
                         {
                             SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
