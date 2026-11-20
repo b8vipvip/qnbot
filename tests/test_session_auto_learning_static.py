@@ -834,3 +834,18 @@ def test_acceptance_diagnostics_is_read_only_and_redacts_customer_and_account_da
         "Invoke-RestMethod",
     ]:
         assert forbidden not in script
+
+def test_reply_style_profile_requires_exact_stable_shop_scope():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    profile = service[
+        service.index("private static string ProfileKey"):
+        service.index("private static string GetStyleProfile")
+    ]
+
+    assert "var current = ShopSettingsScope.Current;" in profile
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in profile
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in profile
+    assert "!shop.HasStableSellerId" in profile
+    assert "shop.SellerNick, seller, StringComparison.Ordinal" in profile
+    assert "current.ShopKey, shop.ShopKey, StringComparison.Ordinal" in profile
+    assert "return string.Empty;" in profile
