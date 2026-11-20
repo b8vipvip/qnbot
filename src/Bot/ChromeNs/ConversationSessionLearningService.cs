@@ -857,8 +857,10 @@ namespace Bot.ChromeNs
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
                 report.RetryCount = session.RetryCount;
+                var corpusComplete = corpusAnalysis != null && corpusAnalysis.Complete;
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
                 if (EnableAutomaticWrites
+                    && corpusComplete
                     && CountHumanSellerTurns(turns, cards) >= 2
                     && !string.IsNullOrWhiteSpace(styleAfter))
                 {
@@ -881,6 +883,12 @@ namespace Bot.ChromeNs
                 {
                     foreach (var suggestion in suggestions)
                     {
+                        if (!corpusComplete)
+                        {
+                            suggestion.ApplyMessage = "Knowledge V2全库覆盖不完整或源版本发生变化，禁止自动写入生产知识库";
+                            skipped++;
+                            continue;
+                        }
                         if (KugouReceptionPolicy.Applies(session.Seller)
                             && RequiresWorkflowReview(suggestion))
                         {
@@ -919,7 +927,6 @@ namespace Bot.ChromeNs
 
                 report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
                 var allSuggestions = suggestions.Concat(corpusAnalysis.Candidates).ToList();
-                var corpusComplete = corpusAnalysis.Complete;
                 report.Status = EnableAutomaticWrites
                     ? (corpusComplete ? "学习完成" : "学习完成（V2全库覆盖不完整）")
                     : (corpusComplete ? "学习完成（dry-run）" : "学习完成（dry-run，V2全库覆盖不完整）");
