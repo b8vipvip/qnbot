@@ -115,9 +115,22 @@ namespace Bot.ChromeNs
             this._seller = seller;
             this.rpa = new QNRpa(this);
             this._buyerMessageBurstCoordinator = new BuyerMessageBurstCoordinator(ProcessBuyerBurstAsync);
-            // One per-shop low-frequency scheduler; actual refresh only after 7 days.
-            // It never opens a chat or sends a message.
-            ShopProductCatalogService.EnsureScheduled(seller == null ? null : seller.Nick);
+            // One low-frequency scheduler per stable ShopKey. Resolve the identity
+            // through the same profile path used by GetByShopIdentity; never key a timer
+            // by the mutable seller nickname.
+            try
+            {
+                if (seller != null)
+                    ShopProductCatalogService.EnsureScheduled(
+                        ShopContextLocator.ResolveRuntimeBySellerIdentity(seller));
+            }
+            catch (Exception ex)
+            {
+                // Scheduling is optional; an unresolved/ambiguous identity must not
+                // prevent a valid Qianniu connection from being constructed.
+                Log.Info("店铺商品周期更新未安排: identity resolution failed; type="
+                    + ex.GetType().Name);
+            }
         }
 
         public async Task<bool> SendTextAsync(string buyer, string text)

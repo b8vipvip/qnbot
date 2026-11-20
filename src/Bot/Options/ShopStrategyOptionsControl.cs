@@ -128,7 +128,8 @@ namespace Bot.Options
             layout.Children.Add(_items);
             Content = layout;
             Reload();
-            ShopProductCatalogService.EnsureScheduled(_seller);
+            // The QN lifecycle owns the single ShopKey-keyed scheduler. The settings
+            // page must not create a second timer keyed by a different identity string.
         }
 
         private static Button MakeButton(string label, double width,

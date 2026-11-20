@@ -26,7 +26,7 @@ concurrency:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -105,8 +105,24 @@ jobs:
           fi
 
           if [[ "$RELEASE_REQUIRED" == "true" ]]; then
-            release_path="$(jq -r '[.[] | select(.name == "Release" and ((.state // "") | ascii_downcase | startswith("disabled") | not))][0].path // empty' <<<"$catalog")"
-            [[ -n "$release_path" ]] || { echo "::error::Release is required but no enabled Release workflow exists"; exit 1; }
+            release_entry="$(jq -c '[.[] | select((.path == ".github/workflows/publish-bot-auto-update-release.yml" or .name == "Publish Bot auto-update release" or .name == "Release") and (((.state // "") | ascii_downcase | startswith("disabled")) | not))] | sort_by(if .path == ".github/workflows/publish-bot-auto-update-release.yml" then 0 elif .name == "Publish Bot auto-update release" then 1 else 2 end) | .[0] // {}' <<<"$catalog")"
+            release_path="$(jq -r '.path // empty' <<<"$release_entry")"
+            release_name="$(jq -r '.name // empty' <<<"$release_entry")"
+            [[ -n "$release_path" && -n "$release_name" ]] || {
+              echo "::error::Release is required but no enabled release workflow was found."
+              exit 1
+            }
+            gh workflow view "$release_path" --repo "$REPOSITORY" --yaml > /tmp/gptauto-release-workflow.yml
+            grep -Eq '^[[:space:]]*workflow_dispatch:' /tmp/gptauto-release-workflow.yml || {
+              echo "::error::Release workflow $release_path has no workflow_dispatch trigger."
+              exit 1
+            }
+            grep -Eq '^[[:space:]]{6}source_sha:' /tmp/gptauto-release-workflow.yml || {
+              echo "::error::Release workflow $release_path must accept a source_sha input so Reconcile cannot publish a different master build."
+              exit 1
+            }
+            echo "release-path=$release_path" >> "$GITHUB_OUTPUT"
+            echo "release-name=$release_name" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Wait for terminal post-merge validation gates
@@ -161,6 +177,8 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           MERGE_SHA: ${{ inputs.merge_sha }}
           RELEASE_REQUIRED: ${{ inputs.release_required }}
+          RELEASE_PATH: ${{ steps.validation-plan.outputs.release-path }}
+          RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -189,51 +207,108 @@ jobs:
           proof="$(find_release_for_merge || true)"
           release_run_id=""
           if [[ -z "$proof" ]]; then
-            catalog="$(gh api --paginate --slurp "repos/$REPOSITORY/actions/workflows?per_page=100" | jq -c '[.[].workflows[]]')"
-            release_path="$(jq -r '[.[] | select(.name == "Release" and ((.state // "") | ascii_downcase | startswith("disabled") | not))][0].path // empty' <<<"$catalog")"
-            [[ -n "$release_path" ]] || { echo "::error::Release is required but no enabled Release workflow exists"; exit 1; }
+            [[ -n "$RELEASE_PATH" && -n "$RELEASE_NAME" ]] || {
+              echo "::error::Validated release workflow metadata is missing."
+              exit 1
+            }
 
-            runs_before="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
-            baseline="$(jq '[.workflow_runs[] | select(.name == "Release") | .id] | max // 0' <<<"$runs_before")"
-            gh workflow view "$release_path" --repo "$REPOSITORY" --yaml > /tmp/gptauto-release-workflow.yml
-
-            if grep -Eq '^[[:space:]]+source_sha:' /tmp/gptauto-release-workflow.yml; then
-              gh workflow run "$release_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f source_sha="$MERGE_SHA"
-            else
-              current_main="$(gh api "repos/$REPOSITORY/commits/$DEFAULT_BRANCH" --jq '.sha')"
-              [[ "$current_main" == "$MERGE_SHA" ]] || {
-                echo "::error::Release workflow has no source_sha input and $DEFAULT_BRANCH moved to $current_main; refusing to publish the wrong commit"
-                exit 1
-              }
-              gh workflow run "$release_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"
-            fi
-            echo "Dispatched Release only after all post-merge validation gates passed."
-
-            deadline=$((SECONDS + 900))
-            while (( SECONDS < deadline )); do
+            # Wait for the Windows artifact built from this exact merge SHA.
+            build_deadline=$((SECONDS + 600))
+            build_row="{}"
+            while (( SECONDS < build_deadline )); do
               runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
-              row="$(jq -c --argjson baseline "$baseline" '[.workflow_runs[] | select(.name == "Release" and .id > $baseline)] | sort_by(.created_at, .id) | reverse | .[0] // {}' <<<"$runs")"
-              status="$(jq -r '.status // "missing"' <<<"$row")"
-              conclusion="$(jq -r '.conclusion // ""' <<<"$row")"
-              release_run_id="$(jq -r '.id // ""' <<<"$row")"
-              if [[ "$status" == "completed" ]]; then
-                [[ "$conclusion" == "success" ]] || {
-                  echo "::error::Release workflow failed with $conclusion (run $release_run_id)"
-                  exit 1
-                }
-                proof="$(find_release_for_merge || true)"
-                [[ -n "$proof" ]] || {
-                  echo "::error::Release workflow succeeded without published GitHub Release evidence targeting merge $MERGE_SHA (run $release_run_id)"
+              build_row="$(jq -c --arg branch "$DEFAULT_BRANCH" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == "Windows x64 release build" and .head_branch == $branch and .head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0] // empty' <<<"$runs")"
+              if [[ -z "$build_row" || "$build_row" == "null" ]]; then
+                build_row="$(jq -c --arg branch "$DEFAULT_BRANCH" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == "Windows x64 release build" and .head_branch == $branch and .head_sha == $sha)] | sort_by(.created_at, .id) | reverse | .[0] // {}' <<<"$runs")"
+              fi
+              build_status="$(jq -r '.status // "missing"' <<<"$build_row")"
+              build_conclusion="$(jq -r '.conclusion // ""' <<<"$build_row")"
+              if [[ "$build_status" == "completed" ]]; then
+                [[ "$build_conclusion" == "success" ]] || {
+                  echo "::error::Exact-SHA Windows x64 build failed with $build_conclusion for $MERGE_SHA"
                   exit 1
                 }
                 break
               fi
+              sleep 10
+            done
+            build_run_id="$(jq -r '.id // ""' <<<"$build_row")"
+            build_status="$(jq -r '.status // "missing"' <<<"$build_row")"
+            build_conclusion="$(jq -r '.conclusion // ""' <<<"$build_row")"
+            [[ -n "$build_run_id" && "$build_status" == "completed" && "$build_conclusion" == "success" ]] || {
+              echo "::error::Timed out waiting for a successful Windows x64 build for exact merge SHA $MERGE_SHA"
+              exit 1
+            }
+
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+            # Reuse an automatic workflow_run or a previous successful dispatch;
+            # never launch a second publisher while the exact-SHA run is active.
+            release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == $workflow and .head_sha == $sha and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            if [[ -z "$release_run_id" ]]; then
+              release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == $workflow and .head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            fi
+
+            # The Windows build completion fires the automatic publisher. Give it
+            # a short registration window before falling back to a pinned dispatch.
+            if [[ -z "$release_run_id" ]]; then
+              registration_deadline=$((SECONDS + 45))
+              while (( SECONDS < registration_deadline )); do
+                runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+                release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == $workflow and .head_sha == $sha and .event == "workflow_run" and (.status != "completed" or .conclusion == "success"))] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+                [[ -n "$release_run_id" ]] && break
+                sleep 3
+              done
+            fi
+
+            if [[ -z "$release_run_id" ]]; then
+              current_main="$(gh api "repos/$REPOSITORY/commits/$DEFAULT_BRANCH" --jq '.sha')"
+              [[ "$current_main" == "$MERGE_SHA" ]] || {
+                echo "::error::$DEFAULT_BRANCH moved to $current_main before release dispatch; refusing to publish a different commit"
+                exit 1
+              }
+              baseline="$(jq -r --arg workflow "$RELEASE_NAME" '[.workflow_runs[] | select(.name == $workflow) | .id] | max // 0' <<<"$runs")"
+              gh workflow run "$RELEASE_PATH" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f source_sha="$MERGE_SHA"
+              echo "Dispatched exact-SHA release workflow $RELEASE_PATH for $MERGE_SHA."
+
+              registration_deadline=$((SECONDS + 90))
+              while (( SECONDS < registration_deadline )); do
+                runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+                release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg sha "$MERGE_SHA" --argjson baseline "$baseline" '[.workflow_runs[] | select(.name == $workflow and .head_sha == $sha and .event == "workflow_dispatch" and .id > $baseline)] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+                [[ -n "$release_run_id" ]] && break
+                sleep 3
+              done
+            fi
+            [[ -n "$release_run_id" ]] || {
+              echo "::error::Release workflow $RELEASE_NAME was not registered for exact merge SHA $MERGE_SHA"
+              exit 1
+            }
+
+            deadline=$((SECONDS + 900))
+            while (( SECONDS < deadline )); do
+              row="$(gh api "repos/$REPOSITORY/actions/runs/$release_run_id")"
+              status="$(jq -r '.status // "missing"' <<<"$row")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$row")"
+              if [[ "$status" == "completed" ]]; then
+                [[ "$conclusion" == "success" ]] || {
+                  echo "::error::$RELEASE_NAME failed with $conclusion (run $release_run_id)"
+                  exit 1
+                }
+                proof="$(find_release_for_merge || true)"
+                [[ -n "$proof" ]] && break
+              fi
               sleep 5
             done
-            [[ -n "$proof" ]] || { echo "::error::Timed out waiting for published release evidence"; exit 1; }
+            [[ -n "$proof" ]] || {
+              echo "::error::Timed out waiting for published release evidence targeting merge $MERGE_SHA"
+              exit 1
+            }
           else
             runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
-            release_run_id="$(jq -r '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            release_run_id="$(jq -r --arg workflow "$RELEASE_NAME" --arg sha "$MERGE_SHA" '[.workflow_runs[] | select(.name == $workflow and .head_sha == $sha and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+            [[ -n "$release_run_id" ]] || {
+              echo "::error::Published release targets $MERGE_SHA but no successful $RELEASE_NAME run can be identified."
+              exit 1
+            }
           fi
 
           release_id="${proof%%$'\t'*}"

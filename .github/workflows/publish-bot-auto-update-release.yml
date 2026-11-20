@@ -6,6 +6,11 @@ on:
     types: [completed]
     branches: [master]
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact master commit to publish (set by GPTAuto Reconcile)
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -27,7 +32,7 @@ jobs:
       - name: Checkout verified release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'master' }}
+          ref: ${{ inputs.source_sha || github.event.workflow_run.head_sha || 'master' }}
           fetch-depth: 1
 
       - name: Check whether the verified range changes Bot product files
@@ -88,24 +93,42 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_json="$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow "Windows x64 release build" \
-              --branch master \
-              --status success \
-              --limit 1 \
-              --json databaseId,number,headSha \
-              --jq '.[0]')"
-            if [[ -z "$run_json" || "$run_json" == "null" ]]; then
-              echo "No successful master Windows x64 release build was found." >&2
-              exit 1
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ -n "$SOURCE_SHA" ]]; then
+              runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SOURCE_SHA&per_page=100")"
+              run_json="$(jq -c --arg source_sha "$SOURCE_SHA" '[.workflow_runs[] | select(.name == "Windows x64 release build" and .head_branch == "master" and .status == "completed" and .conclusion == "success" and .head_sha == $source_sha)] | sort_by(.created_at, .id) | reverse | .[0] // empty' <<<"$runs")"
+              if [[ -z "$run_json" || "$run_json" == "null" ]]; then
+                echo "No successful master Windows x64 release build exists for requested source SHA $SOURCE_SHA." >&2
+                exit 1
+              fi
+              run_id="$(jq -r '.id' <<<"$run_json")"
+              run_number="$(jq -r '.run_number' <<<"$run_json")"
+              head_sha="$(jq -r '.head_sha' <<<"$run_json")"
+              [[ "$head_sha" == "$SOURCE_SHA" ]] || {
+                echo "Resolved Windows build SHA $head_sha does not match requested source SHA $SOURCE_SHA." >&2
+                exit 1
+              }
+            else
+              run_json="$(gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "Windows x64 release build" \
+                --branch master \
+                --status success \
+                --limit 1 \
+                --json databaseId,number,headSha \
+                --jq '.[0]')"
+              if [[ -z "$run_json" || "$run_json" == "null" ]]; then
+                echo "No successful master Windows x64 release build was found." >&2
+                exit 1
+              fi
+              run_id="$(jq -r '.databaseId' <<<"$run_json")"
+              run_number="$(jq -r '.number' <<<"$run_json")"
+              head_sha="$(jq -r '.headSha' <<<"$run_json")"
             fi
-            run_id="$(jq -r '.databaseId' <<<"$run_json")"
-            run_number="$(jq -r '.number' <<<"$run_json")"
-            head_sha="$(jq -r '.headSha' <<<"$run_json")"
           else
             run_id="${{ github.event.workflow_run.id }}"
             run_number="${{ github.event.workflow_run.run_number }}"

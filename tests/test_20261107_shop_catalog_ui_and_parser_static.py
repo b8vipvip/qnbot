@@ -67,3 +67,23 @@ def test_reader_included_in_production_windows_build():
     assert "ShopProductCatalogService.cs" in targets
     assert "ShopOrderProductRulesUi.cs" in targets
     assert "ShopStrategyOptionsControl.cs" in targets
+
+
+def test_shop_catalog_refresh_uses_authoritative_shopkey_session_and_one_scheduler():
+    service = read("src/Bot/ChromeNs/ShopProductCatalogService.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    settings = read("src/Bot/Options/ShopStrategyOptionsControl.cs")
+
+    refresh = service.split(
+        "internal static async Task<int> RefreshAsync(ShopContext shop", 1
+    )[1].split("\n        }", 1)[0]
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in refresh
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId)" in refresh
+    assert "QN.FindExistingBySellerNick(seller)" not in refresh
+    assert "Gates.GetOrAdd(shopKey" in refresh
+    assert "LastAttempts.TryGetValue(shopKey" in refresh
+    assert "Pollers.GetOrAdd(shopKey" in service
+    assert "ShopProductCatalogService.EnsureScheduled(" in qn
+    assert "ResolveRuntimeBySellerIdentity(seller)" in qn
+    assert "EnsureScheduled(_seller)" not in settings
+    assert "ShopSettingsScope.Enter(shop, false)" in refresh

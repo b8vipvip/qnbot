@@ -70,3 +70,24 @@ def test_draft_pr_becomes_explicit_user_action_after_all_ci_passes():
     assert 'blocked-reason=$(jq -r' in executor_workflow
     assert "Complete the required Windows/千牛 real-client acceptance" in executor_workflow
     assert 'elif [[ "$BLOCKED_REASON" == "draft_pr_requires_real_client_acceptance" ]]; then' in executor_workflow
+
+
+def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha():
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    release = read(".github/workflows/publish-bot-auto-update-release.yml")
+
+    assert 'publish-bot-auto-update-release.yml' in reconcile
+    assert 'Publish Bot auto-update release' in reconcile
+    assert 'release-path=$release_path' in reconcile
+    assert 'release-name=$release_name' in reconcile
+    assert 'RELEASE_PATH: ${{ steps.validation-plan.outputs.release-path }}' in reconcile
+    assert 'RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}' in reconcile
+    assert '-f source_sha="$MERGE_SHA"' in reconcile
+    assert 'select(.name == $workflow and .head_sha == $sha' in reconcile
+    assert 'event == "workflow_run"' in reconcile
+    assert 'event == "workflow_dispatch"' in reconcile
+    assert 'inputs.source_sha' in release
+    assert 'SOURCE_SHA: ${{ inputs.source_sha }}' in release
+    assert 'head_sha == $source_sha' in release
+    assert 'source_sha:' in release
+    assert 'timeout-minutes: 60' in reconcile

@@ -126,3 +126,14 @@ def test_shop_product_catalog_uses_the_bound_scope_and_stable_shopkey_outside_ui
     assert "ResolveRuntimeByShopKey(sellerNick)" in locator
     assert "IsQianniuShopKey(sellerNick)" in locator
     assert "shopStrategy = new ShopStrategyOptionsControl(_shop.ShopKey);" in window
+
+
+def test_offline_product_reply_rules_are_optional_during_settings_initialization():
+    feature = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    start = feature.index("try\n            {\n                _orderProductRulesUi = new ShopOrderProductRulesUi")
+    end = feature.index("if (legacyStack != null)", start)
+    optional_rules = feature[start:end]
+    assert "catch (Exception ex)" in optional_rules
+    assert "_orderProductRulesUi = null;" in optional_rules
+    assert "Product-specific rules are optional" in optional_rules
+    assert "Log.Exception(ex);" in optional_rules
