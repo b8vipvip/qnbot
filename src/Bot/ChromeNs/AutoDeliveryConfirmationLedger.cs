@@ -72,7 +72,7 @@ namespace Bot.ChromeNs
                             var migrated = MigratePendingConfirmationIntentsLocked();
                             // Never replace an unreadable/invalid ledger, even if legacy queue
                             // migration found records. A partial replacement could erase old barriers.
-                            if (!_failClosed && (migrated || _migrationRequired || !File.Exists(path)))
+                            if (!_failClosed && (migrated || _migrationRequired || !File.Exists(StatePath())))
                             {
                                 if (!SaveLocked()) _failClosed = true;
                                 else _migrationRequired = false;
@@ -121,6 +121,7 @@ namespace Bot.ChromeNs
             var legacyKey = BuildLegacyKey(seller, orderId);
             lock (Sync)
             {
+                if (_failClosed) return true;
                 var path = StatePath();
                 using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
