@@ -420,3 +420,32 @@ def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwr
     assert "拒绝重置或覆盖现有任务文件" in loader
     assert "保留原文件" in loader
     assert "loadedSuccessfully = true;" not in loader[loader.index("catch (Exception ex)"):]
+
+
+
+def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_never_second_confirm():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    execute = runtime[
+        runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        runtime.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")
+    ]
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    uncertain = process[
+        process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"):
+        process.index("default:", process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"))
+    ]
+
+    assert "if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId))" in execute
+    assert execute.index("if (AutoDeliveryConfirmationLedger.HasIntent") < execute.index("if (!verificationOnly")
+    assert execute.index("TrySilentAutoDeliveryPreflightAsync(snapshot)") < execute.index("if (verificationOnly)")
+    assert "保持只读，不切换前台买家且绝不再次确认发货" in execute
+    assert execute.index("if (verificationOnly)") < execute.index("BotActivityCoordinator.IsSafeToAutoFocus")
+    assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)" in execute
+    assert execute.index("TryPersistConfirmationIntent") < execute.index('ReadModalStateAsync("confirm")')
+    assert "repeatConfirm=false" in execute
+    assert "live.ConfirmationUncertainCount++;" in uncertain
+    assert "live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);" in uncertain
+    assert 'MarkResolved(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, "manual_review_required")' in uncertain
