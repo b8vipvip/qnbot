@@ -141,6 +141,23 @@ def capture(
     release_event_published = event == "release" and str(release_state or "").lower() in {"published", "released"}
     explicit_release_published = str(release_published or "").strip().lower() in {"true", "1", "yes"}
     release_done = release_event_published or (explicit_release_published and _passed(release_conclusion))
+    terminal_reconcile_evidence = (
+        evidence_provenance == "reconciler"
+        and merged
+        and bool(str(merge_sha or "").strip())
+        and _passed(main_ci_conclusion)
+        and bool(str(main_ci_run_id or "").strip())
+        and (
+            not release_required
+            or (
+                explicit_release_published
+                and _passed(release_conclusion)
+                and bool(str(release_run_id or "").strip())
+                and bool(str(release_id or "").strip())
+                and bool(str(release_tag or "").strip())
+            )
+        )
+    )
     main_ci_done = _passed(main_ci_conclusion) or (
         event == "workflow_run"
         and workflow_success
@@ -271,10 +288,9 @@ def capture(
     elif pr_number and not merged:
         state = State.EXECUTE
     elif merged:
-        if release_required:
-            state = State.DONE if (main_ci_done and release_done) else State.VERIFY
-        else:
-            state = State.DONE if main_ci_done else State.VERIFY
+        # Ordinary Observer evidence can only request Reconcile. Only a
+        # Reconcile capture with exact successful run IDs may mark this merge DONE.
+        state = State.DONE if terminal_reconcile_evidence else State.VERIFY
     elif event == "workflow_run" and workflow_success and branch == default_branch:
         state = State.DONE
     elif event in {"push", "workflow_run", "release"}:
@@ -324,6 +340,9 @@ def capture(
             "release_published": bool(release_done),
             "release_id": str(release_id or ""),
             "blocked_reason": effective_blocked_reason,
+            "terminal_done_provenance": "reconciler" if terminal_reconcile_evidence else "",
+            "terminal_done_merge_sha": merge_sha if terminal_reconcile_evidence else "",
+            "terminal_reconcile_run_id": str(run_id or "") if terminal_reconcile_evidence else "",
         },
     )
     t.history = [

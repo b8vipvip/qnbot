@@ -241,14 +241,31 @@ namespace Bot.ChromeNs
             var shopKey = shop.ShopKey;
             delayMinutes = AutoDeliverySettings.Clamp(delayMinutes);
             var now = DateTime.Now;
+            var preservedForVerification = 0;
             lock (Sync)
             {
                 if (!enabled)
                 {
-                    var removed = _state.Pending.RemoveAll(x => x != null && x.Snapshot != null
+                    var scoped = _state.Pending.Where(x => x != null && x.Snapshot != null
                         && string.Equals(x.Snapshot.ShopKey ?? string.Empty, shopKey, StringComparison.Ordinal)
-                        && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal));
-                    if (removed > 0) Log.Info("关闭自动发货后已取消该店铺未执行任务，但长期确认防重账本保留: seller=" + seller + ", count=" + removed);
+                        && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)).ToList();
+                    var removed = 0;
+                    foreach (var record in scoped)
+                    {
+                        if (HasConfirmationIntent(record))
+                        {
+                            if (!record.ConfirmationIntentAt.HasValue)
+                                record.ConfirmationIntentAt = now;
+                            record.NextAttemptAt = now;
+                            preservedForVerification++;
+                            continue;
+                        }
+                        _state.Pending.Remove(record);
+                        removed++;
+                    }
+                    if (removed > 0 || preservedForVerification > 0)
+                        Log.Info("关闭自动发货后已取消未执行任务，并保留已消耗确认权限的任务进行只读复核: seller="
+                            + seller + ", cancelled=" + removed + ", verificationOnly=" + preservedForVerification);
                 }
                 else
                 {
@@ -264,7 +281,7 @@ namespace Bot.ChromeNs
                 }
                 SaveStateLocked();
             }
-            if (enabled) ScheduleWorker();
+            if (enabled || preservedForVerification > 0) ScheduleWorker();
         }
 
         public static bool TryPersistConfirmationIntent(string shopKey, string seller, string orderId)
@@ -390,9 +407,9 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop))
                 {
                     var cfg = AutoDeliverySettings.Load(snapshot.Seller);
-                    if (cfg == null || !cfg.Enabled)
+                    if (!verificationOnly && (cfg == null || !cfg.Enabled))
                     {
-                        RemoveRecord(record, "功能已关闭");
+                        RemoveRecord(record, "功能已关闭且尚未消耗确认权限");
                         return;
                     }
                     result = await qn.TryExecuteVirtualGoodsAutoDeliveryAsync(snapshot, verificationOnly).ConfigureAwait(false);
@@ -512,6 +529,14 @@ namespace Bot.ChromeNs
             Log.Info("虚拟商品自动发货任务结束: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", detail=" + (reason ?? string.Empty) + ", longLedgerPreserved=" + AutoDeliveryConfirmationLedger.HasIntent(record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId));
         }
 
+        private static bool HasConfirmationIntent(PendingRecord record)
+        {
+            if (record == null || record.Snapshot == null) return false;
+            return record.ConfirmationIntentAt.HasValue
+                || AutoDeliveryConfirmationLedger.HasIntent(
+                    record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId);
+        }
+
         private static PendingRecord FindLiveRecordLocked(string key)
         {
             return _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
@@ -529,7 +554,22 @@ namespace Bot.ChromeNs
             var expired = _state.Pending.Where(x => x == null || x.Snapshot == null || x.ExpiresAt <= now).ToList();
             foreach (var item in expired)
             {
-                if (item != null && item.Snapshot != null) Log.Info("虚拟商品自动发货队列任务已过期并停止；长期确认防重账本不受影响: seller=" + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId + ", confirmationIntent=" + item.ConfirmationIntentAt.HasValue);
+                if (item != null && item.Snapshot != null)
+                {
+                    if (HasConfirmationIntent(item))
+                    {
+                        AutoDeliveryConfirmationLedger.MarkResolved(
+                            item.Snapshot.ShopKey, item.Snapshot.Seller, item.Snapshot.OrderId,
+                            "manual_review_required");
+                        Log.Error("虚拟商品自动发货只读复核任务超过24小时，已转人工复核；长期防重账本继续阻止重复确认: seller="
+                            + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId);
+                    }
+                    else
+                    {
+                        Log.Info("虚拟商品自动发货队列任务已过期并停止: seller="
+                            + item.Snapshot.Seller + ", orderId=" + item.Snapshot.OrderId);
+                    }
+                }
                 _state.Pending.Remove(item);
             }
         }
@@ -715,9 +755,11 @@ namespace Bot.ChromeNs
             if (runtimeShop == null || string.IsNullOrWhiteSpace(snapshot.ShopKey)
                 || !string.Equals(runtimeShop.ShopKey, snapshot.ShopKey, StringComparison.Ordinal))
                 return AutoDeliveryAttemptResult.Deferred("当前千牛会话ShopKey与订单任务不一致");
-            if (!AutoDeliverySettings.Load(seller).Enabled) return AutoDeliveryAttemptResult.Terminal("自动发货已关闭");
+            if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId))
+                verificationOnly = true;
+            if (!verificationOnly && !AutoDeliverySettings.Load(seller).Enabled)
+                return AutoDeliveryAttemptResult.Terminal("自动发货已关闭");
             if (cdp == null || rpa == null) return verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核时千牛控制通道尚未连接") : AutoDeliveryAttemptResult.Deferred("千牛控制通道尚未连接");
-            if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId)) verificationOnly = true;
 
             if (_sendGate.CurrentCount < 1 || _incomingMessageGate.CurrentCount < 1 || _backgroundRecoveryGate.CurrentCount < 1)
                 return verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核等待当前消息/发送任务完成") : AutoDeliveryAttemptResult.Deferred("当前正在处理消息、发送或后台恢复任务");

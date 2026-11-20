@@ -274,3 +274,36 @@ def test_auto_delivery_queue_cursor_and_confirmation_ledger_are_shopkey_isolated
     assert "MarkResolved(string shopKey, string seller, string orderId" in ledger
     assert "BuildLegacyKey(seller, orderId)" in ledger
     assert "loaded.Schema == 1" in ledger
+
+
+
+def test_disabling_auto_delivery_preserves_consumed_confirmation_for_read_only_recovery():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    reconfigure = runtime[
+        runtime.index("public static void ReconfigureSeller"):
+        runtime.index("public static bool TryPersistConfirmationIntent")
+    ]
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    execute = runtime[
+        runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        runtime.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")
+    ]
+    cleanup = runtime[
+        runtime.index("private static void CleanupExpiredLocked"):
+        runtime.index("private static DateTime ResolveAnchor")
+    ]
+
+    assert "if (HasConfirmationIntent(record))" in reconfigure
+    assert "preservedForVerification++;" in reconfigure
+    assert "if (enabled || preservedForVerification > 0) ScheduleWorker();" in reconfigure
+    assert "if (!verificationOnly && (cfg == null || !cfg.Enabled))" in process
+    assert "if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId))" in execute
+    assert "if (!verificationOnly && !AutoDeliverySettings.Load(seller).Enabled)" in execute
+    verification_stop = execute.index("if (verificationOnly)")
+    focus = execute.index("BotActivityCoordinator.IsSafeToAutoFocus", verification_stop)
+    assert verification_stop < focus
+    assert '"manual_review_required"' in cleanup
+    assert "只读复核任务超过24小时，已转人工复核" in cleanup

@@ -146,3 +146,37 @@ def test_release_waits_for_exact_sha_api_control_plane_ci_before_publishing():
     assert 'select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $source_sha)' in gate
     assert '[[ "$conclusion" == "success" ]]' in gate
     assert 'Timed out waiting for API control plane CI on exact release SHA' in gate
+
+
+
+def test_merged_tasks_cannot_become_terminal_without_reconcile_provenance():
+    observer = read(".github/gptauto/observer.py")
+    orchestrator = read(".github/gptauto/orchestrator.py")
+
+    assert 'evidence_provenance == "reconciler"' in observer
+    assert "terminal_reconcile_evidence" in observer
+    assert '"terminal_done_provenance": "reconciler" if terminal_reconcile_evidence else ""' in observer
+    assert 'str(task.metadata.get("terminal_done_provenance") or "") == "reconciler"' in orchestrator
+    assert 'str(task.metadata.get("terminal_done_merge_sha") or "") == merge_sha' in orchestrator
+    assert 'return "RECONCILE"' in orchestrator
+    assert '"WAITING_GITHUB", "RECONCILE"' in orchestrator
+
+
+def test_terminal_reconcile_receipt_is_mandatory_and_verified_before_state_upload():
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    receipt_start = reconcile.index("- name: Publish terminal foreground receipt")
+    upload_start = reconcile.index("- uses: ./.github/actions/upload-gptauto-log")
+    rollback_start = reconcile.index("- name: Reopen lease if terminal persistence failed")
+    summary_start = reconcile.index("- name: Terminal receipt summary")
+    receipt = reconcile[receipt_start:summary_start]
+
+    assert receipt_start < upload_start < rollback_start < summary_start
+    assert "continue-on-error: true" not in reconcile[receipt_start:upload_start]
+    assert "steps.lease-receipt.outcome == 'success'" in reconcile[upload_start:rollback_start]
+    assert "gh api --paginate" in receipt
+    assert "verified_comments=" in receipt
+    assert "Completion Lease is RELEASED" in receipt
+    assert "Terminal state: DONE" in receipt
+    assert "Completion Lease comment was not durably updated to RELEASED" in receipt
+    assert "failure() && steps.terminal.outcome == 'success'" in receipt
+    assert "Unable to restore active Completion Lease" in receipt

@@ -737,3 +737,17 @@ def test_corpus_prompt_never_exposes_raw_knowledge_record_ids():
     assert "expected.TryGetValue(id, out record)" in parser
     assert "KnowledgeId = record.Id" in parser
     assert '["id"] = record.Id ?? string.Empty' not in prompt
+
+
+
+def test_live_session_learning_rejects_mismatched_shop_scope():
+    service = text("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    observe = service[
+        service.index("public static void ObserveLiveMessage"):
+        service.index("public static string BuildReplyStylePromptAddon")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick(seller)" in observe
+    assert "shop.SellerNick, seller, StringComparison.Ordinal" in observe
+    assert "ShopSettingsScope.Current.ShopKey, shop.ShopKey" in observe
+    assert "拒绝卖家与当前ShopKey作用域不匹配" in observe

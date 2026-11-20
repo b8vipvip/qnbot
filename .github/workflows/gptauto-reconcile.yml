@@ -456,16 +456,11 @@ jobs:
           [[ "$captured_release_required" == "$RELEASE_REQUIRED" ]] || { echo "::error::Terminal capture changed release intent"; exit 1; }
           [[ "$captured_provenance" == "reconciler" ]] || { echo "::error::Terminal capture provenance is not reconciler"; exit 1; }
           echo "task-id=$captured_task_id" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/upload-gptauto-log
-        if: ${{ steps.terminal.outcome == 'success' && steps.terminal.outputs.task-id != '' }}
-        with:
-          task-id: ${{ steps.terminal.outputs.task-id }}
-          retention-days: '30'
       - name: Publish terminal foreground receipt
+        id: lease-receipt
         if: ${{ steps.terminal.outcome == 'success' && steps.terminal.outputs.task-id != '' }}
-        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TASK_ID: ${{ inputs.task_id }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -480,13 +475,58 @@ jobs:
           Terminal state: DONE
           Merge SHA: $MERGE_SHA
           Foreground completion is now permitted because Reconcile produced terminal DONE evidence."
-          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
-          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
             gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
           else
             gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
           fi
+          verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
+          grep -Fq "Completion Lease is RELEASED" <<<"$verified_body" || {
+            echo "::error::Completion Lease comment was not durably updated to RELEASED."
+            exit 1
+          }
+          grep -Fq "Terminal state: DONE" <<<"$verified_body" || {
+            echo "::error::Completion Lease receipt is missing terminal DONE evidence."
+            exit 1
+          }
+      - uses: ./.github/actions/upload-gptauto-log
+        id: terminal-artifact
+        if: ${{ steps.terminal.outcome == 'success' && steps.terminal.outputs.task-id != '' && steps.lease-receipt.outcome == 'success' }}
+        with:
+          task-id: ${{ steps.terminal.outputs.task-id }}
+          retention-days: '30'
+      - name: Reopen lease if terminal persistence failed
+        if: ${{ failure() && steps.terminal.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TASK_ID: ${{ inputs.task_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          body="$marker
+          GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: reconcile_recovery).
+
+          Terminal capture succeeded for merge $MERGE_SHA, but the terminal receipt or durable artifact upload failed. This task is NOT complete; rerun Reconcile until both terminal evidence and its foreground receipt are durably published."
+          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
+          verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
+          grep -Fq "Completion Lease is ACTIVE" <<<"$verified_body" || {
+            echo "::error::Unable to restore active Completion Lease after terminal persistence failure."
+            exit 1
+          }
       - name: Terminal receipt summary
         if: ${{ steps.terminal.outcome == 'success' && steps.terminal.outputs.task-id != '' }}
         env:

@@ -22,6 +22,16 @@ def canonical_phase(task: Task) -> str:
     event_head = str(task.metadata.get("event_head_sha") or "")
     current_head = str(task.metadata.get("current_pr_head_sha") or task.metadata.get("head_sha") or "")
     current_event = not (event_head and current_head and event_head != current_head)
+    merge_sha = str(task.metadata.get("merge_sha") or "")
+    terminal_reconciled = (
+        bool(merge_sha)
+        and str(task.metadata.get("terminal_done_provenance") or "") == "reconciler"
+        and str(task.metadata.get("terminal_done_merge_sha") or "") == merge_sha
+    )
+    # A successful Reconcile receipt is immutable for this exact merge SHA.
+    # Later Observer events may add evidence, but cannot reopen or bypass it.
+    if terminal_reconciled:
+        return "DONE"
 
     # GitHub uses action_required for an approval/actor intervention gate. It is
     # not product-code failure evidence and must never spend a repair generation.
@@ -58,6 +68,10 @@ def canonical_phase(task: Task) -> str:
     if bool(task.metadata.get("release_required")):
         if not release or release.status not in {GateStatus.PASSED, GateStatus.SKIPPED}:
             return "RELEASE_VERIFY" if task.metadata.get("release_run_id") else "RELEASE"
+    # A merged PR is not terminal merely because Observer can see green CI and a
+    # published tag. Reconcile must capture exact-SHA terminal evidence itself.
+    if str(task.metadata.get("pr_number") or "").strip() and merge_sha:
+        return "RECONCILE"
     if task.required_gates_satisfied() and task.criteria_satisfied():
         return "DONE"
     if task.state == State.BLOCKED:
@@ -73,7 +87,7 @@ def canonicalize_task(task: Task) -> dict:
         task.state = State.DONE
     elif phase == "REPAIR_REQUIRED":
         task.state = State.EXECUTE
-    elif phase in {"POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB"}:
+    elif phase in {"POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB", "RECONCILE"}:
         task.state = State.VERIFY
     elif phase == "USER_ACTION_REQUIRED":
         task.state = State.BLOCKED

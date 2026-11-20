@@ -349,6 +349,15 @@ namespace Bot.ChromeNs
                 }
             }
 
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || (ShopSettingsScope.Current != null
+                    && !string.Equals(ShopSettingsScope.Current.ShopKey, shop.ShopKey, StringComparison.Ordinal)))
+            {
+                Log.ErrorWithMaxCount("接待自动学习拒绝卖家与当前ShopKey作用域不匹配的消息: seller=" + seller, 10);
+                return;
+            }
+
             var now = DateTime.Now;
             var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
             var key = Key(shop.ShopKey, seller, buyer);
