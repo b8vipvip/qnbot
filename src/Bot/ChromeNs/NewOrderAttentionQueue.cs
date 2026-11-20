@@ -78,7 +78,8 @@ namespace Bot.ChromeNs
 
         private static string Key(OrderSnapshot snapshot)
         {
-            return (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (snapshot.ShopKey ?? string.Empty).Trim()
+                + "#" + (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (snapshot.OrderId ?? string.Empty).Trim()
                 + "#" + snapshot.EventType;
         }
@@ -255,7 +256,7 @@ namespace Bot.ChromeNs
             if (_backgroundRecoveryGate.CurrentCount < 1) return Denied("正在补抓后台消息");
 
             string reason;
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason, snapshot.ShopKey)) return Denied(reason);
 
             var protectSeconds = OrderAttentionSettings.GetHumanProtectionSeconds();
             DateTime lastSellerEcho;
@@ -277,13 +278,13 @@ namespace Bot.ChromeNs
                 {
                     return Denied("Bot发送失败草稿仍在输入框，等待发送恢复且不计为人工操作");
                 }
-                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
+                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容", snapshot.ShopKey);
                 return Denied("客服正在输入消息");
             }
 
             var current = await TryGetCurrentBuyerAsync();
-            ObserveVisibleBuyer(snapshot.Seller, current);
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
+            ObserveVisibleBuyer(snapshot.ShopKey, snapshot.Seller, current);
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason, snapshot.ShopKey)) return Denied(reason);
             if (!string.Equals(current, snapshot.Buyer, StringComparison.Ordinal)
                 && _orderAttentionLastObservedBuyerAt != DateTime.MinValue
                 && DateTime.Now - _orderAttentionLastObservedBuyerAt < TimeSpan.FromSeconds(2))
@@ -303,7 +304,7 @@ namespace Bot.ChromeNs
         private async Task<bool> FocusOrderBuyerAsync(OrderSnapshot snapshot)
         {
             await _sendGate.WaitAsync();
-            using (BotActivityCoordinator.Begin("新订单自动切换", snapshot.Seller, snapshot.Buyer))
+            using (BotActivityCoordinator.Begin("新订单自动切换", snapshot.Seller, snapshot.Buyer, snapshot.ShopKey))
             {
                 try
                 {
@@ -319,7 +320,7 @@ namespace Bot.ChromeNs
                             }
                             else
                             {
-                                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容", snapshot.ShopKey);
                             }
                         }
                         return false;
@@ -396,7 +397,7 @@ namespace Bot.ChromeNs
             catch { return new InputboxCheck { Success = false, Empty = false }; }
         }
 
-        private void ObserveVisibleBuyer(string seller, string currentBuyer)
+        private void ObserveVisibleBuyer(string shopKey, string seller, string currentBuyer)
         {
             currentBuyer = (currentBuyer ?? string.Empty).Trim();
             if (currentBuyer.Length == 0) return;
@@ -415,7 +416,7 @@ namespace Bot.ChromeNs
             _orderAttentionLastObservedBuyerAt = DateTime.Now;
             if (!wasOwnRecentSwitch)
             {
-                BotActivityCoordinator.MarkHumanInteraction(seller, "客服或其他流程刚切换到买家 " + currentBuyer);
+                BotActivityCoordinator.MarkHumanInteraction(seller, "客服或其他流程刚切换到买家 " + currentBuyer, shopKey);
             }
         }
 
@@ -426,7 +427,8 @@ namespace Bot.ChromeNs
 
         private static string AttentionKey(OrderSnapshot snapshot)
         {
-            return (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (snapshot.ShopKey ?? string.Empty).Trim()
+                + "#" + (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (snapshot.OrderId ?? string.Empty).Trim()
                 + "#" + snapshot.EventType;
         }

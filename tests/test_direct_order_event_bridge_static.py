@@ -27,6 +27,8 @@ def test_system_order_events_are_observed_before_normal_buyer_role_filtering():
     assert "receiveNewMsg系统订单卡片" in bridge
     assert "messageCenterNotify订单通知" in bridge
     assert "OrderPlacedAutoReplyService.TryCreatePlan" in bridge
+    assert "ResolveRuntimeBySeller(this).ShopKey" in bridge
+    assert "ShopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey" in bridge
     assert "await ProcessOrderPlacedReplyAsync(plan);" in bridge
 
 

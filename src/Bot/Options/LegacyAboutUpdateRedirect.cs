@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using Newtonsoft.Json.Linq;
 using System;
@@ -257,7 +258,9 @@ namespace Bot.ChromeNs
             string skuStrategy;
             if (!TryParseCompleteSnapshot(qn, raw, source, out snapshot, out skuStrategy)) return;
 
-            var reserveKey = Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;
+            var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            snapshot.ShopKey = shop.ShopKey;
+            var reserveKey = shop.ShopKey + "#" + Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;
             DateTime until;
             if (Reservations.TryGetValue(reserveKey, out until) && until >= DateTime.Now) return;
             Reservations[reserveKey] = DateTime.Now.AddMinutes(2);
@@ -331,6 +334,7 @@ namespace Bot.ChromeNs
 
             snapshot = new OrderSnapshot
             {
+                ShopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey,
                 Seller = seller,
                 Buyer = buyer,
                 OrderId = orderId,

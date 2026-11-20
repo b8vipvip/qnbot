@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using BotLib;
 using DbEntity;
 using Newtonsoft.Json;
@@ -769,6 +770,7 @@ return JSON.stringify({ok:!!best,text:best});
 
                 var snapshot = new OrderSnapshot
                 {
+                    ShopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey,
                     Seller = runtimeSeller,
                     Buyer = verifiedBuyer,
                     OrderId = candidate.OrderId,
@@ -929,7 +931,8 @@ return JSON.stringify({ok:!!best,text:best});
                 buyer,
                 _messageSafetyStartedAt,
                 out plan,
-                exactOrderIdHint)) return;
+                exactOrderIdHint,
+                ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey)) return;
 
             if (plan == null)
             {

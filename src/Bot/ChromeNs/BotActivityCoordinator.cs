@@ -46,6 +46,7 @@ namespace Bot.ChromeNs
         {
             public long Id;
             public string Kind;
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public DateTime StartedAt;
@@ -63,13 +64,16 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, HumanRecord> HumanInteractions =
             new ConcurrentDictionary<string, HumanRecord>(StringComparer.OrdinalIgnoreCase);
 
-        public static BotActivityLease Begin(string kind, string seller, string buyer)
+        public static BotActivityLease Begin(string kind, string seller, string buyer, string shopKey = null)
         {
+            if (string.IsNullOrWhiteSpace(shopKey) && ShopSettingsScope.Current != null)
+                shopKey = ShopSettingsScope.Current.ShopKey;
             var id = Interlocked.Increment(ref _nextId);
             Activities[id] = new ActivityRecord
             {
                 Id = id,
                 Kind = (kind ?? string.Empty).Trim(),
+                ShopKey = (shopKey ?? string.Empty).Trim(),
                 Seller = Normalize(seller),
                 Buyer = Normalize(buyer),
                 StartedAt = DateTime.Now
@@ -83,11 +87,14 @@ namespace Bot.ChromeNs
             Activities.TryRemove(id, out ignored);
         }
 
-        public static void MarkHumanInteraction(string seller, string reason)
+        public static void MarkHumanInteraction(string seller, string reason, string shopKey = null)
         {
+            if (string.IsNullOrWhiteSpace(shopKey) && ShopSettingsScope.Current != null)
+                shopKey = ShopSettingsScope.Current.ShopKey;
             seller = Normalize(seller);
             if (seller.Length == 0) return;
-            HumanInteractions[seller] = new HumanRecord
+            var key = HumanKey(shopKey, seller);
+            HumanInteractions[key] = new HumanRecord
             {
                 At = DateTime.Now,
                 Reason = (reason ?? string.Empty).Trim()
@@ -95,11 +102,17 @@ namespace Bot.ChromeNs
             Log.Info("已记录人工操作保护: seller=" + seller + ", reason=" + (reason ?? string.Empty));
         }
 
-        public static bool IsSafeToAutoFocus(string seller, out string reason)
+        public static bool IsSafeToAutoFocus(string seller, out string reason, string shopKey = null)
         {
+            if (string.IsNullOrWhiteSpace(shopKey) && ShopSettingsScope.Current != null)
+                shopKey = ShopSettingsScope.Current.ShopKey;
             seller = Normalize(seller);
+            shopKey = (shopKey ?? string.Empty).Trim();
             var active = Activities.Values
-                .Where(x => x != null && (x.Seller.Length == 0 || x.Seller == seller))
+                .Where(x => x != null && (x.Seller.Length == 0
+                    || (x.Seller == seller
+                        && (shopKey.Length == 0 || string.IsNullOrWhiteSpace(x.ShopKey)
+                            || string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)))))
                 .OrderBy(x => x.StartedAt)
                 .ToList();
             if (active.Count > 0)
@@ -110,8 +123,9 @@ namespace Bot.ChromeNs
 
             HumanRecord human;
             var protectSeconds = OrderAttentionSettings.GetHumanProtectionSeconds();
-            if (HumanInteractions.TryGetValue(seller, out human)
-                && human != null
+            var hasHuman = HumanInteractions.TryGetValue(HumanKey(shopKey, seller), out human)
+                || HumanInteractions.TryGetValue(seller, out human);
+            if (hasHuman && human != null
                 && DateTime.Now - human.At < TimeSpan.FromSeconds(protectSeconds))
             {
                 var remain = Math.Max(1, protectSeconds - (int)(DateTime.Now - human.At).TotalSeconds);
@@ -123,11 +137,12 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        public static BotActivitySnapshot GetSnapshot(string seller)
+        public static BotActivitySnapshot GetSnapshot(string seller, string shopKey = null)
         {
             seller = Normalize(seller);
             HumanRecord human;
-            HumanInteractions.TryGetValue(seller, out human);
+            if (!HumanInteractions.TryGetValue(HumanKey(shopKey, seller), out human))
+                HumanInteractions.TryGetValue(seller, out human);
             var active = Activities.Values
                 .Where(x => x != null && (x.Seller.Length == 0 || x.Seller == seller))
                 .OrderBy(x => x.StartedAt)
@@ -141,6 +156,12 @@ namespace Bot.ChromeNs
                     ? string.Empty
                     : string.Join("、", active.Select(x => x.Kind).Distinct().Take(3))
             };
+        }
+
+        private static string HumanKey(string shopKey, string seller)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            return shopKey.Length == 0 ? seller : shopKey + "#" + seller;
         }
 
         private static string Normalize(string value)
@@ -288,7 +309,7 @@ namespace Bot.ChromeNs
                 QN qn = null;
                 for (var attempt = 0; attempt < 20 && qn == null; attempt++)
                 {
-                    qn = ResolveQn(snapshot.Seller);
+                    qn = ResolveQn(snapshot.ShopKey);
                     if (qn == null) await Task.Delay(250);
                 }
                 if (qn == null)
@@ -303,7 +324,7 @@ namespace Bot.ChromeNs
                 ShopContext shop;
                 try
                 {
-                    shop = ShopContextLocator.ResolveBySellerNick(snapshot.Seller);
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey);
                 }
                 catch (Exception ex)
                 {
@@ -335,21 +356,10 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static QN ResolveQn(string seller)
+        private static QN ResolveQn(string shopKey)
         {
-            var exact = QN.FindExistingBySellerNick(seller);
-            if (exact != null) return exact;
-            try
-            {
-                return QN.GetRuntimeSafetySnapshot()
-                    .FirstOrDefault(x => x != null
-                        && x.Seller != null
-                        && DirectOrderIdentityResolver.IdentityEquals(x.Seller.Nick, seller));
-            }
-            catch
-            {
-                return null;
-            }
+            if (string.IsNullOrWhiteSpace(shopKey)) return null;
+            return ShopContextLocator.FindConnectedQnByShopKey(shopKey);
         }
 
         private static bool TryReadLocalDateTime(JToken token, out DateTime value)
@@ -389,7 +399,8 @@ namespace Bot.ChromeNs
 
         private static string BuildKey(OrderSnapshot snapshot)
         {
-            return (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (snapshot.ShopKey ?? string.Empty).Trim()
+                + "#" + (snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (snapshot.OrderId ?? string.Empty).Trim()
                 + "#" + snapshot.EventType;
         }
@@ -434,7 +445,17 @@ namespace Bot.ChromeNs
             }
 
             var runtimeSeller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(runtimeSeller)
+            ShopContext runtimeShop;
+            try { runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch (Exception ex)
+            {
+                Log.Info("[订单自动回复] Hub兜底无法验证当前千牛ShopKey，未发送: " + ex.Message);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(snapshot.ShopKey)
+                || runtimeShop == null
+                || !string.Equals(runtimeShop.ShopKey, snapshot.ShopKey, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(runtimeSeller)
                 || !DirectOrderIdentityResolver.IdentityEquals(runtimeSeller, snapshot.Seller))
             {
                 Log.Info("[订单自动回复] Hub兜底卖家身份不匹配，未发送: snapshotSeller="
@@ -490,12 +511,13 @@ namespace Bot.ChromeNs
 
             var plan = new OrderPlacedReplyPlan
             {
+                ShopKey = snapshot.ShopKey,
                 Seller = snapshot.Seller,
                 Buyer = snapshot.Buyer,
                 OrderId = snapshot.OrderId,
                 EventText = snapshot.EventText,
                 EventTime = snapshot.EventTime,
-                ReservationKey = BuildOrderEventFallbackReservationKey(snapshot.Seller, snapshot.Buyer, snapshot.OrderId),
+                ReservationKey = BuildOrderEventFallbackReservationKey(snapshot.ShopKey, snapshot.Seller, snapshot.Buyer, snapshot.OrderId),
                 Config = cfg,
                 Snapshot = snapshot,
                 IsBuyerFollowUp = false,
@@ -536,9 +558,10 @@ namespace Bot.ChromeNs
             await ProcessOrderPlacedReplyAsync(plan);
         }
 
-        private static string BuildOrderEventFallbackReservationKey(string seller, string buyer, string orderId)
+        private static string BuildOrderEventFallbackReservationKey(string shopKey, string seller, string buyer, string orderId)
         {
-            return Regex.Replace((seller ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + Regex.Replace((seller ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
                 + "#" + Regex.Replace((buyer ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
                 + "#" + (orderId ?? string.Empty).Trim();
         }

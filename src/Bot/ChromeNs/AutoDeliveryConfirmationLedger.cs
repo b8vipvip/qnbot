@@ -1,4 +1,5 @@
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -19,6 +20,7 @@ namespace Bot.ChromeNs
         private sealed class ConfirmationRecord
         {
             public string Key { get; set; }
+            public string ShopKey { get; set; }
             public string Seller { get; set; }
             public string OrderId { get; set; }
             public DateTime IntentAt { get; set; }
@@ -34,7 +36,7 @@ namespace Bot.ChromeNs
 
             public LedgerState()
             {
-                Schema = 1;
+                Schema = 2;
                 Records = new List<ConfirmationRecord>();
             }
         }
@@ -45,6 +47,7 @@ namespace Bot.ChromeNs
         private static LedgerState _state;
         private static bool _initialized;
         private static bool _failClosed;
+        private static bool _migrationRequired;
 
         public static void Initialize()
         {
@@ -58,7 +61,7 @@ namespace Bot.ChromeNs
                     var migrated = MigratePendingConfirmationIntentsLocked();
                     // Never replace an unreadable/invalid ledger, even if legacy queue
                     // migration found records. A partial replacement could erase old barriers.
-                    if (!_failClosed && (migrated || !File.Exists(StatePath())) && !SaveLocked())
+                    if (!_failClosed && (migrated || _migrationRequired || !File.Exists(StatePath())) && !SaveLocked())
                         _failClosed = true;
                 }
                 _initialized = true;
@@ -85,17 +88,19 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        public static bool HasIntent(string seller, string orderId)
+        public static bool HasIntent(string shopKey, string seller, string orderId)
         {
             Initialize();
-            if (!IsSafeOrderId(orderId)) return true;
-            var key = BuildKey(seller, orderId);
+            if (!IsSafeOrderId(orderId) || string.IsNullOrWhiteSpace(shopKey)) return true;
+            var key = BuildKey(shopKey, seller, orderId);
+            var legacyKey = BuildLegacyKey(seller, orderId);
             lock (Sync)
             {
                 if (_failClosed) return true;
                 CleanupLocked(DateTime.Now);
                 return _state.Records.Any(x => x != null
-                    && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    && (string.Equals(x.Key, key, StringComparison.Ordinal)
+                        || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)));
             }
         }
 
@@ -103,24 +108,28 @@ namespace Bot.ChromeNs
         /// Returns true only for the first successfully persisted intent. An existing record returns
         /// false by design: a previous barrier denies another confirm, never authorizes a retry.
         /// </summary>
-        public static bool TryRecordIntent(string seller, string orderId, DateTime intentAt)
+        public static bool TryRecordIntent(string shopKey, string seller, string orderId, DateTime intentAt)
         {
             Initialize();
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             orderId = (orderId ?? string.Empty).Trim();
-            if (seller.Length == 0 || !IsSafeOrderId(orderId)) return false;
-            var key = BuildKey(seller, orderId);
+            if (shopKey.Length == 0 || seller.Length == 0 || !IsSafeOrderId(orderId)) return false;
+            var key = BuildKey(shopKey, seller, orderId);
+            var legacyKey = BuildLegacyKey(seller, orderId);
 
             lock (Sync)
             {
                 if (_failClosed) return false;
                 CleanupLocked(DateTime.Now);
                 if (_state.Records.Any(x => x != null
-                    && string.Equals(x.Key, key, StringComparison.Ordinal))) return false;
+                    && (string.Equals(x.Key, key, StringComparison.Ordinal)
+                        || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))) return false;
 
                 var record = new ConfirmationRecord
                 {
                     Key = key,
+                    ShopKey = shopKey,
                     Seller = seller,
                     OrderId = orderId,
                     IntentAt = intentAt == DateTime.MinValue ? DateTime.Now : intentAt,
@@ -138,11 +147,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void MarkResolved(string seller, string orderId, string resolution)
+        public static void MarkResolved(string shopKey, string seller, string orderId, string resolution)
         {
             Initialize();
-            if (!IsSafeOrderId(orderId)) return;
-            var key = BuildKey(seller, orderId);
+            if (string.IsNullOrWhiteSpace(shopKey) || !IsSafeOrderId(orderId)) return;
+            var key = BuildKey(shopKey, seller, orderId);
             lock (Sync)
             {
                 if (_failClosed) return;
@@ -183,16 +192,35 @@ namespace Bot.ChromeNs
                     if (!DateTime.TryParse(intentToken.ToString(), out intentAt)) intentAt = DateTime.Now;
                     var snapshot = token["Snapshot"] as JObject;
                     var seller = snapshot == null ? string.Empty : Convert.ToString(snapshot["Seller"]);
+                    var shopKey = snapshot == null ? string.Empty : Convert.ToString(snapshot["ShopKey"]);
                     var orderId = snapshot == null ? string.Empty : Convert.ToString(snapshot["OrderId"]);
                     seller = (seller ?? string.Empty).Trim();
+                    shopKey = (shopKey ?? string.Empty).Trim();
                     orderId = (orderId ?? string.Empty).Trim();
                     if (seller.Length == 0 || !IsSafeOrderId(orderId)) continue;
-                    var key = BuildKey(seller, orderId);
+                    if (shopKey.Length == 0)
+                    {
+                        try
+                        {
+                            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                            if (shop != null && string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                                shopKey = shop.ShopKey;
+                        }
+                        catch
+                        {
+                            // Preserve the old intent as a seller-wide barrier. It may block
+                            // more than one same-nickname shop, but can never permit a repeat confirm.
+                        }
+                    }
+                    var key = shopKey.Length == 0
+                        ? BuildLegacyKey(seller, orderId)
+                        : BuildKey(shopKey, seller, orderId);
                     if (_state.Records.Any(x => x != null
                         && string.Equals(x.Key, key, StringComparison.Ordinal))) continue;
                     _state.Records.Add(new ConfirmationRecord
                     {
                         Key = key,
+                        ShopKey = shopKey,
                         Seller = seller,
                         OrderId = orderId,
                         IntentAt = intentAt,
@@ -223,11 +251,29 @@ namespace Bot.ChromeNs
                 var path = StatePath();
                 if (!File.Exists(path)) return new LedgerState();
                 var loaded = JsonConvert.DeserializeObject<LedgerState>(File.ReadAllText(path, Encoding.UTF8));
-                if (loaded == null || loaded.Schema != 1 || loaded.Records == null)
+                if (loaded == null || (loaded.Schema != 1 && loaded.Schema != 2) || loaded.Records == null)
                 {
                     _failClosed = true;
                     Log.ErrorWithMaxCount("自动发货长期确认防重账本结构无效（包括 Records 缺失或为 null）；本次运行禁止新的自动确认且保留原文件。", 10);
                     return new LedgerState();
+                }
+                if (loaded.Schema == 1)
+                {
+                    // Old records used seller nickname + order ID only. Keep each as a
+                    // seller-wide at-most-once barrier instead of guessing which same-nick
+                    // ShopKey owned the irreversible confirmation.
+                    foreach (var record in loaded.Records.Where(x => x != null))
+                    {
+                        record.ShopKey = string.Empty;
+                        record.Key = BuildLegacyKey(record.Seller, record.OrderId);
+                    }
+                    loaded.Schema = 2;
+                    _migrationRequired = true;
+                }
+                else
+                {
+                    foreach (var record in loaded.Records.Where(x => x != null && string.IsNullOrWhiteSpace(x.ShopKey)))
+                        record.Key = BuildLegacyKey(record.Seller, record.OrderId);
                 }
                 return loaded;
             }
@@ -275,9 +321,16 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string BuildKey(string seller, string orderId)
+        private static string BuildKey(string shopKey, string seller, string orderId)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return (shopKey ?? string.Empty).Trim() + "#"
+                + (seller ?? string.Empty).Trim().ToLowerInvariant()
+                + "#" + (orderId ?? string.Empty).Trim();
+        }
+
+        private static string BuildLegacyKey(string seller, string orderId)
+        {
+            return "legacy#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "#" + (orderId ?? string.Empty).Trim();
         }
 

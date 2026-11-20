@@ -7,7 +7,7 @@ def read(path: str) -> str:
 
 def test_order_card_parser_builds_structured_snapshot_without_persisting_raw_json():
     code = read("src/Bot/ChromeNs/OrderEventHub.cs")
-    for field in ["OrderId", "ItemId", "ItemTitle", "SkuId", "SkuText", "Quantity", "TotalAmount", "PaidAmount", "TradeStatus", "IsPaid", "CreatedAt", "PaidAt", "ProductUrl", "ImageUrl", "RawCardHash", "EventType"]:
+    for field in ["ShopKey", "OrderId", "ItemId", "ItemTitle", "SkuId", "SkuText", "Quantity", "TotalAmount", "PaidAmount", "TradeStatus", "IsPaid", "CreatedAt", "PaidAt", "ProductUrl", "ImageUrl", "RawCardHash", "EventType"]:
         assert "public " in code and field in code
     assert "JObject.FromObject(message)" in code
     assert "SHA256.Create()" in code
@@ -20,7 +20,10 @@ def test_order_card_parser_builds_structured_snapshot_without_persisting_raw_jso
 
 def test_order_event_hub_separates_created_and_paid_and_persists_dedup():
     code = read("src/Bot/ChromeNs/OrderEventHub.cs")
-    assert "Created = 0" in code; assert "Paid = 1" in code; assert 'return Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;' in code; assert "AddDays(-30)" in code; assert "Take(2000)" in code; assert "相同订单事件已处理" in code
+    assert "Created = 0" in code; assert "Paid = 1" in code
+    assert 'return Normalize(snapshot.ShopKey) + "#" + Normalize(snapshot.Seller)' in code
+    assert "legacy_shop_scope_ambiguous_duplicate_blocked" in code
+    assert "AddDays(-30)" in code; assert "Take(2000)" in code; assert "相同订单事件已处理" in code
 
 def test_order_detection_is_independent_from_auto_reply_and_queues_attention():
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")

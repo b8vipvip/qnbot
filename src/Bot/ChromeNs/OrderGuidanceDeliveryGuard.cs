@@ -1,5 +1,6 @@
 ﻿using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -108,6 +109,7 @@ namespace Bot.ChromeNs
 
     internal sealed class OrderGuidanceRecord
     {
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string OrderId { get; set; }
@@ -128,7 +130,7 @@ namespace Bot.ChromeNs
 
         public OrderGuidanceState()
         {
-            SchemaVersion = 1;
+            SchemaVersion = 2;
             Records = new List<OrderGuidanceRecord>();
         }
     }
@@ -155,6 +157,13 @@ namespace Bot.ChromeNs
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller)
                 || string.IsNullOrWhiteSpace(snapshot.Buyer) || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
+            var shopKey = ResolveShopKey(snapshot.Seller, snapshot.ShopKey);
+            if (shopKey.Length == 0)
+            {
+                Log.Info("订单充值流程账本拒绝记录无法确认ShopKey的订单事实: seller=" + snapshot.Seller);
+                return;
+            }
+            snapshot.ShopKey = shopKey;
 
             // Do not discard non-Created/Paid facts here. OrderPlacedAutoReplyService only sends on
             // Created/Paid, but the commerce context must still learn a later refund/close/shipped
@@ -163,7 +172,7 @@ namespace Bot.ChromeNs
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = FindInternal(snapshot.Seller, snapshot.Buyer, snapshot.OrderId);
+                var record = FindInternal(shopKey, snapshot.Seller, snapshot.Buyer, snapshot.OrderId);
                 if (record == null)
                 {
                     record = NewRecord(snapshot);
@@ -197,10 +206,12 @@ namespace Bot.ChromeNs
         /// this projection to select the order relevant to the current question instead of blindly
         /// inheriting whichever order happened to be observed most recently.
         /// </summary>
-        public static List<OrderSnapshot> GetRecentOrderSnapshots(string seller, string buyer, int maxCount = 8)
+        public static List<OrderSnapshot> GetRecentOrderSnapshots(string seller, string buyer, int maxCount = 8, string shopKey = null)
         {
             var result = new List<OrderSnapshot>();
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return result;
+            shopKey = ResolveShopKey(seller, shopKey);
+            if (shopKey.Length == 0) return result;
             maxCount = Math.Max(1, Math.Min(20, maxCount));
             lock (Sync)
             {
@@ -208,6 +219,7 @@ namespace Bot.ChromeNs
                 CleanupInternal();
                 foreach (var record in _state.Records
                     .Where(x => x != null
+                        && Same(x.ShopKey, shopKey)
                         && Same(x.Seller, seller)
                         && Same(x.Buyer, buyer)
                         && x.Snapshot != null
@@ -223,15 +235,17 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        public static bool TryGetLatestOrderSnapshot(string seller, string buyer, out OrderSnapshot snapshot)
+        public static bool TryGetLatestOrderSnapshot(string seller, string buyer, out OrderSnapshot snapshot, string shopKey = null)
         {
             snapshot = null;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
+            shopKey = ResolveShopKey(seller, shopKey);
+            if (shopKey.Length == 0) return false;
             lock (Sync)
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = FindLatestInternal(seller, buyer);
+                var record = FindLatestInternal(shopKey, seller, buyer);
                 if (record == null || record.Snapshot == null) return false;
                 snapshot = CloneSnapshot(record.Snapshot);
                 return snapshot != null;
@@ -243,7 +257,8 @@ namespace Bot.ChromeNs
             string buyer,
             string triggerText,
             out OrderSnapshot snapshot,
-            out string reason)
+            out string reason,
+            string shopKey = null)
         {
             snapshot = null;
             reason = string.Empty;
@@ -253,11 +268,23 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            shopKey = ResolveShopKey(seller, shopKey);
+            if (shopKey.Length == 0)
+            {
+                reason = "无法确认当前店铺身份，已阻止跨店创建充值流程续问";
+                return false;
+            }
+
             lock (Sync)
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = FindLatestInternal(seller, buyer);
+                if (HasLegacyRecord(seller, buyer, null))
+                {
+                    reason = "旧版订单记录缺少ShopKey，已阻止跨店补发充值流程";
+                    return false;
+                }
+                var record = FindLatestInternal(shopKey, seller, buyer);
                 if (record == null || record.Snapshot == null)
                 {
                     reason = "该买家没有经过严格确认的近期订单";
@@ -286,15 +313,25 @@ namespace Bot.ChromeNs
         {
             reason = string.Empty;
             if (plan == null || string.IsNullOrWhiteSpace(plan.OrderId)) return false;
+            if (string.IsNullOrWhiteSpace(plan.ShopKey))
+            {
+                reason = "订单回复计划缺少ShopKey，已阻止发送";
+                return true;
+            }
 
             lock (Sync)
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = FindInternal(plan.Seller, plan.Buyer, plan.OrderId);
+                if (HasLegacyRecord(plan.Seller, plan.Buyer, plan.OrderId))
+                {
+                    reason = "旧版订单记录缺少ShopKey，已阻止跨店重复发送";
+                    return true;
+                }
+                var record = FindInternal(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
                 if (record == null)
                 {
-                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime);
+                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime, plan.ShopKey);
                     _state.Records.Add(record);
                 }
 
@@ -367,10 +404,11 @@ namespace Bot.ChromeNs
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = FindInternal(plan.Seller, plan.Buyer, plan.OrderId);
+                if (string.IsNullOrWhiteSpace(plan.ShopKey)) return;
+                var record = FindInternal(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
                 if (record == null)
                 {
-                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime);
+                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime, plan.ShopKey);
                     _state.Records.Add(record);
                 }
                 MarkDeliveredInternal(record, plan, deliveredBy);
@@ -385,7 +423,8 @@ namespace Bot.ChromeNs
                 snapshot == null ? string.Empty : snapshot.Seller,
                 snapshot == null ? string.Empty : snapshot.Buyer,
                 snapshot == null ? string.Empty : snapshot.OrderId,
-                snapshot == null ? DateTime.Now : snapshot.EventTime);
+                snapshot == null ? DateTime.Now : snapshot.EventTime,
+                snapshot == null ? string.Empty : snapshot.ShopKey);
         }
 
         private static OrderGuidanceRecord NewRecord(
@@ -393,10 +432,12 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string orderId,
-            DateTime eventTime)
+            DateTime eventTime,
+            string shopKey)
         {
             return new OrderGuidanceRecord
             {
+                ShopKey = (shopKey ?? string.Empty).Trim(),
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
                 OrderId = (orderId ?? string.Empty).Trim(),
@@ -490,10 +531,11 @@ namespace Bot.ChromeNs
                 string.Empty);
         }
 
-        private static OrderGuidanceRecord FindLatestInternal(string seller, string buyer)
+        private static OrderGuidanceRecord FindLatestInternal(string shopKey, string seller, string buyer)
         {
             return _state.Records
                 .Where(x => x != null
+                    && Same(x.ShopKey, shopKey)
                     && Same(x.Seller, seller)
                     && Same(x.Buyer, buyer)
                     && x.ObservedAt >= DateTime.Now.AddDays(-7))
@@ -502,12 +544,49 @@ namespace Bot.ChromeNs
                 .FirstOrDefault();
         }
 
-        private static OrderGuidanceRecord FindInternal(string seller, string buyer, string orderId)
+        private static OrderGuidanceRecord FindInternal(string shopKey, string seller, string buyer, string orderId)
         {
             return _state.Records.FirstOrDefault(x => x != null
+                && Same(x.ShopKey, shopKey)
                 && Same(x.Seller, seller)
                 && Same(x.Buyer, buyer)
                 && string.Equals((x.OrderId ?? string.Empty).Trim(), (orderId ?? string.Empty).Trim(), StringComparison.Ordinal));
+        }
+
+        private static bool HasLegacyRecord(string seller, string buyer, string orderId)
+        {
+            return _state.Records.Any(x => x != null
+                && string.IsNullOrWhiteSpace(x.ShopKey)
+                && Same(x.Seller, seller)
+                && Same(x.Buyer, buyer)
+                && (string.IsNullOrWhiteSpace(orderId)
+                    || string.Equals((x.OrderId ?? string.Empty).Trim(), (orderId ?? string.Empty).Trim(), StringComparison.Ordinal)));
+        }
+
+        private static string ResolveShopKey(string seller, string requestedShopKey)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            requestedShopKey = (requestedShopKey ?? string.Empty).Trim();
+            if (seller.Length == 0) return string.Empty;
+
+            var current = ShopSettingsScope.Current;
+            ShopContext shop;
+            try
+            {
+                if (requestedShopKey.Length > 0)
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(requestedShopKey);
+                else if (current != null)
+                    shop = current;
+                else
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            }
+            catch { return string.Empty; }
+
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !Same(shop.SellerNick, seller)
+                || (current != null && !Same(current.ShopKey, shop.ShopKey)))
+                return string.Empty;
+            return shop.ShopKey;
         }
 
         private static bool Same(string left, string right)
@@ -524,7 +603,10 @@ namespace Bot.ChromeNs
                 _state = File.Exists(path)
                     ? JsonConvert.DeserializeObject<OrderGuidanceState>(File.ReadAllText(path, Encoding.UTF8))
                     : new OrderGuidanceState();
-                if (_state == null || _state.SchemaVersion != 1) _state = new OrderGuidanceState();
+                if (_state == null || (_state.SchemaVersion != 1 && _state.SchemaVersion != 2))
+                    _state = new OrderGuidanceState();
+                else if (_state.SchemaVersion == 1)
+                    _state.SchemaVersion = 2;
                 if (_state.Records == null) _state.Records = new List<OrderGuidanceRecord>();
             }
             catch (Exception ex)
@@ -549,6 +631,7 @@ namespace Bot.ChromeNs
             try
             {
                 var path = GetPath();
+                _state.SchemaVersion = 2;
                 var directory = Path.GetDirectoryName(path);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                 var temp = path + ".tmp";
@@ -580,6 +663,7 @@ namespace Bot.ChromeNs
         private static void MergeSnapshot(OrderSnapshot target, OrderSnapshot incoming)
         {
             if (target == null || incoming == null) return;
+            if (string.IsNullOrWhiteSpace(target.ShopKey)) target.ShopKey = incoming.ShopKey;
             if (string.IsNullOrWhiteSpace(target.Buyer)) target.Buyer = incoming.Buyer;
             if (string.IsNullOrWhiteSpace(target.ItemId)) target.ItemId = incoming.ItemId;
             if (string.IsNullOrWhiteSpace(target.ItemTitle)) target.ItemTitle = incoming.ItemTitle;

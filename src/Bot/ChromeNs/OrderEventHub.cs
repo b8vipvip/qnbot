@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -25,6 +26,7 @@ namespace Bot.ChromeNs
 
     internal sealed class OrderSnapshot
     {
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string OrderId { get; set; }
@@ -554,15 +556,22 @@ namespace Bot.ChromeNs
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return new List<OrderSnapshot>();
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch { return new List<OrderSnapshot>(); }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return new List<OrderSnapshot>();
             var disk = TryReadState(GetPath());
             if (disk == null || disk.Events == null) return new List<OrderSnapshot>();
             return disk.Events.Where(x => x != null && x.Snapshot != null
+                    && string.Equals((x.Snapshot.ShopKey ?? "").Trim(), shop.ShopKey,
+                        StringComparison.Ordinal)
                     && string.Equals((x.Snapshot.Seller ?? "").Trim(), seller,
                         StringComparison.Ordinal))
                 .OrderByDescending(x => x.SeenAt)
                 .Take(Math.Max(1, Math.Min(200, limit)))
                 .Select(x => new OrderSnapshot
                 {
+                    ShopKey = shop.ShopKey,
                     Seller = seller,
                     Buyer = "模拟买家",
                     OrderId = "SIM-REC-" + Guid.NewGuid().ToString("N").Substring(0, 10),
@@ -581,6 +590,8 @@ namespace Bot.ChromeNs
         public static OrderSnapshot RefreshFromCanonical(OrderSnapshot snapshot)
         {
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return snapshot;
+            string scopeError;
+            if (!TryEnsureShopKey(snapshot, out scopeError)) return snapshot;
             lock (Sync)
             {
                 var path = GetPath();
@@ -603,6 +614,20 @@ namespace Bot.ChromeNs
             {
                 return new OrderEventPublishResult { Detected = false, Accepted = false, Reason = "订单快照为空", Snapshot = snapshot };
             }
+            string scopeError;
+            if (!TryEnsureShopKey(snapshot, out scopeError))
+            {
+                Log.ErrorWithMaxCount("订单事件缺少可验证的ShopKey，已阻止跨店去重/发送: seller="
+                    + (snapshot.Seller ?? string.Empty) + ", orderId=" + snapshot.OrderId
+                    + ", reason=" + scopeError, 20);
+                return new OrderEventPublishResult
+                {
+                    Detected = true,
+                    Accepted = false,
+                    Reason = "shop_scope_unresolved:" + scopeError,
+                    Snapshot = snapshot
+                };
+            }
 
             lock (Sync)
             {
@@ -623,6 +648,27 @@ namespace Bot.ChromeNs
                     _state.Events.RemoveAll(x => x == null || x.SeenAt < now.AddDays(-30));
                     var key = BuildKey(snapshot);
                     var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    if (existing == null)
+                    {
+                        var legacyKey = BuildLegacyKey(snapshot);
+                        var legacy = _state.Events.FirstOrDefault(x => x != null
+                            && x.Snapshot != null
+                            && string.IsNullOrWhiteSpace(x.Snapshot.ShopKey)
+                            && string.Equals(x.Key, legacyKey, StringComparison.Ordinal));
+                        if (legacy != null)
+                        {
+                            // A pre-ShopKey event cannot be assigned to one of several shops
+                            // sharing a seller nickname. Treat it as a global at-most-once barrier:
+                            // do not merge its payload into another shop and do not resend it.
+                            return new OrderEventPublishResult
+                            {
+                                Detected = true,
+                                Accepted = false,
+                                Reason = "legacy_shop_scope_ambiguous_duplicate_blocked",
+                                Snapshot = snapshot
+                            };
+                        }
+                    }
                     if (existing != null)
                     {
                         // Legacy state files only had SeenAt. Capture that value before refreshing
@@ -714,12 +760,69 @@ namespace Bot.ChromeNs
 
         private static string BuildKey(OrderSnapshot snapshot)
         {
-            return Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;
+            return Normalize(snapshot.ShopKey) + "#" + Normalize(snapshot.Seller)
+                + "#" + snapshot.OrderId + "#" + snapshot.EventType;
+        }
+
+        private static string BuildLegacyKey(OrderSnapshot snapshot)
+        {
+            return Normalize(snapshot == null ? string.Empty : snapshot.Seller) + "#"
+                + (snapshot == null ? string.Empty : snapshot.OrderId ?? string.Empty) + "#"
+                + (snapshot == null ? OrderEventType.Created : snapshot.EventType);
+        }
+
+        private static bool TryEnsureShopKey(OrderSnapshot snapshot, out string error)
+        {
+            error = string.Empty;
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Seller))
+            {
+                error = "seller_missing";
+                return false;
+            }
+
+            ShopContext shop;
+            var requestedShopKey = (snapshot.ShopKey ?? string.Empty).Trim();
+            var current = ShopSettingsScope.Current;
+            try
+            {
+                if (requestedShopKey.Length > 0)
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(requestedShopKey);
+                else if (current != null)
+                    shop = current;
+                else
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(snapshot.Seller);
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetType().Name + ":" + ex.Message;
+                return false;
+            }
+
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            {
+                error = "shopkey_missing";
+                return false;
+            }
+            if (!string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (snapshot.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                error = "seller_shopkey_mismatch";
+                return false;
+            }
+            if (current != null && !string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+            {
+                error = "ambient_shop_scope_mismatch";
+                return false;
+            }
+
+            snapshot.ShopKey = shop.ShopKey;
+            return true;
         }
 
         private static void Merge(OrderSnapshot target, OrderSnapshot incoming)
         {
             if (target == null || incoming == null) return;
+            if (string.IsNullOrWhiteSpace(target.ShopKey)) target.ShopKey = incoming.ShopKey;
             if (string.IsNullOrWhiteSpace(target.Buyer)) target.Buyer = incoming.Buyer;
             if (string.IsNullOrWhiteSpace(target.ItemId)) target.ItemId = incoming.ItemId;
             if (string.IsNullOrWhiteSpace(target.ItemTitle)) target.ItemTitle = incoming.ItemTitle;

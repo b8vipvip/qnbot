@@ -98,4 +98,6 @@ def test_send_path_reuses_existing_safe_order_reply_pipeline():
     send = source.index("await qn.ProcessOrderTemplateRequiredFieldsPlanAsync(plan)", attention)
     assert publish < observe < attention < send
     assert "return ProcessOrderPlacedReplyAsync(plan)" in source
+    assert "ResolveRuntimeBySeller(qn).ShopKey" in source
+    assert "BuildOrderKey(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId)" in source
     assert "BotActivityCoordinator.Begin" in source

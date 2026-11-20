@@ -644,7 +644,9 @@ namespace Bot.ChromeNs
                 sellerNick,
                 buyerNick,
                 _messageSafetyStartedAt,
-                out orderPlan))
+                out orderPlan,
+                null,
+                ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey))
             {
                 if (orderPlan != null && orderPlan.IsBuyerFollowUp)
                     ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);

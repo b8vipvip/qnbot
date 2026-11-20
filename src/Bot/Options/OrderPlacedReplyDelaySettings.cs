@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using BotLib;
 using DbEntity;
 using Newtonsoft.Json.Linq;
@@ -386,7 +387,8 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var reserveKey = Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;
+            var reserveKey = (snapshot.ShopKey ?? string.Empty).Trim()
+                + "#" + Normalize(snapshot.Seller) + "#" + snapshot.OrderId + "#" + snapshot.EventType;
             DateTime until;
             if (Reservations.TryGetValue(reserveKey, out until) && until >= DateTime.Now) return;
             Reservations[reserveKey] = DateTime.Now.AddMinutes(2);
@@ -462,6 +464,7 @@ namespace Bot.ChromeNs
             var eventTime = ParseDate(FindValue(flat, TimeKeys)) ?? DateTime.Now;
             snapshot = new OrderSnapshot
             {
+                ShopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey,
                 Seller = seller,
                 Buyer = buyer,
                 OrderId = orderId,
@@ -911,6 +914,11 @@ namespace Bot.ChromeNs
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return;
             if (!Params.Robot.CanUseRobotReal) return;
 
+            var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
+            if (!string.IsNullOrWhiteSpace(snapshot.ShopKey)
+                && !string.Equals(snapshot.ShopKey, shop.ShopKey, StringComparison.Ordinal)) return;
+            snapshot.ShopKey = shop.ShopKey;
+
             if (snapshot.EventTime < _messageSafetyStartedAt.AddSeconds(-8))
             {
                 Log.Info("完整订单字段事件已跳过历史通知: orderId=" + snapshot.OrderId
@@ -938,12 +946,14 @@ namespace Bot.ChromeNs
 
             var plan = new OrderPlacedReplyPlan
             {
+                ShopKey = snapshot.ShopKey,
                 Seller = snapshot.Seller,
                 Buyer = snapshot.Buyer,
                 OrderId = snapshot.OrderId,
                 EventText = snapshot.EventText,
                 EventTime = snapshot.EventTime,
-                ReservationKey = Regex.Replace((snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
+                ReservationKey = (snapshot.ShopKey ?? string.Empty).Trim()
+                    + "#" + Regex.Replace((snapshot.Seller ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
                     + "#" + Regex.Replace((snapshot.Buyer ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty)
                     + "#" + snapshot.OrderId,
                 Config = cfg,

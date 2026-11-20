@@ -36,7 +36,12 @@ def test_fixed_preset_fallback_is_immediate_while_http_keeps_enrichment():
 
 def test_fallback_resolves_exact_shop_scope_and_never_guesses_cross_shop():
     code = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
-    assert "QN.FindExistingBySellerNick(seller)" in code; assert "DirectOrderIdentityResolver.IdentityEquals(x.Seller.Nick, seller)" in code; assert "ShopContextLocator.ResolveBySellerNick(snapshot.Seller)" in code; assert "using (ShopSettingsScope.Enter(shop))" in code; assert "拒绝跨店猜测" in code
+    assert "private static QN ResolveQn(string shopKey)" in code
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey)" in code
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey)" in code
+    assert "runtimeShop.ShopKey, snapshot.ShopKey" in code
+    assert "using (ShopSettingsScope.Enter(shop))" in code
+    assert "拒绝跨店猜测" in code
 
 def test_accepted_hub_event_builds_plan_without_republishing_order_event():
     code = read("src/Bot/ChromeNs/BotActivityCoordinator.cs"); method = code[code.index("ProcessAcceptedOrderEventFallbackAsync"):]

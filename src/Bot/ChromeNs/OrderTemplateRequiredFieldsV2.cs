@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using Bot.Options;
 using BotLib;
 using DbEntity;
@@ -190,7 +191,9 @@ namespace Bot.ChromeNs
                 seller,
                 buyer,
                 StartedAt,
-                out plan))
+                out plan,
+                null,
+                ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey))
             {
                 return;
             }
@@ -212,16 +215,19 @@ namespace Bot.ChromeNs
             {
                 OrderSnapshot snapshot;
                 if (!TryParseSparseSnapshot(qn, raw, out snapshot)) return;
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                snapshot.ShopKey = shop.ShopKey;
                 if (snapshot.EventTime < StartedAt.AddSeconds(-8)) return;
 
                 var plan = new OrderPlacedReplyPlan
                 {
+                    ShopKey = shop.ShopKey,
                     Seller = snapshot.Seller,
                     Buyer = snapshot.Buyer,
                     OrderId = snapshot.OrderId,
                     EventText = snapshot.EventText,
                     EventTime = snapshot.EventTime,
-                    ReservationKey = BuildOrderKey(snapshot.Seller, snapshot.Buyer, snapshot.OrderId),
+                    ReservationKey = BuildOrderKey(snapshot.ShopKey, snapshot.Seller, snapshot.Buyer, snapshot.OrderId),
                     Config = cfg,
                     Snapshot = snapshot,
                     IsBuyerFollowUp = false,
@@ -262,7 +268,7 @@ namespace Bot.ChromeNs
         private static void StartOwnedPlan(QN qn, OrderPlacedReplyPlan plan, string source)
         {
             if (qn == null || plan == null || plan.Config == null || plan.Snapshot == null) return;
-            var key = BuildOrderKey(plan.Seller, plan.Buyer, plan.OrderId)
+            var key = BuildOrderKey(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId)
                 + "#" + plan.Snapshot.EventType;
             DateTime until;
             if (Inflight.TryGetValue(key, out until) && until > DateTime.Now) return;
@@ -314,6 +320,9 @@ namespace Bot.ChromeNs
 
                     if (snapshot != null)
                     {
+                        snapshot.ShopKey = string.IsNullOrWhiteSpace(snapshot.ShopKey)
+                            ? plan.ShopKey
+                            : snapshot.ShopKey;
                         OrderEventHub.Publish(snapshot);
                         OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
                         qn.EnqueueNewOrderAttention(snapshot);
@@ -1028,9 +1037,10 @@ namespace Bot.ChromeNs
             return sb.ToString();
         }
 
-        private static string BuildOrderKey(string seller, string buyer, string orderId)
+        private static string BuildOrderKey(string shopKey, string seller, string buyer, string orderId)
         {
-            return NormalizeIdentity(seller) + "#" + NormalizeIdentity(buyer) + "#" + (orderId ?? string.Empty).Trim();
+            return (shopKey ?? string.Empty).Trim() + "#" + NormalizeIdentity(seller)
+                + "#" + NormalizeIdentity(buyer) + "#" + (orderId ?? string.Empty).Trim();
         }
 
         private static string BuildBuyerKey(string seller, string buyer)

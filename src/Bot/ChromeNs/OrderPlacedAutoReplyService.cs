@@ -1,6 +1,7 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -95,6 +96,7 @@ namespace Bot.ChromeNs
 
     internal sealed class OrderPlacedReplyPlan
     {
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string OrderId { get; set; }
@@ -120,6 +122,7 @@ namespace Bot.ChromeNs
     {
         private sealed class OrderReplyActionRecord
         {
+            public string ShopKey { get; set; }
             public string Seller { get; set; }
             public string Buyer { get; set; }
             public string OrderId { get; set; }
@@ -153,15 +156,43 @@ namespace Bot.ChromeNs
             string buyer,
             DateTime botStartedAt,
             out OrderPlacedReplyPlan plan,
-            string exactOrderIdHint = null)
+            string exactOrderIdHint = null,
+            string shopKey = null)
         {
             plan = null;
             if (!Params.Robot.CanUseRobotReal) return false;
 
+            ShopContext shop;
+            try
+            {
+                var current = ShopSettingsScope.Current;
+                if (!string.IsNullOrWhiteSpace(shopKey))
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                else if (current != null)
+                    shop = current;
+                else
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("订单自动回复已阻止：无法确认订单来源ShopKey: seller=" + seller + ", error=" + ex.Message);
+                return true;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                || (ShopSettingsScope.Current != null
+                    && !string.Equals(ShopSettingsScope.Current.ShopKey, shop.ShopKey, StringComparison.Ordinal)))
+            {
+                Log.Info("订单自动回复已阻止：订单来源卖家与ShopKey不匹配: seller=" + seller);
+                return true;
+            }
+            shopKey = shop.ShopKey;
+
             string classificationReason;
             if (!OrderMessageClassifier.IsConfirmedOrderEvent(message, messageText, out classificationReason))
             {
-                return TryCreateBuyerFollowUpPlan(messageText, seller, buyer, out plan);
+                using (ShopSettingsScope.Enter(shop))
+                    return TryCreateBuyerFollowUpPlan(messageText, seller, buyer, shopKey, out plan);
             }
 
             OrderSnapshot snapshot;
@@ -186,8 +217,10 @@ namespace Bot.ChromeNs
                     + ", exactOrderId=" + exactOrderId);
                 snapshot.OrderId = exactOrderId;
             }
-            ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
-            OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
+            snapshot.ShopKey = shopKey;
+            ObserveCanonicalOrderId(shopKey, seller, buyer, snapshot.OrderId);
+            using (ShopSettingsScope.Enter(shop))
+                OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
             Log.Info("订单事件通过严格证据校验: seller=" + seller
                 + ", buyer=" + buyer + ", orderId=" + snapshot.OrderId
                 + ", reason=" + classificationReason);
@@ -207,7 +240,7 @@ namespace Bot.ChromeNs
 
             if (snapshot.EventType == OrderEventType.Created || snapshot.EventType == OrderEventType.Paid)
             {
-                var qn = QN.FindExistingBySellerNick(seller);
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey);
                 if (qn != null)
                 {
                     qn.EnqueueNewOrderAttention(snapshot);
@@ -218,7 +251,7 @@ namespace Bot.ChromeNs
             if (cfg == null || !cfg.EnableOrderPlacedReply) return true;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
 
-            var key = BuildReservationKey(seller, buyer, snapshot.OrderId, false);
+            var key = BuildReservationKey(shopKey, seller, buyer, snapshot.OrderId, false);
             var now = DateTime.Now;
             DateTime until;
             if (Reservations.TryGetValue(key, out until) && until > now)
@@ -231,6 +264,7 @@ namespace Bot.ChromeNs
             Reservations[key] = now.AddMinutes(reserveMinutes);
             plan = new OrderPlacedReplyPlan
             {
+                ShopKey = shopKey,
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
                 OrderId = snapshot.OrderId,
@@ -253,6 +287,7 @@ namespace Bot.ChromeNs
             string messageText,
             string seller,
             string buyer,
+            string shopKey,
             out OrderPlacedReplyPlan plan)
         {
             plan = null;
@@ -264,9 +299,10 @@ namespace Bot.ChromeNs
             if (!OrderGuidanceDeliveryGuard.CanCreateFollowUp(seller, buyer, messageText, out snapshot, out reason))
                 return false;
 
-            ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
+            snapshot.ShopKey = shopKey;
+            ObserveCanonicalOrderId(shopKey, seller, buyer, snapshot.OrderId);
             var trigger = (messageText ?? string.Empty).Trim();
-            var key = BuildReservationKey(seller, buyer, snapshot.OrderId, true);
+            var key = BuildReservationKey(shopKey, seller, buyer, snapshot.OrderId, true);
             DateTime until;
             if (Reservations.TryGetValue(key, out until) && until > DateTime.Now)
             {
@@ -276,6 +312,7 @@ namespace Bot.ChromeNs
             Reservations[key] = DateTime.Now.AddMinutes(5);
             plan = new OrderPlacedReplyPlan
             {
+                ShopKey = shopKey,
                 Seller = (seller ?? string.Empty).Trim(), Buyer = (buyer ?? string.Empty).Trim(),
                 OrderId = snapshot.OrderId, EventText = trigger, EventTime = snapshot.EventTime,
                 ReservationKey = key, Config = cfg, Snapshot = snapshot, IsBuyerFollowUp = true,
@@ -467,6 +504,7 @@ namespace Bot.ChromeNs
             {
                 var probe = new OrderSnapshot
                 {
+                    ShopKey = plan.ShopKey,
                     Seller = plan.Seller,
                     Buyer = string.Empty,
                     OrderId = plan.OrderId,
@@ -530,6 +568,7 @@ namespace Bot.ChromeNs
                 plan.Buyer = authoritativeBuyer;
                 if (plan.Snapshot != null) plan.Snapshot.Buyer = authoritativeBuyer;
                 plan.ReservationKey = BuildReservationKey(
+                    plan.ShopKey,
                     plan.Seller,
                     authoritativeBuyer,
                     plan.OrderId,
@@ -578,18 +617,18 @@ namespace Bot.ChromeNs
                     ActiveActions.RemoveAll(x => x == null || x.Until <= now);
                     _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
 
-                    var canonical = FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId);
+                    var canonical = FindCanonicalOrderIdLocked(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
                     if (!string.IsNullOrWhiteSpace(canonical)
                         && !string.Equals(canonical, plan.OrderId, StringComparison.Ordinal))
                     {
                         Log.Info("订单号精度别名已归一化: orderId=" + plan.OrderId + ", canonicalOrderId=" + canonical);
                         plan.OrderId = canonical;
                         if (plan.Snapshot != null) plan.Snapshot.OrderId = canonical;
-                        plan.ReservationKey = BuildReservationKey(plan.Seller, plan.Buyer, canonical, plan.IsBuyerFollowUp);
+                        plan.ReservationKey = BuildReservationKey(plan.ShopKey, plan.Seller, plan.Buyer, canonical, plan.IsBuyerFollowUp);
                     }
 
                     if (IsSuspiciousRoundedOrderId(plan.OrderId)
-                        && string.IsNullOrWhiteSpace(FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId, true)))
+                        && string.IsNullOrWhiteSpace(FindCanonicalOrderIdLocked(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId, true)))
                     {
                         reason = "precision_risk_order_id";
                         Log.ErrorWithMaxCount("订单自动回复已阻止：检测到疑似 JavaScript Number 精度损失的长订单号，等待精确字符串订单事件补偿。 orderId="
@@ -624,6 +663,7 @@ namespace Bot.ChromeNs
                         durable = new OrderReplyActionRecord();
                         _actionState.Records.Add(durable);
                     }
+                    durable.ShopKey = plan.ShopKey;
                     durable.Seller = Normalize(plan.Seller);
                     durable.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     durable.OrderId = plan.OrderId.Trim();
@@ -635,6 +675,7 @@ namespace Bot.ChromeNs
 
                     ActiveActions.Add(new OrderReplyActionRecord
                     {
+                        ShopKey = durable.ShopKey,
                         Seller = durable.Seller,
                         Buyer = durable.Buyer,
                         OrderId = durable.OrderId,
@@ -685,6 +726,7 @@ namespace Bot.ChromeNs
                         existing = new OrderReplyActionRecord();
                         _actionState.Records.Add(existing);
                     }
+                    existing.ShopKey = plan.ShopKey;
                     existing.Seller = Normalize(plan.Seller);
                     existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
@@ -739,6 +781,7 @@ namespace Bot.ChromeNs
                             existing = new OrderReplyActionRecord();
                             _actionState.Records.Add(existing);
                         }
+                        existing.ShopKey = plan.ShopKey;
                         existing.Seller = Normalize(plan.Seller);
                         existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                         existing.OrderId = plan.OrderId.Trim();
@@ -754,7 +797,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void ObserveCanonicalOrderId(string seller, string buyer, string orderId)
+        private static void ObserveCanonicalOrderId(string shopKey, string seller, string buyer, string orderId)
         {
             orderId = (orderId ?? string.Empty).Trim();
             if (orderId.Length < 8 || IsSuspiciousRoundedOrderId(orderId)) return;
@@ -777,6 +820,7 @@ namespace Bot.ChromeNs
                     }
                     var exists = _actionState.Records.Any(x => x != null
                         && !x.FollowUp
+                        && SameShopScope(x.ShopKey, shopKey)
                         && Normalize(x.Seller) == Normalize(seller)
                         && NormalizeBuyer(x.Seller, x.Buyer) == NormalizeBuyer(seller, buyer)
                         && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
@@ -784,6 +828,7 @@ namespace Bot.ChromeNs
                     {
                         _actionState.Records.Add(new OrderReplyActionRecord
                         {
+                            ShopKey = shopKey,
                             Seller = Normalize(seller),
                             Buyer = NormalizeBuyer(seller, buyer),
                             OrderId = orderId,
@@ -799,13 +844,14 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string FindCanonicalOrderIdLocked(string seller, string buyer, string orderId, bool requireExactCandidate = false)
+        private static string FindCanonicalOrderIdLocked(string shopKey, string seller, string buyer, string orderId, bool requireExactCandidate = false)
         {
             var normalizedSeller = Normalize(seller);
             var normalizedBuyer = NormalizeBuyer(seller, buyer);
             orderId = (orderId ?? string.Empty).Trim();
             var candidates = ActiveActions.Concat(_actionState == null ? new List<OrderReplyActionRecord>() : _actionState.Records)
                 .Where(x => x != null
+                    && string.Equals((x.ShopKey ?? string.Empty).Trim(), (shopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
                     && Normalize(x.Seller) == normalizedSeller
                     && NormalizeBuyer(x.Seller, x.Buyer) == normalizedBuyer
                     && !string.IsNullOrWhiteSpace(x.OrderId))
@@ -821,6 +867,7 @@ namespace Bot.ChromeNs
         {
             if (record == null || plan == null) return false;
             return record.FollowUp == plan.IsBuyerFollowUp
+                && SameShopScope(record.ShopKey, plan.ShopKey)
                 && Normalize(record.Seller) == Normalize(plan.Seller)
                 && NormalizeBuyer(record.Seller, record.Buyer) == NormalizeBuyer(plan.Seller, plan.Buyer)
                 && (string.Equals((record.OrderId ?? string.Empty).Trim(), (plan.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
@@ -849,9 +896,9 @@ namespace Bot.ChromeNs
                 && Regex.IsMatch(value, @"0{3,}$");
         }
 
-        private static string BuildReservationKey(string seller, string buyer, string orderId, bool followUp)
+        private static string BuildReservationKey(string shopKey, string seller, string buyer, string orderId, bool followUp)
         {
-            return Normalize(seller) + "#" + NormalizeBuyer(seller, buyer) + "#" + (orderId ?? string.Empty).Trim()
+            return (shopKey ?? string.Empty).Trim() + "#" + Normalize(seller) + "#" + NormalizeBuyer(seller, buyer) + "#" + (orderId ?? string.Empty).Trim()
                 + (followUp ? "#guidance-followup" : string.Empty);
         }
 
@@ -932,10 +979,21 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private static bool SameShopScope(string left, string right)
+        {
+            left = (left ?? string.Empty).Trim();
+            right = (right ?? string.Empty).Trim();
+            // Empty ShopKey exists only in pre-migration action records. Keep those as
+            // conservative at-most-once barriers; new records must match exact ShopKey.
+            return left.Length == 0 || right.Length == 0
+                || string.Equals(left, right, StringComparison.Ordinal);
+        }
+
         private static bool SameStoredAction(OrderReplyActionRecord left, OrderReplyActionRecord right)
         {
             if (left == null || right == null || left.FollowUp != right.FollowUp) return false;
-            return Normalize(left.Seller) == Normalize(right.Seller)
+            return SameShopScope(left.ShopKey, right.ShopKey)
+                && Normalize(left.Seller) == Normalize(right.Seller)
                 && Normalize(left.Buyer) == Normalize(right.Buyer)
                 && (string.Equals((left.OrderId ?? string.Empty).Trim(), (right.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
                     || ArePrecisionAliases(left.OrderId, right.OrderId));
@@ -1249,6 +1307,36 @@ namespace Bot.ChromeNs
 
         private async Task ProcessOrderPlacedReplyAsync(OrderPlacedReplyPlan plan)
         {
+            if (plan == null || string.IsNullOrWhiteSpace(plan.ShopKey))
+            {
+                Log.Info("下单自动回复已阻止：计划缺少ShopKey。");
+                return;
+            }
+
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch (Exception ex)
+            {
+                Log.Info("下单自动回复已阻止：无法验证当前千牛ShopKey: " + ex.Message);
+                OrderPlacedAutoReplyService.Complete(plan, false);
+                OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                return;
+            }
+            if (shop == null || !string.Equals(shop.ShopKey, plan.ShopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, (plan.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                Log.Info("下单自动回复已阻止：当前千牛实例与订单计划ShopKey不匹配。");
+                OrderPlacedAutoReplyService.Complete(plan, false);
+                OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                return;
+            }
+
+            using (ShopSettingsScope.Enter(shop))
+                await ProcessOrderPlacedReplyInShopScopeAsync(plan).ConfigureAwait(false);
+        }
+
+        private async Task ProcessOrderPlacedReplyInShopScopeAsync(OrderPlacedReplyPlan plan)
+        {
             string actionReason;
             if (!OrderPlacedAutoReplyService.TryBeginExecution(plan, out actionReason))
             {
@@ -1274,7 +1362,7 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer))
+            using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer, plan == null ? string.Empty : plan.ShopKey))
             {
                 try
                 {

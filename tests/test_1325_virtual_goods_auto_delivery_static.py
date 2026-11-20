@@ -89,7 +89,7 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     durable_write = runtime.index("AutoDeliveryConfirmationLedger.TryRecordIntent", local_consumed)
     assert persist < local_consumed < durable_write
     assert "AutoDeliveryConfirmationLedger.Remove" not in runtime
-    assert "AutoDeliveryConfirmationLedger.HasIntent(seller, orderId)" in runtime[persist:durable_write]
+    assert "AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId)" in runtime[persist:durable_write]
 
 
 def test_auto_delivery_only_declares_success_on_explicit_done_status():
@@ -173,7 +173,7 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
     assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
     assert "保留原状态文件并暂停自动发货" in initialize
     assert "private static StateDocument LoadState(out bool loadedSuccessfully)" in loader
-    assert "loaded.Schema != 1 || loaded.Pending == null" in loader
+    assert "(loaded.Schema != 1 && loaded.Schema != 2) || loaded.Pending == null" in loader
     assert "loadedSuccessfully = false;" in loader
     assert "if (_stateLoadFailed) return;" in runtime
     assert "if (_stateLoadFailed) return false;" in runtime
@@ -205,7 +205,7 @@ def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwrit
     assert "if (!loadedSuccessfully)" in initialize
     assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
     assert "private static volatile bool _cursorStateUnavailable;" in seed
-    assert "state == null || state.Schema != 1 || state.Sellers == null" in loader
+    assert "state == null || (state.Schema != 1 && state.Schema != 2) || state.Sellers == null" in loader
     assert "loadedSuccessfully = false;" in loader
     assert "return new CursorState();" in loader
     assert "if (_cursorStateUnavailable) return;" in tick
@@ -249,3 +249,28 @@ def test_auto_delivery_settings_never_fall_back_to_global_on_ambiguous_shop_iden
     assert "只有一个明确为空的 seller" not in load
     assert "Only an explicitly empty seller may use the pre-ShopKey global" in load
     assert "已阻止回退到全局设置" in resolver
+
+
+
+def test_auto_delivery_queue_cursor_and_confirmation_ledger_are_shopkey_isolated():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+
+    assert "public string ShopKey { get; set; }" in runtime
+    assert "BuildKey(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)" in runtime
+    assert "ShopContextLocator.FindConnectedQnByShopKey(snapshot.ShopKey)" in runtime
+    assert "runtimeShop.ShopKey, snapshot.ShopKey" in runtime
+    assert "loaded.Schema = 2;" in runtime
+    assert "旧版任务无法唯一恢复ShopKey" in runtime
+
+    assert "GetCursorLocked(string shopKey, string seller)" in seed
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in seed
+    assert "x.Snapshot.ShopKey" in seed
+    assert "state.Schema = 2;" in seed
+
+    assert "HasIntent(string shopKey, string seller, string orderId)" in ledger
+    assert "TryRecordIntent(string shopKey, string seller, string orderId" in ledger
+    assert "MarkResolved(string shopKey, string seller, string orderId" in ledger
+    assert "BuildLegacyKey(seller, orderId)" in ledger
+    assert "loaded.Schema == 1" in ledger

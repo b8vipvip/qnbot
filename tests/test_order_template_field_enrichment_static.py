@@ -55,6 +55,7 @@ def test_complete_snapshot_wins_before_sparse_synthetic_message():
     send = code.index("await ProcessOrderPlacedReplyAsync(plan)", plan)
 
     assert publish < plan < send
+    assert "ShopKey = snapshot.ShopKey" in code
     assert "HasTemplateFieldEvidence(snapshot)" in code
     assert "旧桥接随后会被 OrderEventHub 去重" in code
     assert "下单固定模板将使用完整订单字段" in code

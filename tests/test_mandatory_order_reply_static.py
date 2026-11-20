@@ -30,3 +30,6 @@ def test_order_reply_still_requires_enabled_rule_and_global_auto_send():
     assert "Params.Robot.GetIsAutoReply()" in code
     assert "Reservations.TryGetValue" in code
     assert "OrderEventHub.Publish(snapshot)" in code
+    assert "ShopKey = shopKey" in code
+    assert "BuildReservationKey(string shopKey, string seller" in code
+    assert "SameShopScope(record.ShopKey, plan.ShopKey)" in code

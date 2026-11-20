@@ -1,4 +1,5 @@
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using System;
@@ -12,7 +13,7 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Bridges the already-authoritative, durable OrderEventHub ledger into the auto-delivery queue.
-    /// A per-seller cursor prevents enabling the feature from retroactively shipping old orders,
+    /// A per-ShopKey cursor prevents same-nickname shops from consuming each other's orders and prevents retroactive shipping,
     /// while still allowing a crash between event acceptance and queue persistence to recover after
     /// the next startup.
     /// </summary>
@@ -32,6 +33,7 @@ namespace Bot.ChromeNs
 
         private sealed class SellerCursor
         {
+            public string ShopKey { get; set; }
             public string Seller { get; set; }
             public bool EnabledObserved { get; set; }
             public DateTime LastSeenAt { get; set; }
@@ -44,7 +46,7 @@ namespace Bot.ChromeNs
 
             public CursorState()
             {
-                Schema = 1;
+                Schema = 2;
                 Sellers = new List<SellerCursor>();
             }
         }
@@ -55,6 +57,7 @@ namespace Bot.ChromeNs
         private static int _initialized;
         private static int _running;
         private static volatile bool _cursorStateUnavailable;
+        private static bool _cursorStateDirty;
 
         public static void Initialize()
         {
@@ -73,6 +76,11 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，避免跳过未处理订单。", 10);
                     return;
                 }
+                if (_cursorStateDirty && !SaveCursorsLocked())
+                {
+                    _cursorStateUnavailable = true;
+                    return;
+                }
                 _timer = new Timer(_ => Tick(), null, 1200, 1800);
             }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
@@ -84,15 +92,26 @@ namespace Bot.ChromeNs
             if (_cursorStateUnavailable) return;
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("自动发货游标配置无法确认店铺身份，拒绝修改同昵称店铺游标: seller="
+                    + seller + ", error=" + ex.Message, 20);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) return;
             lock (Sync)
             {
-                var cursor = GetCursorLocked(seller);
+                var cursor = GetCursorLocked(shop.ShopKey, seller);
                 if (cursor.EnabledObserved != enabled)
                 {
                     cursor.EnabledObserved = enabled;
                     cursor.LastSeenAt = DateTime.Now;
-                    if (!SaveCursorsLocked()) return;
+                    _cursorStateDirty = true;
                 }
+                if (_cursorStateDirty && !SaveCursorsLocked()) return;
             }
         }
 
@@ -133,48 +152,65 @@ namespace Bot.ChromeNs
                     : hub.Events;
                 foreach (var qn in qns)
                 {
+                    ShopContext shop;
+                    try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                    catch (Exception ex)
+                    {
+                        Log.Info("自动发货事件桥跳过无法确认身份的千牛实例: error=" + ex.Message);
+                        continue;
+                    }
+                    if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
                     var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                    if (seller.Length == 0) continue;
-                    var enabled = AutoDeliverySettings.Load(seller).Enabled;
-                    SellerCursor cursor;
-                    lock (Sync)
-                    {
-                        cursor = GetCursorLocked(seller);
-                        if (cursor.EnabledObserved != enabled)
-                        {
-                            // false -> true begins exactly at now; all prior events are history.
-                            cursor.EnabledObserved = enabled;
-                            cursor.LastSeenAt = DateTime.Now;
-                            if (!SaveCursorsLocked()) return;
-                        }
-                    }
-                    if (!enabled) continue;
+                    if (seller.Length == 0 || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) continue;
 
-                    DateTime floor;
-                    lock (Sync) floor = cursor.LastSeenAt;
-                    var matching = events
-                        .Where(x => x != null && x.Snapshot != null)
-                        .Where(x => x.SeenAt > floor)
-                        .Where(x => x.Snapshot.EventType == OrderEventType.Created
-                            || x.Snapshot.EventType == OrderEventType.Paid)
-                        .Where(x => DirectOrderIdentityResolver.IdentityEquals(x.Snapshot.Seller, seller))
-                        .OrderBy(x => x.SeenAt)
-                        .ToList();
-
-                    var latest = floor;
-                    foreach (var entry in matching)
+                    using (ShopSettingsScope.Enter(shop))
                     {
-                        // Do not advance the durable event cursor unless the corresponding
-                        // queue state was safely persisted or the event was intentionally ignored.
-                        if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;
-                        if (entry.SeenAt > latest) latest = entry.SeenAt;
-                    }
-                    if (latest > floor)
-                    {
+                        var enabled = AutoDeliverySettings.Load(seller).Enabled;
+                        SellerCursor cursor;
                         lock (Sync)
                         {
-                            cursor.LastSeenAt = latest;
-                            if (!SaveCursorsLocked()) return;
+                            cursor = GetCursorLocked(shop.ShopKey, seller);
+                            if (cursor.EnabledObserved != enabled)
+                            {
+                                // false -> true begins exactly at now; all prior events are history.
+                                cursor.EnabledObserved = enabled;
+                                cursor.LastSeenAt = DateTime.Now;
+                                _cursorStateDirty = true;
+                            }
+                            if (_cursorStateDirty && !SaveCursorsLocked()) return;
+                        }
+                        if (!enabled) continue;
+
+                        DateTime floor;
+                        lock (Sync) floor = cursor.LastSeenAt;
+                        var matching = events
+                            .Where(x => x != null && x.Snapshot != null)
+                            .Where(x => x.SeenAt > floor)
+                            .Where(x => string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(),
+                                shop.ShopKey, StringComparison.Ordinal))
+                            .Where(x => x.Snapshot.EventType == OrderEventType.Created
+                                || x.Snapshot.EventType == OrderEventType.Paid)
+                            .Where(x => string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(),
+                                seller, StringComparison.Ordinal))
+                            .OrderBy(x => x.SeenAt)
+                            .ToList();
+
+                        var latest = floor;
+                        foreach (var entry in matching)
+                        {
+                            // Do not advance the durable event cursor unless the corresponding
+                            // queue state was safely persisted or the event was intentionally ignored.
+                            if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;
+                            if (entry.SeenAt > latest) latest = entry.SeenAt;
+                        }
+                        if (latest > floor)
+                        {
+                            lock (Sync)
+                            {
+                                cursor.LastSeenAt = latest;
+                                _cursorStateDirty = true;
+                                if (!SaveCursorsLocked()) return;
+                            }
                         }
                     }
                 }
@@ -189,21 +225,43 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static SellerCursor GetCursorLocked(string seller)
+        private static SellerCursor GetCursorLocked(string shopKey, string seller)
         {
             if (_cursors == null) _cursors = new CursorState();
             if (_cursors.Sellers == null) _cursors.Sellers = new List<SellerCursor>();
             var cursor = _cursors.Sellers.FirstOrDefault(x => x != null
-                && string.Equals(x.Seller ?? string.Empty, seller, StringComparison.Ordinal));
+                && string.Equals((x.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal));
             if (cursor != null) return cursor;
+
+            // Migrate a seller-only cursor only when the nickname resolves uniquely to
+            // this exact ShopKey. Otherwise each shop starts at now and old events remain history.
+            var legacy = _cursors.Sellers.FirstOrDefault(x => x != null
+                && string.IsNullOrWhiteSpace(x.ShopKey)
+                && string.Equals(x.Seller ?? string.Empty, seller, StringComparison.Ordinal));
+            if (legacy != null)
+            {
+                try
+                {
+                    var unique = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                    if (unique != null && string.Equals(unique.ShopKey, shopKey, StringComparison.Ordinal))
+                    {
+                        legacy.ShopKey = shopKey;
+                        _cursorStateDirty = true;
+                        return legacy;
+                    }
+                }
+                catch { }
+            }
 
             cursor = new SellerCursor
             {
+                ShopKey = shopKey,
                 Seller = seller,
                 EnabledObserved = false,
                 LastSeenAt = DateTime.Now
             };
             _cursors.Sellers.Add(cursor);
+            _cursorStateDirty = true;
             return cursor;
         }
 
@@ -244,10 +302,17 @@ namespace Bot.ChromeNs
                     return new CursorState();
                 }
                 var state = JsonConvert.DeserializeObject<CursorState>(File.ReadAllText(path, Encoding.UTF8));
-                if (state == null || state.Schema != 1 || state.Sellers == null)
+                if (state == null || (state.Schema != 1 && state.Schema != 2) || state.Sellers == null)
                 {
                     Log.ErrorWithMaxCount("自动发货订单事件游标结构无效；拒绝重置或覆盖现有游标文件。", 10);
                     return new CursorState();
+                }
+                if (state.Schema == 1)
+                {
+                    // Old seller-only cursors are retained for unique-name migration; ambiguous
+                    // names intentionally do not get attached to an arbitrary ShopKey.
+                    state.Schema = 2;
+                    _cursorStateDirty = true;
                 }
                 loadedSuccessfully = true;
                 return state;
@@ -269,6 +334,7 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                     path, JsonConvert.SerializeObject(_cursors, Formatting.Indented), 3, 50, out error))
                     throw new IOException("原子保存失败：" + error);
+                _cursorStateDirty = false;
                 return true;
             }
             catch (Exception ex)

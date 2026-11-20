@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -91,6 +92,7 @@ namespace Bot.ChromeNs
     {
         private sealed class GenericWake
         {
+            public string ShopKey;
             public DateTime StartedAt;
             public DateTime LastSeenAt;
             public string Trigger;
@@ -99,6 +101,7 @@ namespace Bot.ChromeNs
         private sealed class BuyerSignal
         {
             public QN Qn;
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public DateTime SeenAt;
@@ -140,17 +143,27 @@ namespace Bot.ChromeNs
             if (qn == null || qn.Seller == null) return;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
+            {
+                Log.Info("订单入站协调器拒绝无ShopKey的付款唤醒: " + ex.Message);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) return;
 
             Cleanup();
             var now = DateTime.Now;
-            var key = Normalize(seller);
+            var key = shop.ShopKey;
             var wake = GenericWakes.AddOrUpdate(
                 key,
-                _ => new GenericWake { StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty },
+                _ => new GenericWake { ShopKey = shop.ShopKey, StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty },
                 (_, old) => old == null || old.LastSeenAt < now.Subtract(GenericWakeLifetime)
-                    ? new GenericWake { StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty }
+                    ? new GenericWake { ShopKey = shop.ShopKey, StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty }
                     : new GenericWake
                     {
+                        ShopKey = shop.ShopKey,
                         StartedAt = old.StartedAt,
                         LastSeenAt = now,
                         Trigger = string.IsNullOrWhiteSpace(trigger) ? old.Trigger : trigger
@@ -165,9 +178,10 @@ namespace Bot.ChromeNs
             {
                 var signal = pair.Value;
                 if (signal == null || signal.Qn == null) continue;
+                if (!string.Equals(signal.ShopKey ?? string.Empty, shop.ShopKey, StringComparison.Ordinal)) continue;
                 if (!DirectOrderIdentityResolver.IdentityEquals(signal.Seller, seller)) continue;
                 if (signal.SeenAt < now.Subtract(BackwardBuyerCorrelation)) continue;
-                ScheduleCorrelatedProbe(signal.Qn, seller, signal.Buyer, wake.StartedAt,
+                ScheduleCorrelatedProbe(signal.Qn, signal.ShopKey, seller, signal.Buyer, wake.StartedAt,
                     "generic-after-" + (signal.Source ?? "buyer-signal"));
             }
         }
@@ -192,15 +206,28 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (qn == null || seller.Length == 0 || buyer.Length == 0) return;
 
-            var normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
+            {
+                Log.Info("订单入站协调器拒绝无ShopKey的买家信号: " + ex.Message);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) return;
+            var shopKey = shop.ShopKey;
+            string normalizedBuyer;
+            using (ShopSettingsScope.Enter(shop))
+                normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             if (!string.IsNullOrWhiteSpace(normalizedBuyer)) buyer = normalizedBuyer;
             var now = DateTime.Now;
             Cleanup();
 
-            var buyerKey = Normalize(seller) + "#" + Normalize(buyer);
+            var buyerKey = shopKey + "#" + Normalize(seller) + "#" + Normalize(buyer);
             RecentBuyerSignals[buyerKey] = new BuyerSignal
             {
                 Qn = qn,
+                ShopKey = shopKey,
                 Seller = seller,
                 Buyer = buyer,
                 SeenAt = now,
@@ -208,7 +235,7 @@ namespace Bot.ChromeNs
             };
 
             GenericWake wake;
-            if (!GenericWakes.TryGetValue(Normalize(seller), out wake)
+            if (!GenericWakes.TryGetValue(shopKey, out wake)
                 || wake == null
                 || wake.LastSeenAt < now.Subtract(GenericWakeLifetime))
             {
@@ -217,24 +244,33 @@ namespace Bot.ChromeNs
 
             Log.Info("订单入站统一协调器关联付款唤醒与买家: seller=" + seller
                 + ", buyer=" + buyer + ", source=" + (source ?? string.Empty));
-            ScheduleCorrelatedProbe(qn, seller, buyer, wake.StartedAt, source);
+            ScheduleCorrelatedProbe(qn, shopKey, seller, buyer, wake.StartedAt, source);
         }
 
         private static void ScheduleCorrelatedProbe(
             QN qn,
+            string shopKey,
             string seller,
             string buyer,
             DateTime startedAt,
             string source)
         {
-            if (qn == null || string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
-            var key = Normalize(seller) + "#" + Normalize(buyer);
+            if (qn == null || string.IsNullOrWhiteSpace(shopKey)
+                || string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
+            ShopContext resolvedShop;
+            try { resolvedShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch { return; }
+            if (resolvedShop == null || !string.Equals(resolvedShop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(resolvedShop.SellerNick, seller, StringComparison.Ordinal)) return;
+            var key = shopKey + "#" + Normalize(seller) + "#" + Normalize(buyer);
             var state = Probes.GetOrAdd(key, _ => new ProbeState { StartedAt = startedAt });
             if (startedAt < state.StartedAt) state.StartedAt = startedAt;
             if (Interlocked.Exchange(ref state.Running, 1) != 0) return;
 
             Task.Run(async () =>
             {
+                using (ShopSettingsScope.Enter(resolvedShop))
+                {
                 try
                 {
                     Log.Info("订单入站统一协调器启动目标买家面板补扫: seller=" + seller
@@ -250,7 +286,7 @@ namespace Bot.ChromeNs
                         if (!Probes.TryGetValue(key, out current) || !ReferenceEquals(current, state)) return;
 
                         var mayFocus = targetDelay >= 3200 && targetDelay <= LastSafeAutoFocusProbeMs;
-                        if (await TryActivateTargetIfSafeAsync(qn, seller, buyer, mayFocus).ConfigureAwait(false))
+                        if (await TryActivateTargetIfSafeAsync(qn, shopKey, seller, buyer, mayFocus).ConfigureAwait(false))
                         {
                             if (await qn.TryRecoverVisibleOrderPanelForCoordinatorAsync(
                                 seller,
@@ -279,11 +315,13 @@ namespace Bot.ChromeNs
                         Probes.TryRemove(key, out ignored);
                     }
                 }
+                }
             });
         }
 
         private static async Task<bool> TryActivateTargetIfSafeAsync(
             QN qn,
+            string shopKey,
             string seller,
             string buyer,
             bool mayFocus)
@@ -304,7 +342,7 @@ namespace Bot.ChromeNs
             if (!mayFocus) return false;
 
             string blockedReason;
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out blockedReason))
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out blockedReason, shopKey))
             {
                 Log.Info("订单入站统一协调器暂不切换买家：" + blockedReason + ", target=" + buyer);
                 return false;
@@ -455,7 +493,15 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var hash = Hash(raw);
+            ShopContext messageShop;
+            try { messageShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
+            {
+                Log.Info("付款通知兼容解析拒绝无ShopKey消息: " + ex.Message);
+                return;
+            }
+            if (messageShop == null || string.IsNullOrWhiteSpace(messageShop.ShopKey)) return;
+            var hash = messageShop.ShopKey + "#" + Hash(raw);
             CleanupReservations();
 
             try
@@ -509,11 +555,14 @@ namespace Bot.ChromeNs
                 var synthetic = new QNChatMessage { summary = summary };
                 Log.Info("付款通知兼容解析成功: seller=" + seller
                     + ", buyer=" + buyer + ", orderId=" + orderId + ", paid=" + paid);
-                await qn.ProcessDirectOrderMessageAsync(
-                    synthetic,
-                    seller,
-                    buyer,
-                    "messageCenterNotify统一兼容解析");
+                using (ShopSettingsScope.Enter(messageShop))
+                {
+                    await qn.ProcessDirectOrderMessageAsync(
+                        synthetic,
+                        seller,
+                        buyer,
+                        "messageCenterNotify统一兼容解析");
+                }
             }
             catch (Exception ex)
             {
@@ -792,6 +841,7 @@ namespace Bot.ChromeNs
 
                 var snapshot = new OrderSnapshot
                 {
+                    ShopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey,
                     Seller = runtimeSeller,
                     Buyer = verifiedBuyer,
                     OrderId = candidate.OrderId,
