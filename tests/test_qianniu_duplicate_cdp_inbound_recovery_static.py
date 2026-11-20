@@ -562,7 +562,8 @@ def test_periodic_shop_identity_probe_cannot_overwrite_a_newer_status_generation
     assert "currentIdentityProbeGeneration != expectedIdentityProbeGeneration.Value" in claim
     assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in revalidate
     assert "IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)" in revalidate
-    assert "IsAuthoritativeShopSession(shopKey, session.SessionID)" in revalidate
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in revalidate
+    assert "if (onClaimed != null) onClaimed();" in claim
     assert "QN.GetByShopIdentity(user.Result)" in revalidate
 
 
