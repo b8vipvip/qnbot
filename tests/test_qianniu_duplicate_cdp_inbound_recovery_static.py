@@ -590,3 +590,37 @@ def test_every_status_heartbeat_invalidates_old_shop_identity_reads_even_when_di
     assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration)" in init
     assert "expectedIdentityProbeGeneration: identityProbeGeneration" in status or "expectedIdentityProbeGeneration: identityProbeGeneration" in server
     assert "IsCurrentShopIdentityProbeLocked(sessionId, expectedIdentityProbeGeneration.Value)" in promotion
+
+
+
+def test_periodic_identity_claim_and_qn_binding_are_atomic_against_new_status_events():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    claim = server[
+        server.index("private bool TryClaimShopSession"):
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
+    ]
+    periodic = server[
+        server.index("private async Task TryRevalidateShopIdentity(WebSocketSession session, long bindingGeneration)"):
+        server.index("private async Task TryBindStatusConversation")
+    ]
+
+    assert "Action onClaimed = null" in claim
+    assert "if (onClaimed != null) onClaimed();" in claim
+    assert claim.index("lock (_sellerSessionSync)") < claim.index("if (onClaimed != null) onClaimed();")
+    assert "TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>" in periodic
+    assert periodic.index("TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>") < periodic.index("qn.CDP = cdp;")
+    assert "CDPClient.PreferRuntimeSession(" in periodic
+
+
+def test_initial_identity_claim_and_qn_binding_are_atomic_against_new_status_events():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    init = server[
+        server.index("private async Task TryInitSession(WebSocketSession session, string reason, long identityProbeGeneration)"):
+        server.index("private void OnSessionClosed")
+    ]
+
+    assert "TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration, () =>" in init
+    assert "qn.QnVersion = ver != null ? ver.version : string.Empty;" in init
+    assert "qn.CDP = cdp;" in init
+    assert "_initialized[session.SessionID] = true;" in init
+    assert "if (!IsCurrentShopIdentityProbeLocked(session.SessionID, identityProbeGeneration)) return;" in init

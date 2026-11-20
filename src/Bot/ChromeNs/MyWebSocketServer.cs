@@ -203,7 +203,7 @@ namespace Bot.ChromeNs
             });
         }
 
-        private bool TryClaimShopSession(string shopKey, string sessionId, long? expectedIdentityProbeGeneration = null)
+        private bool TryClaimShopSession(string shopKey, string sessionId, long? expectedIdentityProbeGeneration = null, Action onClaimed = null)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();
@@ -263,6 +263,7 @@ namespace Bot.ChromeNs
                             _duplicateShopSessions.TryRemove(sessionId, out ignoredDuplicate);
                             DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId);
                             BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
+                            if (onClaimed != null) onClaimed();
                             return true;
                         }
 
@@ -290,6 +291,7 @@ namespace Bot.ChromeNs
                     _duplicateShopSessions.TryRemove(sessionId, out ignored);
                     DuplicateCdpInboundRecoveryBridge.ClearSessionIdentityTransition(sessionId);
                     BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_shopSessions.Count);
+                    if (onClaimed != null) onClaimed();
                     Log.Info("已选定ShopKey权威千牛CDP会话: shopRef=" + DiagnosticRef("shop", shopKey)
                         + ", sessionRef=" + DiagnosticRef("session", sessionId));
                     return true;
@@ -739,26 +741,20 @@ namespace Bot.ChromeNs
                 if (qn == null || qn.Seller == null) return;
                 var sellerNick = qn.Seller.Nick ?? user.Result.Nick;
 
-                if (TryClaimShopSession(shopKey, session.SessionID, bindingGeneration))
+                // Claiming the ShopKey and installing its CDP runtime binding must be
+                // one atomic operation. A newer qnbotStatus event cannot land between them.
+                if (TryClaimShopSession(shopKey, session.SessionID, bindingGeneration, () =>
                 {
-                    lock (_sellerSessionSync)
-                    {
-                        if (!IsCurrentShopIdentityProbeLocked(session.SessionID, bindingGeneration)
-                            || !IsAuthoritativeShopSession(shopKey, session.SessionID)
-                            || cdp.IsInvalidated)
-                            return;
-
-                        cdp.ShopKey = shopKey;
-                        cdp.IsShopIdentityRetired = false;
-                        cdp.Nick = sellerNick;
-                        qn.CDP = cdp;
-                        CDPClient.PreferRuntimeSession(
-                            shopKey, sellerNick, session.SessionID, string.Empty,
-                            "periodic_shop_identity_revalidation");
-                        _initialized[session.SessionID] = true;
-                    }
+                    cdp.ShopKey = shopKey;
+                    cdp.IsShopIdentityRetired = false;
+                    cdp.Nick = sellerNick;
+                    qn.CDP = cdp;
+                    CDPClient.PreferRuntimeSession(
+                        shopKey, sellerNick, session.SessionID, string.Empty,
+                        "periodic_shop_identity_revalidation");
+                    _initialized[session.SessionID] = true;
+                }))
                     return;
-                }
 
                 // A verified duplicate/standby may retain only its exact ShopKey mapping.
                 // A late result must not restore even that mapping after a newer status event.
@@ -910,35 +906,34 @@ namespace Bot.ChromeNs
                 var shopKey = shop.ShopKey;
                 QN qn = QN.GetByShopIdentity(user.Result);
                 if (qn == null || qn.Seller == null) return;
-                if (!TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration))
+                // Claiming the ShopKey and installing the CDP runtime binding must be
+                // one atomic operation. A newer qnbotStatus event cannot land between them.
+                var claimed = TryClaimShopSession(shopKey, session.SessionID, identityProbeGeneration, () =>
                 {
-                    if (!IsCurrentShopIdentityProbe(session.SessionID, identityProbeGeneration)) return;
-                    _initialized[session.SessionID] = true;
-                    string duplicateShopKey;
-                    if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
-                        Log.Info("重复千牛CDP会话已完成识别但不接管该ShopKey运行通道: shopRef="
-                            + DiagnosticRef("shop", duplicateShopKey)
-                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
-                    else
-                        Log.Info("千牛WebSocket登录ShopKey发生变化，旧绑定已释放，等待下一次状态事件重新绑定: shopRef="
-                            + DiagnosticRef("shop", shopKey)
-                            + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
-                    return;
-                }
-
-                lock (_sellerSessionSync)
-                {
-                    if (!IsCurrentShopIdentityProbeLocked(session.SessionID, identityProbeGeneration)
-                        || !IsAuthoritativeShopSession(shopKey, session.SessionID)
-                        || cdp.IsInvalidated)
-                        return;
-
                     qn.QnVersion = ver != null ? ver.version : string.Empty;
                     cdp.ShopKey = shopKey;
                     cdp.IsShopIdentityRetired = false;
                     cdp.Nick = sellerNick;
                     qn.CDP = cdp;
                     _initialized[session.SessionID] = true;
+                });
+                if (!claimed)
+                {
+                    lock (_sellerSessionSync)
+                    {
+                        if (!IsCurrentShopIdentityProbeLocked(session.SessionID, identityProbeGeneration)) return;
+                        _initialized[session.SessionID] = true;
+                        string duplicateShopKey;
+                        if (_duplicateShopSessions.TryGetValue(session.SessionID, out duplicateShopKey))
+                            Log.Info("重复千牛CDP会话已完成识别但不接管该ShopKey运行通道: shopRef="
+                                + DiagnosticRef("shop", duplicateShopKey)
+                                + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                        else
+                            Log.Info("千牛WebSocket登录ShopKey发生变化，旧绑定已释放，等待下一次状态事件重新绑定: shopRef="
+                                + DiagnosticRef("shop", shopKey)
+                                + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                    }
+                    return;
                 }
 
                 Log.Info("千牛登录身份已绑定独立ShopKey运行通道: shopRef=" + DiagnosticRef("shop", shopKey)
