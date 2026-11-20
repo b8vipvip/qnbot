@@ -148,7 +148,8 @@ def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_
     assert 'select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")' in terminal
     assert "| group_by(.name)" in terminal
     assert "pr_ci_invalid_rows=" in terminal
-    assert '(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")' in terminal
+    assert '| select(.conclusion != "skipped")' in terminal
+    assert 'select(.status != "completed" or .conclusion != "success")' in terminal
     assert '[.[].id | tostring] | join(",")' in terminal
     assert 'pr_ci_status="completed"' in terminal
     assert 'pr_ci_conclusion="success"' in terminal
@@ -264,3 +265,15 @@ def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_ev
     assert "no successful exact-SHA validation exists" in validation
     assert "reusing exact-SHA validation run" in validation
     assert 'gh workflow run "$primary_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"' in validation
+
+
+
+def test_skipped_or_neutral_pr_workflows_cannot_satisfy_product_validation():
+    observer = read(".github/workflows/gptauto-observer.yml")
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+
+    for workflow in (observer, reconcile):
+        assert '| select(.conclusion != "skipped")' in workflow
+        assert '.conclusion != "success"' in workflow
+    assert 'and .conclusion != "neutral"' not in observer
+    assert 'and .conclusion != "neutral"' not in reconcile

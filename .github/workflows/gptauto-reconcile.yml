@@ -451,6 +451,7 @@ jobs:
             [.workflow_runs[]
               | select(.head_sha == $head)
               | select(.event == "pull_request")
+              | select(.conclusion != "skipped")
               | select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")]
             | sort_by([.name, .created_at, .id])
             | group_by(.name)
@@ -460,7 +461,7 @@ jobs:
             echo "::error::No exact-head PR product-validation workflow runs found for $pr_head_sha (expected API control plane CI, CI, or Windows x64 release build)"
             exit 1
           }
-          pr_ci_invalid_rows="$(jq -c '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))]' <<<"$pr_gate_rows")"
+          pr_ci_invalid_rows="$(jq -c '[.[] | select(.status != "completed" or .conclusion != "success")]' <<<"$pr_gate_rows")"
           [[ "$(jq 'length' <<<"$pr_ci_invalid_rows")" == "0" ]] || {
             echo "::error::Exact-head PR validation evidence is not fully successful: $pr_ci_invalid_rows"
             exit 1

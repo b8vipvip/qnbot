@@ -74,7 +74,11 @@ namespace Bot.ChromeNs
         public static bool IsOperational()
         {
             Initialize();
-            lock (Sync) return !_failClosed;
+            lock (Sync)
+            {
+                CleanupLocked(DateTime.Now);
+                return !_failClosed && !IsAtCapacityLocked();
+            }
         }
 
         public static bool IsSafeOrderId(string orderId)
@@ -98,6 +102,13 @@ namespace Bot.ChromeNs
             {
                 if (_failClosed) return true;
                 CleanupLocked(DateTime.Now);
+                // A full ledger cannot safely answer "no intent" for an unseen order:
+                // all new irreversible confirmations must stop until capacity is available.
+                if (IsAtCapacityLocked())
+                {
+                    Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；保留全部防重记录并暂停新的自动确认。", 10);
+                    return true;
+                }
                 return _state.Records.Any(x => x != null
                     && (string.Equals(x.Key, key, StringComparison.Ordinal)
                         || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)));
@@ -125,6 +136,11 @@ namespace Bot.ChromeNs
                 if (_state.Records.Any(x => x != null
                     && (string.Equals(x.Key, key, StringComparison.Ordinal)
                         || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))) return false;
+                if (IsAtCapacityLocked())
+                {
+                    Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；拒绝写入新确认意图，禁止执行确认发货。", 10);
+                    return false;
+                }
 
                 var record = new ConfirmationRecord
                 {
@@ -138,7 +154,6 @@ namespace Bot.ChromeNs
                     ResolvedAt = null
                 };
                 _state.Records.Add(record);
-                TrimLocked();
                 if (SaveLocked()) return true;
 
                 _state.Records.Remove(record);
@@ -290,17 +305,13 @@ namespace Bot.ChromeNs
             if (_state == null) _state = new LedgerState();
             if (_state.Records == null) _state.Records = new List<ConfirmationRecord>();
             _state.Records.RemoveAll(x => x == null || x.KeepUntil <= now);
-            TrimLocked();
         }
 
-        private static void TrimLocked()
+        private static bool IsAtCapacityLocked()
         {
-            if (_state.Records.Count <= MaxRecords) return;
-            _state.Records = _state.Records
-                .Where(x => x != null)
-                .OrderByDescending(x => x.IntentAt)
-                .Take(MaxRecords)
-                .ToList();
+            return _state != null
+                && _state.Records != null
+                && _state.Records.Count >= MaxRecords;
         }
 
         private static bool SaveLocked()

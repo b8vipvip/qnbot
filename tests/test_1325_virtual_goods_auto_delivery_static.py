@@ -307,3 +307,31 @@ def test_disabling_auto_delivery_preserves_consumed_confirmation_for_read_only_r
     assert verification_stop < focus
     assert '"manual_review_required"' in cleanup
     assert "只读复核任务超过24小时，已转人工复核" in cleanup
+
+
+
+def test_confirmation_ledger_capacity_never_evicts_existing_at_most_once_barriers():
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    operational = ledger[
+        ledger.index("public static bool IsOperational"):
+        ledger.index("public static bool IsSafeOrderId")
+    ]
+    has_intent = ledger[
+        ledger.index("public static bool HasIntent"):
+        ledger.index("public static bool TryRecordIntent")
+    ]
+    record_intent = ledger[
+        ledger.index("public static bool TryRecordIntent"):
+        ledger.index("public static void MarkResolved")
+    ]
+
+    # Capacity is a fail-closed admission limit, never a license to discard an
+    # older irreversible-confirmation barrier.
+    assert "return !_failClosed && !IsAtCapacityLocked();" in operational
+    assert "if (IsAtCapacityLocked())" in has_intent
+    assert "return true;" in has_intent
+    assert "if (IsAtCapacityLocked())" in record_intent
+    assert "拒绝写入新确认意图" in record_intent
+    assert "private static bool IsAtCapacityLocked()" in ledger
+    assert "TrimLocked" not in ledger
+    assert ".Take(MaxRecords)" not in ledger

@@ -262,6 +262,7 @@ jobs:
               pr_gate_rows="$(jq -c '
                 [.workflow_runs[]
                   | select(.event == "pull_request")
+                  | select(.conclusion != "skipped")
                   | select(.name == "API control plane CI" or .name == "CI" or .name == "Windows x64 release build")]
                 | sort_by([.name, .created_at, .id])
                 | group_by(.name)
@@ -278,7 +279,7 @@ jobs:
                   PR_CI_STATUS="in_progress"
                 else
                   PR_CI_STATUS="completed"
-                  if [[ "$(jq '[.[] | select(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")] | length' <<<"$pr_gate_rows")" == "0" ]]; then
+                  if [[ "$(jq '[.[] | select(.conclusion != "success")] | length' <<<"$pr_gate_rows")" == "0" ]]; then
                     PR_CI_CONCLUSION="success"
                   else
                     PR_CI_CONCLUSION="failure"
