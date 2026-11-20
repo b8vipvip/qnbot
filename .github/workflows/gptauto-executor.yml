@@ -163,16 +163,33 @@ jobs:
           set -Eeuo pipefail
           [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || { echo "::error::Reconcile adoption is missing task/PR/merge identity."; exit 1; }
           marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$MERGE_SHA -->"
-          existing="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
-          if grep -Fq "$marker" <<<"$existing"; then
-            echo "Reconcile already dispatched for task=$TASK_ID merge=$MERGE_SHA; keeping one canonical run."
+          completion_marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          completion_body="$(jq -r --arg marker "$completion_marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$comments")"
+
+          # A dispatch marker records only that a Reconcile was attempted. It is
+          # not terminal evidence: the previous run may have failed before DONE.
+          # Suppress a retry only after the exact merge has a durable DONE receipt.
+          if grep -Fq "Completion Lease is RELEASED" <<<"$completion_body" \
+            && grep -Fq "Terminal state: DONE" <<<"$completion_body" \
+            && grep -Fq "Merge SHA: $MERGE_SHA" <<<"$completion_body"; then
+            echo "Reconcile already produced terminal DONE for task=$TASK_ID merge=$MERGE_SHA; no recovery dispatch needed."
             exit 0
           fi
+
+          handoff_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
             -f release_required="$RELEASE_REQUIRED"
-          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
-          GPTAuto adopted merged task $TASK_ID for Reconcile on merge $MERGE_SHA. Automatic wakeups reuse the handoff; explicit manual recovery remains available."
+
+          recovery_body="$marker
+          GPTAuto recovery Reconcile scheduled for task $TASK_ID merge $MERGE_SHA.
+          The previous dispatch marker was not treated as completion; the Completion Lease remains ACTIVE until this exact merge receives a durable terminal DONE receipt."
+          if [[ -n "$handoff_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$recovery_body" >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$recovery_body"
+          fi
 
       - name: Retry transient failed jobs only
         id: transient-retry
