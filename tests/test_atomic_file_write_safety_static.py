@@ -66,7 +66,7 @@ def test_confirmation_ledger_never_replaces_a_corrupt_or_incomplete_barrier_file
     loader = ledger[ledger.index("private static LedgerState LoadState"):ledger.index("private static void CleanupLocked")]
 
     assert "if (!_failClosed)" in initialize
-    assert "if (!_failClosed && (migrated || !File.Exists(StatePath()))" in initialize
-    assert "loaded == null || loaded.Schema != 1 || loaded.Records == null" in loader
+    assert "if (!_failClosed && (migrated || _migrationRequired || !File.Exists(StatePath()))" in initialize
+    assert "loaded == null || (loaded.Schema != 1 && loaded.Schema != 2) || loaded.Records == null" in loader
     assert "if (loaded.Records == null) loaded.Records = new List<ConfirmationRecord>();" not in loader
     assert "保留原文件" in loader

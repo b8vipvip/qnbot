@@ -98,3 +98,35 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'head_sha == $source_sha' in release
     assert 'source_sha:' in release
     assert 'timeout-minutes: 60' in reconcile
+
+
+def test_reconcile_never_releases_completion_lease_without_successful_exact_sha_gates():
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+
+    terminal = reconcile[
+        reconcile.index("- name: Capture terminal DONE evidence directly"):
+        reconcile.index("- uses: ./.github/actions/upload-gptauto-log")
+    ]
+    upload = reconcile[
+        reconcile.index("- uses: ./.github/actions/upload-gptauto-log"):
+        reconcile.index("- name: Publish terminal foreground receipt")
+    ]
+    receipt = reconcile[
+        reconcile.index("- name: Publish terminal foreground receipt"):
+        reconcile.index("- name: Terminal receipt summary")
+    ]
+    summary = reconcile[reconcile.index("- name: Terminal receipt summary"):]
+
+    assert "steps.validation-plan.outcome == 'success'" in terminal
+    assert "steps.gates.outcome == 'success'" in terminal
+    assert "steps.release-proof.outcome == 'success'" in terminal
+    assert 'VALIDATION_WORKFLOW: ${{ steps.validation-plan.outputs.validation-workflow }}' in terminal
+    assert '[[ -n "$MAIN_CI_RUN_ID" && -n "$VALIDATION_WORKFLOW" ]]' in terminal
+    assert 'validation_head_sha="$(jq -r '.head_sha // ""' <<<"$validation_row")"' in terminal
+    assert 'validation_name="$(jq -r '.name // ""' <<<"$validation_row")"' in terminal
+    assert 'validation_conclusion="$(jq -r '.conclusion // ""' <<<"$validation_row")"' in terminal
+    assert '"$validation_head_sha" == "$MERGE_SHA"' in terminal
+    assert '"$validation_name" == "$VALIDATION_WORKFLOW"' in terminal
+    assert "steps.terminal.outcome == 'success'" in upload
+    assert "steps.terminal.outcome == 'success'" in receipt
+    assert "steps.terminal.outcome == 'success'" in summary

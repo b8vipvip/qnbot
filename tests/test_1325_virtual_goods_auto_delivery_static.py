@@ -115,7 +115,7 @@ def test_auto_delivery_respects_shared_human_and_bot_activity_guards():
     assert "TryGetInputboxEmptyAsync" in runtime
     assert "IsKnownBotOwnedDraftAsync" in runtime
     assert "await _sendGate.WaitAsync()" in runtime
-    assert 'using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer))' in runtime
+    assert 'using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer, snapshot.ShopKey))' in runtime
 
     # Read-only verification and non-candidates must terminate before foreground focus/navigation.
     method = runtime[runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
@@ -257,7 +257,7 @@ def test_auto_delivery_queue_cursor_and_confirmation_ledger_are_shopkey_isolated
     seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
     ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
 
-    assert "public string ShopKey { get; set; }" in runtime
+    assert "snapshot.ShopKey = ShopContextLocator.ResolveRuntimeBySellerNick(snapshot.Seller).ShopKey" in runtime
     assert "BuildKey(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)" in runtime
     assert "ShopContextLocator.FindConnectedQnByShopKey(snapshot.ShopKey)" in runtime
     assert "runtimeShop.ShopKey, snapshot.ShopKey" in runtime
