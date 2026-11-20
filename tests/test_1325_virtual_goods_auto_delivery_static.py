@@ -232,3 +232,20 @@ def test_event_cursor_does_not_advance_when_queue_persistence_is_unavailable():
     assert "|| !AutoDeliveryCoordinator.IsOperational()" in tick
     assert "if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;" in tick
     assert tick.index("AutoDeliveryCoordinator.Enqueue(entry.Snapshot)") < tick.index("cursor.LastSeenAt = latest;")
+
+
+def test_auto_delivery_settings_never_fall_back_to_global_on_ambiguous_shop_identity():
+    page = text("src/Bot/Options/AutoDeliveryOptionsControl.cs")
+    load = page[page.index("public static AutoDeliveryConfig Load"):
+                page.index("public static void Save")]
+    resolver = page[page.index("private static ShopScopedSettingsStore TryCreateShopStore"):
+                    page.index("private static bool ParseBool")]
+
+    assert "ShopContextLocator.ResolveCurrentOrBySellerNick(seller)" in resolver
+    assert "ShopContextLocator.ResolveBySellerNick(seller)" not in resolver
+    assert "catch" not in resolver
+    assert "var store = TryCreateShopStore(seller);" in load
+    assert "catch" not in load
+    assert "只有一个明确为空的 seller" not in load
+    assert "Only an explicitly empty seller may use the pre-ShopKey global" in load
+    assert "已阻止回退到全局设置" in resolver

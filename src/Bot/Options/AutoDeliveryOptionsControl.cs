@@ -33,24 +33,21 @@ namespace Bot.Options
                 DelayMinutes = DefaultDelayMinutes
             };
 
-            try
+            var store = TryCreateShopStore(seller);
+            if (store != null)
             {
-                var store = TryCreateShopStore(seller);
-                if (store != null)
-                {
-                    string enabled;
-                    string delay;
-                    if (store.TryGetString(EnabledKey, out enabled))
-                        result.Enabled = ParseBool(enabled, false);
-                    if (store.TryGetString(DelayKey, out delay))
-                        result.DelayMinutes = ParseDelay(delay, DefaultDelayMinutes);
-                    return result;
-                }
-            }
-            catch
-            {
+                string enabled;
+                string delay;
+                if (store.TryGetString(EnabledKey, out enabled))
+                    result.Enabled = ParseBool(enabled, false);
+                if (store.TryGetString(DelayKey, out delay))
+                    result.DelayMinutes = ParseDelay(delay, DefaultDelayMinutes);
+                return result;
             }
 
+            // Only an explicitly empty seller may use the pre-ShopKey global
+            // compatibility values. An ambiguous or mismatched non-empty identity
+            // must propagate the error rather than silently reading another scope.
             var legacyEnabled = PersistentParams.GetParam2Key(LegacyEnabledKey, LegacyScope, "0");
             var legacyDelay = PersistentParams.GetParam2Key(
                 LegacyDelayKey,
@@ -81,16 +78,11 @@ namespace Bot.Options
         {
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0) return null;
-            try
-            {
-                var shop = ShopContextLocator.ResolveBySellerNick(seller);
-                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return null;
-                return new ShopScopedSettingsStore(shop, new ShopScopedPathProvider());
-            }
-            catch
-            {
-                return null;
-            }
+            var shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+                throw new InvalidOperationException(
+                    "无法确认自动发货配置所属店铺，已阻止回退到全局设置。");
+            return new ShopScopedSettingsStore(shop, new ShopScopedPathProvider());
         }
 
         private static bool ParseBool(string value, bool fallback)
