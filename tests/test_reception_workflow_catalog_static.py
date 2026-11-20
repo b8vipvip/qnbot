@@ -87,3 +87,16 @@ def test_workflow_steps_require_nonempty_unique_evidence_contracts():
     assert "new HashSet<string>(StringComparer.Ordinal)" in validation
     assert "evidenceKinds.Add(Convert.ToString(kind))" in validation
     assert "同一步骤不允许重复声明相同证据类型" in validation
+
+
+
+def test_status_document_distinguishes_draft_catalog_from_missing_approval_publish_and_rollback():
+    status = source("docs/RECEPTION_WORKFLOW_STATUS.md")
+
+    assert "privacy-minimized, cross-restart evidence ledger" in status
+    assert "versioned workflow draft catalog" in status
+    assert "Every saved flow remains `draft`" in status
+    assert "trusted operator identity and authorization source" in status
+    assert "active-version pointer" in status
+    assert "atomic rollback" in status
+    assert "must remain draft-only" in status

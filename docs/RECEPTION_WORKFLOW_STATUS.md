@@ -22,16 +22,21 @@ The planned generic model uses `shop_key`, `product_id`, `sku`, `flow_version`, 
 
 ## Runtime protection already implemented
 
-Current implementation includes shop-scoped knowledge quarantine, pre-send text/vision safety checks, a bounded recent-image follow-up window, conservative OCR decisions, short-lived audit and cautious five-minute learning candidates. Learning candidates do not automatically authorize financial or account operations.
+Current implementation includes:
 
-## Known gaps
+- Shop-scoped knowledge quarantine, pre-send text/vision safety checks, a bounded recent-image follow-up window, conservative OCR decisions, and cautious learning candidates. Learning candidates do not automatically authorize financial or account operations.
+- A privacy-minimized, cross-restart evidence ledger. It stores hashes and structured observations rather than raw chat, OCR, image URLs, phone numbers, or order IDs; writes are serialized per shop and retained for seven days (maximum 500 rows).
+- A shop-scoped, versioned workflow draft catalog with strict schema validation, cross-process atomic writes, backup, and restore. Every saved flow remains `draft`; the catalog cannot activate or execute a workflow.
 
-- Durable cross-restart evidence ledger and generic versioned flow engine.
-- Dynamic shop/product/SKU flow approval, with operator review.
-- UI for editing actual state transitions and reviewing learning proposals.
-- Trusted external order/account truth and guarded execution of irreversible operations.
+## Remaining approval and runtime gaps
+
+- A trusted operator identity and authorization source for approval. A UI click or a local draft edit is not proof of an authorized approver.
+- An auditable approval record bound to the exact ShopKey, flow ID/version, approved evidence requirements, approver identity, and approval time.
+- Controlled publication of an approved immutable version, an active-version pointer, and an atomic rollback to the prior approved version. These operations are not implemented; the current catalog must remain draft-only.
+- Trusted external order/account truth and guarded, idempotent execution of irreversible operations. The evidence ledger is diagnostic and must never be treated as order/payment authority.
+- UI for reviewing learning proposals and editing/reviewing actual state transitions.
 - Complete migration of legacy knowledge with human-approved conflict resolution.
-- Field acceptance of real-world client sessions, customer images, and manual takeover.
+- Field acceptance of real-world client sessions, customer images, manual takeover, and recovery after a real process restart.
 
 Never declare the project completed or auto-merge high-risk changes based solely on unit tests. Perform a shadow evaluation, manual review, and canary rollout first.
 
