@@ -18,6 +18,7 @@ on:
       - 'src/**'
       - 'tools/qn_discovery_lab/**'
       - 'tests/**'
+      - 'scripts/Invoke-QnBotAcceptanceDiagnostics.ps1'
       - '.github/workflows/windows-build.yml'
       - '.github/workflows/ci.yml'
 
