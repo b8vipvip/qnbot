@@ -866,6 +866,8 @@ def test_read_only_acceptance_diagnostics_runtime_snapshot_is_privacy_minimized_
     assert "ageSeconds -gt 120" in script
     assert "process_mismatch" in script
     assert "RuntimeShopSessions = $runtimeSnapshot" in script
+    assert "StandbyCapabilitySessions = [int]$rawCounts.StandbyCapabilitySessions" in script
+    assert "standby-capable sessions=" in script
     assert "ShopRef" in script and "OwnerSessionRef" in script
     assert "Standbys = standbys" in snapshot
     assert "RawShopKeysIncluded = $false" in script
