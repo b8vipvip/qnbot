@@ -335,3 +335,10 @@ def test_confirmation_ledger_capacity_never_evicts_existing_at_most_once_barrier
     assert "private static bool IsAtCapacityLocked()" in ledger
     assert "TrimLocked" not in ledger
     assert ".Take(MaxRecords)" not in ledger
+
+    migration = ledger[
+        ledger.index("private static bool MigratePendingConfirmationIntentsLocked"):
+        ledger.index("private static LedgerState LoadState")
+    ]
+    assert "KeepUntil = DateTime.Now.Add(Retention)" in migration
+    assert "TrimLocked" not in migration
