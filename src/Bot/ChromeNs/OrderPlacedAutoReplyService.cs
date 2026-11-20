@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -132,6 +133,8 @@ namespace Bot.ChromeNs
             public bool Delivered { get; set; }
             public bool DeliveryUncertain { get; set; }
             public bool InFlight { get; set; }
+            public int ProcessId { get; set; }
+            public long ProcessStartTimeUtcTicks { get; set; }
         }
 
         private sealed class OrderReplyActionState
@@ -652,13 +655,46 @@ namespace Bot.ChromeNs
                         reason = "action_delivery_uncertain";
                         return false;
                     }
-                    if (_actionState.Records.Any(x => x.InFlight && x.Until > now && SameAction(x, plan)))
+                    var priorAction = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    if (priorAction != null && priorAction.InFlight && priorAction.Until > now)
                     {
-                        reason = "action_inflight_cross_process";
+                        if (IsActionOwnerProcessAlive(priorAction))
+                        {
+                            reason = "action_inflight_cross_process";
+                            return false;
+                        }
+
+                        // The reserving process exited before persisting a final outcome.
+                        // Delivery may have reached the buyer, so preserve at-most-once and
+                        // expose a durable manual-review state instead of retrying.
+                        priorAction.InFlight = false;
+                        priorAction.DeliveryUncertain = true;
+                        priorAction.Delivered = false;
+                        priorAction.Until = now.AddHours(720);
+                        priorAction.ProcessId = 0;
+                        priorAction.ProcessStartTimeUtcTicks = 0;
+                        if (!SaveActionStateLocked(path))
+                        {
+                            reason = "action_state_unavailable";
+                            return false;
+                        }
+                        reason = "action_delivery_uncertain";
+                        Log.ErrorWithMaxCount(
+                            "发现订单自动回复的原执行进程已退出；已将遗留in-flight转为30天人工复核屏障，禁止自动重发: orderId="
+                            + plan.OrderId, 20);
                         return false;
                     }
 
-                    var durable = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    int ownerProcessId;
+                    long ownerProcessStartTimeUtcTicks;
+                    if (!TryGetCurrentProcessIdentity(out ownerProcessId, out ownerProcessStartTimeUtcTicks))
+                    {
+                        reason = "action_owner_identity_unavailable";
+                        Log.ErrorWithMaxCount("订单自动回复无法持久化当前进程身份，禁止启动外部发送动作。", 20);
+                        return false;
+                    }
+
+                    var durable = priorAction;
                     if (durable == null)
                     {
                         durable = new OrderReplyActionRecord();
@@ -673,6 +709,8 @@ namespace Bot.ChromeNs
                     durable.Delivered = false;
                     durable.DeliveryUncertain = false;
                     durable.InFlight = true;
+                    durable.ProcessId = ownerProcessId;
+                    durable.ProcessStartTimeUtcTicks = ownerProcessStartTimeUtcTicks;
 
                     ActiveActions.Add(new OrderReplyActionRecord
                     {
@@ -684,13 +722,17 @@ namespace Bot.ChromeNs
                         Until = durable.Until,
                         Delivered = false,
                         DeliveryUncertain = false,
-                        InFlight = true
+                        InFlight = true,
+                        ProcessId = ownerProcessId,
+                        ProcessStartTimeUtcTicks = ownerProcessStartTimeUtcTicks
                     });
 
                     if (!SaveActionStateLocked(path))
                     {
                         ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
                         durable.InFlight = false;
+                        durable.ProcessId = 0;
+                        durable.ProcessStartTimeUtcTicks = 0;
                         reason = "action_state_persist_failed";
                         Log.ErrorWithMaxCount("订单自动回复已阻止：动作级in-flight状态无法原子持久化，避免多实例重复发送。", 20);
                         return false;
@@ -737,6 +779,8 @@ namespace Bot.ChromeNs
                     existing.Delivered = false;
                     existing.DeliveryUncertain = true;
                     existing.InFlight = false;
+                    existing.ProcessId = 0;
+                    existing.ProcessStartTimeUtcTicks = 0;
                     if (!SaveActionStateLocked(path))
                     {
                         // TryBeginExecution now persists a 30-day in-flight lease before any
@@ -777,7 +821,12 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
-                    if (existing != null) existing.InFlight = false;
+                    if (existing != null)
+                    {
+                        existing.InFlight = false;
+                        existing.ProcessId = 0;
+                        existing.ProcessStartTimeUtcTicks = 0;
+                    }
 
                     if (delivered || sentSegments > 0 || plan.DeliveryUncertain)
                     {
@@ -993,8 +1042,18 @@ namespace Bot.ChromeNs
                 existing.Delivered = existing.Delivered || local.Delivered;
                 existing.DeliveryUncertain = !existing.Delivered
                     && (existing.DeliveryUncertain || local.DeliveryUncertain);
-                existing.InFlight = !existing.Delivered
+                existing.InFlight = !existing.Delivered && !existing.DeliveryUncertain
                     && (existing.InFlight || local.InFlight);
+                if (existing.InFlight && local.InFlight)
+                {
+                    existing.ProcessId = local.ProcessId;
+                    existing.ProcessStartTimeUtcTicks = local.ProcessStartTimeUtcTicks;
+                }
+                else if (!existing.InFlight)
+                {
+                    existing.ProcessId = 0;
+                    existing.ProcessStartTimeUtcTicks = 0;
+                }
                 if (IsSuspiciousRoundedOrderId(existing.OrderId) && !IsSuspiciousRoundedOrderId(local.OrderId))
                     existing.OrderId = local.OrderId;
             }
@@ -1020,6 +1079,48 @@ namespace Bot.ChromeNs
                 && Normalize(left.Buyer) == Normalize(right.Buyer)
                 && (string.Equals((left.OrderId ?? string.Empty).Trim(), (right.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
                     || ArePrecisionAliases(left.OrderId, right.OrderId));
+        }
+
+        private static bool TryGetCurrentProcessIdentity(out int processId, out long processStartTimeUtcTicks)
+        {
+            processId = 0;
+            processStartTimeUtcTicks = 0;
+            try
+            {
+                using (var process = Process.GetCurrentProcess())
+                {
+                    processId = process.Id;
+                    processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+                    return processId > 0 && processStartTimeUtcTicks > 0;
+                }
+            }
+            catch
+            {
+                processId = 0;
+                processStartTimeUtcTicks = 0;
+                return false;
+            }
+        }
+
+        private static bool IsActionOwnerProcessAlive(OrderReplyActionRecord record)
+        {
+            if (record == null || record.ProcessId <= 0 || record.ProcessStartTimeUtcTicks <= 0)
+                return false;
+
+            try
+            {
+                using (var process = Process.GetProcessById(record.ProcessId))
+                {
+                    if (process.HasExited) return false;
+                    var actualStartTicks = process.StartTime.ToUniversalTime().Ticks;
+                    return Math.Abs(actualStartTicks - record.ProcessStartTimeUtcTicks)
+                        <= TimeSpan.FromSeconds(2).Ticks;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool SaveActionStateLocked(string path)

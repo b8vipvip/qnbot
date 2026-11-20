@@ -67,3 +67,27 @@ def test_uncertain_reply_keeps_long_pre_send_barrier_when_post_send_persist_fail
     assert "if (!SaveActionStateLocked(path))" in uncertain
     assert "发送前已持久化的30天in-flight屏障" in uncertain
     assert "durable.Until = now.AddMinutes(10);" not in begin
+
+
+
+def test_orphaned_order_reply_inflight_is_recovered_to_manual_review_not_resend():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    begin = code[
+        code.index("internal static bool TryBeginExecution"):
+        code.index("internal static void MarkDeliveryUncertain")
+    ]
+    helpers = code[
+        code.index("private static bool TryGetCurrentProcessIdentity"):
+        code.index("private static bool SaveActionStateLocked")
+    ]
+
+    assert "public int ProcessId { get; set; }" in code
+    assert "public long ProcessStartTimeUtcTicks { get; set; }" in code
+    assert "durable.ProcessId = ownerProcessId" in begin
+    assert "durable.ProcessStartTimeUtcTicks = ownerProcessStartTimeUtcTicks" in begin
+    assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
+    assert "priorAction.DeliveryUncertain = true" in begin
+    assert 'reason = "action_delivery_uncertain"' in begin
+    assert "priorAction.Until = now.AddHours(720)" in begin
+    assert "Process.GetProcessById(record.ProcessId)" in helpers
+    assert "process.StartTime.ToUniversalTime().Ticks" in helpers
