@@ -175,3 +175,17 @@ def test_windows_memory_sampler_compares_knowledge_v2_cloud_revision_and_fingerp
     assert "LocalFingerprintPrefix" in collector
     assert "CloudFingerprintPrefix" in collector
     assert "process_mismatch" in collector
+
+def test_windows_memory_sampler_includes_150_message_and_restart_checkpoint_metrics():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "KnowledgeV2LearningSnapshotPath" in collector
+    assert "knowledge-v2-learning-snapshot.json" in collector
+    assert "KnowledgeV2LearningSnapshotStatus" in collector
+    assert "KnowledgeV2LatestHistoryMessagesInWindow" in collector
+    assert "KnowledgeV2LatestCorpusRecords" in collector
+    assert "KnowledgeV2LatestRecordsReviewed" in collector
+    assert "KnowledgeV2LatestBatchCount" in collector
+    assert "KnowledgeV2LatestBatchesCompleted" in collector
+    assert "KnowledgeV2LatestCorpusComplete" in collector
+    assert "KnowledgeV2LatestResumeCount" in collector
+    assert "KnowledgeV2LearningReportStates" in collector
