@@ -447,7 +447,7 @@ namespace Bot.ChromeNs
                     : ProcessOrderPlacedReplyAsync(orderPlan);
             }
 
-            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
+            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey);
             var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
             var visionDecision = VisionMessageDecision.Decide(
                 message,
