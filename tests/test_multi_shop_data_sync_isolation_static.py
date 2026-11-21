@@ -220,3 +220,32 @@ def test_buyer_identity_alias_cache_is_bounded_under_sustained_traffic():
     assert "lock (record)" in observe
     assert "Cleanup();" in observe
     assert "Interlocked.Exchange(ref _cleanupRunning, 0);" in cleanup
+
+
+def test_qn_ingress_rejects_conflicting_stable_seller_identity_even_when_nick_matches():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    buyer = qn[
+        qn.index("private bool IsBuyerMessage"):
+        qn.index("public void SetActiveConversationByNick")
+    ]
+    assert "IsCurrentSellerEndpoint(m, false)" in buyer
+    assert "IsCurrentSellerEndpoint(m, true)" in buyer
+    assert "message.loginid.targetId" in buyer
+    assert "endpoint.targetId" in buyer
+    assert "expectedTargetId" in buyer
+    assert "StringComparison.Ordinal" in buyer
+
+
+def test_conversation_timeline_rejects_ambient_shop_scope_mismatch():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    refresh = context[
+        context.index("public static void RefreshAndRecord"):
+        context.index("internal static bool RecordObservedSellerMessage")
+    ]
+    assert "var currentScope = ShopSettingsScope.Current;" in refresh
+    assert "catch (AmbiguousShopIdentityException ex)" in refresh
+    assert "currentScope != null" in refresh
+    assert "shop == null" in refresh
+    assert "currentScope.ShopKey, shop.ShopKey" in refresh
+    assert "会话时间线拒绝与当前ShopKey作用域不匹配的消息" in refresh
+    assert "if (shop != null && currentScope == null)" in refresh
