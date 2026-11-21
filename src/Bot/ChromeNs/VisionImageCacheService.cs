@@ -691,8 +691,7 @@ namespace Bot.ChromeNs
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
             if (!string.IsNullOrWhiteSpace(from) && !string.Equals(from, seller, StringComparison.Ordinal)) return from;
             if (!string.IsNullOrWhiteSpace(to) && !string.Equals(to, seller, StringComparison.Ordinal)) return to;
-            var qn = QN.CurQN;
-            return qn == null || qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+            return string.Empty;
         }
 
         private static bool SameConversation(
