@@ -30,6 +30,7 @@ namespace Bot.ChromeNs
     {
         private sealed class ScopeState
         {
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string Text;
@@ -59,11 +60,12 @@ namespace Bot.ChromeNs
 
         private static readonly AsyncLocal<ScopeState> Current = new AsyncLocal<ScopeState>();
 
-        public static IDisposable BeginBusinessCritical(string seller, string buyer, string text, string reason)
+        public static IDisposable BeginBusinessCritical(string shopKey, string seller, string buyer, string text, string reason)
         {
             var previous = Current.Value;
             var state = new ScopeState
             {
+                ShopKey = (shopKey ?? string.Empty).Trim(),
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
                 Text = (text ?? string.Empty).Trim(),
@@ -74,11 +76,13 @@ namespace Bot.ChromeNs
             return new ScopeLease(state, previous);
         }
 
-        public static bool IsProtectedFromBuyerUpdate(string seller, string buyer, string text, out string reason)
+        public static bool IsProtectedFromBuyerUpdate(string shopKey, string seller, string buyer, string text, out string reason)
         {
             reason = string.Empty;
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return false;
 
             // Text is intentionally diagnostic rather than the identity key: QN applies the
             // configured outbound suffix after the order layer opens this async scope. AsyncLocal
@@ -86,6 +90,7 @@ namespace Bot.ChromeNs
             // nested send for another conversation from inheriting the privilege.
             for (var state = Current.Value; state != null; state = state.Previous)
             {
+                if (!string.Equals(state.ShopKey, shopKey, StringComparison.Ordinal)) continue;
                 if (!string.Equals(state.Seller, seller, StringComparison.Ordinal)) continue;
                 if (!BuyerIdentityAliasService.AreEquivalent(seller, state.Buyer, buyer)) continue;
                 reason = string.IsNullOrWhiteSpace(state.Reason) ? "business_critical" : state.Reason;
@@ -1384,6 +1389,7 @@ namespace Bot.ChromeNs
                 var sendStartedAt = DateTime.Now;
                 bool sent;
                 using (ReliableSendAuthority.BeginBusinessCritical(
+                    plan.ShopKey,
                     plan.Seller,
                     plan.Buyer,
                     text,
