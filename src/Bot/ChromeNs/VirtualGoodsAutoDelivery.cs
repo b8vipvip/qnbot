@@ -859,6 +859,14 @@ namespace Bot.ChromeNs
             if (verificationOnly)
                 return AutoDeliveryAttemptResult.Uncertain("静默预检确认订单仍未发货，但确认权限此前已消费；保持只读，不切换前台买家且绝不再次确认发货");
 
+            // Silent preflight can take several seconds. Recheck all conversation/send
+            // gates after the network round-trip; a message or recovery task may have
+            // started while the trade API was being queried.
+            if (_incomingMessageGate.CurrentCount < 1
+                || _backgroundRecoveryGate.CurrentCount < 1
+                || _sendGate.CurrentCount < 1)
+                return AutoDeliveryAttemptResult.Deferred("静默预检期间消息、发送或后台恢复任务已启动，取消本次前台切换");
+
             string activityReason;
             if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)) return AutoDeliveryAttemptResult.Deferred(activityReason);
             if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("绑定发货店铺前来源CDP会话已变化");
@@ -885,6 +893,10 @@ namespace Bot.ChromeNs
             if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer))
             {
                 if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)) return AutoDeliveryAttemptResult.Deferred(activityReason);
+                if (_incomingMessageGate.CurrentCount < 1
+                    || _backgroundRecoveryGate.CurrentCount < 1
+                    || _sendGate.CurrentCount < 1)
+                    return AutoDeliveryAttemptResult.Deferred("切换买家前检测到消息、发送或后台恢复任务已启动");
                 Log.Info("虚拟商品自动发货静默预检已命中安全候选，现仅为实际发货切换一次目标买家: seller=" + seller + ", targetBuyer=" + expectedBuyer + ", currentBuyer=" + currentBuyer + ", orderId=" + snapshot.OrderId);
                 if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("切换目标买家前来源CDP会话已变化");
                 OpenChat(expectedBuyer);
@@ -908,6 +920,18 @@ namespace Bot.ChromeNs
 
             if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("获取发送锁前来源CDP会话已变化");
             await _sendGate.WaitAsync().ConfigureAwait(false);
+            // The send lock may have been contended while this task was navigating.
+            // Revalidate queued buyer work before claiming the irreversible-action lease.
+            if (_incomingMessageGate.CurrentCount < 1 || _backgroundRecoveryGate.CurrentCount < 1)
+            {
+                _sendGate.Release();
+                return AutoDeliveryAttemptResult.Deferred("取得发送锁后发现消息或后台恢复任务正在处理，取消本次确认");
+            }
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey))
+            {
+                _sendGate.Release();
+                return AutoDeliveryAttemptResult.Deferred(activityReason);
+            }
             using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer, snapshot.ShopKey))
             {
                 try
