@@ -334,3 +334,19 @@ def test_reconcile_run_title_includes_task_identity_for_deduplication():
     assert 'run-name: "GPTAuto Reconcile (${{ inputs.task_id }} / PR #${{ inputs.pr_number }})"' in reconcile
     assert "- 'docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md'" in observer
     assert "- 'docs/PROJECT_HANDOFF_CONTEXT.md'" in observer
+
+
+def test_api_ci_runs_for_bot_source_and_release_skips_superseded_exact_sha():
+    api_ci = read(".github/workflows/api-control-plane-ci.yml")
+    publish = read(".github/workflows/publish-bot-auto-update-release.yml")
+
+    assert api_ci.count("src/Bot/**") >= 2
+    assert api_ci.count("src/BotLib/**") >= 2
+    assert api_ci.count("src/DbEntity/**") >= 2
+    assert api_ci.count("src/Directory.Build.props") >= 2
+    assert "latest_master_sha" in publish
+    assert 'select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $sha)' in publish
+    assert 'select(.name == "Windows x64 release build" and .head_branch == "master" and .head_sha == $sha)' in publish
+    assert 'echo "superseded=true" >> "$GITHUB_OUTPUT"' in publish
+    assert "steps.api-ci.outputs.superseded != 'true'" in publish
+    assert "Skip superseded release candidate" in publish
