@@ -112,3 +112,11 @@ def test_vision_cache_records_and_withdrawal_markers_are_shopkey_isolated():
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in manual
     assert "TryGetRecentReference(\n                seller,\n                buyer,\n                TimeSpan.FromMinutes(5),\n                out recent,\n                shopKey)" in manual
     assert "Key(string shopKey, string seller, string buyer, string messageKey)" in manual
+
+
+def test_vision_cache_never_uses_global_current_qn_for_shop_identity():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    assert "QN.CurQN" not in cache
+    assert "GetSellerNick(message, shopKey)" in cache
+    assert "GetSellerNick(notice, shopKey)" in cache
+    assert "ResolveRuntimeByShopKey(shopKey)" in cache
