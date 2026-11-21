@@ -701,7 +701,7 @@ namespace Bot.ChromeNs
                 message,
                 messageText,
                 decision,
-                AiEndpointStore.GetVisionEnabledEndpoints());
+                shopKey);
 
             if (!Params.Robot.CanUseRobotReal)
             {
