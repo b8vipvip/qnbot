@@ -350,3 +350,21 @@ def test_api_ci_runs_for_bot_source_and_release_skips_superseded_exact_sha():
     assert 'echo "superseded=true" >> "$GITHUB_OUTPUT"' in publish
     assert "steps.api-ci.outputs.superseded != 'true'" in publish
     assert "Skip superseded release candidate" in publish
+
+def test_executor_deduplicates_active_reconcile_runs_before_dispatch():
+    executor = read(".github/workflows/gptauto-executor.yml")
+    merge = executor[
+        executor.index("- name: Execute safe merge gate"):
+        executor.index("- name: Adopt externally merged completion lease")
+    ]
+    adoption = executor[
+        executor.index("- name: Adopt externally merged completion lease"):
+        executor.index("- name: Retry transient failed jobs only")
+    ]
+
+    for section in (merge, adoption):
+        assert 'reconcile_title="GPTAuto Reconcile ($TASK_ID / PR #$PR_NUMBER)"' in section
+        assert 'actions/workflows/gptauto-reconcile.yml/runs?per_page=100' in section
+        assert 'select(.display_title == $title and .status != "completed")' in section
+        assert 'if [[ -n "$active_reconcile_run" ]]' in section
+        assert 'exit 0' in section
