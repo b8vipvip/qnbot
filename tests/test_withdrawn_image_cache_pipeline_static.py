@@ -11,8 +11,8 @@ def read(path: str) -> str:
 def test_incoming_image_is_cached_before_burst_delay_and_withdrawal_is_recorded():
     source = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
 
-    assert "VisionImageCacheService.Prime(message, messageText);" in source
-    assert "VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText);" in source
+    assert "VisionImageCacheService.Prime(message, messageText, shopKey);" in source
+    assert "VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText, shopKey);" in source
     assert "图片若已收到将继续后台分析" in source
     assert source.index("MarkLatestBuyerImageWithdrawn") < source.index('return Skip("[撤回提示]"')
 
@@ -33,7 +33,7 @@ def test_raw_images_are_persisted_under_permanent_user_data_with_atomic_write_an
 def test_vision_resolver_uses_local_complete_copy_instead_of_remote_url():
     source = read("src/Bot/ChromeNs/VisionImageResolver.cs")
 
-    assert "VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken)" in source
+    assert "VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey)" in source
     assert "FromLocalCache" in source
     assert "CacheComplete" in source
     assert "http.GetAsync" not in source
@@ -91,3 +91,24 @@ def test_pipeline_is_initialized_between_streaming_and_existing_visual_followup_
     assert streaming < withdrawn < followup
     assert "VisionImageCacheService.cs" in targets
     assert "VisionWithdrawalAwarePipeline.cs" in targets
+
+
+def test_vision_cache_records_and_withdrawal_markers_are_shopkey_isolated():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    pipeline = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    manual = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+
+    assert "public string ShopKey { get; set; }" in cache
+    assert "public string ShopKey;" in cache
+    assert "BuildKey(string shopKey, string messageKey, string url)" in cache
+    assert 'return shopKey + "|message:" + messageKey.Trim();' in cache
+    assert "ResolveRuntimeByShopKey(shopKey)" in cache
+    assert "Records.Values" in cache
+    assert "string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)" in cache
+    assert "var current = QN.CurQN;" not in cache
+    assert "VisionImageCacheService.Prime(visionItem.Message, visionItem.DisplayText, burst.ShopKey)" in pipeline
+    assert "visionItem.Message,\n                burst.ShopKey)" in pipeline
+    assert "out recent,\n                burst.ShopKey)" in pipeline
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in manual
+    assert "TryGetRecentReference(\n                seller,\n                buyer,\n                TimeSpan.FromMinutes(5),\n                out recent,\n                shopKey)" in manual
+    assert "Key(string shopKey, string seller, string buyer, string messageKey)" in manual
