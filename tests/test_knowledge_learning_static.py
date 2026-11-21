@@ -43,7 +43,8 @@ def test_learning_dedup_sensitive_redaction_and_per_shop_save_lock():
     assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
     assert "[手机号]" in source
     assert "[API_KEY]" in source
-    assert "confidence < 0.90" in source
+    assert "confidence < 0.95" in source
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in source
     assert "ContainsUnsafeManualLearning" in source
 
 

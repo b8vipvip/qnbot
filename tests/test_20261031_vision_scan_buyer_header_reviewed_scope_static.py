@@ -63,4 +63,4 @@ def test_manual_direct_edit_needs_explicit_standalone_scope_for_ambiguous_prompt
     assert 'EditedQuestion == "[图片]"' in edit
     assert "wnd.EditedQuestion" in handler
     assert "SaveDirectAnswer(prompt.Text" in sandbox
-    assert "var best = manualExact ?? productionMatches.FirstOrDefault();" in engine
+    assert "var best = manualExact ?? manualSimilar ?? productionMatches.FirstOrDefault();" in engine

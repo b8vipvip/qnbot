@@ -15,8 +15,10 @@ def test_session_learning_waits_five_minutes_and_keeps_audit_records():
     assert "public const int SellerQuietSeconds = 30" in source
     assert "ConversationSessionLearningReportEntity" in source
     assert "StoreReplyStyleProfileEntity" in source
-    assert 'report.Status = EnableAutomaticWrites' in source
-    assert 'corpusComplete ? "学习完成（dry-run）"' in source
+    assert 'report.Status = !corpusComplete' in source
+    assert 'EnableVerifiedCorpusCorrectionWrites = true' in source
+    assert '学习完成（已自动应用' in source
+    assert '通用候选待审核' in source
     assert "ResumePending" in source
 
 

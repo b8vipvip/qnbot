@@ -135,9 +135,10 @@ def test_manual_answer_comparison_only_upgrades_safe_high_confidence_knowledge()
     assert "CompareManualAnswerAsync" in source
     assert "KnowledgeEngineV2Semantics.TextSimilarity" in source
     assert "similarity >= 0.92" in source
-    assert "confidence < 0.90" in source
+    assert "confidence < 0.95" in source
     assert "ContainsUnsafeManualLearning" in source
-    assert '"人工对照学习"' in source
+    assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in source
+    assert "seller, question, manualAnswer" in source
     assert "should_learn" in source
     assert "人工答案优先级高于Bot，但不能因为措辞不同就修改知识" in source
 
