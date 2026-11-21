@@ -55,7 +55,7 @@ def test_order_retry_requires_remote_delivery_verification():
 def test_recovered_buyer_media_uses_verified_conversation_plus_buyer_alias():
     s = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
     assert "IsRecoveredBuyerMessageForTarget" in s
-    assert "BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer)" in s
+    assert "AreBuyerAliasesEquivalentInShop(seller, message.fromid.nick, buyer)" in s
 
 
 def test_raw_receive_payload_is_not_logged():
