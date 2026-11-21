@@ -1,9 +1,9 @@
 # Qianniu AI Bot 项目交接上下文
 
-更新时间：2026-11-20  
+更新时间：2026-11-21  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前正式客户端：`bot-v1.1.2470`  
+当前正式客户端：`bot-v1.1.2481`  
 统一未完成事项：Issue #366
 
 ## 1. 当前目标
@@ -30,13 +30,13 @@
 
 ## 3. Current release baseline
 
-- Latest stable release：`bot-v1.1.2470`
-- Release target：`8fc1c21440f351ce336a58f2751ef16afae4cd97`
-- x64 package SHA-256：`30ac46a1791f986e05bc836adcd67a7d74ef9db6d88d22705aa66539bc419830`
+- Latest stable release：`bot-v1.1.2481`
+- Release target：`35f5ed0138eba56e3f341915b7e2a800c102007d`
+- x64 package SHA-256：`126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
-- Validated product-source SHA: `8fc1c21440f351ce336a58f2751ef16afae4cd97`; API Full Gate passed (Fast Gate 1682 passed / 16 skipped, API package tests 141 passed, Windows Static Gate passed) and Windows x64 build run `44752223276` completed successfully. Later master commits in this sequence are documentation-only.
-- Release `bot-v1.1.2470` includes the GPTAuto Reconcile recovery marker fix, Knowledge V2 full-corpus write gate, and read-only auto-delivery manual-review escalation. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
-- Historical GPTAuto task PR #434 (`GA-ddf0aa319783`, merge `483b07f03eeeeef5e9339b286d2c179378489ccc`, release_required=false) remains ACTIVE after Reconcile run `44677995005` failed at terminal capture. Current master can retry the handoff, but a new Reconcile workflow_dispatch with the original task/PR/merge inputs is still required to obtain terminal DONE evidence.
+- Validated release-source SHA: `35f5ed0138eba56e3f341915b7e2a800c102007d`; API Full Gate passed (Fast Gate 1686 passed / 16 skipped, API package tests 141 passed, Windows Static Gate passed) and Windows x64 build run `44858618045` completed successfully. Post-release cleanup master SHA `5fce1c3869b19dd044cd4d39db31ae9456df1b64` also passed API Full Gate and Windows x64 build run `44859065309`.
+- Release `bot-v1.1.2481` includes the GPTAuto Reconcile recovery marker fix, Knowledge V2 full-corpus write gate, read-only auto-delivery manual-review escalation, bounded buyer alias cache, seller TargetId ingress validation and ambient ShopKey timeline guard. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
+- Historical GPTAuto task PR #434 (`GA-ddf0aa319783`, merge `483b07f03eeeeef5e9339b286d2c179378489ccc`, release_required=false) is now terminal DONE. Reconcile run `44858934200` succeeded; Completion Lease is RELEASED with the exact merge SHA. The one-time recovery workflow was removed after success; the generic Executor retry fix remains.
 - 2026-11-20 上传的 Windows 诊断显示：Bot-owned 41010 正常、1 个权威会话、0 个重复 standby；bench_im/CDP 目标尚未识别。后续诊断脚本正在补充命令行可见性、loopback 候选端口和 release-info.json 产品版本识别，尚需 exact-SHA CI/Windows build。
 - 生产安装仍需要管理员/用户明确操作；CI 不得触发生产主机部署。
 
@@ -44,7 +44,7 @@
 
 - 当前没有开放 PR；#426/#429/#430/#431 已合并到 master。
 - 唯一开放的普通跟踪 Issue 为 #366；不新建普通 Issue 或分支。
-- 下一步应使用 `bot-v1.1.2470` 真实运行证据继续验收；后续 master 源码修复须先通过精确 SHA CI/Windows build。
+- 下一步应使用 `bot-v1.1.2481` 真实运行证据继续验收；后续 master 源码修复须先通过精确 SHA CI/Windows build。
 
 ## 5. Architecture
 
@@ -76,8 +76,10 @@ Qianniu renderer
 - Generation watchdog, bounded CDP execute gate, active buyer confirmation deadline and reliable-send evidence checks are in the production source.
 - Knowledge V2 session learning uses five-minute inactivity, complete paginated history, full-corpus batches, durable checkpoints, source/transcript fingerprints and per-ShopKey circuit breakers.
 - Knowledge V2 automatic writes remain disabled (dry-run). No production write enablement without transaction/backup/rollback and real Windows canary.
+- BuyerIdentityAliasService now has a bounded 5,000-entry trigger / 4,000-entry LRU target with coalesced cleanup and conditional key/value removal.
+- QN inbound buyer messages and seller echoes validate the seller endpoint/login nickname and stable TargetId when available; ConversationContextStore rejects timeline writes outside the exact ambient ShopKey scope.
 - PRs #426/#429/#430/#431 are already merged into master and included in the 1.1.2379 lineage; 1.1.2380 adds the ShopKey catalog refresh/settings fix.
-- GPTAuto Release discovery, exact source SHA build selection and dynamic display_title correlation have been corrected in master; end-to-end Reconcile terminal evidence remains pending.
+- GPTAuto Release discovery, exact source SHA build selection and dynamic display_title correlation are corrected in master; historical task #434 is now DONE with a RELEASED Completion Lease and exact Merge SHA receipt.
 
 ## 7. Next acceptance work
 
@@ -106,10 +108,15 @@ Qianniu renderer
 - Shadow decisions → human review → small canary → reversible release.
 - High-risk actions remain disabled by default.
 
-### P1 — GPTAuto Reconcile
-- Dispatch one real Reconcile task after the workflow fixes.
-- Verify exact source SHA, Windows build association, dynamic release run title and terminal Completion Lease state.
-- Observer success alone is not terminal completion.
+### P1 — GPTAuto Reconcile regression maintenance
+- Keep exact source SHA, Windows build association, task-aware run title and terminal Completion Lease checks covered by regression tests.
+- Do not treat Observer/Executor success or a dispatch marker as terminal completion.
+- Historical PR #434 is closed with terminal DONE evidence; future tasks must retain the same exact-SHA receipt discipline.
+
+### P1 — order automation crash recovery
+- Verify auto-reply and virtual-goods auto-delivery recovery on real test orders.
+- Confirm restart recovery never repeats a consumed confirmation click or uncertain send.
+- Verify persistent manual-review escalation and operator-visible recovery status.
 
 ## 8. Windows read-only diagnostics
 
