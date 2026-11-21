@@ -70,6 +70,9 @@ def test_real_human_reply_path_remains_available_after_bot_echo_guard():
     assert 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")' in human_tail
     assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer)" in human_tail
     assert "检测到本店客服人工接管，已阻止当前Bot发送" in human_tail
+    assert "SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);" in human_tail
+    assert "out bool bypassed" in method
+    assert "bypassed = true;" in method
     assert "return true;" in human_tail
 
 def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bot_echo_guard():
