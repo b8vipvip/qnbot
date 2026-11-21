@@ -192,9 +192,9 @@ namespace Bot.ChromeNs
         }
 
         /// <summary>
-        /// Historical name kept for binary/source compatibility. A human reply no longer blocks
-        /// the Bot send. Instead it is captured as high-value evidence and compared asynchronously
-        /// with the Bot candidate. Only reusable, high-confidence corrections may upgrade knowledge.
+        /// Detects a substantive human seller reply newer than the current buyer question.
+        /// It blocks this exact pending Bot send at the last-mile UI boundary, without cancelling
+        /// unrelated buyer generations, and records the human answer for asynchronous comparison.
         /// </summary>
         public static bool TryBlockForManualReply(
             QN qn,
