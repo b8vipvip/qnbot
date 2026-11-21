@@ -81,7 +81,7 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     assert "SendDeliveryWatchdog.IsKnownBotAnswer" in manual
     assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert "return true;" in manual
-    assert 'SetSendCancellation("人工接管"' in read("src/Bot/ChromeNs/QNRpa.cs)
+    assert 'SetSendCancellation("人工接管"' in read("src/Bot/ChromeNs/QNRpa.cs")
 
 
 def test_buyer_session_runtime_bridge_uses_send_ledger_as_only_echo_authorship_source():
