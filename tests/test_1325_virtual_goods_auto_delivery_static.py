@@ -588,3 +588,23 @@ def test_full_confirmation_ledger_never_fabricates_per_order_intent_on_capacity(
     assert exact_read < actual_intent < capacity_gate < record < race_read
     assert "if (AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId))" not in persist
     assert "不伪造订单确认屏障" in persist
+
+def test_read_only_delivery_recovery_never_rebinds_or_focuses_another_shop():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    execute = runtime[
+        runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        runtime.index("private bool IsAutoDeliverySourceSessionCurrent")
+    ]
+
+    assert "using (ShopSettingsScope.Enter(shop, false))" in process
+    assert "using (ShopSettingsScope.Enter(shop))" not in process
+    verification_stop = execute.index("if (verificationOnly)")
+    bind = execute.index("MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop)")
+    focus = execute.index("BotActivityCoordinator.IsSafeToAutoFocus", bind)
+    assert verification_stop < bind < focus
+    assert "if (!MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop))" in execute
+    assert "只读复核确认订单仍未发货，但确认权限此前已消费" in execute
