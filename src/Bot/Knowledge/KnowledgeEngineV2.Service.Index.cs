@@ -236,18 +236,18 @@ namespace Bot.Knowledge
 
         internal static int CachedWorkingMemoryCount { get { return Working.Count; } }
 
-        private static KnowledgeV2WorkingMemory GetWorkingMemory(string seller, string buyer)
+        private static KnowledgeV2WorkingMemory GetWorkingMemory(string shopKey, string seller, string buyer)
         {
             KnowledgeV2WorkingMemory memory;
-            if (Working.TryGetValue(WorkingKey(seller, buyer), out memory)
+            if (Working.TryGetValue(WorkingKey(shopKey, seller, buyer), out memory)
                 && memory != null && memory.UpdatedAt >= DateTime.Now.AddMinutes(-45)) return memory;
             return null;
         }
 
-        private static void UpdateWorkingMemory(string seller, string buyer, KnowledgeV2Query query)
+        private static void UpdateWorkingMemory(string shopKey, string seller, string buyer, KnowledgeV2Query query)
         {
             if (query == null) return;
-            var key = WorkingKey(seller, buyer);
+            var key = WorkingKey(shopKey, seller, buyer);
             var current = Working.GetOrAdd(key, _ => new KnowledgeV2WorkingMemory
             {
                 Seller = seller ?? string.Empty,
@@ -402,9 +402,11 @@ namespace Bot.Knowledge
             return shop;
         }
 
-        private static string WorkingKey(string seller, string buyer)
+        private static string WorkingKey(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "|" + (buyer ?? string.Empty).Trim();
+            return (shopKey ?? string.Empty).Trim() + "|"
+                + (seller ?? string.Empty).Trim() + "|"
+                + (buyer ?? string.Empty).Trim();
         }
 
         private static bool IsMediaPlaceholder(string value)
