@@ -94,7 +94,6 @@ namespace Bot.ChromeNs
                 {
                     ObserveSellerReply(qn, message);
                 }
-                }
             }
             catch (Exception ex)
             {
