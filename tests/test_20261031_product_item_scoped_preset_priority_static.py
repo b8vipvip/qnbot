@@ -42,7 +42,7 @@ def test_item_scoped_rule_stays_in_existing_preset_management_ui():
     assert "保存话术" in ui and "启用此话术" in ui
     assert "GetEnabledPresetsForProductLinkPreview(_seller, itemId)" in sandbox
     assert "ResolveProductItemId(null, message)" in sandbox
-    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply)" in router
+    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in router
     assert "aiCalled=false" in router
 
 def test_no_broad_product_preset_shall_auto_send_for_unmatched_specific_item():
