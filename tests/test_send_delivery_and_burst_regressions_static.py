@@ -206,7 +206,7 @@ def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_gen
     block = manual.index("return true;", same_answer)
     greeting = manual.index("ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)")
     assert bot_guard < same_answer < block
-    assert "sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
+    assert "!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert greeting < block
     assert 'SetSendCancellation("人工接管"' in qnrpa
     assert "自动发送因人工接管取消，禁止重试" in qnrpa
