@@ -368,3 +368,17 @@ def test_executor_deduplicates_active_reconcile_runs_before_dispatch():
         assert 'select(.display_title == $title and .status != "completed")' in section
         assert 'if [[ -n "$active_reconcile_run" ]]' in section
         assert 'exit 0' in section
+
+def test_reconcile_adoption_debounces_recent_handoff_when_run_list_is_eventually_consistent():
+    executor = read(".github/workflows/gptauto-executor.yml")
+    adoption = executor[
+        executor.index("- name: Adopt externally merged completion lease"):
+        executor.index("- name: Retry transient failed jobs only")
+    ]
+
+    assert 'handoff_updated_at="$(jq -r --arg marker "$marker"' in adoption
+    assert 'date -u -d "$handoff_updated_at" +%s' in adoption
+    assert "if (( handoff_age < 600 )); then" in adoption
+    assert "deferring recovery dispatch to avoid an eventual-consistency duplicate" in adoption
+    assert "Existing Reconcile handoff timestamp is unreadable; suppressing duplicate dispatch" in adoption
+    assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index("gh workflow run gptauto-reconcile.yml")
