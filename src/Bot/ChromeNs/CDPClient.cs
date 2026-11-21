@@ -303,6 +303,8 @@ namespace Bot.ChromeNs
         private void OnWSocketRecieveMessage(WebSocketSession session, WSocketNewMessageEventArgs e)
         {
             if (session == null || _webSocketSession == null || session.SessionID != _webSocketSession.SessionID) return;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (IsInvalidated || server == null || !server.IsWebSocketSessionConnected(session.SessionID)) return;
 
             var response = e.Value ?? string.Empty;
 
