@@ -131,3 +131,22 @@ def test_duplicate_probe_fingerprint_cache_enforces_its_declared_hard_cap():
     assert "private static void TrimOldestDuplicateProbeFingerprints()" in guard
     assert "RecentDuplicateProbePayloads.OrderBy(x => x.Value).Take(removeCount)" in guard
     assert "targetCount = MaxDuplicateProbeFingerprints * 3 / 4" in guard
+
+def test_late_websocket_events_cannot_recreate_cdp_client_after_session_close():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    client_factory = server[
+        server.index("private CDPClient GetOrCreateClient"):
+        server.index("private static string ReadJsonString")
+    ]
+    closed = server[
+        server.index("webSocket.SessionClosed +="):
+        server.index("var config = new ServerConfig()")
+    ]
+
+    assert "if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return null;" in client_factory
+    assert "lock (_sellerSessionSync)" in client_factory
+    assert "if (!_connectedSessions.ContainsKey(sessionId)) return null;" in client_factory
+    assert client_factory.index("_connectedSessions.ContainsKey(sessionId)") < client_factory.index("_clients.GetOrAdd")
+    assert "lock (_sellerSessionSync)" in closed
+    assert "_connectedSessions.TryRemove(session.SessionID, out _);" in closed
+    assert closed.index("_connectedSessions.TryRemove(session.SessionID, out _);") < closed.index("_clients.TryRemove(session.SessionID, out removed);")
