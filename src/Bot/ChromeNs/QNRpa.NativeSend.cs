@@ -204,6 +204,11 @@ namespace Bot.ChromeNs
                 SetSendFailure("兼容发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
                 return false;
             }
+            if (manualTakeoverCheck != null && manualTakeoverCheck())
+            {
+                await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                return false;
+            }
             var uiResult = await TrySendTextViaUiaAsync(
                 buyer, text, sendStart, manualTakeoverCheck).ConfigureAwait(false);
             if (uiResult) return true;
