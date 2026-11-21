@@ -160,3 +160,21 @@ def test_websocket_server_drops_late_frames_after_session_close():
 
     assert "if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;" in handler
     assert handler.index("_connectedSessions.ContainsKey(session.SessionID)") < handler.index("JsonConvert.DeserializeObject<WSocketMessage>(value)")
+
+def test_closed_websocket_status_generation_entries_are_pruned_without_generation_reuse():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    next_generation = server[
+        server.index("private long NextStatusBindingGenerationLocked"):
+        server.index("private bool IsCurrentStatusBindingGenerationLocked")
+    ]
+    closed = server[
+        server.index("webSocket.SessionClosed +="):
+        server.index("var config = new ServerConfig()")
+    ]
+
+    assert "private long _statusBindingGenerationSequence;" in server
+    assert "Interlocked.Increment(ref _statusBindingGenerationSequence)" in next_generation
+    assert "_statusBindingGenerations[sessionId] = next;" in next_generation
+    assert "NextStatusBindingGenerationLocked(session.SessionID);" in closed
+    assert "_statusBindingGenerations.TryRemove(session.SessionID, out ignoredStatusGeneration);" in closed
+    assert closed.index("NextStatusBindingGenerationLocked(session.SessionID);") < closed.index("_statusBindingGenerations.TryRemove(session.SessionID, out ignoredStatusGeneration);")
