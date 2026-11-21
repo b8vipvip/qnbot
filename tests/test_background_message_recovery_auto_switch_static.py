@@ -88,7 +88,7 @@ def test_background_message_recovery_aliases_are_scoped_to_the_exact_qn_shop():
     ]
 
     assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in key
-    assert "shop.ShopKey + \"#\" + seller + \"#\"" in key
+    assert "shopKey + \"#\" + seller + \"#\"" in key
     assert "ShopSettingsScope.Enter(shop, false)" in key
     assert "ResolveRecoveryShop(seller)" in schedule
     assert "BuyerIdentityAliasService.Observe" in schedule
