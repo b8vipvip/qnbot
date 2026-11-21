@@ -915,8 +915,8 @@ def test_corpus_batch_is_not_checkpointed_until_candidate_evidence_restoration_s
     reviewed = batch.index("result.RecordsReviewed += batch.Count;")
 
     assert restore < stage < append < completed < reviewed
-    assert "Stage every fallible post-processing step before marking the batch complete" in batch
-    assert "If evidence-ID restoration or candidate handling throws" in batch
+    assert "Stage every fallible post-processing step" in batch
+    assert "checkpoint must leave this batch pending for restart" in batch
 
 def test_corpus_checkpoint_rejects_duplicate_restored_candidates_for_one_knowledge_id():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
