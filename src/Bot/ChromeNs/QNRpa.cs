@@ -611,7 +611,8 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<bool> TrySendTextViaUiaAsync(string buyer, string text, DateTime sendStart)
+        private async Task<bool> TrySendTextViaUiaAsync(
+            string buyer, string text, DateTime sendStart, Func<bool> manualTakeoverCheck)
         {
             try
             {
@@ -633,6 +634,11 @@ namespace Bot.ChromeNs
 
                 Log.Info("UIA定位完成，开始点击发送主按钮左侧区域: seller=" + SellerNick
                     + ", buyer=" + buyer);
+                if (manualTakeoverCheck != null && manualTakeoverCheck())
+                {
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                    return false;
+                }
                 var clicked = await RunUiActionAsync(
                     () => TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
@@ -659,6 +665,11 @@ namespace Bot.ChromeNs
                         buyer, text, sendStart, "坐标点击异常后确认", 1800).ConfigureAwait(false);
                 }
 
+                if (manualTakeoverCheck != null && manualTakeoverCheck())
+                {
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                    return false;
+                }
                 var invoked = await RunUiActionAsync(
                     () => TryInvokeCachedSendButtonNow(),
                     "发送按钮左侧UIA安全调用",
