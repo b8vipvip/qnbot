@@ -281,8 +281,11 @@ namespace Bot.Knowledge
             // Do not advance the in-memory checkpoint until both persisted values have
             // been read back successfully. A transient disk/DPAPI error must cause the
             // next poll to retry from the previous revision instead of skipping changes.
-            state.Revision=Math.Max(0,targetRevision);
-            state.Fingerprint=targetFingerprint??string.Empty;
+            lock(state.SyncRoot)
+            {
+                state.Revision=Math.Max(0,targetRevision);
+                state.Fingerprint=targetFingerprint??string.Empty;
+            }
         }
 
         private static List<KnowledgeV2Record> MergeCloudAndLocal(
