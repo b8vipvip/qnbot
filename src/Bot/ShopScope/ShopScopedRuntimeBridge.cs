@@ -92,6 +92,10 @@ namespace Bot.ShopScope
             var eventSeller = (e.Seller.Nick ?? string.Empty).Trim();
             var eventTargetId = (e.Seller.TargetId ?? string.Empty).Trim();
             var buyer = e.Buyer == null ? string.Empty : (e.Buyer.Nick ?? string.Empty).Trim();
+            if (buyer.Length == 0 && e.Buyer != null)
+                buyer = (e.Buyer.Ccode ?? string.Empty).Trim();
+            if (buyer.Length == 0 && e.Buyer != null)
+                buyer = (e.Buyer.TargetId ?? string.Empty).Trim();
 
             // CDPClient and DuplicateCdpInboundRecoveryBridge have already verified that this
             // event belongs to the exact authoritative ShopKey. Promote it as foreground
