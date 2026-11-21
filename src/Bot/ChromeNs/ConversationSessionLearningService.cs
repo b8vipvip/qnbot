@@ -2581,6 +2581,18 @@ namespace Bot.ChromeNs
             catch { return string.Empty; }
         }
 
+        private static string LearningStatusCode(string status)
+        {
+            status=(status??string.Empty).Trim();
+            if(status.IndexOf("完成",StringComparison.Ordinal)>=0) return "completed";
+            if(status.IndexOf("失败",StringComparison.Ordinal)>=0||status.IndexOf("错误",StringComparison.Ordinal)>=0) return "failed";
+            if(status.IndexOf("中断",StringComparison.Ordinal)>=0) return "interrupted";
+            if(status.IndexOf("跳过",StringComparison.Ordinal)>=0) return "skipped";
+            if(status.IndexOf("等待",StringComparison.Ordinal)>=0) return "pending";
+            if(status.IndexOf("学习",StringComparison.Ordinal)>=0||status.IndexOf("处理",StringComparison.Ordinal)>=0) return "running";
+            return "other";
+        }
+
         private static void WriteLearningDiagnosticsSnapshot(bool force)
         {
             try
@@ -2619,7 +2631,7 @@ namespace Bot.ChromeNs
                         {
                             ["shopRef"]=MyWebSocketServer.DiagnosticRef("shop",report.ShopKey),
                             ["sessionRef"]=MyWebSocketServer.DiagnosticRef("learning-session",report.EntityId??string.Empty),
-                            ["status"]=report.Status??string.Empty,
+                            ["status"]=LearningStatusCode(report.Status),
                             ["sessionStartedAtUtc"]=LearningTicksToUtc(report.SessionStartedAtTicks),
                             ["updatedAtUtc"]=LearningTicksToUtc(report.UpdatedAtTicks),
                             ["completedAtUtc"]=LearningTicksToUtc(report.CompletedAtTicks),
