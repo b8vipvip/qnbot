@@ -95,6 +95,10 @@ namespace Bot.ChromeNs
             if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
                 return false;
 
+            // Prepare each seller once: disable the retired v1 runtime flag and warm
+            // this exact shop's V2 snapshot before any local direct decision.
+            PrepareSeller(burst.SellerNick);
+
             // V2 is only a fast terminal path when the shared commerce authority allows local
             // termination. The same authority is consumed by Smart Reply, so verified orders and
             // strongly post-order conversations cannot be decided differently by parallel layers.
