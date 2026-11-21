@@ -9,6 +9,8 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Globalization;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
@@ -237,6 +239,8 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, StoreReplyStyleProfileEntity> StyleCache =
             new ConcurrentDictionary<string, StoreReplyStyleProfileEntity>(StringComparer.Ordinal);
         private static readonly object DbSync = new object();
+        private static readonly object LearningDiagnosticsSync = new object();
+        private static DateTime _lastLearningDiagnosticsWriteUtc = DateTime.MinValue;
         private static int _initialized;
         private static int _schemaReady;
 
@@ -2560,6 +2564,126 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { report });
+            }
+            WriteLearningDiagnosticsSnapshot(report.CompletedAtTicks > 0);
+        }
+
+        private static string LearningFingerprintPrefix(string value)
+        {
+            value=value??string.Empty;
+            return value.Length<=16?value:value.Substring(0,16);
+        }
+
+        private static string LearningTicksToUtc(long ticks)
+        {
+            if(ticks<=0) return string.Empty;
+            try { return new DateTime(ticks,DateTimeKind.Local).ToUniversalTime().ToString("o"); }
+            catch { return string.Empty; }
+        }
+
+        private static void WriteLearningDiagnosticsSnapshot(bool force)
+        {
+            try
+            {
+                lock(LearningDiagnosticsSync)
+                {
+                    var now=DateTime.UtcNow;
+                    if(!force && now-_lastLearningDiagnosticsWriteUtc<TimeSpan.FromSeconds(5)) return;
+                    _lastLearningDiagnosticsWriteUtc=now;
+
+                    List<ConversationSessionLearningReportEntity> reports;
+                    lock(DbSync)
+                    {
+                        reports=(DbHelper.Db.Select(
+                            typeof(ConversationSessionLearningReportEntity),
+                            "order by UpdatedAtTicks desc limit 100")??new List<object>())
+                            .OfType<ConversationSessionLearningReportEntity>()
+                            .ToList();
+                    }
+
+                    var rows=new JArray();
+                    foreach(var report in reports)
+                    {
+                        if(report==null||string.IsNullOrWhiteSpace(report.ShopKey)) continue;
+                        JObject coverage;
+                        try
+                        {
+                            coverage=string.IsNullOrWhiteSpace(report.InputCoverageJson)
+                                ? new JObject() : JObject.Parse(report.InputCoverageJson);
+                        }
+                        catch { coverage=new JObject(); }
+
+                        var sourceFingerprint=Convert.ToString(coverage["knowledgeCorpusSourceFingerprint"])??string.Empty;
+                        var transcriptFingerprint=Convert.ToString(coverage["knowledgeCorpusTranscriptFingerprint"])??string.Empty;
+                        rows.Add(new JObject
+                        {
+                            ["shopRef"]=MyWebSocketServer.DiagnosticRef("shop",report.ShopKey),
+                            ["sessionRef"]=MyWebSocketServer.DiagnosticRef("learning-session",report.EntityId??string.Empty),
+                            ["status"]=report.Status??string.Empty,
+                            ["sessionStartedAtUtc"]=LearningTicksToUtc(report.SessionStartedAtTicks),
+                            ["updatedAtUtc"]=LearningTicksToUtc(report.UpdatedAtTicks),
+                            ["completedAtUtc"]=LearningTicksToUtc(report.CompletedAtTicks),
+                            ["historyComplete"]=coverage.Value<bool?>("historyComplete")??false,
+                            ["historyPages"]=coverage.Value<int?>("historyPages")??0,
+                            ["historyMessagesFetched"]=coverage.Value<int?>("historyMessagesFetched")??0,
+                            ["historyMessagesInWindow"]=coverage.Value<int?>("historyMessagesInWindow")??0,
+                            ["timelineTurns"]=coverage.Value<int?>("timelineTurns")??0,
+                            ["knowledgeCorpusComplete"]=coverage.Value<bool?>("knowledgeCorpusComplete")??false,
+                            ["knowledgeCorpusRecords"]=coverage.Value<int?>("knowledgeCorpusRecords")??0,
+                            ["knowledgeCorpusRecordsReviewed"]=coverage.Value<int?>("knowledgeCorpusRecordsReviewed")??0,
+                            ["knowledgeCorpusBatches"]=coverage.Value<int?>("knowledgeCorpusBatches")??0,
+                            ["knowledgeCorpusBatchesCompleted"]=coverage.Value<int?>("knowledgeCorpusBatchesCompleted")??0,
+                            ["knowledgeCorpusCoveragePercent"]=coverage.Value<double?>("knowledgeCorpusCoveragePercent")??0,
+                            ["knowledgeCorpusFailedBatches"]=coverage.Value<int?>("knowledgeCorpusFailedBatches")??0,
+                            ["knowledgeCorpusResumeCount"]=coverage.Value<int?>("knowledgeCorpusResumeCount")??0,
+                            ["knowledgeCorpusLastResumedAtUtc"]=Convert.ToString(coverage["knowledgeCorpusLastResumedAtUtc"])??string.Empty,
+                            ["knowledgeCorpusRevisionStable"]=coverage.Value<bool?>("knowledgeCorpusRevisionStable")??false,
+                            ["knowledgeCorpusSourceFingerprintPrefix"]=LearningFingerprintPrefix(sourceFingerprint),
+                            ["knowledgeCorpusTranscriptFingerprintPrefix"]=LearningFingerprintPrefix(transcriptFingerprint),
+                            ["appliedCount"]=report.AppliedCount,
+                            ["skippedCount"]=report.SkippedCount,
+                            ["retryCount"]=report.RetryCount,
+                            ["errorPresent"]=!string.IsNullOrWhiteSpace(report.Error)
+                                || !string.IsNullOrWhiteSpace(Convert.ToString(coverage["knowledgeCorpusError"]))
+                        });
+                    }
+
+                    int processId;
+                    long processStartTicks;
+                    using(var process=Process.GetCurrentProcess())
+                    {
+                        processId=process.Id;
+                        processStartTicks=process.StartTime.ToUniversalTime().Ticks;
+                    }
+                    var snapshot=new JObject
+                    {
+                        ["schemaVersion"]=1,
+                        ["collectedAtUtc"]=now.ToString("o"),
+                        ["processId"]=processId,
+                        ["processStartTimeUtcTicks"]=processStartTicks,
+                        ["reports"]=rows
+                    };
+                    var directory=Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "QianniuAiBot","diagnostics");
+                    Directory.CreateDirectory(directory);
+                    var path=Path.Combine(directory,"knowledge-v2-learning-snapshot.json");
+                    var temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+                    try
+                    {
+                        File.WriteAllText(temp,snapshot.ToString(Formatting.None),new UTF8Encoding(false));
+                        if(File.Exists(path)) File.Replace(temp,path,null);
+                        else File.Move(temp,path);
+                    }
+                    finally
+                    {
+                        if(File.Exists(temp)) File.Delete(temp);
+                    }
+                }
+            }
+            catch(Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2 学习只读诊断快照写入失败："+ex.GetType().Name,5);
             }
         }
 
