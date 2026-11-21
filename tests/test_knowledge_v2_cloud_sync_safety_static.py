@@ -133,3 +133,23 @@ def test_v2_cloud_sync_in_memory_checkpoint_and_diagnostic_snapshot_share_one_lo
     assert "lock(state.SyncRoot)" in persist
     assert "state.Revision=Math.Max(0,targetRevision);" in persist
     assert "state.Fingerprint=targetFingerprint??string.Empty;" in persist
+
+def test_v2_cloud_replacement_clears_rows_and_writes_corpus_metadata_in_one_sqlite_transaction():
+    helper = read("src/BotLib/Db/Sqlite/SQLiteHelper.cs")
+    replace = helper[
+        helper.index("public void ReplaceRecordsInTransaction"):
+        helper.index("public int DeleteInTransaction")
+    ]
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository[
+        repository.index("internal static bool TryReplaceAllIfUnchanged"):
+        repository.index("public static string GetDatabasePath")
+    ]
+
+    assert "conn.RunInTransaction" in replace
+    assert "conn.DeleteAll(table)" in replace
+    assert "conn.InsertOrReplace(record)" in replace
+    assert "state.Db.ReplaceRecordsInTransaction(" in method
+    assert "replacementRows.Add(new KnowledgeV2MetaRow" in method
+    assert "state.Db.ClearTable(" not in method
+    assert "state.Db.SaveRecordsInTransaction(" not in method
