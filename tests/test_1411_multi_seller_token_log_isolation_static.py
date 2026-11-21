@@ -16,11 +16,22 @@ def test_conversation_change_recovers_active_seller_from_authoritative_or_duplic
     assert 'GetField("ForwardedInboundSourceSession"' in source
     assert "GetForwardedInboundSourceSession()" in source
     assert '"forwarded-onConversationChange:" + forwardedSource' in source
-    assert 'ReassertCurrent("forwarded-onConversationChange")' in source
-    assert "重复WebView承载的真实onConversationChange已用于切换活动客服" in source
+    assert 'ActivateFromVerifiedConversationChange(' in source
+    assert 'ReassertCurrent("verified-onConversationChange")' in source
+    assert "真实onConversationChange已晋升活动客服" in source
+    assert "ObserveChatDialogActive(qn, \"authoritative-onConversationChange\")" not in source
     assert "重复页面onConversationChange仅更新本店买家，不切换活动客服" not in source
-    assert 'ObserveChatDialogActive(qn, "authoritative-onConversationChange")' in source
-    assert 'ReassertCurrent("authoritative-onConversationChange")' in source
+
+    registry = text(ROOT / "src" / "Bot" / "ChromeNs" / "MultiShopRuntimeSessionCoordinator.cs")
+    activate = registry[
+        registry.index("internal static bool ActivateFromVerifiedConversationChange"):
+        registry.index("internal static bool ValidateNativeSend")
+    ]
+    assert "eventSellerNick" in activate
+    assert "eventTargetId" in activate
+    assert "expectedTargetId" in activate
+    assert "if (buyer.Length == 0) return false;" in activate
+    assert "return Activate(qn, sessionId, eventTargetId, true," in activate
 
 
 def test_settings_click_promotes_visible_desk_seller_before_opening_window():
