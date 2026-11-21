@@ -106,10 +106,11 @@ namespace Bot.Knowledge
             }
 
             var parseSw = Stopwatch.StartNew();
-            var memory = GetWorkingMemory(seller, buyer);
+            var shop = ResolveShopRequired(seller);
+            var memory = GetWorkingMemory(shop.ShopKey, seller, buyer);
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
             decision.Query = query;
-            UpdateWorkingMemory(seller, buyer, query);
+            UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
             decision.ParseMs = parseSw.ElapsedMilliseconds;
 
             var snapshot = GetSnapshot(seller);
@@ -124,14 +125,18 @@ namespace Bot.Knowledge
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
-            var manualExact = productionMatches.FirstOrDefault(x => x != null
-                && x.Record != null
-                && string.Equals((x.Record.SourceType ?? "").Trim(),
-                    "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
-                && (x.Record.Aliases ?? new List<string>()).Concat(new[] { x.Record.Title })
-                    .Any(a => string.Equals(KnowledgeEngineV2Semantics.Compact(a),
-                        query.Normalized, StringComparison.Ordinal)));
-            var manualSimilar = manualExact == null
+            var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)
+                .Where(x => x != null
+                    && x.Record != null
+                    && string.Equals((x.Record.SourceType ?? "").Trim(),
+                        "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase)
+                    && (x.Record.Aliases ?? new List<string>()).Concat(new[] { x.Record.Title })
+                        .Any(a => string.Equals(KnowledgeEngineV2Semantics.Compact(a),
+                            query.Normalized, StringComparison.Ordinal)))
+                .ToList();
+            var manualExactConflict = manualExactMatches.Count > 1;
+            var manualExact = manualExactConflict ? null : manualExactMatches.FirstOrDefault();
+            var manualSimilar = manualExact == null && !manualExactConflict
                 ? productionMatches
                     .Where(x => IsStrongManualReviewedSimilarMatch(x, query))
                     .OrderByDescending(x => x.AliasScore)
@@ -154,7 +159,7 @@ namespace Bot.Knowledge
                 && !object.ReferenceEquals(x, best));
             // An explicit human correction of this exact standalone question wins over
             // older generic answers; unrelated queries still use conflict rejection.
-            decision.HasConflict = manualExact == null && HasConflict(best, second);
+            decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second));
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
             var minConfidence = settings.MinConfidence;
