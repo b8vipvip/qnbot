@@ -130,7 +130,7 @@ namespace Bot.ChromeNs
         {
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(currentQuestion)) return false;
-            if (ShouldSuppressForOffHours(seller, buyer)) return false;
+            if (ShouldSuppressForOffHours(seller, buyer, shopKey)) return false;
 
             var resolved = RunInShopScope(seller, delegate
             {
@@ -307,7 +307,7 @@ namespace Bot.ChromeNs
                     }
                 }
                 return true;
-            });
+            }, shopKey);
         }
 
         private static bool IsKnownNonProblemHistoryTurn(
