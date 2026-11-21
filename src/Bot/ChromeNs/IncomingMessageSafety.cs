@@ -298,7 +298,7 @@ namespace Bot.ChromeNs
             // only so the existing UI/send pipeline is reused; MyOpenAI returns before any HTTP call.
             if (ConversationContextStore.IsProductLink(message, messageText))
             {
-                ConversationContextStore.RegisterProductLinkReply(message, messageText);
+                ConversationContextStore.RegisterProductLinkReply(message, messageText, shopKey);
                 return new IncomingMessageDecision
                 {
                     ShouldCallAi = true,
