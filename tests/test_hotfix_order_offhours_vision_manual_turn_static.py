@@ -34,7 +34,7 @@ def test_invalid_work_hours_never_fall_back_to_0900_1800():
 
 
 def test_local_ocr_knowledge_can_route_images_without_external_vision_api():
-    assert 'var localUsable = CanUseLocalOcrKnowledge(seller);' in VISION
+    assert 'var localUsable = CanUseLocalOcrKnowledge(seller, shopKey);' in VISION
     assert 'var usable = localUsable || externalUsable;' in VISION
     assert 'Kind = VisionDecisionKind.Vision' in VISION
     assert '使用本地OCR+Knowledge V2图片理解；无需外部视觉模型。' in VISION
