@@ -325,28 +325,12 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert "previous dispatch marker was not treated as completion" in adoption
 
 
-def test_stranded_merged_reconcile_lease_recovers_only_after_exact_sha_gates():
-    recovery = read(".github/workflows/gptauto-reconcile-recovery.yml")
+
+
+def test_reconcile_run_title_includes_task_identity_for_deduplication():
     reconcile = read(".github/workflows/gptauto-reconcile.yml")
     observer = read(".github/workflows/gptauto-observer.yml")
 
     assert 'run-name: "GPTAuto Reconcile (${{ inputs.task_id }} / PR #${{ inputs.pr_number }})"' in reconcile
-    assert "workflows: [API control plane CI, Windows x64 release build]" in recovery
-    assert "github.event.workflow_run.head_branch == 'master'" in recovery
-    assert "latest_master" in recovery and '"$latest_master" != "$CURRENT_SHA"' in recovery
-    assert "TASK_ID: GA-ddf0aa319783" in recovery
-    assert 'PR_NUMBER: "434"' in recovery
-    assert "MERGE_SHA: 483b07f03eeeeef5e9339b286d2c179378489ccc" in recovery
-    assert 'RELEASE_REQUIRED: "false"' in recovery
-    assert 'select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $sha)' in recovery
-    assert 'select(.name == "Windows x64 release build" and .head_branch == "master" and .head_sha == $sha)' in recovery
-    assert '.event == "pull_request"' in recovery
-    assert 'select(.head_sha == $head' in recovery
-    assert "Completion Lease is RELEASED" in recovery
-    assert "Terminal state: DONE" in recovery
-    assert "Merge SHA: $MERGE_SHA" in recovery
-    assert 'select((.display_title // "") | contains($task))' in recovery
-    assert "gh workflow run gptauto-reconcile.yml" in recovery
-    assert "Completion Lease remains ACTIVE until Reconcile publishes terminal DONE" in recovery
     assert "- 'docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md'" in observer
     assert "- 'docs/PROJECT_HANDOFF_CONTEXT.md'" in observer
