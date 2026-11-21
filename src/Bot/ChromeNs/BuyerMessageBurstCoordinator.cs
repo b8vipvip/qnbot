@@ -365,10 +365,10 @@ namespace Bot.ChromeNs
             // canonical buyer owner can send it without entering burst/Knowledge/AI at all.
             string productLinkReply;
             if (ConversationContextStore.TryTakeProductLinkReply(
-                item.SellerNick, item.BuyerNick, question, out productLinkReply))
+                item.SellerNick, item.BuyerNick, question, out productLinkReply, item.ShopKey))
             {
                 var productOk = await SendFixedAsync(
-                    qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply), cancellationToken).ConfigureAwait(false);
+                    qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey), cancellationToken).ConfigureAwait(false);
                 Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + productOk + ", aiCalled=false");
                 return productOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
