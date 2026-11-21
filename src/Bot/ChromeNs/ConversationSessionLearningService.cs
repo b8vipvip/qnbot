@@ -1247,23 +1247,34 @@ namespace Bot.ChromeNs
                         }
                         else
                         {
-                            result.CompletedBatchIndices.Add(batchIndex);
-                            result.BatchesCompleted = result.CompletedBatchIndices.Count;
-                            result.RecordsReviewed += batch.Count;
+                            // Stage every fallible post-processing step before marking the
+                            // batch complete. If evidence-ID restoration or candidate handling
+                            // throws, the checkpoint must leave this batch pending for restart.
                             int evidenceRestoreRejected;
                             var sourceCandidates = RestoreSourceEvidenceMessageIds(
                                 batchResult.Candidates, promptIdentifiers, out evidenceRestoreRejected);
-                            result.EvidenceRejected += batchResult.EvidenceRejected + evidenceRestoreRejected;
+                            var candidatesToKeep = new List<Suggestion>();
+                            var candidatesOmitted = 0;
                             foreach (var candidate in sourceCandidates)
                             {
-                                if (result.Candidates.Count < MaxKnowledgeCorpusCandidates)
-                                    result.Candidates.Add(candidate);
+                                if (result.Candidates.Count + candidatesToKeep.Count < MaxKnowledgeCorpusCandidates)
+                                    candidatesToKeep.Add(candidate);
                                 else
-                                    result.CandidatesOmitted++;
+                                    candidatesOmitted++;
                             }
+
+                            result.Candidates.AddRange(candidatesToKeep);
+                            result.CandidatesOmitted += candidatesOmitted;
+                            result.EvidenceRejected += batchResult.EvidenceRejected + evidenceRestoreRejected;
                             if (!string.IsNullOrWhiteSpace(batchResult.Model)) result.Models.Add(batchResult.Model);
                             if (!string.IsNullOrWhiteSpace(batchResult.Protocol)) result.Protocols.Add(batchResult.Protocol);
                             if (!string.IsNullOrWhiteSpace(batchResult.EndpointName)) result.Endpoints.Add(batchResult.EndpointName);
+
+                            // Commit the durable checkpoint only after candidate/evidence
+                            // restoration has completed successfully.
+                            result.CompletedBatchIndices.Add(batchIndex);
+                            result.BatchesCompleted = result.CompletedBatchIndices.Count;
+                            result.RecordsReviewed += batch.Count;
                         }
                     }
                     catch (Exception ex)
