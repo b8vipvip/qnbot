@@ -21,6 +21,11 @@ on:
   pull_request:
     paths:
       - services/api-control-plane/**
+      - src/Bot/**
+      - src/BotLib/**
+      - src/DbEntity/**
+      - src/Directory.Build.props
+      - src/Directory.Build.targets
       - scripts/update-api-control-plane.sh
       - scripts/update-bot.ps1
       - tests/**
