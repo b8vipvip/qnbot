@@ -260,7 +260,7 @@ namespace Bot.ChromeNs
 
             // Refresh the same seller+buyer timeline before deciding how to answer. This loads
             // recent manual-agent questions as well as buyer replies such as phone/model/account IDs.
-            ConversationContextStore.RefreshAndRecord(message, messageText);
+            ConversationContextStore.RefreshAndRecord(message, messageText, shopKey);
 
             // EvRecieveNewMessage subscribers run before the ordinary buyer-message loop. The
             // recharge service claims only explicit progress questions with a same-conversation
