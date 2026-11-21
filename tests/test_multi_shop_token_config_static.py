@@ -197,14 +197,31 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
     assert "ResolveRuntimeBySellerNick" in locator
 
 
-def test_vision_model_selection_uses_message_shop_ai_settings():
+def test_vision_model_selection_uses_exact_shopkey_and_never_global_fallback():
     source = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
-    assert "ResolveShopVisionEndpoints(message, endpoints)" in source
-    assert "message.toid.nick" in source
-    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
+    assert "ResolveShopVisionEndpoints(message, shopKey)" in source
+    assert "CanUseLocalOcrKnowledge(seller, shopKey)" in source
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in source
     assert "using (ShopSettingsScope.Enter(shop))" in source
     assert "AiEndpointStore.GetVisionEnabledEndpoints" in source
+    assert "new AiEndpointConfig[0]" in source
+    assert "fail-closed且不回退全局配置" in source
+    assert "ResolveRuntimeBySellerNick" not in source
     assert "本店未配置可用的视觉模型" in source
+
+
+def test_recovered_buyer_messages_reenter_authoritative_shop_scope():
+    source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    method = source[
+        source.index("private Task ProcessRecoveredBuyerMessageAfterMissAsync"):
+        source.index("\n        }\n\n", source.index("private Task ProcessRecoveredBuyerMessageAfterMissAsync")) + 11
+    ]
+    assert "ResolveRuntimeBySeller(this).ShopKey" in method
+    assert "VisionMessageDecision.Decide(" in method
+    assert "decision,\n                shopKey" in method
+    assert "ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey)" in method
+    assert "ShopKey = shopKey" in method
+    assert "if (string.IsNullOrWhiteSpace(shopKey))" in method
 
 
 def test_runtime_scope_does_not_add_a_second_reflection_handler_wrapper():
