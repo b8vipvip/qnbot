@@ -21,11 +21,13 @@ def test_local_first_and_source_labels():
     assert '"AI生成"' in source
 
 
-def test_manual_reply_comparison_learning_is_shop_scoped_and_nonblocking():
+def test_manual_reply_comparison_learning_is_shop_scoped_and_blocks_current_bot_send():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
     service = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "TryBlockForManualReply" in rpa
-    assert "检测到本店客服人工回复但不取消Bot发送" in service
+    assert "已阻止当前Bot发送并进入对比学习" in service
+    assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in service
+    assert "return true;" in service
     assert "QueueManualAnswerComparison" in service
     assert "CompareManualAnswerAsync" in service
     assert "AllowNextManualSend" in service
