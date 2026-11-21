@@ -11,18 +11,26 @@ param(
     [ValidateRange(1, 240)][int]$Minutes = 10,
     [ValidateRange(5, 300)][int]$IntervalSeconds = 30,
     [ValidateRange(5, 50)][int]$TopProcessCount = 15,
-    [string]$OutputDirectory = ''
+    [string]$OutputDirectory = '',
+    [string]$RuntimeSnapshotPath = '',
+    [ValidateLength(0, 40)][string]$ScenarioTag = ''
 )
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics'
 }
+if ([string]::IsNullOrWhiteSpace($RuntimeSnapshotPath)) {
+    $RuntimeSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\runtime-snapshot.json'
+}
+$ScenarioTag = [regex]::Replace([string]$ScenarioTag, '[^A-Za-z0-9_.-]', '_')
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $csv = Join-Path $OutputDirectory ('qnbot-memory-' + $stamp + '.csv')
 $processNames = @('Bot', 'AliWorkbench', 'AliRender', 'wwcmd')
 $last = @{}
+$previousOwners = @{}
+$previousRuntimeProcessStartTicks = 0L
 $loops = [int][Math]::Ceiling(($Minutes * 60.0) / $IntervalSeconds)
 
 for ($sample = 1; $sample -le $loops; $sample++) {
@@ -41,6 +49,113 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         Write-Warning 'Could not read system memory counters; process metrics continue.'
     }
 
+    # Read only the Bot's pseudonymized runtime snapshot. This lets a long-running
+    # sample observe shop-owner mapping, reconnects and Bot restarts without collecting
+    # seller nicknames, ShopKeys, session IDs, chat content or raw logs.
+    $runtimeStatus = 'missing'
+    $runtimeAgeSeconds = $null
+    $runtimeProcessId = $null
+    $runtimeProcessStartTicks = $null
+    $runtimeConnectedSessions = $null
+    $runtimeAuthoritativeShopCount = $null
+    $runtimeDuplicateSessions = $null
+    $runtimeRecoverableStandbySessions = $null
+    $runtimeStandbyCapabilitySessions = $null
+    $runtimeUnmappedConnectedSessions = $null
+    $runtimeOwnerDisconnectedCount = $null
+    $runtimeOwnerNotInitializedCount = $null
+    $runtimeOwnerClientInvalidatedCount = $null
+    $runtimeOwnerClientRetiredCount = $null
+    $runtimeStandbyCount = $null
+    $runtimeRecoverableStandbyCount = $null
+    $runtimeShopRefs = ''
+    $runtimeShopOwners = ''
+    $runtimeOwnerChanges = 0
+    $runtimeProcessGenerationChanged = $false
+    $runtimeSchemaVersion = $null
+
+    if (Test-Path -LiteralPath $RuntimeSnapshotPath -PathType Leaf) {
+        try {
+            $runtime = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($RuntimeSnapshotPath)) -ErrorAction Stop
+            $runtimeSchemaVersion = [int]$runtime.SchemaVersion
+            $runtimeCollectedAt = [DateTimeOffset]::Parse([string]$runtime.CollectedAtUtc).UtcDateTime
+            $runtimeAgeSeconds = [math]::Round(([DateTime]::UtcNow - $runtimeCollectedAt).TotalSeconds, 1)
+            if ($runtimeSchemaVersion -ne 1) {
+                $runtimeStatus = 'unsupported_schema'
+            }
+            elseif ($runtimeAgeSeconds -lt -30 -or $runtimeAgeSeconds -gt 120) {
+                $runtimeStatus = 'stale'
+            }
+            else {
+                $runtimeProcessId = [int]$runtime.ProcessId
+                $runtimeProcessStartTicks = [long]$runtime.ProcessStartTimeUtcTicks
+                $runtimeBotProcess = Get-Process -Id $runtimeProcessId -ErrorAction Stop
+                $actualStartTicks = [long]$runtimeBotProcess.StartTime.ToUniversalTime().Ticks
+                if ($actualStartTicks -ne $runtimeProcessStartTicks) {
+                    $runtimeStatus = 'process_mismatch'
+                }
+                else {
+                    $runtimeStatus = 'fresh'
+                    $counts = $runtime.Counts
+                    $runtimeConnectedSessions = [int]$counts.ConnectedSessions
+                    $runtimeAuthoritativeShopCount = [int]$counts.AuthoritativeShopCount
+                    $runtimeDuplicateSessions = [int]$counts.DuplicateSessions
+                    $runtimeRecoverableStandbySessions = [int]$counts.RecoverableStandbySessions
+                    $runtimeStandbyCapabilitySessions = [int]$counts.StandbyCapabilitySessions
+                    $runtimeUnmappedConnectedSessions = [int]$counts.UnmappedConnectedSessions
+
+                    $shopRows = @()
+                    if ($null -ne $runtime.Shops) { $shopRows = @($runtime.Shops) }
+                    $currentOwners = @{}
+                    $shopRefList = @()
+                    $ownerPairs = @()
+                    foreach ($shop in $shopRows) {
+                        if ($null -eq $shop) { continue }
+                        $shopRef = [string]$shop.ShopRef
+                        if ([string]::IsNullOrWhiteSpace($shopRef)) { continue }
+                        $ownerRef = [string]$shop.OwnerSessionRef
+                        $currentOwners[$shopRef] = $ownerRef
+                        $shopRefList += $shopRef
+                        $ownerPairs += ($shopRef + '=' + $(if ([string]::IsNullOrWhiteSpace($ownerRef)) { 'none' } else { $ownerRef }))
+                        if ($shop.OwnerConnected -eq $false) { $runtimeOwnerDisconnectedCount++ }
+                        if ($shop.OwnerInitialized -eq $false) { $runtimeOwnerNotInitializedCount++ }
+                        if ($shop.OwnerClientInvalidated -eq $true) { $runtimeOwnerClientInvalidatedCount++ }
+                        if ($shop.OwnerClientIdentityRetired -eq $true) { $runtimeOwnerClientRetiredCount++ }
+                        $runtimeStandbyCount += [int]$shop.StandbyCount
+                        $runtimeRecoverableStandbyCount += [int]$shop.RecoverableStandbyCount
+                    }
+                    $runtimeOwnerDisconnectedCount = [int]$runtimeOwnerDisconnectedCount
+                    $runtimeOwnerNotInitializedCount = [int]$runtimeOwnerNotInitializedCount
+                    $runtimeOwnerClientInvalidatedCount = [int]$runtimeOwnerClientInvalidatedCount
+                    $runtimeOwnerClientRetiredCount = [int]$runtimeOwnerClientRetiredCount
+                    $runtimeStandbyCount = [int]$runtimeStandbyCount
+                    $runtimeRecoverableStandbyCount = [int]$runtimeRecoverableStandbyCount
+                    $runtimeShopRefs = (@($shopRefList | Sort-Object -Unique) -join ';')
+                    $runtimeShopOwners = ($ownerPairs -join ';')
+
+                    if ($previousRuntimeProcessStartTicks -ne 0L -and
+                        $previousRuntimeProcessStartTicks -ne $runtimeProcessStartTicks) {
+                        $runtimeProcessGenerationChanged = $true
+                        $previousOwners = @{}
+                    }
+                    if (-not $runtimeProcessGenerationChanged) {
+                        foreach ($shopRef in $currentOwners.Keys) {
+                            if ($previousOwners.ContainsKey($shopRef) -and
+                                $previousOwners[$shopRef] -ne $currentOwners[$shopRef]) {
+                                $runtimeOwnerChanges++
+                            }
+                        }
+                    }
+                    $previousOwners = $currentOwners
+                    $previousRuntimeProcessStartTicks = $runtimeProcessStartTicks
+                }
+            }
+        }
+        catch {
+            $runtimeStatus = 'invalid'
+        }
+    }
+
     # Always write machine totals, even if the user has closed both applications.
     [pscustomobject]@{
         Time                = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
@@ -56,6 +171,28 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         SystemFreeMiB       = $freeMiB
         SystemTotalMiB      = $totalMiB
         SystemUsedPercent   = $usedPercent
+        ScenarioTag         = $ScenarioTag
+        RuntimeSnapshotStatus = $runtimeStatus
+        RuntimeSnapshotAgeSeconds = $runtimeAgeSeconds
+        RuntimeSchemaVersion = $runtimeSchemaVersion
+        RuntimeProcessId = $runtimeProcessId
+        RuntimeProcessStartUtcTicks = $runtimeProcessStartTicks
+        RuntimeProcessGenerationChanged = $runtimeProcessGenerationChanged
+        RuntimeConnectedSessions = $runtimeConnectedSessions
+        RuntimeAuthoritativeShopCount = $runtimeAuthoritativeShopCount
+        RuntimeDuplicateSessions = $runtimeDuplicateSessions
+        RuntimeRecoverableStandbySessions = $runtimeRecoverableStandbySessions
+        RuntimeStandbyCapabilitySessions = $runtimeStandbyCapabilitySessions
+        RuntimeUnmappedConnectedSessions = $runtimeUnmappedConnectedSessions
+        RuntimeOwnerDisconnectedCount = $runtimeOwnerDisconnectedCount
+        RuntimeOwnerNotInitializedCount = $runtimeOwnerNotInitializedCount
+        RuntimeOwnerClientInvalidatedCount = $runtimeOwnerClientInvalidatedCount
+        RuntimeOwnerClientRetiredCount = $runtimeOwnerClientRetiredCount
+        RuntimeStandbyCount = $runtimeStandbyCount
+        RuntimeRecoverableStandbyCount = $runtimeRecoverableStandbyCount
+        RuntimeShopRefs = $runtimeShopRefs
+        RuntimeShopOwners = $runtimeShopOwners
+        RuntimeOwnerChangesSincePreviousSample = $runtimeOwnerChanges
     } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
     $byPid = @{}
@@ -117,7 +254,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
 
     Write-Host ('Sample ' + $sample + '/' + $loops + ': ' +
         $targets.Count + ' QnBot/Qianniu target processes, top ' +
-        $top.Count + ' system processes, used=' + $usedPercent + '%, CSV=' + $csv)
+        $top.Count + ' system processes, used=' + $usedPercent + '%, runtime=' +
+        $runtimeStatus + ', shops=' + $runtimeAuthoritativeShopCount +
+        ', ownerChanges=' + $runtimeOwnerChanges + ', CSV=' + $csv)
     if ($sample -lt $loops) { Start-Sleep -Seconds $IntervalSeconds }
 }
 Write-Host ('Saved privacy-minimized system and process samples: ' + $csv)
