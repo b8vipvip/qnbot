@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -15,6 +16,7 @@ namespace Bot.ChromeNs
 {
     internal sealed class VisionCachedImageReference
     {
+        public string ShopKey { get; set; }
         public string SellerNick { get; set; }
         public string BuyerNick { get; set; }
         public string MessageKey { get; set; }
@@ -38,6 +40,7 @@ namespace Bot.ChromeNs
         private sealed class CacheRecord
         {
             public string Key;
+            public string ShopKey;
             public string SellerNick;
             public string BuyerNick;
             public string MessageKey;
@@ -86,7 +89,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void Prime(QNChatMessage message, string messageText)
+        public static void Prime(QNChatMessage message, string messageText, string shopKey = null)
         {
             try
             {
@@ -94,13 +97,25 @@ namespace Bot.ChromeNs
                 var url = VisionImageResolver.ExtractUrl(message);
                 if (string.IsNullOrWhiteSpace(url)) return;
 
-                EnsureCleanupTimer();
-                var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
-                var endpoint = endpoints == null ? null : endpoints.FirstOrDefault();
                 var seller = GetSellerNick(message);
                 var buyer = GetBuyerNick(message, seller);
+                var shop = ResolveShop(seller, shopKey);
+                if (shop == null)
+                {
+                    Log.ErrorWithMaxCount("买家图片缓存无法确认唯一ShopKey，已阻止跨店缓存: seller=" + seller, 20);
+                    return;
+                }
+                shopKey = shop.ShopKey;
+                AiEndpointConfig endpoint;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
+                    endpoint = endpoints == null ? null : endpoints.FirstOrDefault();
+                }
+
+                EnsureCleanupTimer();
                 var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
-                var key = BuildKey(messageKey, url);
+                var key = BuildKey(shopKey, messageKey, url);
                 CacheRecord record;
                 var created = false;
 
@@ -123,6 +138,7 @@ namespace Bot.ChromeNs
                         record = new CacheRecord
                         {
                             Key = key,
+                            ShopKey = shopKey,
                             SellerNick = seller,
                             BuyerNick = buyer,
                             MessageKey = messageKey,
@@ -178,22 +194,23 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void MarkLatestBuyerImageWithdrawn(QNChatMessage notice, string messageText)
+        public static void MarkLatestBuyerImageWithdrawn(QNChatMessage notice, string messageText, string shopKey = null)
         {
             try
             {
                 var seller = GetSellerNick(notice);
                 var buyer = GetBuyerNick(notice, seller);
-                var current = QN.CurQN;
-                if (current != null)
+                var shop = ResolveShop(seller, shopKey);
+                if (shop == null || string.IsNullOrWhiteSpace(buyer))
                 {
-                    if (string.IsNullOrWhiteSpace(seller) && current.Seller != null) seller = current.Seller.Nick;
-                    if (string.IsNullOrWhiteSpace(buyer) && current.Buyer != null) buyer = current.Buyer.Nick;
+                    Log.ErrorWithMaxCount("买家撤回图片缺少唯一ShopKey/会话身份，未跨店修改缓存状态。", 20);
+                    return;
                 }
 
                 var cutoff = DateTime.Now.AddMinutes(-5);
                 var candidate = Records.Values
-                    .Where(x => x != null && !x.Withdrawn && x.ObservedAt >= cutoff)
+                    .Where(x => x != null && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    .Where(x => !x.Withdrawn && x.ObservedAt >= cutoff)
                     .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                     .OrderByDescending(x => x.ObservedAt)
                     .FirstOrDefault();
@@ -218,18 +235,23 @@ namespace Bot.ChromeNs
         public static async Task<VisionImageResult> ResolveAsync(
             QNChatMessage message,
             AiEndpointConfig endpoint,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string shopKey = null)
         {
             if (message == null) return Fail("图片消息为空");
             var url = VisionImageResolver.ExtractUrl(message);
             if (string.IsNullOrWhiteSpace(url)) return Fail("图片 URL 不存在");
 
+            var seller = GetSellerNick(message);
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return Fail("无法确认图片消息所属ShopKey，已阻止跨店缓存读取");
+            shopKey = shop.ShopKey;
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, string.Empty);
-            var record = FindRecord(messageKey, url);
+            var record = FindRecord(messageKey, url, shopKey);
             if (record == null)
             {
-                Prime(message, string.Empty);
-                record = FindRecord(messageKey, url);
+                Prime(message, string.Empty, shopKey);
+                record = FindRecord(messageKey, url, shopKey);
             }
             if (record == null) return Fail("图片本地缓存任务未建立");
 
@@ -279,21 +301,27 @@ namespace Bot.ChromeNs
             };
         }
 
-        public static bool IsWithdrawn(string seller, string buyer, string messageKey, QNChatMessage message)
+        public static bool IsWithdrawn(string seller, string buyer, string messageKey, QNChatMessage message, string shopKey = null)
         {
-            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message));
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return true;
+            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey);
             if (record != null) return record.Withdrawn;
             return Records.Values
-                .Where(x => x != null && x.Withdrawn)
+                .Where(x => x != null && x.Withdrawn
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
                 .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                 .OrderByDescending(x => x.ObservedAt)
                 .Take(1)
                 .Any();
         }
 
-        public static bool HasCompleteCache(string messageKey, QNChatMessage message)
+        public static bool HasCompleteCache(string messageKey, QNChatMessage message, string shopKey = null)
         {
-            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message));
+            var seller = GetSellerNick(message);
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return false;
+            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey);
             return record != null && IsTaskSuccessful(record.DownloadTask);
         }
 
@@ -301,12 +329,16 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             TimeSpan window,
-            out VisionCachedImageReference reference)
+            out VisionCachedImageReference reference,
+            string shopKey = null)
         {
             reference = null;
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return false;
             var cutoff = DateTime.Now - window;
             var record = Records.Values
-                .Where(x => x != null && x.Message != null && x.ObservedAt >= cutoff)
+                .Where(x => x != null && x.Message != null && x.ObservedAt >= cutoff
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
                 .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                 .OrderByDescending(x => x.ObservedAt)
                 .FirstOrDefault();
@@ -314,6 +346,7 @@ namespace Bot.ChromeNs
 
             reference = new VisionCachedImageReference
             {
+                ShopKey = record.ShopKey,
                 SellerNick = record.SellerNick,
                 BuyerNick = record.BuyerNick,
                 MessageKey = record.MessageKey,
@@ -325,14 +358,16 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static CacheRecord FindRecord(string messageKey, string url)
+        private static CacheRecord FindRecord(string messageKey, string url, string shopKey)
         {
             CacheRecord record;
-            var key = BuildKey(messageKey, url);
+            var key = BuildKey(shopKey, messageKey, url);
             if (Records.TryGetValue(key, out record)) return record;
             if (string.IsNullOrWhiteSpace(url)) return null;
             return Records.Values
-                .Where(x => x != null && string.Equals(x.Url, url, StringComparison.Ordinal))
+                .Where(x => x != null
+                    && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                    && string.Equals(x.Url, url, StringComparison.Ordinal))
                 .OrderByDescending(x => x.ObservedAt)
                 .FirstOrDefault();
         }
@@ -557,10 +592,36 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string BuildKey(string messageKey, string url)
+        private static string BuildKey(string shopKey, string messageKey, string url)
         {
-            if (!string.IsNullOrWhiteSpace(messageKey)) return "message:" + messageKey.Trim();
-            return "url:" + Sha256(url ?? string.Empty);
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return string.Empty;
+            if (!string.IsNullOrWhiteSpace(messageKey))
+                return shopKey + "|message:" + messageKey.Trim();
+            return shopKey + "|url:" + Sha256(url ?? string.Empty);
+        }
+
+        private static ShopContext ResolveShop(string seller, string shopKey)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0) return null;
+            try
+            {
+                var current = ShopSettingsScope.Current;
+                ShopContext shop = shopKey.Length > 0
+                    ? ShopContextLocator.ResolveRuntimeByShopKey(shopKey)
+                    : (current != null
+                        ? ShopContextLocator.ResolveCurrentOrBySellerNick(seller)
+                        : ShopContextLocator.ResolveRuntimeBySellerNick(seller));
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)
+                    || (shopKey.Length > 0 && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                    || (current != null && !string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal)))
+                    return null;
+                return shop;
+            }
+            catch { return null; }
         }
 
         private static string Sha256(string value)
