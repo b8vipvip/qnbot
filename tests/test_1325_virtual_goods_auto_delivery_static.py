@@ -73,8 +73,8 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     assert '"virtual-goods-auto-delivery-confirmation-ledger.json"' in ledger
     assert "TimeSpan.FromDays(365)" in ledger
     assert "public static bool IsOperational()" in ledger
-    assert "if (_failClosed) return true;" in ledger
     assert "if (_failClosed) return false;" in ledger
+    assert "if (!TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity)) return true;" in ledger
     assert "if (_state.Records.Any" in ledger
     assert "MigratePendingConfirmationIntentsLocked" in ledger
     assert 'token["ConfirmationIntentAt"]' in ledger
