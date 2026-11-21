@@ -97,7 +97,7 @@ namespace Bot.ChromeNs
                 var url = VisionImageResolver.ExtractUrl(message);
                 if (string.IsNullOrWhiteSpace(url)) return;
 
-                var seller = GetSellerNick(message);
+                var seller = GetSellerNick(message, shopKey);
                 var buyer = GetBuyerNick(message, seller);
                 var shop = ResolveShop(seller, shopKey);
                 if (shop == null)
@@ -198,7 +198,7 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var seller = GetSellerNick(notice);
+                var seller = GetSellerNick(notice, shopKey);
                 var buyer = GetBuyerNick(notice, seller);
                 var shop = ResolveShop(seller, shopKey);
                 if (shop == null || string.IsNullOrWhiteSpace(buyer))
@@ -660,18 +660,28 @@ namespace Bot.ChromeNs
             return DateTime.Now;
         }
 
-        private static string GetSellerNick(QNChatMessage message)
+        private static string GetSellerNick(QNChatMessage message, string shopKey = null)
         {
             if (message != null && message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
-            {
                 return message.loginid.nick.Trim();
-            }
-            var qn = QN.CurQN;
-            if (qn != null && qn.Seller != null && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
+
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0)
             {
-                return qn.Seller.Nick.Trim();
+                try
+                {
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop != null) return (shop.SellerNick ?? string.Empty).Trim();
+                }
+                catch { return string.Empty; }
             }
-            return message == null || message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
+
+            var current = ShopSettingsScope.Current;
+            if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
+                return current.SellerNick.Trim();
+            return message == null || message.toid == null
+                ? string.Empty
+                : (message.toid.nick ?? string.Empty).Trim();
         }
 
         private static string GetBuyerNick(QNChatMessage message, string seller)
