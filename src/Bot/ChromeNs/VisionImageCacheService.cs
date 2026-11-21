@@ -318,7 +318,7 @@ namespace Bot.ChromeNs
 
         public static bool HasCompleteCache(string messageKey, QNChatMessage message, string shopKey = null)
         {
-            var seller = GetSellerNick(message);
+            var seller = GetSellerNick(message, shopKey);
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return false;
             var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey);
