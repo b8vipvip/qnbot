@@ -193,13 +193,26 @@ try {
             if (!Params.Robot.CanUseRobotReal) return;
             var client = CDP;
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
-            if (client == null || client.IsInvalidated || seller.Length == 0) return;
+            if (client == null || client.IsInvalidated || client.IsShopIdentityRetired || seller.Length == 0) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch { return; }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) return;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
             if (!await _businessInboundLivenessGate.WaitAsync(0).ConfigureAwait(false)) return;
 
+            using (ShopSettingsScope.Enter(shop, false))
+            {
             try
             {
+                if (!ReferenceEquals(CDP, client)
+                    || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                 var probeStartedAt = DateTime.Now;
                 var first = await GetCurrentConversationID().ConfigureAwait(false);
+                if (!ReferenceEquals(CDP, client)
+                    || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                 var current = first == null ? null : first.Result;
                 if (current == null || string.IsNullOrWhiteSpace(current.Nick)) return;
 
@@ -216,6 +229,8 @@ try {
                 {
                     await Task.Delay(180).ConfigureAwait(false);
                     var second = await GetCurrentConversationID().ConfigureAwait(false);
+                    if (!ReferenceEquals(CDP, client)
+                        || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                     var stable = second == null ? null : second.Result;
                     if (stable == null || string.IsNullOrWhiteSpace(stable.Nick)
                         || !BuyerIdentityAliasService.AreEquivalent(seller, stable.Nick, buyer))
@@ -266,7 +281,8 @@ try {
                     msgid = "-1",
                     msgtime = "-1"
                 }).ConfigureAwait(false);
-                if (history == null) return;
+                if (history == null || !ReferenceEquals(CDP, client)
+                    || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
 
                 var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>()
                     ?? new List<QNChatMessage>();
@@ -313,6 +329,8 @@ try {
 
                 foreach (var message in missedCandidates)
                 {
+                    if (!ReferenceEquals(CDP, client)
+                        || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
                     var text = GetMessageText(message);
                     var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
                     if (!_businessInboundHistoryProbeLedger.TryAccept(messageKey)) continue;
@@ -338,6 +356,7 @@ try {
             finally
             {
                 _businessInboundLivenessGate.Release();
+            }
             }
         }
     }
