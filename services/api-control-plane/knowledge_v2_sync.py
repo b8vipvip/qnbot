@@ -78,20 +78,37 @@ def _state(client_id):
         return {"revision":0,"records":[],"updated_at":"","updated_by":""}
     return {"revision":int(row["revision"] or 0),"records":json.loads(row["records_json"] or "[]"),"updated_at":row["updated_at"] or "","updated_by":row["updated_by"] or ""}
 
-def _save(client_id, records, updated_by):
+def _save(client_id, records, updated_by, expected_revision=None):
     records=_validate_records(records)
-    current=_state(client_id)
     encoded=json.dumps(records,ensure_ascii=False,separators=(",",":"),sort_keys=True)
-    current_encoded=json.dumps(current["records"],ensure_ascii=False,separators=(",",":"),sort_keys=True)
-    if encoded==current_encoded:
-        return current
-    revision=current["revision"]+1
     now=_cp.iso_now()
     with _cp.db() as conn:
+        # Serialize read/compare/write. A runtime request can otherwise read revision N,
+        # race with a web edit to N+1, then overwrite that newer state using its stale N.
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute(
+            "SELECT revision,records_json,updated_at,updated_by FROM bot_knowledge_v2_state WHERE client_id=?",
+            (client_id,)
+        ).fetchone()
+        if not row:
+            current={"revision":0,"records":[],"updated_at":"","updated_by":""}
+        else:
+            current={
+                "revision":int(row["revision"] or 0),
+                "records":json.loads(row["records_json"] or "[]"),
+                "updated_at":row["updated_at"] or "",
+                "updated_by":row["updated_by"] or ""
+            }
+        if expected_revision is not None and current["revision"] != expected_revision:
+            return current
+        current_encoded=json.dumps(current["records"],ensure_ascii=False,separators=(",",":"),sort_keys=True)
+        if encoded==current_encoded:
+            return current
+        revision=current["revision"]+1
         conn.execute("""INSERT INTO bot_knowledge_v2_state(client_id,revision,records_json,updated_at,updated_by)
           VALUES(?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET revision=excluded.revision,records_json=excluded.records_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
           (client_id,revision,encoded,now,updated_by))
-    return {"revision":revision,"records":records,"updated_at":now,"updated_by":updated_by}
+        return {"revision":revision,"records":records,"updated_at":now,"updated_by":updated_by}
 
 @router.get("/api/bot-web/knowledge-v2")
 def web_get(client=Depends(bot_web_console._web_client)):
@@ -116,11 +133,11 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
     # Windows-originated update. This keeps the existing local repository authoritative
     # during first adoption without allowing stale clients to overwrite Web changes.
     if current["revision"] == 0 and payload.records is not None:
-        return _save(client_id,payload.records,"windows")
+        return _save(client_id,payload.records,"windows",expected_revision=0)
     if current["revision"] > payload.revision:
         return current
     if payload.records is not None:
-        return _save(client_id,payload.records,"windows")
+        return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
     return current
 
 
