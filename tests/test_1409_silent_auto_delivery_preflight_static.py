@@ -97,3 +97,31 @@ def test_silent_preflight_is_fail_closed_and_final_ui_revalidation_remains_autho
     assert "if (!before.ShipButton)" in src
     assert "ReadOrderStateAsync(sourceClient, snapshot.OrderId, true)" in src
     assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent" in src
+
+def test_auto_delivery_irreversible_dom_actions_are_pinned_to_the_authoritative_source_session():
+    src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    execute = src[
+        src.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        src.index("private bool IsAutoDeliverySourceSessionCurrent")
+    ]
+    guard = src[
+        src.index("private bool IsAutoDeliverySourceSessionCurrent"):
+        src.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")
+    ]
+    order_reader = src[
+        src.index("private async Task<AutoDeliveryDomState> ReadOrderStateAsync"):
+        src.index("private static T ParseEvaluationResult")
+    ]
+
+    assert "var sourceClient = cdp;" in execute
+    assert "IsAutoDeliverySourceSessionCurrent(snapshot.ShopKey, sourceClient)" in execute
+    assert execute.count("sourceSessionCurrent()") >= 18
+    assert execute.index("sourceSessionCurrent()") < execute.index("TryPersistConfirmationIntent")
+    assert execute.index("TryPersistConfirmationIntent") < execute.index('ReadModalStateAsync(sourceClient, "confirm")')
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in guard
+    assert "ReferenceEquals(cdp, sourceClient)" in guard
+    assert "FindConnectedQnByShopKey(shopKey, sessionId)" in guard
+    assert "ReadOrderStateAsync(CDPClient sourceClient" in order_reader
+    assert "ReadModalStateAsync(CDPClient sourceClient" in order_reader
+    assert "sourceClient.EvaluateExpressionAsync" in order_reader
+    assert "cdp.EvaluateExpressionAsync" not in order_reader
