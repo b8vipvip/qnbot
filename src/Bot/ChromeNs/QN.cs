@@ -473,13 +473,50 @@ namespace Bot.ChromeNs
         private bool IsBuyerMessage(QNChatMessage m)
         {
             return m != null && m.fromid != null && m.toid != null && _seller != null
-                && m.fromid.nick != _seller.Nick && m.toid.nick == _seller.Nick;
+                && !string.Equals(m.fromid.nick, _seller.Nick, StringComparison.Ordinal)
+                && IsCurrentSellerEndpoint(m, false);
         }
 
         private bool IsSellerMessage(QNChatMessage m)
         {
             return m != null && m.fromid != null && m.toid != null && _seller != null
-                && m.fromid.nick == _seller.Nick && m.toid.nick != _seller.Nick;
+                && !string.Equals(m.toid.nick, _seller.Nick, StringComparison.Ordinal)
+                && IsCurrentSellerEndpoint(m, true);
+        }
+
+        private bool IsCurrentSellerEndpoint(QNChatMessage message, bool sellerIsFrom)
+        {
+            if (message == null || _seller == null) return false;
+            var sellerNick = (_seller.Nick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return false;
+
+            var endpoint = sellerIsFrom ? message.fromid : message.toid;
+            if (endpoint == null
+                || !string.Equals((endpoint.nick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                return false;
+
+            // Nicknames are not unique across logged-in Qianniu accounts. When the
+            // session has a stable TargetId, reject any conflicting seller identity
+            // carried by the message instead of routing it into this shop's pipeline.
+            var expectedTargetId = (_seller.TargetId ?? string.Empty).Trim();
+            if (expectedTargetId.Length == 0) return true;
+
+            var endpointTargetId = (endpoint.targetId ?? string.Empty).Trim();
+            if (endpointTargetId.Length > 0
+                && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
+                return false;
+
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
+            if (loginNick.Length > 0
+                && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
+                return false;
+
+            var loginTargetId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
+            if (loginTargetId.Length > 0
+                && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal))
+                return false;
+
+            return true;
         }
 
         public void SetActiveConversationByNick(string sellerNick, string buyerNick, string source)
