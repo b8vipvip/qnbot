@@ -3,7 +3,6 @@ using BotLib;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,30 +10,10 @@ namespace Bot.ChromeNs
 {
     internal static class KnowledgeEngineV2RuntimeBridge
     {
-        private sealed class V2HandlerWrapper
-        {
-            private readonly QN _qn;
-            private readonly Func<BuyerMessageBurstLease, Task> _inner;
-
-            public V2HandlerWrapper(QN qn, Func<BuyerMessageBurstLease, Task> inner)
-            {
-                _qn = qn;
-                _inner = inner;
-            }
-
-            public Task HandleAsync(BuyerMessageBurstLease lease)
-            {
-                return KnowledgeEngineV2RuntimeBridge.HandleAsync(_qn, _inner, lease);
-            }
-        }
-
         private static readonly ConcurrentDictionary<string, byte> PreparedSellers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> WarmingSellers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<BuyerMessageBurstCoordinator, byte> PatchedCoordinators =
-            new ConcurrentDictionary<BuyerMessageBurstCoordinator, byte>();
-        private static Timer _timer;
         private static int _initialized;
 
         public static object InitializeForApp()
@@ -45,12 +24,7 @@ namespace Bot.ChromeNs
                 try { KnowledgeV2QualityUiBridge.Initialize(); } catch { }
                 try { KnowledgeEngineV2FeedbackBridge.Initialize(); } catch { }
                 StopLegacyMemoryTimer();
-                _timer = new Timer(_ =>
-                {
-                    StopLegacyMemoryTimer();
-                    PatchExisting();
-                }, null, 850, 850);
-                Log.Info("Knowledge Engine V2已启动：SQLite Knowledge Repository + 结构化倒排索引 + Working Memory补全 + 真实反馈质量闭环；Memory Engine v1运行时已进入兼容退场模式。");
+                Log.Info("Knowledge Engine V2已启动：回复主流程显式调用V2决策，不再与Smart Reply争抢反射包装顺序；SQLite知识库、结构化索引、Working Memory和反馈质量闭环已启用。");
             }
             return new object();
         }
@@ -67,81 +41,6 @@ namespace Bot.ChromeNs
                 timerField.SetValue(null, null);
             }
             catch { }
-        }
-
-        private static void PatchExisting()
-        {
-            try
-            {
-                QN[] qns;
-                try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
-                catch { return; }
-
-                var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
-                var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (coordinatorField == null || handlerField == null) return;
-
-                foreach (var qn in qns)
-                {
-                    if (qn == null || qn.Seller == null || string.IsNullOrWhiteSpace(qn.Seller.Nick)) continue;
-                    var seller = qn.Seller.Nick.Trim();
-                    PrepareSeller(seller);
-                    var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
-                    if (coordinator == null) continue;
-                    if (!PatchedCoordinators.TryAdd(coordinator, 0)) continue;
-                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
-                    if (current == null)
-                    {
-                        byte ignored;
-                        PatchedCoordinators.TryRemove(coordinator, out ignored);
-                        continue;
-                    }
-                    current = StripLegacyMemoryWrapper(current);
-                    if (current == null)
-                    {
-                        byte ignored;
-                        PatchedCoordinators.TryRemove(coordinator, out ignored);
-                        continue;
-                    }
-                    if (current.Target is V2HandlerWrapper)
-                    {
-                        handlerField.SetValue(coordinator, current);
-                        continue;
-                    }
-                    var wrapper = new V2HandlerWrapper(qn, current);
-                    try
-                    {
-                        handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
-                    }
-                    catch
-                    {
-                        byte ignored;
-                        PatchedCoordinators.TryRemove(coordinator, out ignored);
-                        throw;
-                    }
-                    Log.Info("已为客服实例挂载Knowledge Engine V2本地决策层: seller=" + seller);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("安装Knowledge Engine V2运行时桥失败，继续原回复链路: " + ex.Message, 10);
-            }
-        }
-
-        private static Func<BuyerMessageBurstLease, Task> StripLegacyMemoryWrapper(
-            Func<BuyerMessageBurstLease, Task> current)
-        {
-            for (var depth = 0; depth < 4 && current != null; depth++)
-            {
-                var target = current.Target;
-                if (target == null) return current;
-                var type = target.GetType();
-                if (type.Name.IndexOf("MemoryHandlerWrapper", StringComparison.Ordinal) < 0
-                    || type.DeclaringType != typeof(KnowledgeMemoryRuntimeBridge)) return current;
-                var innerField = type.GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic);
-                current = innerField == null ? null : innerField.GetValue(target) as Func<BuyerMessageBurstLease, Task>;
-            }
-            return current;
         }
 
         private static void PrepareSeller(string seller)
@@ -186,20 +85,14 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static async Task HandleAsync(QN qn, Func<BuyerMessageBurstLease, Task> inner, BuyerMessageBurstLease lease)
+        internal static async Task<bool> TryHandleAsync(QN qn, BuyerMessageBurstLease lease)
         {
             var burst = lease == null ? null : lease.Burst;
-            if (qn == null || inner == null || burst == null || burst.Items.Count < 1
+            if (qn == null || burst == null || burst.Items.Count < 1
                 || burst.LatestVisionItem != null || !burst.HasReplyableItem)
-            {
-                if (inner != null) await inner(lease);
-                return;
-            }
+                return false;
             if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
-            {
-                await inner(lease);
-                return;
-            }
+                return false;
 
             // V2 is only a fast terminal path when the shared commerce authority allows local
             // termination. The same authority is consumed by Smart Reply, so verified orders and
@@ -216,8 +109,7 @@ namespace Bot.ChromeNs
                     + ", phase=" + (commerce == null ? string.Empty : commerce.PurchasePhase)
                     + ", structured=" + (commerce != null && commerce.HasStructuredOrder)
                     + ", reason=" + commerceAuthority.Reason);
-                await inner(lease);
-                return;
+                return false;
             }
 
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
@@ -225,8 +117,7 @@ namespace Bot.ChromeNs
                 QueueWarm(burst.SellerNick);
                 Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
                     + burst.BuyerNick);
-                await inner(lease);
-                return;
+                return false;
             }
 
             KnowledgeV2Decision decision;
@@ -238,8 +129,7 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("Knowledge Engine V2检索失败，回退兼容链路: buyer="
                     + burst.BuyerNick + ", error=" + ex.Message, 20);
-                await inner(lease);
-                return;
+                return false;
             }
 
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
@@ -248,8 +138,7 @@ namespace Bot.ChromeNs
                     + ", totalMs=" + (decision == null ? 0 : decision.TotalMs)
                     + ", candidates=" + (decision == null ? 0 : decision.CandidateCount)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                await inner(lease);
-                return;
+                return false;
             }
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
@@ -259,19 +148,19 @@ namespace Bot.ChromeNs
             {
                 Log.Info("Knowledge Engine V2迟到结果已丢弃，generation已失效，未进入答案就绪/发送: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                return;
+                return true;
             }
             if (autoSend && !await lease.ConfirmStableAsync(80))
             {
                 Log.Info("Knowledge Engine V2发送前稳定性确认失败，未发布迟到答案: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                return;
+                return true;
             }
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 Log.Info("Knowledge Engine V2稳定性确认后generation失效，未发布答案: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                return;
+                return true;
             }
 
             var ctl = ResponseProgressTracker.BeginAnswer(
@@ -292,7 +181,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("Knowledge Engine V2答案发布前generation已终止，权威本地答案未进入UI/发送: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                return;
+                return true;
             }
             answer = dedup.Answer;
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
@@ -300,7 +189,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("Knowledge Engine V2答案完成后generation已终止，迟到本地答案已丢弃: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
-                return;
+                return true;
             }
             var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
             // Preserve the actual knowledge record selected for the direct reply.
@@ -334,13 +223,13 @@ namespace Bot.ChromeNs
                 lease.MarkCompleted("knowledge_v2_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Engine V2本地命中）", true);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
-                return;
+                return true;
             }
 
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
-                return;
+                return true;
             }
 
             string relevanceReason;
@@ -350,7 +239,7 @@ namespace Bot.ChromeNs
                 if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
                 Log.Info("Knowledge Engine V2发送前被并发相关性门控抑制: buyer="
                     + burst.BuyerNick + ", reason=" + relevanceReason);
-                return;
+                return true;
             }
 
             if (!lease.MarkSending("knowledge_v2_send_started"))
@@ -358,7 +247,7 @@ namespace Bot.ChromeNs
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在V2发送前已失效");
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效");
-                return;
+                return true;
             }
 
             bool sendOk;
@@ -374,7 +263,7 @@ namespace Bot.ChromeNs
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效");
                 Log.Info("Knowledge Engine V2发送期间generation硬失效，已停止后续UI发送副作用: buyer="
                     + burst.BuyerNick);
-                return;
+                return true;
             }
             var failureReason = sendOk || qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason();
             if (sendOk)
@@ -413,6 +302,7 @@ namespace Bot.ChromeNs
                 + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            return true;
         }
 
         private static bool IsApprovedMatchForLogging(KnowledgeV2Match match)
