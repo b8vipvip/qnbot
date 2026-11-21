@@ -2,6 +2,9 @@ using Bot.ChatRecord;
 using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -12,6 +15,15 @@ namespace Bot.ChromeNs
     internal static class BuyerIdentityAliasService
     {
         private const string CnTaobaoTransportPrefix = "cntaobao";
+        private const int AliasCleanupThreshold = 5000;
+        private const int AliasCleanupTarget = 4000;
+        private static int _cleanupRunning;
+
+        private sealed class AliasCleanupEntry
+        {
+            public KeyValuePair<string, AliasRecord> Pair;
+            public DateTime UpdatedAt;
+        }
 
         private sealed class AliasRecord
         {
@@ -63,18 +75,21 @@ namespace Bot.ChromeNs
                     Aliases.TryGetValue(Key(shopKey, seller, canonicalInternal), out old);
             }
             var record = old ?? new AliasRecord();
-            record.ShopKey = shopKey;
-            record.Seller = seller;
-            record.InternalNick = internalNick;
-            if (display.Length > 0) record.Display = display;
-            if (targetId.Length > 0) record.TargetId = targetId;
-            record.UpdatedAt = DateTime.Now;
+            lock (record)
+            {
+                record.ShopKey = shopKey;
+                record.Seller = seller;
+                record.InternalNick = internalNick;
+                if (display.Length > 0) record.Display = display;
+                if (targetId.Length > 0) record.TargetId = targetId;
+                record.UpdatedAt = DateTime.Now;
 
-            StoreAlias(shopKey, seller, internalNick, record);
-            if (!string.IsNullOrWhiteSpace(record.Display))
-                StoreAlias(shopKey, seller, record.Display, record);
-            if (!string.IsNullOrWhiteSpace(record.TargetId))
-                StoreAlias(shopKey, seller, record.TargetId, record);
+                StoreAlias(shopKey, seller, internalNick, record);
+                if (!string.IsNullOrWhiteSpace(record.Display))
+                    StoreAlias(shopKey, seller, record.Display, record);
+                if (!string.IsNullOrWhiteSpace(record.TargetId))
+                    StoreAlias(shopKey, seller, record.TargetId, record);
+            }
             Cleanup();
         }
 
@@ -203,14 +218,73 @@ namespace Bot.ChromeNs
 
         private static void Cleanup()
         {
-            if (Aliases.Count < 5000) return;
-            var cutoff = DateTime.Now.AddDays(-30);
-            foreach (var pair in Aliases)
+            if (Aliases.Count < AliasCleanupThreshold) return;
+            if (Interlocked.CompareExchange(ref _cleanupRunning, 1, 0) != 0) return;
+
+            try
             {
-                if (pair.Value != null && pair.Value.UpdatedAt >= cutoff) continue;
-                AliasRecord ignored;
-                Aliases.TryRemove(pair.Key, out ignored);
+                var cutoff = DateTime.Now.AddDays(-30);
+                var candidates = new List<AliasCleanupEntry>();
+                foreach (var pair in Aliases.ToArray())
+                {
+                    candidates.Add(new AliasCleanupEntry
+                    {
+                        Pair = pair,
+                        UpdatedAt = pair.Value == null ? DateTime.MinValue : pair.Value.UpdatedAt
+                    });
+                }
+
+                // Remove expired entries first. Conditional key/value removal prevents
+                // an old snapshot from deleting a mapping that another thread replaced.
+                foreach (var candidate in candidates)
+                {
+                    var record = candidate.Pair.Value;
+                    if (record == null)
+                    {
+                        RemoveExact(candidate.Pair);
+                        continue;
+                    }
+
+                    lock (record)
+                    {
+                        if (record.UpdatedAt < cutoff)
+                            RemoveExact(candidate.Pair);
+                    }
+                }
+
+                // TTL alone is not a memory bound: a busy installation can keep every
+                // alias fresh forever. Evict the least-recently-used mappings down to a
+                // lower watermark; a missing alias safely falls back to the raw nick.
+                if (Aliases.Count <= AliasCleanupTarget) return;
+                candidates.Sort((left, right) => left.UpdatedAt.CompareTo(right.UpdatedAt));
+                foreach (var candidate in candidates)
+                {
+                    if (Aliases.Count <= AliasCleanupTarget) break;
+                    var record = candidate.Pair.Value;
+                    if (record == null)
+                    {
+                        RemoveExact(candidate.Pair);
+                        continue;
+                    }
+
+                    lock (record)
+                    {
+                        // The entry was refreshed after this snapshot; do not evict it
+                        // based on its stale ordering.
+                        if (record.UpdatedAt != candidate.UpdatedAt) continue;
+                        RemoveExact(candidate.Pair);
+                    }
+                }
             }
+            finally
+            {
+                Interlocked.Exchange(ref _cleanupRunning, 0);
+            }
+        }
+
+        private static void RemoveExact(KeyValuePair<string, AliasRecord> pair)
+        {
+            ((ICollection<KeyValuePair<string, AliasRecord>>)Aliases).Remove(pair);
         }
     }
 }
