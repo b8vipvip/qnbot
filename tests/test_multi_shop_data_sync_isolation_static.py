@@ -303,3 +303,22 @@ def test_inbound_timeline_and_product_presets_use_exact_shopkey():
     assert "ResolveShop(seller, shopKey)" in preset
     assert "using (ShopSettingsScope.Enter(shop))" in preset
     assert "GetPresetsForProductLink(seller, itemId)" in preset
+
+    take = context[
+        context.index("public static bool TryTakeProductLinkReply"):
+        context.index("public static List<ConversationContextTurn> GetRecentTurns")
+    ]
+    assert "string shopKey = null" in take
+    assert "ResolveShop(seller, shopKey)" in take
+    assert "using (ShopSettingsScope.Enter(shop))" in take
+
+    preset_service = read("src/Bot/ChromeNs/BotReplyPresetService.cs")
+    create_store = preset_service[
+        preset_service.index("private static ShopScopedSettingsStore CreateStore"):
+        preset_service.index("private static List<BotReplyPreset> Normalize")
+    ]
+    assert "ShopSettingsScope.Current" in create_store
+    assert "current.SellerNick" in create_store
+    assert "ResolveRuntimeBySellerNick(seller)" in create_store
+    assert "ResolveSourceLabel(string seller, string answer, string shopKey = null)" in preset_service
+    assert "ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
