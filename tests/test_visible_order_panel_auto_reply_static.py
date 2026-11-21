@@ -106,3 +106,28 @@ def test_visible_order_panel_retry_generations_are_shop_scoped_and_revalidate_qn
     assert "currentShop.ShopKey, capturedShopKey, StringComparison.Ordinal" in method
     assert "using (ShopSettingsScope.Enter(currentShop, false))" in method
     assert "await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source)" in method
+
+def test_receive_new_message_order_cards_run_inside_exact_shop_scope():
+    code = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    method = code[
+        code.index("private static async void OnReceiveNewMessage"):
+        code.index("private static async void OnMessageCenterNotify")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in method
+    assert "using (ShopSettingsScope.Enter(shop, false))" in method
+    assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, messageSeller)" in method
+    assert method.index("ResolveRuntimeBySeller(qn)") < method.index("ProcessDirectOrderMessageAsync")
+    assert method.index("IdentityEquals(shop.SellerNick, messageSeller)") < method.index("ProcessDirectOrderMessageAsync")
+
+
+def test_visible_panel_buyer_alias_resolution_uses_the_captured_shop_scope():
+    code = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    method = code[
+        code.index("private static void ScheduleVisibleOrderPanelScan"):
+        code.index("private static string NormalizeIdentityKey")
+    ]
+
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    alias = method.index("BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)")
+    assert scope < alias
