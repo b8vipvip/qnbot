@@ -107,3 +107,18 @@ def test_background_buyer_liveness_probe_uses_exact_shop_scoped_desk_and_aliases
     assert "BuyerIdentityAliasService.ResolveInternalNick(seller, secondNick)" in schedule
     assert "FindSellerDesk(seller)" not in monitor
     assert "HasVerifiedReceptionDesk(seller)" not in monitor
+
+def test_business_inbound_history_recovery_is_scoped_and_revalidates_source_session():
+    source = read("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
+    method = source[
+        source.index("internal async Task ProbeActiveConversationForMissedInboundAsync"):
+        source.index("\n    }\n}")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in method
+    assert "ShopSettingsScope.Enter(shop, false)" in method
+    assert "server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)" in method
+    assert method.count("ReferenceEquals(CDP, client)") >= 4
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick)" in method
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, cachedBuyer, buyer)" in method
+    assert "client.Invoke<JObject>(\"im.singlemsg.GetRemoteHisMsg\"" in method
