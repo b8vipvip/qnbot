@@ -334,7 +334,7 @@ jobs:
             --latest
 
       - name: Verify published release assets
-        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
+        if: (github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true') && steps.api-ci.outputs.superseded != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
