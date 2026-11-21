@@ -99,10 +99,10 @@ namespace Bot.ChromeNs
             return BotReplyPresetService.IsPresetReply(seller, answer);
         }
 
-        public static void RefreshAndRecord(QNChatMessage message, string messageText)
+        public static void RefreshAndRecord(QNChatMessage message, string messageText, string shopKey = null)
         {
             if (message == null) return;
-            var seller = GetSellerNick(message);
+            var seller = GetSellerNick(message, shopKey);
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
@@ -110,7 +110,7 @@ namespace Bot.ChromeNs
             ShopContext shop;
             try
             {
-                shop = ResolveShop(seller);
+                shop = ResolveShop(seller, shopKey);
             }
             catch (AmbiguousShopIdentityException ex)
             {
@@ -1367,11 +1367,21 @@ namespace Bot.ChromeNs
             catch { return null; }
         }
 
-        private static string GetSellerNick(QNChatMessage message)
+        private static string GetSellerNick(QNChatMessage message, string shopKey = null)
         {
             if (message == null) return string.Empty;
             if (message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
                 return message.loginid.nick.Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0)
+            {
+                try
+                {
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop != null) return (shop.SellerNick ?? string.Empty).Trim();
+                }
+                catch { return string.Empty; }
+            }
             var current = ShopSettingsScope.Current;
             if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
                 return current.SellerNick.Trim();
