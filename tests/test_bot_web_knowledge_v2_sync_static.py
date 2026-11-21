@@ -64,3 +64,14 @@ def test_windows_v2_cloud_revision_and_fingerprint_survive_process_restart():
     assert "store.TryGetString(RevisionKey,out revisionText)" in s
     assert "store.SetString(RevisionKey,revision)" in s
     assert "store.SetString(FingerprintKey,fingerprint)" in s
+
+def test_runtime_sync_save_uses_atomic_revision_compare_and_swap():
+    s=read(SERVER)
+    save=s[s.index("def _save("):s.index("@router.get(\"/api/bot-web/knowledge-v2\")")]
+    runtime=s[s.index("def runtime_sync("):s.index("def web_smart_import(")]
+    assert 'conn.execute("BEGIN IMMEDIATE")' in save
+    assert 'expected_revision is not None and current["revision"] != expected_revision' in save
+    assert 'expected_revision=0' in runtime
+    assert 'expected_revision=payload.revision' in runtime
+    assert runtime.index('current["revision"] > payload.revision') < runtime.index('expected_revision=payload.revision')
+    assert 'return current' in save
