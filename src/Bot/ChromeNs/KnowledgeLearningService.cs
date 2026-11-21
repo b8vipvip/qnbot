@@ -202,10 +202,12 @@ namespace Bot.ChromeNs
             string candidateAnswer,
             out string question,
             out string manualAnswer,
-            string shopKey = null)
+            string shopKey,
+            out bool bypassed)
         {
             question = string.Empty;
             manualAnswer = string.Empty;
+            bypassed = false;
             if (qn == null || qn.Seller == null) return false;
             var seller = qn.Seller.Nick ?? string.Empty;
             string resolvedShopKey;
@@ -224,7 +226,11 @@ namespace Bot.ChromeNs
             {
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
-            if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now) return false;
+            if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now)
+            {
+                bypassed = true;
+                return false;
+            }
 
             DateTime questionTime;
             if (!ConversationContextStore.TryGetLatestBuyerQuestion(seller, buyer, out question, out questionTime)) return false;
@@ -270,6 +276,7 @@ namespace Bot.ChromeNs
                         sameAsCandidate
                             ? "人工客服已发送与Bot候选相同的答案；已阻止Bot重复发送"
                             : "人工答案=" + Short(manualAnswer, 500) + "；当前Bot发送已阻止并进入对比学习");
+                    SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);
                     Log.Info("检测到本店客服人工接管，已阻止当前Bot发送: seller="
                         + seller + ", buyer=" + buyer + ", sameAsCandidate=" + sameAsCandidate);
                     return true;
