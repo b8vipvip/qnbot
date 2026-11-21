@@ -109,7 +109,7 @@ def test_send_path_drops_wpf_context_and_never_uses_enter_for_delivery():
     assert "keybd_event(0x0D" not in qnrpa
     assert "PressEnter" not in qnrpa
     assert "TrySendTextNativeFirstAsync" in qnrpa
-    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
     assert "PressEnter" not in native
 
 
