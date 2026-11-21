@@ -129,7 +129,10 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - 该工具不能证明真实消息已送达；真实买家消息、切店、重连和知识学习仍需现场验收。
 
 已有可选长时采样脚本：
-- `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程。
+- `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程；同时按采样周期读取 Bot 的伪名化 `runtime-snapshot.json`，记录店铺 owner 会话变化、重复/未映射会话、standby 能力和 Bot 进程重启。
+- Knowledge V2 云同步服务写出 `knowledge-v2-sync-snapshot.json`，仅含 ShopRef、云端 revision、记录数、截断指纹、收敛状态和最近同步状态；采样脚本会校验它与当前 Bot 进程身份一致后再记录。
+- A/B 切店与重连采样示例：`powershell.exe -NoProfile -File scripts\\Collect-QnBotMemory.ps1 -Minutes 60 -IntervalSeconds 15 -ScenarioTag shop-switch`。运行期间手动执行 A→B→A 切换和断线重连；CSV 的 `RuntimeShopOwners`、`RuntimeOwnerChangesSincePreviousSample`、`RuntimeDuplicateSessions`、`RuntimeUnmappedConnectedSessions` 可用于检查身份稳定性。
+- 跨设备 Knowledge V2 对比：在两台设备分别运行采样，确认同一店铺的 CloudRevision、LocalFingerprintPrefix、CloudFingerprintPrefix 一致且 Converged=True。ShopRef 是进程本地伪名，重启后会轮换，不用于跨设备匹配。
 - `scripts/Collect-QnBotGcTrace.ps1`：管理员权限下有界 CLR GC ETW；ETL 可能含同机其他 .NET 程序事件，分享前需自行审查。
 
 ### 4.1 2026-11-20 Windows diagnostic follow-up
