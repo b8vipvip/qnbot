@@ -25,7 +25,7 @@ def test_manual_reply_comparison_learning_is_shop_scoped_and_blocks_current_bot_
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
     service = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "TryBlockForManualReply" in rpa
-    assert "已阻止当前Bot发送并进入对比学习" in service
+    assert "当前Bot发送已阻止并进入对比学习" in service
     assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in service
     assert "return true;" in service
     assert "QueueManualAnswerComparison" in service
