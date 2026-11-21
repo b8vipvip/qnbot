@@ -231,7 +231,8 @@ def test_qn_ingress_rejects_conflicting_stable_seller_identity_even_when_nick_ma
     assert "IsCurrentSellerEndpoint(m, false)" in buyer
     assert "IsCurrentSellerEndpoint(m, true)" in buyer
     assert "message.loginid.targetId" in buyer
-    assert "endpoint.targetId" in buyer
+    assert "message.fromid.targetId" in buyer
+    assert "message.toid.targetId" in buyer
     assert "expectedTargetId" in buyer
     assert "StringComparison.Ordinal" in buyer
 
