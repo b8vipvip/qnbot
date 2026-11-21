@@ -50,7 +50,7 @@ def test_auto_delivery_runtime_is_exact_order_and_pending_state_gated():
     assert "var ship=uniqueAction(best,'发货')" in runtime
     assert "var no=uniqueExact(modal,'无需物流')" in runtime
     assert "ok=uniqueExact(modal,'确认发货')" in runtime
-    assert 'ReadModalStateAsync("confirm")' in runtime
+    assert 'ReadModalStateAsync(sourceClient, "confirm")' in runtime
     assert "去发货" not in runtime
 
 
