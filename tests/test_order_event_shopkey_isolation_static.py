@@ -236,3 +236,14 @@ def test_feature_settings_router_uses_explicit_shop_scope_for_feature_params():
     assert "var shop = ShopSettingsScope.Current;" in bridge
     assert "ScopedParamRouter.TryRead(masterKey, subKey, out scoped)" in persistent
     assert "ScopedParamRouter.TryWrite(masterKey, subKey" in persistent
+
+def test_rich_order_payload_bridge_reads_rules_from_its_verified_shop_scope():
+    source = read("src/Bot/Options/OrderPlacedReplyDelaySettings.cs")
+    method = source[
+        source.index("internal async Task ProcessRichOrderSnapshotAsync"):
+        source.index("\n    }\n}", source.index("internal async Task ProcessRichOrderSnapshotAsync"))
+    ]
+    resolve = method.index("ShopContextLocator.ResolveRuntimeBySeller(this)")
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    read_rules = method.index("BotFeatureStore.GetAutoReplyRules()")
+    assert resolve < scope < read_rules
