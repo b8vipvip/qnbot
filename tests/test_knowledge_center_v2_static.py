@@ -35,7 +35,7 @@ def test_buyer_runtime_never_waits_for_cold_v2_snapshot():
     assert 'public static bool IsSnapshotReady' in public
     assert 'if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))' in runtime
     assert 'QueueWarm(burst.SellerNick);' in runtime
-    assert 'await inner(lease);' in runtime
+    assert 'return false;' in runtime
     assert 'WarmingSellers.TryAdd' in runtime
 
 
@@ -100,21 +100,26 @@ def test_working_memory_only_supplements_context_dependent_messages():
 def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'StopLegacyMemoryTimer();' in runtime
-    assert 'StripLegacyMemoryWrapper' in runtime
+    assert 'TryHandleAsync(QN qn, BuyerMessageBurstLease lease)' in runtime
     assert 'if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))' in runtime
     assert 'ReplyModeService.IsLocalFirst' not in runtime
     assert 'ParallelReplyRelevanceGate.ShouldSend' in runtime
     assert 'SendTextWithRetryAsync' in runtime
 
 
-def test_v2_runtime_wraps_each_coordinator_only_once_even_when_other_layers_move_outermost():
+def test_v2_is_called_explicitly_by_the_canonical_streaming_handler_not_a_racing_reflection_wrapper():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    assert "ConcurrentDictionary<BuyerMessageBurstCoordinator, byte> PatchedCoordinators" in runtime
-    assert "PatchedCoordinators.TryAdd(coordinator, 0)" in runtime
-    assert "PatchedCoordinators.TryRemove(coordinator, out ignored)" in runtime
-    add = runtime.index("PatchedCoordinators.TryAdd(coordinator, 0)")
-    read_handler = runtime.index("handlerField.GetValue(coordinator)", add)
-    assert add < read_handler
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "TryHandleAsync(QN qn, BuyerMessageBurstLease lease)" in runtime
+    assert "V2HandlerWrapper" not in runtime
+    assert "PatchedCoordinators" not in runtime
+    assert "PatchExisting()" not in runtime
+    plan = streaming.index("private static async Task ProcessTextBurstStreamingAsync")
+    v2 = streaming.index("KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease)", plan)
+    generating = streaming.index('lease.MarkGenerating("streaming_answer_started")', plan)
+    ai = streaming.index("StreamingBuyerAnswerService.GetAnswerAsync(", plan)
+    assert v2 < generating < ai
+    assert "if (await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))" in streaming
 
 
 def test_learning_candidates_require_explicit_approval_before_direct_reply():
