@@ -202,18 +202,26 @@ jobs:
               exit 0
             fi
           fi
+          recovery_body="$marker
+          GPTAuto recovery Reconcile dispatch lease reserved at $(date -u +%Y-%m-%dT%H:%M:%SZ) for task $TASK_ID merge $MERGE_SHA.
+          This recent marker suppresses duplicate dispatch during GitHub run-list eventual consistency. The Completion Lease remains ACTIVE until this exact merge receives a durable terminal DONE receipt."
+          if [[ -n "$handoff_id" ]]; then
+            # Persist the dispatch lease BEFORE calling workflow_dispatch. If the
+            # run-list is temporarily stale, a second Executor still sees this marker.
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$recovery_body" >/dev/null
+          else
+            handoff_id="$(gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$recovery_body" --jq '.id')"
+            [[ -n "$handoff_id" ]] || { echo "::error::Unable to persist Reconcile dispatch lease marker"; exit 1; }
+          fi
+
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
             -f release_required="$RELEASE_REQUIRED"
 
-          recovery_body="$marker
-          GPTAuto recovery Reconcile scheduled for task $TASK_ID merge $MERGE_SHA.
-          The previous dispatch marker was not treated as completion; the Completion Lease remains ACTIVE until this exact merge receives a durable terminal DONE receipt."
-          if [[ -n "$handoff_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$recovery_body" >/dev/null
-          else
-            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$recovery_body"
-          fi
+          scheduled_body="$marker
+          GPTAuto recovery Reconcile dispatch submitted for task $TASK_ID merge $MERGE_SHA.
+          The Completion Lease remains ACTIVE until this exact merge receives a durable terminal DONE receipt."
+          gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$scheduled_body" >/dev/null
 
       - name: Retry transient failed jobs only
         id: transient-retry
