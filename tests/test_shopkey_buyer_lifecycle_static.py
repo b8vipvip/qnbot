@@ -340,3 +340,23 @@ def test_async_status_binding_uses_per_session_generation_to_reject_out_of_order
     assert "TryBindStatusConversation(\n                                                    session, loginNick, conversationNick, bindingGeneration, identityProbeGeneration)" in server
     assert "BeginStatusBindingAttempt(session.SessionID)" in server
     assert "NextStatusBindingGenerationLocked(session.SessionID)" in server
+
+
+def test_burst_coordinator_state_and_semantic_continuation_are_shopkey_scoped():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    coordinator = source[source.index("internal sealed class BuyerMessageBurstCoordinator"):]
+
+    assert "private static string Key(string shopKey, string seller, string buyer)" in coordinator
+    assert 'return shopKey + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()' in coordinator
+    assert "Key(item.ShopKey, item.SellerNick, item.BuyerNick)" in coordinator
+    assert "Key(shopKey, seller, buyer)" in coordinator
+    assert "Key(item.SellerNick, item.BuyerNick)" not in coordinator
+    assert "Key(seller, buyer)" not in coordinator
+    assert "HasPendingBuyerMessages(string shopKey, string seller, string buyer)" in coordinator
+    cancel = coordinator[
+        coordinator.index("public void CancelBuyer("):
+        coordinator.index("private void FinalizeReplyOutcome")
+    ]
+    assert "if (shopKey.Length == 0)" in cancel
+    assert "Key(shopKey, seller, buyer)" in cancel
+    assert "_sessionAgent.CancelAll(seller, buyer, reason, shopKey)" in cancel
