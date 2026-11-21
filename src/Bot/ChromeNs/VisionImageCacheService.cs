@@ -242,7 +242,7 @@ namespace Bot.ChromeNs
             var url = VisionImageResolver.ExtractUrl(message);
             if (string.IsNullOrWhiteSpace(url)) return Fail("图片 URL 不存在");
 
-            var seller = GetSellerNick(message);
+            var seller = GetSellerNick(message, shopKey);
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return Fail("无法确认图片消息所属ShopKey，已阻止跨店缓存读取");
             shopKey = shop.ShopKey;
