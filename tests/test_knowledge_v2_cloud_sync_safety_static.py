@@ -11,7 +11,7 @@ def test_v2_cloud_replay_backs_up_before_any_shop_scoped_replace():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     apply = service[
         service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"):
-        service.index("state.Revision=cloudRevision", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
+        service.index("PersistState(shop,state,cloudRevision,Fingerprint(records));", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
     ]
 
     assert "Backup(shop,latestLocal,cloudRevision)" in apply
