@@ -23,7 +23,7 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop))
                 {
                     await Task.Delay(120);
-                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply() || FirstInquiryFixedReplyService.HasPending(seller, buyer))
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply() || FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey))
                     {
                         Release(key);
                         return;
@@ -37,7 +37,7 @@ namespace Bot.ChromeNs
                     var ok = await qn.SendTextWithRetryAsync(buyer, answer, 1);
                     if (ok)
                     {
-                        FirstInquiryFixedReplyService.MarkDelivered(seller, buyer);
+                        FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shop.ShopKey);
                         ReplyDeduplicationService.RememberDelivered(seller, buyer, answer);
                         Log.Info("回访买家超过10分钟无互动，首次固定回复已发送: seller=" + seller + ", buyer=" + buyer);
                     }
