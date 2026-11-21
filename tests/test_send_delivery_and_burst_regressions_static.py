@@ -210,3 +210,73 @@ def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_gen
     assert greeting < block
     assert 'SetSendCancellation("人工接管"' in qnrpa
     assert "自动发送因人工接管取消，禁止重试" in qnrpa
+
+def test_manual_takeover_is_rechecked_at_each_last_mile_send_path():
+    qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    open_send = qnrpa[
+        qnrpa.index("private async Task<bool> OpenAndSendText"):
+        qnrpa.index("private async Task<bool> TrySendTextViaUiaAsync")
+    ]
+
+    assert "Func<bool> manualTakeoverCheck = () =>" in open_send
+    assert "if (manualTakeoverCheck())" in open_send
+    assert "shopKey, manualTakeoverCheck" in open_send
+    first_check = native.index("manualTakeoverCheck()")
+    dom = native.index("TryTriggerSendViaCdpDomAsync")
+    hwnd_check = native.index("manualTakeoverCheck()", dom)
+    hwnd = native.index("TryPostSafeMainSendMouseMessage", hwnd_check)
+    uia_check = native.index("manualTakeoverCheck()", hwnd)
+    safe_uia = native.index("TryInvokeCachedSendButtonNow", uia_check)
+    legacy_check = native.index("manualTakeoverCheck()", safe_uia)
+    legacy = native.index("TrySendTextViaUiaAsync(", legacy_check)
+    assert first_check < dom < hwnd_check < hwnd < uia_check < safe_uia < legacy_check < legacy
+
+    uia = qnrpa[
+        qnrpa.index("private async Task<bool> TrySendTextViaUiaAsync"):
+        qnrpa.index("public async Task SendImageAsync")
+    ]
+    assert uia.count("manualTakeoverCheck()") >= 2
+    assert "ClearExpectedDraftIfSafeAsync(buyer, text, \"人工接管\")" in uia
+
+
+def test_manual_takeover_marks_pending_delivery_and_suppresses_only_unsubmitted_failure_alerts():
+    watchdog = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
+    method = watchdog[
+        watchdog.index("public static int MarkManualTakeover"):
+        watchdog.index("public static int CancelConversation")
+    ]
+    activation = watchdog[
+        watchdog.index("Task.Run(async () =>", watchdog.index("private static void Activate")):
+        watchdog.index("private static PendingDelivery FindPending")
+    ]
+
+    assert "public int SupersededByManual;" in watchdog
+    assert "Interlocked.Exchange(ref pending.SupersededByManual, 1);" in method
+    suppressed = activation.index("submissionTicks <= 0")
+    assert "pending.SupersededByManual" in activation[suppressed:suppressed + 500]
+    assert suppressed < activation.index("if (!delivered)")
+    assert "if (delivered || submissionTicks > 0)" not in activation
+
+
+def test_manual_takeover_bypass_is_consumed_once_and_shared_across_final_send_checks():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
+    method = learning[
+        learning.index("public static bool TryBlockForManualReply"):
+        learning.index("public static bool TryTakeSendBlock")
+    ]
+    helper = qnrpa[
+        qnrpa.index("private bool TryCancelForManualTakeover"):
+        qnrpa.index("private string SellerNick")
+    ]
+    open_send = qnrpa[
+        qnrpa.index("private async Task<bool> OpenAndSendText"):
+        qnrpa.index("private async Task<bool> TrySendTextViaUiaAsync")
+    ]
+
+    assert "out bool bypassed" in method
+    assert "bypassed = true;" in method
+    assert "if (bypassed) manualBypassConsumed = true;" in open_send
+    assert "if (manualBypassConsumed) return false;" in open_send
+    assert "out bypassed" in helper
