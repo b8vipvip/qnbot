@@ -115,28 +115,52 @@ namespace Bot.ChromeNs
 
         public static bool HasIntent(string shopKey, string seller, string orderId)
         {
+            bool hasIntent, atCapacity;
+            if (!TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity)) return true;
+            // Admission remains fail-closed at capacity even when this exact order has no record.
+            if (atCapacity)
+                Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；保留全部防重记录并暂停新的自动确认。", 10);
+            return hasIntent || atCapacity;
+        }
+
+        /// <summary>
+        /// Reads whether this exact order already has a durable confirmation barrier.
+        /// Unlike HasIntent, this query does not turn a full-but-readable ledger into
+        /// a synthetic "intent exists" result; terminal preflight outcomes need to know
+        /// whether there is an actual barrier to resolve.
+        /// </summary>
+        public static bool TryGetIntent(string shopKey, string seller, string orderId, out bool hasIntent)
+        {
+            bool atCapacity;
+            return TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity);
+        }
+
+        private static bool TryReadIntent(
+            string shopKey,
+            string seller,
+            string orderId,
+            out bool hasIntent,
+            out bool atCapacity)
+        {
+            hasIntent = false;
+            atCapacity = false;
             Initialize();
-            if (!IsSafeOrderId(orderId) || string.IsNullOrWhiteSpace(shopKey)) return true;
+            if (!IsSafeOrderId(orderId) || string.IsNullOrWhiteSpace(shopKey)) return false;
             var key = BuildKey(shopKey, seller, orderId);
             var legacyKey = BuildLegacyKey(seller, orderId);
             lock (Sync)
             {
-                if (_failClosed) return true;
+                if (_failClosed) return false;
                 var path = StatePath();
                 using (var lease = CrossProcessAtomicStateFile.Acquire(path, "AutoDeliveryConfirmationLedger", 3000))
                 {
-                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return true;
+                    if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;
                     CleanupLocked(DateTime.Now);
-                    // A full ledger cannot safely answer "no intent" for an unseen order:
-                    // all new irreversible confirmations must stop until capacity is available.
-                    if (IsAtCapacityLocked())
-                    {
-                        Log.ErrorWithMaxCount("自动发货长期确认账本已达到容量上限；保留全部防重记录并暂停新的自动确认。", 10);
-                        return true;
-                    }
-                    return _state.Records.Any(x => x != null
+                    hasIntent = _state.Records.Any(x => x != null
                         && (string.Equals(x.Key, key, StringComparison.Ordinal)
                             || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)));
+                    atCapacity = IsAtCapacityLocked();
+                    return true;
                 }
             }
         }
