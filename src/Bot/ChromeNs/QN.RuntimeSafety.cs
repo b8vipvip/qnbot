@@ -83,16 +83,17 @@ namespace Bot.ChromeNs
             QNChatMessage message,
             string currentQuestion,
             IncomingMessageDecision decision,
-            out string answer)
+            out string answer,
+            string shopKey = null)
         {
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
             if (!IsActualProblemMessage(message, currentQuestion, decision))
             {
-                RememberKnownNonProblemMessage(seller, buyer, message, currentQuestion);
+                RememberKnownNonProblemMessage(seller, buyer, message, currentQuestion, shopKey);
                 return false;
             }
-            if (ShouldSuppressForOffHours(seller, buyer)) return false;
+            if (ShouldSuppressForOffHours(seller, buyer, shopKey)) return false;
 
             var resolved = RunInShopScope(seller, delegate
             {
@@ -113,7 +114,7 @@ namespace Bot.ChromeNs
                 PendingReplies.AddOrUpdate(key, pending, (ignored, old) => old != null && old.ExpiresAt >= now ? old : pending);
                 PendingReply stored;
                 return PendingReplies.TryGetValue(key, out stored) && stored != null ? (stored.Answer ?? string.Empty) : candidate;
-            });
+            }, shopKey);
             answer = (resolved ?? string.Empty).Trim();
             var prepared = !string.IsNullOrWhiteSpace(answer);
             if (prepared)
@@ -125,7 +126,7 @@ namespace Bot.ChromeNs
             return prepared;
         }
 
-        public static bool TryResolve(string seller, string buyer, string currentQuestion, out string answer)
+        public static bool TryResolve(string seller, string buyer, string currentQuestion, out string answer, string shopKey = null)
         {
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(currentQuestion)) return false;
@@ -154,12 +155,12 @@ namespace Bot.ChromeNs
                 pending.InFlight = true;
                 pending.ExpiresAt = now.AddSeconds(PendingReplySeconds);
                 return pending.Answer;
-            });
+            }, shopKey);
             answer = (resolved ?? string.Empty).Trim();
             return !string.IsNullOrWhiteSpace(answer);
         }
 
-        public static void MarkDelivered(string seller, string buyer)
+        public static void MarkDelivered(string seller, string buyer, string shopKey = null)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
             RunInShopScope(seller, delegate
@@ -171,10 +172,10 @@ namespace Bot.ChromeNs
                 TriggeredAt[key] = DateTime.Now;
                 Log.Info("首条咨询固定回复已确认送达，开始30分钟会话去重: seller=" + seller + ", buyer=" + buyer);
                 return true;
-            });
+            }, shopKey);
         }
 
-        public static void ReleaseReservation(string seller, string buyer, string reason)
+        public static void ReleaseReservation(string seller, string buyer, string reason, string shopKey = null)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
             RunInShopScope(seller, delegate
@@ -185,10 +186,10 @@ namespace Bot.ChromeNs
                 if (PendingReplies.TryRemove(key, out ignored))
                     Log.Info("首条咨询固定回复发送未完成，已释放首条资格: seller=" + seller + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
                 return true;
-            });
+            }, shopKey);
         }
 
-        public static bool HasPending(string seller, string buyer)
+        public static bool HasPending(string seller, string buyer, string shopKey = null)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
             return RunInShopScope(seller, delegate
@@ -201,7 +202,7 @@ namespace Bot.ChromeNs
                 PendingReply ignored;
                 PendingReplies.TryRemove(key, out ignored);
                 return false;
-            });
+            }, shopKey);
         }
 
         internal static bool IsActualProblemMessage(
@@ -284,7 +285,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             QNChatMessage message,
-            string displayText)
+            string displayText,
+            string shopKey = null)
         {
             if (message == null) return;
             var rawKey = IncomingMessageSafety.BuildMessageKey(message, displayText);
@@ -337,7 +339,7 @@ namespace Bot.ChromeNs
                 : runtimeKey + "|" + (rawMessageKey ?? string.Empty).Trim();
         }
 
-        private static bool ShouldSuppressForOffHours(string seller, string buyer)
+        private static bool ShouldSuppressForOffHours(string seller, string buyer, string shopKey = null)
         {
             return RunInShopScope(seller, delegate
             {
@@ -510,7 +512,7 @@ namespace Bot.ChromeNs
             return scope.ShopKey.Trim() + "#" + seller + "#" + buyer;
         }
 
-        private static T RunInShopScope<T>(string seller, Func<T> action)
+        private static T RunInShopScope<T>(string seller, Func<T> action, string shopKey = null)
         {
             if (action == null) return default(T);
             // Empty-seller calls are the explicit legacy-global compatibility path.
@@ -519,13 +521,21 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller)) return action();
 
             ShopContext shop;
-            try { shop = ShopContextLocator.ResolveCurrentOrBySellerNick(seller); }
+            try
+            {
+                shopKey = (shopKey ?? string.Empty).Trim();
+                shop = shopKey.Length > 0
+                    ? ShopContextLocator.ResolveRuntimeByShopKey(shopKey)
+                    : ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
+            }
             catch (Exception ex)
             {
                 Log.Info("首条咨询固定回复已阻止未确认店铺作用域: " + ex.GetType().Name);
                 return default(T);
             }
-            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || (shopKey.Length > 0 && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller.Trim(), StringComparison.Ordinal))
                 return default(T);
 
             var current = ShopSettingsScope.Current;
