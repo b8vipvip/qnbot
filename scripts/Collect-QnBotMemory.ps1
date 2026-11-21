@@ -16,6 +16,7 @@ param(
     [string]$OutputDirectory = '',
     [string]$RuntimeSnapshotPath = '',
     [string]$KnowledgeV2SyncSnapshotPath = '',
+    [string]$KnowledgeV2LearningSnapshotPath = '',
     [ValidateLength(0, 40)][string]$ScenarioTag = ''
 )
 
@@ -28,6 +29,9 @@ if ([string]::IsNullOrWhiteSpace($RuntimeSnapshotPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($KnowledgeV2SyncSnapshotPath)) {
     $KnowledgeV2SyncSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\knowledge-v2-sync-snapshot.json'
+}
+if ([string]::IsNullOrWhiteSpace($KnowledgeV2LearningSnapshotPath)) {
+    $KnowledgeV2LearningSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\knowledge-v2-learning-snapshot.json'
 }
 $ScenarioTag = [regex]::Replace([string]$ScenarioTag, '[^A-Za-z0-9_.-]', '_')
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
@@ -222,6 +226,82 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         }
     }
 
+    # Read the anonymized full-corpus learning report for this same Bot process.
+    # It exposes counts, checkpoint progress and resume evidence only; no message text.
+    $learningSnapshotStatus = 'missing'
+    $learningSnapshotAgeSeconds = $null
+    $learningReportCount = $null
+    $learningLatestShopRef = ''
+    $learningLatestSessionRef = ''
+    $learningLatestReportStatus = ''
+    $learningLatestUpdatedAtUtc = ''
+    $learningLatestHistoryComplete = $null
+    $learningLatestHistoryMessagesFetched = $null
+    $learningLatestHistoryMessagesInWindow = $null
+    $learningLatestCorpusComplete = $null
+    $learningLatestCorpusRecords = $null
+    $learningLatestRecordsReviewed = $null
+    $learningLatestBatchCount = $null
+    $learningLatestBatchesCompleted = $null
+    $learningLatestFailedBatches = $null
+    $learningLatestCoveragePercent = $null
+    $learningLatestResumeCount = $null
+    $learningReportStates = ''
+
+    if (Test-Path -LiteralPath $KnowledgeV2LearningSnapshotPath -PathType Leaf) {
+        try {
+            $learningSnapshot = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($KnowledgeV2LearningSnapshotPath)) -ErrorAction Stop
+            $learningCollectedAt = [DateTimeOffset]::Parse([string]$learningSnapshot.CollectedAtUtc).UtcDateTime
+            $learningSnapshotAgeSeconds = [math]::Round(([DateTime]::UtcNow - $learningCollectedAt).TotalSeconds, 1)
+            if ([int]$learningSnapshot.SchemaVersion -ne 1) {
+                $learningSnapshotStatus = 'unsupported_schema'
+            }
+            elseif ($learningSnapshotAgeSeconds -lt -30 -or $learningSnapshotAgeSeconds -gt 300) {
+                $learningSnapshotStatus = 'stale'
+            }
+            elseif (($runtimeStatus -ne 'fresh' -and $runtimeStatus -ne 'partial') -or [int]$learningSnapshot.ProcessId -ne $runtimeProcessId -or [long]$learningSnapshot.ProcessStartTimeUtcTicks -ne $runtimeProcessStartTicks) {
+                $learningSnapshotStatus = 'process_mismatch'
+            }
+            else {
+                $learningSnapshotStatus = 'fresh'
+                $learningReports = @()
+                if ($null -ne $learningSnapshot.Reports) { $learningReports = @($learningSnapshot.Reports) }
+                $learningReportCount = $learningReports.Count
+                $learningStates = @()
+                foreach ($learningReport in $learningReports) {
+                    if ($null -eq $learningReport) { continue }
+                    $learningStates += ([string]$learningReport.ShopRef + '=' + [string]$learningReport.SessionRef
+                        + ':' + [string]$learningReport.Status + ':' + [string]$learningReport.HistoryMessagesInWindow
+                        + ':' + [string]$learningReport.KnowledgeCorpusRecordsReviewed + '/' + [string]$learningReport.KnowledgeCorpusRecords
+                        + ':' + [string]$learningReport.KnowledgeCorpusBatchesCompleted + '/' + [string]$learningReport.KnowledgeCorpusBatches
+                        + ':' + [string]$learningReport.KnowledgeCorpusComplete + ':resume=' + [string]$learningReport.KnowledgeCorpusResumeCount)
+                }
+                $learningReportStates = $learningStates -join ';'
+                if ($learningReports.Count -gt 0) {
+                    $latestLearning = $learningReports[0]
+                    $learningLatestShopRef = [string]$latestLearning.ShopRef
+                    $learningLatestSessionRef = [string]$latestLearning.SessionRef
+                    $learningLatestReportStatus = [string]$latestLearning.Status
+                    $learningLatestUpdatedAtUtc = [string]$latestLearning.UpdatedAtUtc
+                    $learningLatestHistoryComplete = [bool]$latestLearning.HistoryComplete
+                    $learningLatestHistoryMessagesFetched = [int]$latestLearning.HistoryMessagesFetched
+                    $learningLatestHistoryMessagesInWindow = [int]$latestLearning.HistoryMessagesInWindow
+                    $learningLatestCorpusComplete = [bool]$latestLearning.KnowledgeCorpusComplete
+                    $learningLatestCorpusRecords = [int]$latestLearning.KnowledgeCorpusRecords
+                    $learningLatestRecordsReviewed = [int]$latestLearning.KnowledgeCorpusRecordsReviewed
+                    $learningLatestBatchCount = [int]$latestLearning.KnowledgeCorpusBatches
+                    $learningLatestBatchesCompleted = [int]$latestLearning.KnowledgeCorpusBatchesCompleted
+                    $learningLatestFailedBatches = [int]$latestLearning.KnowledgeCorpusFailedBatches
+                    $learningLatestCoveragePercent = [double]$latestLearning.KnowledgeCorpusCoveragePercent
+                    $learningLatestResumeCount = [int]$latestLearning.KnowledgeCorpusResumeCount
+                }
+            }
+        }
+        catch {
+            $learningSnapshotStatus = 'invalid'
+        }
+    }
+
     # Always write machine totals, even if the user has closed both applications.
     [pscustomobject]@{
         Time                = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
@@ -268,6 +348,25 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         KnowledgeV2LatestCloudRevision = $knowledgeSyncLatestRevision
         KnowledgeV2ShopStates = $knowledgeSyncShopStates
         KnowledgeV2SyncStatuses = $knowledgeSyncStatuses
+        KnowledgeV2LearningSnapshotStatus = $learningSnapshotStatus
+        KnowledgeV2LearningSnapshotAgeSeconds = $learningSnapshotAgeSeconds
+        KnowledgeV2LearningReportCount = $learningReportCount
+        KnowledgeV2LatestShopRef = $learningLatestShopRef
+        KnowledgeV2LatestSessionRef = $learningLatestSessionRef
+        KnowledgeV2LatestReportStatus = $learningLatestReportStatus
+        KnowledgeV2LatestUpdatedAtUtc = $learningLatestUpdatedAtUtc
+        KnowledgeV2LatestHistoryComplete = $learningLatestHistoryComplete
+        KnowledgeV2LatestHistoryMessagesFetched = $learningLatestHistoryMessagesFetched
+        KnowledgeV2LatestHistoryMessagesInWindow = $learningLatestHistoryMessagesInWindow
+        KnowledgeV2LatestCorpusComplete = $learningLatestCorpusComplete
+        KnowledgeV2LatestCorpusRecords = $learningLatestCorpusRecords
+        KnowledgeV2LatestRecordsReviewed = $learningLatestRecordsReviewed
+        KnowledgeV2LatestBatchCount = $learningLatestBatchCount
+        KnowledgeV2LatestBatchesCompleted = $learningLatestBatchesCompleted
+        KnowledgeV2LatestFailedBatches = $learningLatestFailedBatches
+        KnowledgeV2LatestCoveragePercent = $learningLatestCoveragePercent
+        KnowledgeV2LatestResumeCount = $learningLatestResumeCount
+        KnowledgeV2LearningReportStates = $learningReportStates
     } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
     $byPid = @{}
@@ -333,7 +432,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         $runtimeStatus + ', shops=' + $runtimeAuthoritativeShopCount +
         ', ownerChanges=' + $runtimeOwnerChanges + ', knowledgeSync=' + $knowledgeSyncStatus +
         ', converged=' + $knowledgeSyncConvergedShopCount + '/' + $knowledgeSyncShopCount +
-        ', CSV=' + $csv)
+        ', learning=' + $learningSnapshotStatus + ', history=' + $learningLatestHistoryMessagesInWindow +
+        ', corpus=' + $learningLatestRecordsReviewed + '/' + $learningLatestCorpusRecords +
+        ', resumed=' + $learningLatestResumeCount + ', CSV=' + $csv)
     if ($sample -lt $loops) { Start-Sleep -Seconds $IntervalSeconds }
 }
 Write-Host ('Saved privacy-minimized system and process samples: ' + $csv)
