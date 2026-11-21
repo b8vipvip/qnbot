@@ -33,6 +33,8 @@ on:
       - '.github/workflows/gptauto-*.yml'
       - '.github/gptauto/**'
       - 'tests/test_gptauto_workflow_ingress_static.py'
+      - 'docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md'
+      - 'docs/PROJECT_HANDOFF_CONTEXT.md'
   workflow_run:
     workflows: [CI, API control plane CI, Windows x64 release build]
     types: [completed]
