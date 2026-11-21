@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
         private sealed class HubEvent
         {
             public string Key { get; set; }
+            public DateTime AcceptedAt { get; set; }
             public DateTime SeenAt { get; set; }
             public OrderSnapshot Snapshot { get; set; }
         }
@@ -185,14 +186,14 @@ namespace Bot.ChromeNs
                         lock (Sync) floor = cursor.LastSeenAt;
                         var matching = events
                             .Where(x => x != null && x.Snapshot != null)
-                            .Where(x => x.SeenAt > floor)
+                            .Where(x => GetAcceptedAt(x) > floor)
                             .Where(x => string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(),
                                 shop.ShopKey, StringComparison.Ordinal))
                             .Where(x => x.Snapshot.EventType == OrderEventType.Created
                                 || x.Snapshot.EventType == OrderEventType.Paid)
                             .Where(x => string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(),
                                 seller, StringComparison.Ordinal))
-                            .OrderBy(x => x.SeenAt)
+                            .OrderBy(x => GetAcceptedAt(x))
                             .ToList();
 
                         var latest = floor;
@@ -201,7 +202,8 @@ namespace Bot.ChromeNs
                             // Do not advance the durable event cursor unless the corresponding
                             // queue state was safely persisted or the event was intentionally ignored.
                             if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;
-                            if (entry.SeenAt > latest) latest = entry.SeenAt;
+                            var acceptedAt = GetAcceptedAt(entry);
+                            if (acceptedAt > latest) latest = acceptedAt;
                         }
                         if (latest > floor)
                         {
@@ -263,6 +265,15 @@ namespace Bot.ChromeNs
             _cursors.Sellers.Add(cursor);
             _cursorStateDirty = true;
             return cursor;
+        }
+
+        private static DateTime GetAcceptedAt(HubEvent entry)
+        {
+            if (entry == null) return DateTime.MinValue;
+            // SeenAt is refreshed when the same order event is observed again. Using it
+            // as the cursor can make an old order look newly accepted after a restart.
+            // AcceptedAt is immutable; SeenAt is only the legacy fallback.
+            return entry.AcceptedAt == DateTime.MinValue ? entry.SeenAt : entry.AcceptedAt;
         }
 
         private static HubState LoadHubState()
