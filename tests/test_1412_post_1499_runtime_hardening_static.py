@@ -40,9 +40,9 @@ def test_multi_seller_active_shop_fix_remains_present_after_runtime_hardening():
     bridge = read("src/Bot/ShopScope/ShopScopedRuntimeBridge.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
     registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
-    assert "ActiveShopSessionRegistry.ObserveChatDialogActive(" in bridge
-    assert 'ActiveShopSessionRegistry.ReassertCurrent("forwarded-onConversationChange")' in bridge
-    assert "重复WebView承载的真实onConversationChange已用于切换活动客服" in bridge
+    assert "ActiveShopSessionRegistry.ActivateFromVerifiedConversationChange(" in bridge
+    assert 'ActiveShopSessionRegistry.ReassertCurrent("verified-onConversationChange")' in bridge
+    assert "真实onConversationChange已晋升活动客服" in bridge
     assert "活动店铺会话已切换" in coordinator
     assert "ActiveSellerByHwnd" in registry
     assert "同一Desk不能绑定两个seller" not in registry
