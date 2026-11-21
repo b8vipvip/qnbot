@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using DbEntity;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
