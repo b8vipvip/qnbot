@@ -222,6 +222,7 @@ namespace Bot.ChromeNs
                     + ", buyer=" + pending.Buyer
                     + ", knowledgeId=" + knowledge.EntityId
                     + ", answer=" + Short(answer, 180));
+                }
             }
             catch (Exception ex)
             {
