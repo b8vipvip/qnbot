@@ -288,7 +288,8 @@ def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_close
         service.index("private static void RememberKnownNonProblemMessage"):
         service.index("private static bool IsKnownNonProblemHistoryTurn")
     ]
-    assert "RunInShopScope(seller, delegate)" in remember
+    assert "RunInShopScope(seller, delegate" in remember
+    assert "}, shopKey);" in remember
     assert "if (scopedKey.Length == 0) return false;" in remember
     known_key = service[
         service.index("private static string KnownNonProblemKey"):
