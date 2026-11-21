@@ -13,7 +13,7 @@ def test_first_inquiry_fast_path_uses_background_notification_ccode_without_chat
 
     assert 'e.Type, "onShopRobotReceriveNewMsgs"' in source
     assert "active.Conversation.Ccode" in source
-    assert 'cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg"' in source
+    assert 'sourceClient.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg"' in source
     assert "directCcode=true, mergeWait=false" in source
     assert "OpenChat(" not in source
     assert "GetCurrentConversationID(" not in source
