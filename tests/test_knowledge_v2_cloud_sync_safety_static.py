@@ -154,3 +154,15 @@ def test_v2_cloud_replacement_clears_rows_and_writes_corpus_metadata_in_one_sqli
     assert "replacementRows.Add(new KnowledgeV2MetaRow" in method
     assert "state.Db.ClearTable(" not in method
     assert "state.Db.SaveRecordsInTransaction(" not in method
+
+def test_v2_full_package_import_uses_the_same_atomic_replace_primitive():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    replace_all = repository[
+        repository.index("public static void ReplaceAll"):
+        repository.index("internal static string ComputeCloudSyncFingerprint")
+    ]
+
+    assert "state.Db.ReplaceRecordsInTransaction(" in replace_all
+    assert "replacementRows.Add(new KnowledgeV2MetaRow" in replace_all
+    assert "state.Db.ClearTable(" not in replace_all
+    assert "state.Db.SaveRecordsInTransaction(" not in replace_all
