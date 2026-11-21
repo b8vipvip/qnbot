@@ -141,6 +141,12 @@ jobs:
             echo "Reconcile already dispatched for task=$TASK_ID merge=$merge_sha; no duplicate workflow."
             exit 0
           fi
+          reconcile_title="GPTAuto Reconcile ($TASK_ID / PR #$PR_NUMBER)"
+          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" --jq --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
+          if [[ -n "$active_reconcile_run" ]]; then
+            echo "Reconcile run $active_reconcile_run is already active for task=$TASK_ID merge=$merge_sha; no duplicate workflow will be queued."
+            exit 0
+          fi
           default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
@@ -177,6 +183,12 @@ jobs:
             exit 0
           fi
 
+          reconcile_title="GPTAuto Reconcile ($TASK_ID / PR #$PR_NUMBER)"
+          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" --jq --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
+          if [[ -n "$active_reconcile_run" ]]; then
+            echo "Reconcile run $active_reconcile_run is already active for task=$TASK_ID merge=$MERGE_SHA; recovery dispatch deferred."
+            exit 0
+          fi
           handoff_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
