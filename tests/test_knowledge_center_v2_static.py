@@ -34,9 +34,10 @@ def test_buyer_runtime_never_waits_for_cold_v2_snapshot():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'public static bool IsSnapshotReady' in public
     assert 'if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))' in runtime
-    assert 'QueueWarm(burst.SellerNick);' in runtime
+    assert 'QueueWarm(burst.ShopKey, burst.SellerNick);' in runtime
     assert 'return false;' in runtime
-    assert 'WarmingSellers.TryAdd' in runtime
+    assert 'WarmingShopKeys.TryAdd(shopKey, 1)' in runtime
+    assert 'PreparedShopKeys.TryAdd(shopKey, 1)' in runtime
 
 
 def test_v2_edits_use_atomic_incremental_snapshot_updates():
@@ -129,7 +130,8 @@ def test_learning_candidates_require_explicit_approval_before_direct_reply():
     assert 'productionMatches = rankedMatches' in public
     assert '.Where(IsApprovedProductionMatch)' in public
     assert 'var best = manualExact ?? manualSimilar ?? productionMatches.FirstOrDefault();' in public
-    assert 'var manualExact = productionMatches.FirstOrDefault' in public
+    assert 'var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)' in public
+    assert 'var manualExactConflict = manualExactMatches.Count > 1;' in public
     assert 'var visibleMatches = rankedMatches.Take(5).ToList();' in public
     assert 'if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);' in public
     assert 'KnowledgeV2AuthorityPolicy.IsProductionApproved' in public
