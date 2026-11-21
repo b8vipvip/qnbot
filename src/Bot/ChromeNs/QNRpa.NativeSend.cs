@@ -103,7 +103,23 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
+            // The CDP DOM path is a real send action, not a harmless probe. Validate the
+            // authenticated ShopKey before capturing the physical client, then keep this
+            // attempt pinned to that client instead of reading the mutable _qn.CDP again.
+            if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
+            {
+                SetSendFailure("CDP页面发送前店铺身份确认", "当前千牛CDP登录身份已变化或无法验证，已阻止页面发送");
+                return false;
+            }
+
+            var sourceClient = _qn == null ? null : _qn.CDP;
+            if (!IsExpectedShopSessionCurrent(sourceClient, shopKey))
+            {
+                SetSendFailure("CDP页面发送前会话确认", "当前CDP会话不再拥有目标ShopKey，已阻止页面发送");
+                return false;
+            }
+
+            var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer, shopKey, sourceClient).ConfigureAwait(false);
             if (domTriggered)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -112,6 +128,13 @@ namespace Bot.ChromeNs
                     return true;
                 }
                 if (LastSendWasCancelled) return false;
+                // Once a DOM click has been attempted, a changed source session is an
+                // uncertain submission. Never fall through to HWND/UIA and risk a duplicate.
+                if (!IsExpectedShopSessionCurrent(sourceClient, shopKey))
+                {
+                    SetSendFailure("CDP页面发送后会话复核", "页面发送后来源CDP会话已变化；禁止其他发送回退以避免重复发送");
+                    return false;
+                }
 
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
@@ -228,9 +251,25 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private async Task<bool> TryTriggerSendViaCdpDomAsync(string buyer)
+        private bool IsExpectedShopSessionCurrent(CDPClient sourceClient, string expectedShopKey)
         {
-            if (_qn == null || _qn.CDP == null) return false;
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return expectedShopKey.Length > 0
+                && _qn != null
+                && sourceClient != null
+                && ReferenceEquals(_qn.CDP, sourceClient)
+                && !sourceClient.IsInvalidated
+                && !sourceClient.IsShopIdentityRetired
+                && string.Equals(sourceClient.ShopKey, expectedShopKey, StringComparison.Ordinal)
+                && server != null
+                && server.IsAuthoritativeShopSession(expectedShopKey, sourceClient.SessionId);
+        }
+
+        private async Task<bool> TryTriggerSendViaCdpDomAsync(
+            string buyer, string shopKey, CDPClient sourceClient)
+        {
+            if (!IsExpectedShopSessionCurrent(sourceClient, shopKey)) return false;
             const string expression = @"(function(){
   try {
     var norm=function(v){return String(v||'').replace(/\s+/g,' ').trim();};
@@ -259,7 +298,7 @@ namespace Bot.ChromeNs
 
             try
             {
-                var response = await _qn.CDP.EvaluateExpressionAsync(
+                var response = await sourceClient.EvaluateExpressionAsync(
                     expression,
                     "发送当前草稿-CDP页面安全按钮").ConfigureAwait(false);
                 response = response ?? string.Empty;
