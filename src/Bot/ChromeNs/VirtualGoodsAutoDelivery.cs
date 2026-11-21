@@ -822,6 +822,18 @@ namespace Bot.ChromeNs
                 return verificationOnly
                     ? AutoDeliveryAttemptResult.Uncertain("只读复核发现当前千牛会话ShopKey与订单任务不一致")
                     : AutoDeliveryAttemptResult.Deferred("当前千牛会话ShopKey与订单任务不一致");
+
+            // Pin every order-panel DOM operation to the exact authoritative CDP session that
+            // resolved this ShopKey. A same-nickname store or a reconnect must never inherit a
+            // pending order's irreversible confirmation click.
+            var sourceClient = cdp;
+            Func<bool> sourceSessionCurrent = () =>
+                IsAutoDeliverySourceSessionCurrent(snapshot.ShopKey, sourceClient);
+            if (!sourceSessionCurrent())
+                return verificationOnly
+                    ? AutoDeliveryAttemptResult.Uncertain("只读复核来源CDP会话已失效或不再拥有该ShopKey")
+                    : AutoDeliveryAttemptResult.Deferred("来源CDP会话已失效或不再拥有该ShopKey");
+
             if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, seller, snapshot.OrderId))
                 verificationOnly = true;
             if (!verificationOnly && !AutoDeliverySettings.Load(seller).Enabled)
@@ -835,6 +847,10 @@ namespace Bot.ChromeNs
             // The trade/contact APIs execute inside the already-injected WebView but do not change the
             // visible Qianniu conversation. If evidence is absent or ambiguous we defer silently.
             var preflight = await TrySilentAutoDeliveryPreflightAsync(snapshot).ConfigureAwait(false);
+            if (!sourceSessionCurrent())
+                return verificationOnly
+                    ? AutoDeliveryAttemptResult.Uncertain("静默预检期间来源CDP会话发生变化")
+                    : AutoDeliveryAttemptResult.Deferred("静默预检期间来源CDP会话发生变化");
             if (preflight.Kind == AutoDeliveryPreflightKind.Completed) return AutoDeliveryAttemptResult.Completed(preflight.Reason);
             if (preflight.Kind == AutoDeliveryPreflightKind.Terminal) return AutoDeliveryAttemptResult.Terminal(preflight.Reason);
             if (preflight.Kind != AutoDeliveryPreflightKind.Candidate) return verificationOnly ? AutoDeliveryAttemptResult.Uncertain(preflight.Reason) : AutoDeliveryAttemptResult.Deferred(preflight.Reason);
@@ -843,7 +859,9 @@ namespace Bot.ChromeNs
 
             string activityReason;
             if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)) return AutoDeliveryAttemptResult.Deferred(activityReason);
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("检查客服输入框前来源CDP会话已变化");
             var input = await TryGetInputboxEmptyAsync().ConfigureAwait(false);
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("检查客服输入框期间来源CDP会话已变化");
             if (!input.Success) return AutoDeliveryAttemptResult.Deferred("暂时无法确认客服输入框状态");
             if (!input.Empty)
             {
@@ -853,17 +871,23 @@ namespace Bot.ChromeNs
 
             var expectedBuyer = (snapshot.Buyer ?? string.Empty).Trim();
             if (expectedBuyer.Length == 0) return AutoDeliveryAttemptResult.Terminal("订单缺少买家身份");
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取当前买家前来源CDP会话已变化");
             var currentBuyer = await TryGetCurrentBuyerAsync().ConfigureAwait(false);
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取当前买家期间来源CDP会话已变化");
             if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer))
             {
                 if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)) return AutoDeliveryAttemptResult.Deferred(activityReason);
                 Log.Info("虚拟商品自动发货静默预检已命中安全候选，现仅为实际发货切换一次目标买家: seller=" + seller + ", targetBuyer=" + expectedBuyer + ", currentBuyer=" + currentBuyer + ", orderId=" + snapshot.OrderId);
+                if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("切换目标买家前来源CDP会话已变化");
                 OpenChat(expectedBuyer);
+                if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("切换目标买家期间来源CDP会话已变化");
                 var focused = false;
                 for (var attempt = 0; attempt < 24; attempt++)
                 {
                     await Task.Delay(250).ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("等待买家会话切换期间来源CDP会话已变化");
                     currentBuyer = await TryGetCurrentBuyerAsync().ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("确认买家会话期间来源CDP会话已变化");
                     if (BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer))
                     {
                         focused = true;
@@ -874,45 +898,62 @@ namespace Bot.ChromeNs
                 if (!focused) return AutoDeliveryAttemptResult.Deferred("无法确认已切换到订单买家会话");
             }
 
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("获取发送锁前来源CDP会话已变化");
             await _sendGate.WaitAsync().ConfigureAwait(false);
             using (BotActivityCoordinator.Begin("虚拟商品自动发货", seller, expectedBuyer, snapshot.ShopKey))
             {
                 try
                 {
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("执行前来源CDP会话已变化");
                     currentBuyer = await TryGetCurrentBuyerAsync().ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("执行前读取买家期间来源CDP会话已变化");
                     if (!BuyerIdentityAliasService.AreEquivalent(seller, currentBuyer, expectedBuyer)) return AutoDeliveryAttemptResult.Deferred("执行前买家会话发生变化");
                     input = await TryGetInputboxEmptyAsync().ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("执行前读取输入框期间来源CDP会话已变化");
                     if (!input.Success || !input.Empty) return AutoDeliveryAttemptResult.Deferred("执行前客服输入框不为空或状态不可确认");
 
                     // Phase B: after the single committed navigation, wait briefly for the right-side
                     // order panel to render and then revalidate the exact order. Silent API evidence is
                     // never enough to authorize an irreversible click on its own.
-                    var before = await WaitForOrderStateAsync(snapshot.OrderId, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取订单面板前来源CDP会话已变化");
+                    var before = await WaitForOrderStateAsync(sourceClient, snapshot.OrderId, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取订单面板期间来源CDP会话已变化");
                     if (before == null || !before.Found) return AutoDeliveryAttemptResult.Deferred("当前买家右侧订单面板尚未找到唯一准确订单卡片");
                     if (before.Done) return AutoDeliveryAttemptResult.Completed("订单已显示为“" + (before.Status ?? "已发货") + "”");
                     if (before.Terminal) return AutoDeliveryAttemptResult.Terminal("订单当前状态为“" + (before.Status ?? "终态") + "”");
                     if (!before.Pending) return AutoDeliveryAttemptResult.Deferred("订单当前不是待发货状态：" + (before.Status ?? "状态未识别"));
                     if (!before.ShipButton) return AutoDeliveryAttemptResult.Deferred("已确认待发货订单，但未唯一找到该订单的“发货”动作");
 
-                    var shipClick = await ReadOrderStateAsync(snapshot.OrderId, true).ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("点击发货动作前来源CDP会话已变化");
+                    var shipClick = await ReadOrderStateAsync(sourceClient, snapshot.OrderId, true).ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("点击发货动作期间来源CDP会话已变化");
                     if (shipClick == null || !shipClick.Found || !shipClick.Pending || !shipClick.ShipButton || !shipClick.Clicked) return AutoDeliveryAttemptResult.Deferred("发货动作点击前的二次订单校验未通过");
 
                     await Task.Delay(500).ConfigureAwait(false);
-                    var noLogistics = await ReadModalStateAsync("select").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取发货弹窗前来源CDP会话已变化");
+                    var noLogistics = await ReadModalStateAsync(sourceClient, "select").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("读取发货弹窗期间来源CDP会话已变化");
                     if (noLogistics == null || !noLogistics.Found || !noLogistics.NoLogistics || !noLogistics.Confirm || !noLogistics.Clicked) return AutoDeliveryAttemptResult.Uncertain("发货弹窗未能唯一确认“无需物流”和“确认发货”，已停止后续点击");
                     await Task.Delay(350).ConfigureAwait(false);
-                    var selected = await ReadModalStateAsync("verify").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("核验无需物流选中状态前来源CDP会话已变化");
+                    var selected = await ReadModalStateAsync(sourceClient, "verify").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("核验无需物流选中状态期间来源CDP会话已变化");
                     if (selected == null || !selected.Found || !selected.NoLogistics || !selected.Confirm || !selected.Selected) return AutoDeliveryAttemptResult.Uncertain("已点击“无需物流”，但未读取到其选中状态；不会点击确认发货");
 
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("持久化确认意图前来源CDP会话已变化");
                     if (!AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)) return AutoDeliveryAttemptResult.Uncertain("确认发货权限已被长期防重账本消费或无法安全持久化；不会点击确认发货");
-                    var confirm = await ReadModalStateAsync("confirm").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("确认意图已持久化，但来源CDP会话发生变化；保持只读复核且不再次确认");
+                    var confirm = await ReadModalStateAsync(sourceClient, "confirm").ConfigureAwait(false);
+                    if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("确认动作期间来源CDP会话发生变化；保持只读复核且不再次确认");
                     if (confirm == null || !confirm.Found || !confirm.NoLogistics || !confirm.Confirm || !confirm.Selected || !confirm.Clicked) return AutoDeliveryAttemptResult.Uncertain("长期防重屏障已写入，但无法在“无需物流”仍选中的条件下唯一提交确认；后续只读复核");
 
                     Log.Info("虚拟商品自动发货已提交一次确认动作，开始只读核验真实订单状态: seller=" + seller + ", buyer=" + expectedBuyer + ", orderId=" + snapshot.OrderId + ", repeatConfirm=false");
                     for (var attempt = 0; attempt < 16; attempt++)
                     {
                         await Task.Delay(500).ConfigureAwait(false);
-                        var after = await ReadOrderStateAsync(snapshot.OrderId, false).ConfigureAwait(false);
+                        if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("确认后订单复核期间来源CDP会话发生变化；等待恢复后只读复核");
+                        var after = await ReadOrderStateAsync(sourceClient, snapshot.OrderId, false).ConfigureAwait(false);
+                        if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("读取确认后订单状态期间来源CDP会话发生变化；等待恢复后只读复核");
                         if (after == null) continue;
                         if (after.Found && after.Done)
                         {
@@ -931,6 +972,31 @@ namespace Bot.ChromeNs
                         : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
                 }
                 finally { _sendGate.Release(); }
+            }
+        }
+
+                private bool IsAutoDeliverySourceSessionCurrent(string shopKey, CDPClient sourceClient)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || sourceClient == null
+                || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired)
+                return false;
+            var sessionId = (sourceClient.SessionId ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (sessionId.Length == 0 || server == null
+                || !server.IsAuthoritativeShopSession(shopKey, sessionId)
+                || !ReferenceEquals(cdp, sourceClient))
+                return false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                return shop != null
+                    && string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    && ReferenceEquals(ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId), this);
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -997,13 +1063,13 @@ namespace Bot.ChromeNs
             return new AutoDeliveryPreflightResult { Kind = kind, Reason = reason ?? string.Empty };
         }
 
-        private async Task<AutoDeliveryDomState> WaitForOrderStateAsync(string orderId, TimeSpan maxWait)
+        private async Task<AutoDeliveryDomState> WaitForOrderStateAsync(CDPClient sourceClient, string orderId, TimeSpan maxWait)
         {
             var deadline = DateTime.UtcNow.Add(maxWait < TimeSpan.Zero ? TimeSpan.Zero : maxWait);
             AutoDeliveryDomState state = null;
             do
             {
-                state = await ReadOrderStateAsync(orderId, false).ConfigureAwait(false);
+                state = await ReadOrderStateAsync(sourceClient, orderId, false).ConfigureAwait(false);
                 if (state != null && state.Found) return state;
                 if (DateTime.UtcNow >= deadline) break;
                 await Task.Delay(250).ConfigureAwait(false);
@@ -1011,15 +1077,19 @@ namespace Bot.ChromeNs
             return state;
         }
 
-        private async Task<AutoDeliveryDomState> ReadOrderStateAsync(string orderId, bool clickShip)
+        private async Task<AutoDeliveryDomState> ReadOrderStateAsync(CDPClient sourceClient, string orderId, bool clickShip)
         {
-            var raw = await cdp.EvaluateExpressionAsync(BuildOrderStateExpression(orderId, clickShip), clickShip ? "唯一准确订单待发货校验并点击发货" : "读取唯一准确订单发货状态").ConfigureAwait(false);
+            if (sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired)
+                return null;
+            var raw = await sourceClient.EvaluateExpressionAsync(BuildOrderStateExpression(orderId, clickShip), clickShip ? "唯一准确订单待发货校验并点击发货" : "读取唯一准确订单发货状态").ConfigureAwait(false);
             return ParseEvaluationResult<AutoDeliveryDomState>(raw);
         }
 
-        private async Task<AutoDeliveryModalState> ReadModalStateAsync(string action)
+        private async Task<AutoDeliveryModalState> ReadModalStateAsync(CDPClient sourceClient, string action)
         {
-            var raw = await cdp.EvaluateExpressionAsync(BuildDeliveryModalExpression(action), action == "confirm" ? "确认无需物流发货" : action == "verify" ? "核验无需物流已选中" : "选择无需物流发货").ConfigureAwait(false);
+            if (sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired)
+                return null;
+            var raw = await sourceClient.EvaluateExpressionAsync(BuildDeliveryModalExpression(action), action == "confirm" ? "确认无需物流发货" : action == "verify" ? "核验无需物流已选中" : "选择无需物流发货").ConfigureAwait(false);
             return ParseEvaluationResult<AutoDeliveryModalState>(raw);
         }
 
