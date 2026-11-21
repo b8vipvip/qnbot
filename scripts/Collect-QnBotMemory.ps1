@@ -36,7 +36,7 @@ $csv = Join-Path $OutputDirectory ('qnbot-memory-' + $stamp + '.csv')
 $processNames = @('Bot', 'AliWorkbench', 'AliRender', 'wwcmd')
 $last = @{}
 $previousOwners = @{}
-$previousRuntimeProcessStartTicks = 0L
+$previousRuntimeProcessStartTicks = [long]0
 $loops = [int][Math]::Ceiling(($Minutes * 60.0) / $IntervalSeconds)
 
 for ($sample = 1; $sample -le $loops; $sample++) {
@@ -126,7 +126,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                         $ownerRef = [string]$shop.OwnerSessionRef
                         $currentOwners[$shopRef] = $ownerRef
                         $shopRefList += $shopRef
-                        $ownerPairs += ($shopRef + '=' + $(if ([string]::IsNullOrWhiteSpace($ownerRef)) { 'none' } else { $ownerRef }))
+                        $ownerDisplay = 'none'
+                        if (-not [string]::IsNullOrWhiteSpace($ownerRef)) { $ownerDisplay = $ownerRef }
+                        $ownerPairs += ($shopRef + '=' + $ownerDisplay)
                         if ($shop.OwnerConnected -eq $false) { $runtimeOwnerDisconnectedCount++ }
                         if ($shop.OwnerInitialized -eq $false) { $runtimeOwnerNotInitializedCount++ }
                         if ($shop.OwnerClientInvalidated -eq $true) { $runtimeOwnerClientInvalidatedCount++ }
@@ -143,8 +145,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                     $runtimeShopRefs = (@($shopRefList | Sort-Object -Unique) -join ';')
                     $runtimeShopOwners = ($ownerPairs -join ';')
 
-                    if ($previousRuntimeProcessStartTicks -ne 0L -and
-                        $previousRuntimeProcessStartTicks -ne $runtimeProcessStartTicks) {
+                    if ($previousRuntimeProcessStartTicks -ne [long]0 -and $previousRuntimeProcessStartTicks -ne $runtimeProcessStartTicks) {
                         $runtimeProcessGenerationChanged = $true
                         $previousOwners = @{}
                     }
@@ -189,9 +190,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
             elseif ($knowledgeSyncAgeSeconds -lt -30 -or $knowledgeSyncAgeSeconds -gt 180) {
                 $knowledgeSyncStatus = 'stale'
             }
-            elseif ($runtimeStatus -notin @('fresh', 'partial')
-                -or [int]$knowledgeSync.ProcessId -ne $runtimeProcessId
-                -or [long]$knowledgeSync.ProcessStartTimeUtcTicks -ne $runtimeProcessStartTicks) {
+            elseif (($runtimeStatus -ne 'fresh' -and $runtimeStatus -ne 'partial') -or [int]$knowledgeSync.ProcessId -ne $runtimeProcessId -or [long]$knowledgeSync.ProcessStartTimeUtcTicks -ne $runtimeProcessStartTicks) {
                 $knowledgeSyncStatus = 'process_mismatch'
             }
             else {
@@ -209,9 +208,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncStatuses = @()
                 foreach ($syncShop in $syncShops) {
                     if ($null -eq $syncShop) { continue }
-                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision
-                        + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix
-                        + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged)
+                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged)
                     if (-not [string]::IsNullOrWhiteSpace([string]$syncShop.LastStatus)) {
                         $syncStatuses += [string]$syncShop.LastStatus
                     }
