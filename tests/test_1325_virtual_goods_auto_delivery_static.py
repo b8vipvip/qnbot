@@ -57,10 +57,10 @@ def test_auto_delivery_runtime_is_exact_order_and_pending_state_gated():
 def test_no_logistics_must_be_selected_before_confirm_permission_is_consumed():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
 
-    selected = runtime.index('var selected = await ReadModalStateAsync("verify")')
+    selected = runtime.index('var selected = await ReadModalStateAsync(sourceClient, "verify")')
     selected_gate = runtime.index("!selected.Selected", selected)
     barrier = runtime.index("AutoDeliveryCoordinator.TryPersistConfirmationIntent", selected_gate)
-    confirm = runtime.index('var confirm = await ReadModalStateAsync("confirm")', barrier)
+    confirm = runtime.index('var confirm = await ReadModalStateAsync(sourceClient, "confirm")', barrier)
     assert selected < selected_gate < barrier < confirm
     assert "if(ok&&selectedNo)clicked=clickNode(ok)" in runtime
     assert "selected:selectedNo" in runtime
@@ -97,7 +97,7 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
 def test_auto_delivery_only_declares_success_on_explicit_done_status():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
 
-    confirm_index = runtime.index('var confirm = await ReadModalStateAsync("confirm")')
+    confirm_index = runtime.index('var confirm = await ReadModalStateAsync(sourceClient, "confirm")')
     verify_index = runtime.index("for (var attempt = 0; attempt < 16; attempt++)", confirm_index)
     done_gate = runtime.index("if (after.Found && after.Done)", verify_index)
     completed_index = runtime.index("return AutoDeliveryAttemptResult.Completed", done_gate)
@@ -452,7 +452,7 @@ def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_neve
     assert "保持只读，不切换前台买家且绝不再次确认发货" in execute
     assert execute.index("if (verificationOnly)") < execute.index("BotActivityCoordinator.IsSafeToAutoFocus")
     assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)" in execute
-    assert execute.index("TryPersistConfirmationIntent") < execute.index('ReadModalStateAsync("confirm")')
+    assert execute.index("TryPersistConfirmationIntent") < execute.index('ReadModalStateAsync(sourceClient, "confirm")')
     assert "repeatConfirm=false" in execute
     assert "live.ConfirmationUncertainCount++;" in uncertain
     assert "live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);" in uncertain
@@ -496,7 +496,7 @@ def test_read_only_auto_delivery_recovery_failures_count_toward_manual_review():
         runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
         runtime.index("private async Task<AutoDeliveryPreflightResult> TrySilentAutoDeliveryPreflightAsync")
     ]
-    uncertain = execute[execute.index("catch (Exception ex)", execute.index('ReadModalStateAsync("confirm")')):]
+    uncertain = execute[execute.index("catch (Exception ex)", execute.index('ReadModalStateAsync(sourceClient, "confirm")')):]
 
     assert 'AutoDeliveryAttemptResult.Uncertain("只读复核无法确认当前客服与任务店铺身份一致")' in execute
     assert 'AutoDeliveryAttemptResult.Uncertain("只读复核无法验证当前千牛会话ShopKey："' in execute
@@ -607,4 +607,5 @@ def test_read_only_delivery_recovery_never_rebinds_or_focuses_another_shop():
     focus = execute.index("BotActivityCoordinator.IsSafeToAutoFocus", bind)
     assert verification_stop < bind < focus
     assert "if (!MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop))" in execute
-    assert "只读复核确认订单仍未发货，但确认权限此前已消费" in execute
+    assert "静默预检确认订单仍未发货，但确认权限此前已消费" in execute
+    assert "保持只读，不切换前台买家且绝不再次确认发货" in execute
