@@ -218,20 +218,29 @@ namespace Bot.ChromeNs
             var raw = e == null ? string.Empty : (e.NotifyContent ?? string.Empty);
             if (qn == null || raw.Length < 8 || !LooksPotential(raw)) return;
 
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            ShopContext runtimeShop;
+            try { runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
+            {
+                Log.Info("订单字段 V2 messageCenterNotify 无法确认ShopKey，拒绝读取其他店铺模板配置: " + Safe(ex.Message, 220));
+                return;
+            }
+            if (runtimeShop == null || string.IsNullOrWhiteSpace(runtimeShop.ShopKey)) return;
+            AutoReplyRuleConfig cfg;
+            using (ShopSettingsScope.Enter(runtimeShop, false))
+                cfg = BotFeatureStore.GetAutoReplyRules();
             if (!ShouldOwnConfiguredTemplate(cfg) || !Params.Robot.CanUseRobotReal) return;
 
             try
             {
                 OrderSnapshot snapshot;
                 if (!TryParseSparseSnapshot(qn, raw, out snapshot)) return;
-                var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
-                snapshot.ShopKey = shop.ShopKey;
+                snapshot.ShopKey = runtimeShop.ShopKey;
                 if (snapshot.EventTime < StartedAt.AddSeconds(-8)) return;
 
                 var plan = new OrderPlacedReplyPlan
                 {
-                    ShopKey = shop.ShopKey,
+                    ShopKey = runtimeShop.ShopKey,
                     Seller = snapshot.Seller,
                     Buyer = snapshot.Buyer,
                     OrderId = snapshot.OrderId,
