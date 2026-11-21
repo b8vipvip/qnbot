@@ -103,7 +103,7 @@ def test_v2_cloud_sync_publishes_privacy_safe_revision_and_fingerprint_diagnosti
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     snapshot = service[
         service.index("private static void WriteDiagnosticsSnapshot"):
-        service.index("private static string FingerprintPrefix")
+        service.index("private static string Fingerprint(")
     ]
 
     assert 'knowledge-v2-sync-snapshot.json' in snapshot
