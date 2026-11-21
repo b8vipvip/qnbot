@@ -50,6 +50,7 @@ namespace Bot.ChromeNs
         private readonly object _uiMutationLock = new object();
         private Task<bool> _activeUiMutationTask;
 
+        private string _lastOwnedDraftShopKey = string.Empty;
         private string _lastOwnedDraftBuyer = string.Empty;
         private string _lastOwnedDraftText = string.Empty;
         private DateTime _lastOwnedDraftAt = DateTime.MinValue;
@@ -113,7 +114,10 @@ namespace Bot.ChromeNs
         private bool HasOwnedRecentDraft(string text)
         {
             text = (text ?? string.Empty).Trim();
-            return text.Length > 0
+            var currentShopKey = ResolveShopKey();
+            return currentShopKey.Length > 0
+                && string.Equals(_lastOwnedDraftShopKey, currentShopKey, StringComparison.Ordinal)
+                && text.Length > 0
                 && string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
                 && LatestSetTextTime != DateTime.MinValue
                 && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
@@ -123,6 +127,7 @@ namespace Bot.ChromeNs
         {
             buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
             text = (text ?? string.Empty).Trim();
+            _lastOwnedDraftShopKey = ResolveShopKey();
             _lastOwnedDraftBuyer = buyer ?? string.Empty;
             _lastOwnedDraftText = text;
             _lastOwnedDraftAt = text.Length == 0 ? DateTime.MinValue : DateTime.Now;
@@ -132,6 +137,7 @@ namespace Bot.ChromeNs
 
         private void ForgetOwnedDraft()
         {
+            _lastOwnedDraftShopKey = string.Empty;
             _lastOwnedDraftBuyer = string.Empty;
             _lastOwnedDraftText = string.Empty;
             _lastOwnedDraftAt = DateTime.MinValue;
@@ -142,9 +148,12 @@ namespace Bot.ChromeNs
         private bool IsOwnedDraftForBuyer(string buyer, string currentText)
         {
             buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
+            var currentShopKey = ResolveShopKey();
             var ownedBuyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _lastOwnedDraftBuyer);
             var ownedText = (_lastOwnedDraftText ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(buyer)
+            if (currentShopKey.Length == 0
+                || !string.Equals(_lastOwnedDraftShopKey, currentShopKey, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(buyer)
                 || string.IsNullOrWhiteSpace(ownedBuyer)
                 || ownedText.Length == 0
                 || _lastOwnedDraftAt == DateTime.MinValue
@@ -160,6 +169,7 @@ namespace Bot.ChromeNs
         {
             var expected = (LastSetPlainText ?? string.Empty).Trim();
             return expected.Length > 0
+                && HasOwnedRecentDraft(expected)
                 && !string.IsNullOrWhiteSpace(LastSendFailureReason)
                 && !LastSendWasCancelled
                 && EditorMatchesExpectedText(currentText, expected);
@@ -866,21 +876,22 @@ namespace Bot.ChromeNs
             get { return _qn == null || _qn.Seller == null ? string.Empty : (_qn.Seller.Nick ?? string.Empty).Trim(); }
         }
 
-        private static string AttemptKey(string seller, string buyer, string text)
+        private static string AttemptKey(string shopKey, string seller, string buyer, string text)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim() + "#" + (text ?? string.Empty).Trim();
+            return (shopKey ?? string.Empty).Trim() + "#" + (seller ?? string.Empty).Trim()
+                + "#" + (buyer ?? string.Empty).Trim() + "#" + (text ?? string.Empty).Trim();
         }
 
-        private DateTime GetOrCreateAttemptStartedAt(string buyer, string text)
+        private DateTime GetOrCreateAttemptStartedAt(string shopKey, string buyer, string text)
         {
             CleanupAttemptLeases();
-            return AnswerAttemptStartedAt.GetOrAdd(AttemptKey(SellerNick, buyer, text), _ => DateTime.Now);
+            return AnswerAttemptStartedAt.GetOrAdd(AttemptKey(shopKey, SellerNick, buyer, text), _ => DateTime.Now);
         }
 
-        private void CompleteAttemptLease(string buyer, string text)
+        private void CompleteAttemptLease(string shopKey, string buyer, string text)
         {
             DateTime ignored;
-            AnswerAttemptStartedAt.TryRemove(AttemptKey(SellerNick, buyer, text), out ignored);
+            AnswerAttemptStartedAt.TryRemove(AttemptKey(shopKey, SellerNick, buyer, text), out ignored);
         }
 
         private static void CleanupAttemptLeases()
@@ -894,11 +905,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool VerifyAnswerFreshness(string buyer, string text, DateTime attemptStartedAt, string stage)
+        private bool VerifyAnswerFreshness(string shopKey, string buyer, string text, DateTime attemptStartedAt, string stage)
         {
             string authorityReason;
             if (ReliableSendAuthority.IsProtectedFromBuyerUpdate(
-                SellerNick, buyer, text, out authorityReason))
+                shopKey, SellerNick, buyer, text, out authorityReason))
             {
                 Log.Info("业务可靠发送权限受保护，买家后续聊天不会取消已由业务动作ledger授权的本次发送: seller="
                     + SellerNick + ", buyer=" + buyer + ", stage=" + stage
@@ -907,7 +918,7 @@ namespace Bot.ChromeNs
             }
             if (_qn == null || !_qn.HasBuyerMessageAfter(SellerNick, buyer, attemptStartedAt)) return true;
             SetSendCancellation(stage, "买家已发送更新消息，旧答案不会发送");
-            CompleteAttemptLease(buyer, text);
+            CompleteAttemptLease(shopKey, buyer, text);
             Log.Info("旧答案发送/重试已取消: seller=" + SellerNick + ", buyer=" + buyer
                 + ", stage=" + stage + ", reason=买家已发送更新消息");
             return false;
@@ -1174,7 +1185,9 @@ namespace Bot.ChromeNs
 
                 // A concurrent retry may already have placed this exact current answer. Adopt it;
                 // never delete it and never append another copy.
-                if (!string.IsNullOrEmpty(expected) && EditorMatchesExpectedText(observedText, expected))
+                if (!string.IsNullOrEmpty(expected)
+                    && HasOwnedRecentDraft(expected)
+                    && EditorMatchesExpectedText(observedText, expected))
                 {
                     RememberOwnedDraft(buyer, expected);
                     Log.Info("输入框已存在本次任务精确草稿，已接管且不会重复写入: buyer=" + buyer);
@@ -1374,7 +1387,7 @@ namespace Bot.ChromeNs
         {
             var sendResult = false;
             ResetSendFailure();
-            var attemptStartedAt = GetOrCreateAttemptStartedAt(buyer, text);
+            var attemptStartedAt = GetOrCreateAttemptStartedAt(shopKey, buyer, text);
             Func<bool> manualTakeoverCheck = () =>
             {
                 if (manualBypassConsumed) return false;
@@ -1387,7 +1400,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("自动发送开始: buyer=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
-                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
+                if (!VerifyAnswerFreshness(shopKey, buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
                 if (manualTakeoverCheck()) return false;
                 if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
                 {
@@ -1506,7 +1519,7 @@ namespace Bot.ChromeNs
                 }
                 if (sendResult)
                 {
-                    CompleteAttemptLease(buyer, text);
+                    CompleteAttemptLease(shopKey, buyer, text);
                 }
                 else
                 {
