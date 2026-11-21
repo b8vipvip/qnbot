@@ -490,7 +490,11 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            AutoReplyRuleConfig cfg;
+            // Hub fallback runs from a timer, not necessarily from a QN event's
+            // AsyncLocal scope. Bind settings lookup to the validated runtime ShopKey.
+            using (ShopSettingsScope.Enter(runtimeShop, false))
+                cfg = BotFeatureStore.GetAutoReplyRules();
             if (cfg == null || !cfg.EnableOrderPlacedReply)
             {
                 Log.Info("[订单自动回复] 未发送原因=本店下单自动发送关闭, orderId=" + snapshot.OrderId
