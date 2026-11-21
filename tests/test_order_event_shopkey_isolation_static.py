@@ -93,3 +93,21 @@ def test_order_guidance_delivery_and_commerce_context_are_shopkey_isolated():
     assert "HasLegacyRecord(plan.Seller, plan.Buyer, plan.OrderId)" in source
     assert "无法确认当前店铺身份，已阻止跨店创建充值流程续问" in source
     assert "SchemaVersion != 2" in source
+
+
+def test_order_attention_queue_pins_focus_actions_to_authoritative_shop_session():
+    attention = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
+    assert "public CDPClient SourceClient { get; set; }" in attention
+    assert "TryRefreshOrderAttentionSource(item)" in attention
+    assert "IsOrderAttentionSourceCurrent(item)" in attention
+    assert "server.IsAuthoritativeShopSession(shopKey, sourceClient.SessionId)" in attention
+    assert "FindConnectedQnByShopKey(shopKey, sourceClient.SessionId)" in attention
+    assert "FocusOrderBuyerAsync(item)" in attention
+
+    focus = attention[
+        attention.index("private async Task<bool> FocusOrderBuyerAsync"):
+        attention.index("private bool TryRefreshOrderAttentionSource")
+    ]
+    assert focus.index("IsOrderAttentionSourceCurrent(item)") < focus.index("OpenChat(snapshot.Buyer)")
+    assert focus.index("OpenChat(snapshot.Buyer)") < focus.index("IsOrderAttentionSourceCurrent(item)", focus.index("OpenChat(snapshot.Buyer)"))
+    assert "await Task.Delay(250);" in focus
