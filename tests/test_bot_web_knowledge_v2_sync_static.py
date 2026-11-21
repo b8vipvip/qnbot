@@ -26,7 +26,8 @@ def test_first_runtime_report_seeds_state_and_stale_runtime_cannot_overwrite_web
     s=read(SERVER)
     assert 'current["revision"] == 0 and payload.records is not None' in s
     assert 'current["revision"] > payload.revision' in s
-    assert 'return _save(client_id,payload.records,"windows")' in s
+    assert 'return _save(client_id,payload.records,"windows",expected_revision=0)' in s
+    assert 'return _save(client_id,payload.records,"windows",expected_revision=payload.revision)' in s
     assert 'return _save(int(client["id"]), payload.records, "web")' in s
 
 def test_windows_bridge_reuses_shop_repository_and_existing_cloud_credentials():
