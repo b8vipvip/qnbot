@@ -16,6 +16,7 @@ def test_manual_takeover_learns_the_actual_human_reply_directly_into_v2():
     assert "confidence < 0.95" in method
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in method
     assert "seller, question, manualAnswer" in method
+    assert "ResolveRuntimeByShopKey(shopKey)" in source
     assert "SaveLearned(" not in method
 
 
@@ -26,6 +27,8 @@ def test_session_corpus_correction_is_exact_id_revision_guarded_and_rollbackable
     )[0]
     assert "confidence < 0.95" in method
     assert "evidenceIds.Count == 0" in method
+    assert "expectedQuestion.Length < 5" in method
+    assert "before.Title ?? string.Empty).Trim(), expectedQuestion" in method
     assert "ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == knowledgeId)" in method
     assert "observedAnswer, StringComparison.Ordinal" in method
     assert 'corrected.SourceType = "human_evidence_auto_reviewed";' in method

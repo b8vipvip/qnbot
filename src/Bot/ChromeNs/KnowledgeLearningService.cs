@@ -273,7 +273,7 @@ namespace Bot.ChromeNs
                         RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
                         if (!sameAsCandidate)
                         {
-                            QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
+                            QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey);
                         }
                         MessageProcessingTraceService.RecordManualObservation(
                             seller,
@@ -327,14 +327,17 @@ namespace Bot.ChromeNs
             string botAnswer,
             string manualAnswer,
             string seller,
-            string buyer)
+            string buyer,
+            string shopKey)
         {
             question = (question ?? string.Empty).Trim();
             botAnswer = StripBotMarker(botAnswer);
             manualAnswer = StripBotMarker(manualAnswer);
-            if (!CanLearn(question, manualAnswer) || string.IsNullOrWhiteSpace(botAnswer)) return;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || !CanLearn(question, manualAnswer)
+                || string.IsNullOrWhiteSpace(botAnswer)) return;
 
-            var comparisonKey = SendKey(seller, buyer, question + "|" + botAnswer + "|" + manualAnswer);
+            var comparisonKey = shopKey + "|" + SendKey(seller, buyer, question + "|" + botAnswer + "|" + manualAnswer);
             DateTime existing;
             if (ManualComparisons.TryGetValue(comparisonKey, out existing)
                 && existing >= DateTime.Now.AddMinutes(-10)) return;
@@ -345,8 +348,12 @@ namespace Bot.ChromeNs
                 IDisposable scope = null;
                 try
                 {
-                    var shop = ResolveShop(seller);
-                    if (shop != null) scope = ShopSettingsScope.Enter(shop);
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null
+                        || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                        throw new InvalidOperationException("人工答案学习拒绝使用不匹配的ShopKey/Seller身份");
+                    scope = ShopSettingsScope.Enter(shop);
                     await CompareManualAnswerAsync(question, botAnswer, manualAnswer, seller, buyer);
                 }
                 catch (OperationCanceledException)

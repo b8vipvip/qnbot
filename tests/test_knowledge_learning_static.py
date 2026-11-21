@@ -45,6 +45,13 @@ def test_learning_dedup_sensitive_redaction_and_per_shop_save_lock():
     assert "[API_KEY]" in source
     assert "confidence < 0.95" in source
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in source
+    queue = source.split("private static void QueueManualAnswerComparison(", 1)[1].split(
+        "private static async Task CompareManualAnswerAsync(", 1
+    )[0]
+    assert "string shopKey" in queue
+    assert "ResolveRuntimeByShopKey(shopKey)" in queue
+    assert "shop.ShopKey, shopKey, StringComparison.Ordinal" in queue
+    assert "var comparisonKey = shopKey + \"|\"" in queue
     assert "ContainsUnsafeManualLearning" in source
 
 

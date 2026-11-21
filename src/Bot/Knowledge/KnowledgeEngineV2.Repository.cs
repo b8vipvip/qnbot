@@ -490,6 +490,7 @@ namespace Bot.Knowledge
         public static bool TryApplyVerifiedSessionCorrection(
             string seller,
             string knowledgeId,
+            string expectedQuestion,
             string observedAnswer,
             string correctedAnswer,
             IEnumerable<string> evidenceMessageIds,
@@ -498,6 +499,7 @@ namespace Bot.Knowledge
         {
             result = string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
+            expectedQuestion = (expectedQuestion ?? string.Empty).Trim();
             observedAnswer = (observedAnswer ?? string.Empty).Trim();
             correctedAnswer = (correctedAnswer ?? string.Empty).Trim();
             var evidenceIds = (evidenceMessageIds ?? Enumerable.Empty<string>())
@@ -507,7 +509,7 @@ namespace Bot.Knowledge
                 .Take(12)
                 .ToList();
 
-            if (knowledgeId.Length == 0 || observedAnswer.Length == 0
+            if (knowledgeId.Length == 0 || expectedQuestion.Length < 5 || observedAnswer.Length == 0
                 || correctedAnswer.Length < 2 || correctedAnswer.Length > 1200
                 || evidenceIds.Count == 0
                 || double.IsNaN(confidence) || double.IsInfinity(confidence)
@@ -537,6 +539,11 @@ namespace Bot.Knowledge
                 }
 
                 before = FromRow(row);
+                if (!string.Equals((before.Title ?? string.Empty).Trim(), expectedQuestion, StringComparison.Ordinal))
+                {
+                    result = "目标知识标题已变化，自动修订候选已失效，未覆盖其他问题。";
+                    return false;
+                }
                 if (!before.Enabled
                     || string.Equals(before.Status, "disabled", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(before.Status, "candidate", StringComparison.OrdinalIgnoreCase)

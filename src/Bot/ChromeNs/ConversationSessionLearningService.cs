@@ -1095,18 +1095,29 @@ namespace Bot.ChromeNs
                     continue;
                 }
 
-                string applyMessage;
-                var success = KnowledgeEngineV2Repository.TryApplyVerifiedSessionCorrection(
-                    session.Seller,
-                    candidate.KnowledgeId,
-                    candidate.OldAnswer,
-                    candidate.Answer,
-                    candidate.EvidenceMessageIds,
-                    candidate.Confidence,
-                    out applyMessage);
-                candidate.Applied = success;
-                candidate.ApplyMessage = applyMessage;
-                if (success) applied++; else skipped++;
+                try
+                {
+                    string applyMessage;
+                    var success = KnowledgeEngineV2Repository.TryApplyVerifiedSessionCorrection(
+                        session.Seller,
+                        candidate.KnowledgeId,
+                        candidate.Question,
+                        candidate.OldAnswer,
+                        candidate.Answer,
+                        candidate.EvidenceMessageIds,
+                        candidate.Confidence,
+                        out applyMessage);
+                    candidate.Applied = success;
+                    candidate.ApplyMessage = applyMessage;
+                    if (success) applied++; else skipped++;
+                }
+                catch (Exception ex)
+                {
+                    candidate.Applied = false;
+                    candidate.ApplyMessage = "自动修订异常，候选已保留且本轮未确认写入：" + Clean(ex.Message, 240);
+                    skipped++;
+                    Log.ErrorWithMaxCount("Knowledge V2真人证据自动修订失败: " + ex.GetType().Name, 10);
+                }
             }
             return applied;
         }
