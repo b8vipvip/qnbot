@@ -166,3 +166,16 @@ def test_v2_full_package_import_uses_the_same_atomic_replace_primitive():
     assert "replacementRows.Add(new KnowledgeV2MetaRow" in replace_all
     assert "state.Db.ClearTable(" not in replace_all
     assert "state.Db.SaveRecordsInTransaction(" not in replace_all
+
+def test_v2_repository_rejects_seller_mismatch_inside_an_explicit_shop_scope():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    resolve = repository[
+        repository.index("private static ShopContext ResolveShopRequired"):
+        repository.index("private static double Clamp")
+    ]
+
+    assert "var current = ShopSettingsScope.Current;" in resolve
+    assert "DirectOrderIdentityResolver.IdentityEquals(current.SellerNick, seller)" in resolve
+    assert "DirectOrderIdentityResolver.IdentityEquals(current.DisplayName, seller)" in resolve
+    assert "已拒绝跨店访问" in resolve
+    assert "ShopContextLocator.ResolveBySellerNick(seller)" in resolve
