@@ -50,7 +50,7 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
     assert "SetPlainText(text)" not in open_send
     assert "TrySendTextNativeFirstAsync" in open_send
-    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
     assert native.count("HasExpectedDraftFastAsync(text") >= 4
     assert "if (string.IsNullOrEmpty(expected))" in reliable
 
