@@ -195,3 +195,28 @@ def test_reply_dedup_and_buyer_alias_never_share_unresolved_nickname_scope_acros
     assert "if (key.Length == 0) return;" in dedup
     assert "if (key.Length == 0) return false;" in dedup
     assert 'return shopKey + "|" +' in dedup
+
+
+def test_buyer_identity_alias_cache_is_bounded_under_sustained_traffic():
+    alias = read("src/Bot/ChromeNs/BuyerIdentityAliasService.cs")
+    observe = alias[
+        alias.index("public static void Observe(string seller"):
+        alias.index("public static string ResolveConversationKey")
+    ]
+    cleanup = alias[
+        alias.index("private static void Cleanup()"):
+        alias.index("private static void RemoveExact")
+    ]
+
+    # Expiration alone is not a capacity limit when every alias remains active.
+    assert "AliasCleanupThreshold = 5000" in alias
+    assert "AliasCleanupTarget = 4000" in alias
+    assert "Interlocked.CompareExchange(ref _cleanupRunning, 1, 0)" in cleanup
+    assert "Aliases.ToArray()" in cleanup
+    assert "candidates.Sort((left, right) => left.UpdatedAt.CompareTo(right.UpdatedAt))" in cleanup
+    assert "if (Aliases.Count <= AliasCleanupTarget) break;" in cleanup
+    assert "record.UpdatedAt != candidate.UpdatedAt" in cleanup
+    assert "((ICollection<KeyValuePair<string, AliasRecord>>)Aliases).Remove(pair)" in alias
+    assert "lock (record)" in observe
+    assert "Cleanup();" in observe
+    assert "Interlocked.Exchange(ref _cleanupRunning, 0);" in cleanup
