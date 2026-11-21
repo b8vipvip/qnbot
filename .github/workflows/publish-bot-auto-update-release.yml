@@ -157,7 +157,28 @@ jobs:
           [[ -n "$SOURCE_SHA" ]] || { echo "::error::Verified Windows build did not expose a source SHA"; exit 1; }
 
           deadline=$((SECONDS + 600))
+          attempt=0
           while (( SECONDS < deadline )); do
+            attempt=$((attempt + 1))
+            # If a newer master SHA has already passed both exact release gates,
+            # do not let this older workflow-run event hold the global publish lock.
+            if (( attempt % 6 == 1 )); then
+              latest_master_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq '.sha')"
+              if [[ "$latest_master_sha" != "$SOURCE_SHA" ]]; then
+                latest_runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$latest_master_sha&per_page=100")"
+                latest_api="$(jq -c --arg sha "$latest_master_sha" '[.workflow_runs[] | select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $sha)] | sort_by(.created_at, .id) | reverse | .[0] // {}' <<<"$latest_runs")"
+                latest_windows="$(jq -c --arg sha "$latest_master_sha" '[.workflow_runs[] | select(.name == "Windows x64 release build" and .head_branch == "master" and .head_sha == $sha)] | sort_by(.created_at, .id) | reverse | .[0] // {}' <<<"$latest_runs")"
+                latest_api_ok="$(jq -r '.status == "completed" and .conclusion == "success"' <<<"$latest_api")"
+                latest_windows_ok="$(jq -r '.status == "completed" and .conclusion == "success"' <<<"$latest_windows")"
+                if [[ "$latest_api_ok" == "true" && "$latest_windows_ok" == "true" ]]; then
+                  echo "superseded=true" >> "$GITHUB_OUTPUT"
+                  echo "Skipping stale release source $SOURCE_SHA; newer master $latest_master_sha has successful exact-SHA API and Windows gates."
+                  echo "A newer master SHA ($latest_master_sha) has passed exact-SHA API and Windows release gates; this older release candidate was skipped." >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi
+              fi
+            fi
+
             runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SOURCE_SHA&per_page=100")"
             row="$(jq -c --arg source_sha "$SOURCE_SHA" '[.workflow_runs[] | select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $source_sha)] | sort_by(.created_at, .id) | reverse | .[0] // {}' <<<"$runs")"
             run_id="$(jq -r '.id // ""' <<<"$row")"
@@ -171,6 +192,7 @@ jobs:
                 exit 1
               }
               echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "superseded=false" >> "$GITHUB_OUTPUT"
               echo "API control plane CI passed for exact source SHA $SOURCE_SHA (run $run_id)." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -181,7 +203,7 @@ jobs:
           exit 1
 
       - name: Download complete x64 artifact
-        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
+        if: (github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true') && steps.api-ci.outputs.superseded != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -202,7 +224,7 @@ jobs:
           echo "Downloaded artifact $artifact_id"
 
       - name: Prepare stable update package and manifest
-        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
+        if: (github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true') && steps.api-ci.outputs.superseded != 'true'
         id: package
         shell: bash
         env:
@@ -273,7 +295,7 @@ jobs:
           echo "Prepared $TAG package: $package_size bytes, sha256=$sha256"
 
       - name: Publish GitHub Release
-        if: github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true'
+        if: (github.event_name == 'workflow_dispatch' || steps.release_gate.outputs.release == 'true') && steps.api-ci.outputs.superseded != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -323,6 +345,10 @@ jobs:
           grep -Fx 'qianniu-bot-x64.zip' <<<"$assets"
           grep -Fx 'update.json' <<<"$assets"
           grep -Fx 'qianniu-bot-rescue-update.ps1' <<<"$assets"
+
+      - name: Skip superseded release candidate
+        if: github.event_name == 'workflow_run' && steps.api-ci.outputs.superseded == 'true'
+        run: echo "A newer master SHA has already passed exact-SHA API and Windows gates; this stale release candidate was skipped."
 
       - name: Skip workflow-only automatic release
         if: github.event_name == 'workflow_run' && steps.release_gate.outputs.release != 'true'
