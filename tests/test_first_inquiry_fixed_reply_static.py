@@ -104,7 +104,8 @@ def test_fresh_actual_problem_can_prepare_fixed_reply_with_full_message_metadata
     ordinary_text = router.index("if (safetyDecision.ShouldCallAi)", prepare)
     image_route = router.index('if (!string.Equals(safetyDecision.MessageLabel, "[图片]"', ordinary_text)
     assert prepare < ordinary_text < image_route
-    prepare_call = router[prepare:router.index("shopKey);", prepare)]
+    prepare_end = router.index("shopKey);", prepare) + len("shopKey);")
+    prepare_call = router[prepare:prepare_end]
     assert "message," in prepare_call
     assert "out fixedAnswer," in prepare_call
     assert "shopKey" in prepare_call
@@ -278,7 +279,8 @@ def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_close
         service.index("public static void MarkDelivered"):
         service.index("internal static bool IsActualProblemMessage")
     ]
-    assert delivered.count("RunInShopScope(seller, delegate)") == 3
+    assert delivered.count("RunInShopScope(seller, delegate") == 3
+    assert delivered.count("}, shopKey);") == 3
     assert "var key = RuntimeKey(seller, buyer);" in delivered
     assert "if (key.Length == 0)" in delivered
 
