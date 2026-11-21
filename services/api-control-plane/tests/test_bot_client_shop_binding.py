@@ -84,6 +84,44 @@ def setup_cp(tmp_path):
                 last_error TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE wecom_client_settings(
+                client_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                corp_id TEXT NOT NULL DEFAULT '',
+                app_secret_cipher TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE wecom_handoff_tickets(
+                ticket_id TEXT PRIMARY KEY,
+                client_id INTEGER NOT NULL,
+                client_name TEXT NOT NULL,
+                seller TEXT NOT NULL,
+                buyer TEXT NOT NULL,
+                question TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                notified_users TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_error TEXT
+            );
+            CREATE TABLE wecom_handoff_commands(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL,
+                wecom_msg_id TEXT NOT NULL UNIQUE,
+                from_user TEXT NOT NULL,
+                reply_text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claim_client_id INTEGER,
+                claim_token TEXT,
+                claim_until TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_error TEXT,
+                FOREIGN KEY(ticket_id) REFERENCES wecom_handoff_tickets(ticket_id)
+            );
             CREATE TABLE bot_store_rule_state(client_id INTEGER);
             CREATE TABLE bot_message_processing_traces(client_id INTEGER);
             CREATE TABLE bot_client_bot_enabled(client_id INTEGER PRIMARY KEY,shop_key TEXT);
@@ -135,6 +173,13 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
         conn.execute("INSERT INTO bot_knowledge_backups(client_id,revision,created_at) VALUES(1,1,'2026-08-11T00:00:00+00:00')")
         for table in ("bot_web_settings_ack", "bot_web_auto_reply_rules", "bot_web_ai_model_settings"):
             conn.execute(f"INSERT INTO {table}(client_id,updated_at) VALUES(1,'2026-08-11T00:00:00+00:00')")
+        conn.execute("INSERT INTO wecom_client_settings(client_id,updated_at) VALUES(1,'2026-08-11T00:00:00+00:00')")
+        conn.execute("""INSERT INTO wecom_handoff_tickets(
+            ticket_id,client_id,client_name,seller,buyer,question,reason,notified_users,status,created_at,updated_at,expires_at
+        ) VALUES('ticket-a',1,'Bot A','seller-a','buyer-a','question-a','reason-a','user-a','reply_queued','2026-08-11','2026-08-11','2026-08-12')""")
+        conn.execute("""INSERT INTO wecom_handoff_commands(
+            ticket_id,wecom_msg_id,from_user,reply_text,status,created_at,updated_at
+        ) VALUES('ticket-a','msg-a','user-a','old-shop-reply','pending','2026-08-11','2026-08-11')""")
         conn.execute(
             "INSERT OR REPLACE INTO bot_client_bot_enabled(client_id,shop_key) VALUES(1,'shop_a')"
         )
@@ -157,6 +202,7 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_web_settings_ack",
             "bot_web_auto_reply_rules",
             "bot_web_ai_model_settings",
+            "wecom_client_settings",
             "bot_store_rule_state",
             "bot_message_processing_traces",
             "bot_client_bot_enabled",
@@ -165,6 +211,9 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             count = conn.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE client_id=1"
             ).fetchone()[0]
+            assert count == 0
+        for table in ("wecom_handoff_tickets", "wecom_handoff_commands"):
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             assert count == 0
         row = conn.execute(
             "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=1"
