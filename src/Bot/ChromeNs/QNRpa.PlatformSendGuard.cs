@@ -55,6 +55,15 @@ namespace Bot.ChromeNs
         internal async Task<bool> VerifyShopIdentityBeforeSendAsync(string expectedShopKey)
         {
             expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop != null
+                && !string.Equals((scopedShop.ShopKey ?? string.Empty).Trim(), expectedShopKey, StringComparison.Ordinal))
+            {
+                Log.Info("发送前ShopSettingsScope与目标ShopKey不一致，已fail-closed: expectedShopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", scopedShopRef=" + MyWebSocketServer.DiagnosticRef("shop", scopedShop.ShopKey));
+                return false;
+            }
             var client = _qn == null ? null : _qn.CDP;
             var server = MyWebSocketServer.WSocketSvrInst;
             if (expectedShopKey.Length == 0 || client == null || server == null
