@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using Bot.Common;
+using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
 using DbEntity.Response;
@@ -31,6 +32,7 @@ namespace Bot.ChromeNs
         private sealed class PendingReply
         {
             public readonly object Sync = new object();
+            public string ShopKey;
             public string Seller;
             public string Buyer;
             public string MessageKey;
@@ -92,6 +94,7 @@ namespace Bot.ChromeNs
                 {
                     ObserveSellerReply(qn, message);
                 }
+                }
             }
             catch (Exception ex)
             {
@@ -100,6 +103,17 @@ namespace Bot.ChromeNs
         }
 
         private static void ObserveSellerReply(QN qn, QNChatMessage message)
+        {
+            if (qn == null || message == null) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch { return; }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
+            using (ShopSettingsScope.Enter(shop))
+                ObserveSellerReplyScoped(qn, message, shop.ShopKey);
+        }
+
+        private static void ObserveSellerReplyScoped(QN qn, QNChatMessage message, string shopKey)
         {
             if (message == null || message.fromid == null || message.toid == null) return;
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
@@ -122,7 +136,8 @@ namespace Bot.ChromeNs
                 seller,
                 buyer,
                 TimeSpan.FromMinutes(5),
-                out recent)
+                out recent,
+                shopKey)
                 || recent == null
                 || recent.Message == null
                 || string.IsNullOrWhiteSpace(recent.MessageKey))
@@ -136,9 +151,10 @@ namespace Bot.ChromeNs
             if (replyAt == DateTime.MinValue) replyAt = DateTime.Now;
             if (replyAt < recent.ObservedAt.AddSeconds(-2) || replyAt > recent.ObservedAt.AddMinutes(10)) return;
 
-            var stateKey = Key(seller, buyer, recent.MessageKey);
+            var stateKey = Key(shopKey, seller, buyer, recent.MessageKey);
             var pending = Pending.GetOrAdd(stateKey, _ => new PendingReply
             {
+                ShopKey = shopKey,
                 Seller = seller,
                 Buyer = buyer,
                 MessageKey = recent.MessageKey,
@@ -167,8 +183,12 @@ namespace Bot.ChromeNs
         {
             try
             {
-                await Task.Delay(3500);
-                if (!IsCurrent(pending, capturedVersion)) return;
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(pending.ShopKey);
+                if (shop == null || !string.Equals(shop.ShopKey, pending.ShopKey, StringComparison.Ordinal)) return;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    await Task.Delay(3500);
+                    if (!IsCurrent(pending, capturedVersion)) return;
 
                 // Human replies often arrive before the visual API has finished. Retry the semantic
                 // observation lookup without restarting or cancelling the existing vision request.
@@ -503,9 +523,12 @@ namespace Bot.ChromeNs
             return right.Length > left.Length ? right : left;
         }
 
-        private static string Key(string seller, string buyer, string messageKey)
+        private static string Key(string shopKey, string seller, string buyer, string messageKey)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim() + "#" + (messageKey ?? string.Empty).Trim();
+            return (shopKey ?? string.Empty).Trim() + "#"
+                + (seller ?? string.Empty).Trim() + "#"
+                + (buyer ?? string.Empty).Trim() + "#"
+                + (messageKey ?? string.Empty).Trim();
         }
 
         private static string Short(string value, int max)
