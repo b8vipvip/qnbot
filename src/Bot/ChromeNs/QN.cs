@@ -243,6 +243,12 @@ namespace Bot.ChromeNs
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 rpa.ResetSendFailure();
+                string shopScopeReason;
+                if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                {
+                    rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
+                    return false;
+                }
                 if (!await EnsureActiveBuyerForSendAsync(buyer, cancellationToken))
                 {
                     rpa.SetSendFailure("会话确认", "无法确认目标买家会话");
@@ -250,6 +256,11 @@ namespace Bot.ChromeNs
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                {
+                    rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
+                    return false;
+                }
                 var sendStartedAt = DateTime.Now;
                 var ok = await SendTextAsync(buyer, text);
                 if (!ok && rpa.LastSendWasCancelled)
@@ -292,6 +303,11 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                    {
+                        rpa.SetSendFailure("重试ShopKey作用域复核", shopScopeReason);
+                        return false;
+                    }
                     ok = await SendTextAsync(buyer, text);
                     if (!ok && rpa.LastSendWasCancelled)
                     {
@@ -354,19 +370,78 @@ namespace Bot.ChromeNs
             return HasRecentSellerEcho(buyer, text, since);
         }
 
+        private bool IsCurrentShopScopeValidForSend(out string reason)
+        {
+            reason = string.Empty;
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop == null) return true;
+
+            var expectedShopKey = (scopedShop.ShopKey ?? string.Empty).Trim();
+            var client = CDP;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (expectedShopKey.Length == 0 || client == null || server == null
+                || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
+            {
+                reason = "当前CDP会话不属于显式ShopSettingsScope，已阻止跨店发送";
+                return false;
+            }
+
+            try
+            {
+                var runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                if (runtimeShop == null
+                    || !string.Equals(runtimeShop.ShopKey, expectedShopKey, StringComparison.Ordinal))
+                {
+                    reason = "当前QN运行身份与显式ShopSettingsScope不匹配，已阻止跨店发送";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = "无法解析当前QN的ShopKey，已阻止跨店发送: " + ex.Message;
+                return false;
+            }
+
+            if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
+            {
+                reason = "发送准备期间CDP权威会话发生变化，已阻止跨店发送";
+                return false;
+            }
+            return true;
+        }
+
         private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer, CancellationToken cancellationToken)
         {
             buyer = (buyer ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(buyer) || cdp == null) return false;
+            string shopScopeReason;
+            if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+            {
+                rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
+                return false;
+            }
             var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             var deadlineUtc = DateTime.UtcNow.AddMilliseconds(ActiveBuyerConfirmDeadlineMs);
 
             for (var attempt = 0; attempt < 22 && DateTime.UtcNow < deadlineUtc; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                {
+                    rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
+                    return false;
+                }
                 try
                 {
                     var current = await GetCurrentConversationID();
+                    if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                    {
+                        rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
+                        return false;
+                    }
                     var currentConversation = current == null ? null : current.Result;
                     var currentNick = currentConversation == null ? string.Empty : (currentConversation.Nick ?? string.Empty).Trim();
                     if (currentConversation != null)
@@ -379,12 +454,22 @@ namespace Bot.ChromeNs
                     }
                     if (BuyerIdentityAliasService.AreEquivalent(sellerNick, currentNick, buyer))
                     {
+                        if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                        {
+                            rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
+                            return false;
+                        }
                         SetActiveConversationByNick(sellerNick, currentNick, "sendVerified");
                         return true;
                     }
                     if (attempt == 0)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                        {
+                            rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
+                            return false;
+                        }
                         Log.Info("发送前切换目标买家: target=" + buyer + ", current=" + currentNick);
                         OpenChat(buyer);
                     }
@@ -395,6 +480,11 @@ namespace Bot.ChromeNs
                     if (attempt == 0)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
+                        {
+                            rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
+                            return false;
+                        }
                         OpenChat(buyer);
                     }
                 }
