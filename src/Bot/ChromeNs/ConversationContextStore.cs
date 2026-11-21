@@ -204,6 +204,26 @@ namespace Bot.ChromeNs
                     || (!string.Equals(to, buyer, StringComparison.Ordinal)
                         && !BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)))
                     return false;
+
+                var loginNick = message.loginid == null ? string.Empty
+                    : (message.loginid.nick ?? string.Empty).Trim();
+                if (loginNick.Length > 0
+                    && !string.Equals(loginNick, seller, StringComparison.Ordinal))
+                    return false;
+                if (shop.HasStableSellerId)
+                {
+                    var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
+                    var sellerTargetId = message.fromid == null ? string.Empty
+                        : (message.fromid.targetId ?? string.Empty).Trim();
+                    var loginTargetId = message.loginid == null ? string.Empty
+                        : (message.loginid.targetId ?? string.Empty).Trim();
+                    if (sellerTargetId.Length > 0
+                        && !string.Equals(sellerTargetId, expectedTargetId, StringComparison.Ordinal))
+                        return false;
+                    if (loginTargetId.Length > 0
+                        && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal))
+                        return false;
+                }
                 var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
                 if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
                 var state = GetState(seller, buyer);
