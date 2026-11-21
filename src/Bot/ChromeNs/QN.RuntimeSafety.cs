@@ -331,7 +331,10 @@ namespace Bot.ChromeNs
 
         private static string KnownNonProblemKey(string seller, string buyer, string rawMessageKey)
         {
-            return RuntimeKey(seller, buyer) + "|" + (rawMessageKey ?? string.Empty).Trim();
+            var runtimeKey = RuntimeKey(seller, buyer);
+            return runtimeKey.Length == 0
+                ? string.Empty
+                : runtimeKey + "|" + (rawMessageKey ?? string.Empty).Trim();
         }
 
         private static bool ShouldSuppressForOffHours(string seller, string buyer)
