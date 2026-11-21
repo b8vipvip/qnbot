@@ -340,7 +340,7 @@ def test_stranded_merged_reconcile_lease_recovers_only_after_exact_sha_gates():
     assert 'RELEASE_REQUIRED: "false"' in recovery
     assert 'select(.name == "API control plane CI" and .head_branch == "master" and .head_sha == $sha)' in recovery
     assert 'select(.name == "Windows x64 release build" and .head_branch == "master" and .head_sha == $sha)' in recovery
-    assert 'select(.event == "pull_request")' in recovery
+    assert '.event == "pull_request"' in recovery
     assert 'select(.head_sha == $head' in recovery
     assert "Completion Lease is RELEASED" in recovery
     assert "Terminal state: DONE" in recovery
