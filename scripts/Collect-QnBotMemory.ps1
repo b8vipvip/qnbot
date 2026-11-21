@@ -1,10 +1,12 @@
 #requires -version 5.1
 <#
 Read-only sampler for QianNiu AI Bot / QianNiu workbench process and machine memory.
-Includes a system row and the largest processes even when Bot/Qianniu are stopped.
-No process changes, forced GC, dumps, customer text, environment variables,
-command lines, filesystem inventories, or access tokens are collected.
-Example: powershell -NoProfile -File scripts\Collect-QnBotMemory.ps1 -Minutes 10 -IntervalSeconds 30
+Also samples the Bot's privacy-safe runtime snapshot to track shop-owner mapping,
+duplicate/unmapped sessions and Bot process restarts during A/B switching or reconnect tests.
+ShopRef/OwnerSessionRef are process-local pseudonyms and intentionally rotate after Bot restart.
+No process changes, forced GC, dumps, customer text, seller nicknames, ShopKeys,
+environment variables, command lines, filesystem inventories, or access tokens are collected.
+Example: powershell -NoProfile -File scripts\Collect-QnBotMemory.ps1 -Minutes 60 -IntervalSeconds 15 -ScenarioTag shop-switch
 #>
 [CmdletBinding()]
 param(
@@ -97,6 +99,10 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 else {
                     $runtimeStatus = 'fresh'
                     $counts = $runtime.Counts
+                    $hasCompleteRuntimeSchema = $null -ne $runtime.PSObject.Properties['Shops'] -and
+                        $null -ne $runtime.PSObject.Properties['Counts'] -and
+                        $null -ne $counts.PSObject.Properties['StandbyCapabilitySessions']
+                    if (-not $hasCompleteRuntimeSchema) { $runtimeStatus = 'partial' }
                     $runtimeConnectedSessions = [int]$counts.ConnectedSessions
                     $runtimeAuthoritativeShopCount = [int]$counts.AuthoritativeShopCount
                     $runtimeDuplicateSessions = [int]$counts.DuplicateSessions
