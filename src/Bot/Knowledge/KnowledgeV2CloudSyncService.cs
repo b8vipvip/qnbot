@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -34,9 +35,19 @@ namespace Bot.Knowledge
 
         private sealed class State
         {
+            public readonly object SyncRoot = new object();
             public int Syncing;
             public int Revision;
             public string Fingerprint = string.Empty;
+            public string ShopRef = string.Empty;
+            public DateTime? LastAttemptUtc;
+            public DateTime? LastSuccessUtc;
+            public string LastStatus = "not_started";
+            public int LastLocalRecordCount;
+            public int LastCloudRecordCount;
+            public string LastLocalFingerprintPrefix = string.Empty;
+            public string LastCloudFingerprintPrefix = string.Empty;
+            public bool LastConverged;
         }
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
@@ -64,7 +75,29 @@ namespace Bot.Knowledge
                 || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state=States.GetOrAdd(shop.ShopKey,_=>LoadState(shop));
             if(Interlocked.Exchange(ref state.Syncing,1)!=0) return;
-            Task.Run(async()=>{try{await SyncOnce(shop,state);}catch(Exception ex){Log.ErrorWithMaxCount("Knowledge V2 云同步失败："+Safe(ex.Message,260),20);}finally{Interlocked.Exchange(ref state.Syncing,0);}});
+            lock(state.SyncRoot)
+            {
+                state.LastAttemptUtc=DateTime.UtcNow;
+                state.LastStatus="running";
+            }
+            WriteDiagnosticsSnapshot();
+            Task.Run(async()=>
+            {
+                try
+                {
+                    await SyncOnce(shop,state);
+                }
+                catch(Exception ex)
+                {
+                    lock(state.SyncRoot) state.LastStatus="failed";
+                    Log.ErrorWithMaxCount("Knowledge V2 云同步失败："+Safe(ex.Message,260),20);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref state.Syncing,0);
+                    WriteDiagnosticsSnapshot();
+                }
+            });
         }
         private static async Task SyncOnce(ShopContext shop,State state)
         {
@@ -73,10 +106,22 @@ namespace Bot.Knowledge
                 var connection=new ShopControlPlaneConnectionStore(shop,Paths);
                 string token,error;
                 var url=connection.GetServerUrl();
-                if(!connection.TryGetToken(out token,out error)||string.IsNullOrWhiteSpace(url)||string.IsNullOrWhiteSpace(token)) return;
+                if(!connection.TryGetToken(out token,out error)||string.IsNullOrWhiteSpace(url)||string.IsNullOrWhiteSpace(token))
+                {
+                    lock(state.SyncRoot) state.LastStatus="credentials_missing";
+                    return;
+                }
 
                 var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                 var localFingerprint=Fingerprint(local);
+                lock(state.SyncRoot)
+                {
+                    state.LastLocalRecordCount=local.Count;
+                    state.LastLocalFingerprintPrefix=FingerprintPrefix(localFingerprint);
+                    state.LastCloudFingerprintPrefix=FingerprintPrefix(state.Fingerprint);
+                    state.LastCloudRecordCount=0;
+                    state.LastConverged=false;
+                }
                 var payload=new JObject { ["revision"]=state.Revision };
                 if(state.Revision==0 || !string.Equals(localFingerprint,state.Fingerprint,StringComparison.Ordinal))
                     payload["records"]=JArray.FromObject(local);
@@ -113,6 +158,12 @@ namespace Bot.Knowledge
                         {
                             if(records==null)
                                 throw new InvalidOperationException("Knowledge V2 云端版本已更新但未返回 records，已保留本地数据并等待重试。");
+                            var cloudFingerprint=Fingerprint(records);
+                            lock(state.SyncRoot)
+                            {
+                                state.LastCloudRecordCount=records.Count;
+                                state.LastCloudFingerprintPrefix=FingerprintPrefix(cloudFingerprint);
+                            }
 
                             // Re-read after the network round-trip. A user or learning task may
                             // have edited V2 while the HTTP request was in flight.
@@ -135,6 +186,7 @@ namespace Bot.Knowledge
                                 if(!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(
                                     shop.DisplayName,latestFingerprint,merged))
                                 {
+                                    lock(state.SyncRoot) state.LastStatus="local_changed_during_sync";
                                     Log.Info("Knowledge V2 云端版本到达时本地知识同时发生变化，本轮未覆盖；将于下一轮重新合并: shopRef="
                                         + MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey));
                                     return;
@@ -148,11 +200,35 @@ namespace Bot.Knowledge
                             // Persist the cloud snapshot as the next comparison baseline.
                             // If local-only/conflicting records were retained, the next poll
                             // sends the merged set at this revision instead of discarding it.
-                            PersistState(shop,state,cloudRevision,Fingerprint(records));
+                            PersistState(shop,state,cloudRevision,cloudFingerprint);
+                            var finalLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                            var finalLocalFingerprint=Fingerprint(finalLocal);
+                            lock(state.SyncRoot)
+                            {
+                                state.LastLocalRecordCount=finalLocal.Count;
+                                state.LastCloudRecordCount=records.Count;
+                                state.LastLocalFingerprintPrefix=FingerprintPrefix(finalLocalFingerprint);
+                                state.LastCloudFingerprintPrefix=FingerprintPrefix(cloudFingerprint);
+                                state.LastConverged=string.Equals(finalLocalFingerprint,cloudFingerprint,StringComparison.Ordinal);
+                                state.LastSuccessUtc=DateTime.UtcNow;
+                                state.LastStatus=state.LastConverged?"synced":"merge_pending_push";
+                            }
                             return;
                         }
 
                         PersistState(shop,state,cloudRevision,localFingerprint);
+                        var afterRequestLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                        var afterRequestFingerprint=Fingerprint(afterRequestLocal);
+                        lock(state.SyncRoot)
+                        {
+                            state.LastLocalRecordCount=afterRequestLocal.Count;
+                            state.LastCloudRecordCount=local.Count;
+                            state.LastLocalFingerprintPrefix=FingerprintPrefix(afterRequestFingerprint);
+                            state.LastCloudFingerprintPrefix=FingerprintPrefix(localFingerprint);
+                            state.LastConverged=string.Equals(afterRequestFingerprint,localFingerprint,StringComparison.Ordinal);
+                            state.LastSuccessUtc=DateTime.UtcNow;
+                            state.LastStatus=state.LastConverged?"synced":"local_changed_during_sync";
+                        }
                     }
                 }
             }
@@ -173,7 +249,10 @@ namespace Bot.Knowledge
                 return new State
                 {
                     Revision=Math.Max(0,revision),
-                    Fingerprint=fingerprint??string.Empty
+                    Fingerprint=fingerprint??string.Empty,
+                    ShopRef=MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey),
+                    LastCloudFingerprintPrefix=FingerprintPrefix(fingerprint??string.Empty),
+                    LastStatus="loaded"
                 };
             }
         }
@@ -303,6 +382,81 @@ namespace Bot.Knowledge
             };
             File.WriteAllText(path,snapshot.ToString(Formatting.Indented),new UTF8Encoding(false));
             return path;
+        }
+
+        private static string FingerprintPrefix(string fingerprint)
+        {
+            fingerprint=fingerprint??string.Empty;
+            return fingerprint.Length<=16?fingerprint:fingerprint.Substring(0,16);
+        }
+
+        private static readonly object DiagnosticsSync=new object();
+        private static void WriteDiagnosticsSnapshot()
+        {
+            try
+            {
+                lock(DiagnosticsSync)
+                {
+                    var shops=new JArray();
+                    foreach(var state in States.Values)
+                    {
+                        if(state==null) continue;
+                        lock(state.SyncRoot)
+                        {
+                            shops.Add(new JObject
+                            {
+                                ["shopRef"]=state.ShopRef??string.Empty,
+                                ["cloudRevision"]=state.Revision,
+                                ["localRecordCount"]=state.LastLocalRecordCount,
+                                ["cloudRecordCount"]=state.LastCloudRecordCount,
+                                ["localFingerprintPrefix"]=state.LastLocalFingerprintPrefix??string.Empty,
+                                ["cloudFingerprintPrefix"]=state.LastCloudFingerprintPrefix??string.Empty,
+                                ["converged"]=state.LastConverged,
+                                ["syncing"]=Volatile.Read(ref state.Syncing)!=0,
+                                ["lastAttemptUtc"]=state.LastAttemptUtc.HasValue?state.LastAttemptUtc.Value.ToString("o"):null,
+                                ["lastSuccessUtc"]=state.LastSuccessUtc.HasValue?state.LastSuccessUtc.Value.ToString("o"):null,
+                                ["lastStatus"]=state.LastStatus??string.Empty
+                            });
+                        }
+                    }
+
+                    int processId;
+                    long processStartTicks;
+                    using(var process=Process.GetCurrentProcess())
+                    {
+                        processId=process.Id;
+                        processStartTicks=process.StartTime.ToUniversalTime().Ticks;
+                    }
+                    var snapshot=new JObject
+                    {
+                        ["schemaVersion"]=1,
+                        ["collectedAtUtc"]=DateTime.UtcNow.ToString("o"),
+                        ["processId"]=processId,
+                        ["processStartTimeUtcTicks"]=processStartTicks,
+                        ["shops"]=shops
+                    };
+                    var directory=Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "QianniuAiBot","diagnostics");
+                    Directory.CreateDirectory(directory);
+                    var path=Path.Combine(directory,"knowledge-v2-sync-snapshot.json");
+                    var temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+                    try
+                    {
+                        File.WriteAllText(temp,snapshot.ToString(Formatting.None),new UTF8Encoding(false));
+                        if(File.Exists(path)) File.Replace(temp,path,null);
+                        else File.Move(temp,path);
+                    }
+                    finally
+                    {
+                        if(File.Exists(temp)) File.Delete(temp);
+                    }
+                }
+            }
+            catch(Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2 只读同步诊断快照写入失败："+Safe(ex.Message,180),5);
+            }
         }
 
         private static string Fingerprint(IEnumerable<KnowledgeV2Record> records)
