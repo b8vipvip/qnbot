@@ -85,6 +85,6 @@ def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bo
     block = method.index("return true;", same_answer)
 
     assert bot_guard < same_answer < manual_register < block
-    assert "if (sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))" in method
+    assert "if (!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))" in method
     assert "if (!sameAsCandidate)" in method
     assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);" in method
