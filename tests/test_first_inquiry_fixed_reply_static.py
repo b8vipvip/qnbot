@@ -258,3 +258,42 @@ def test_first_inquiry_settings_never_fall_back_to_global_for_unresolved_nonempt
     assert "current.ShopKey, shop.ShopKey" in resolver
     assert "if (!saved)" in save
     assert "已阻止保存到全局设置" in save
+
+
+def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_closed():
+    service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    runtime_key = service[
+        service.index("private static string RuntimeKey"):
+        service.index("private static T RunInShopScope")
+    ]
+    assert "ShopSettingsScope.Current" in runtime_key
+    assert "scope.ShopKey" in runtime_key
+    assert "scope.SellerNick" in runtime_key
+    assert "return string.Empty;" in runtime_key
+    assert 'return scope.ShopKey.Trim() + "#" + seller + "#" + buyer;' in runtime_key
+
+    delivered = service[
+        service.index("public static void MarkDelivered"):
+        service.index("internal static bool IsActualProblemMessage")
+    ]
+    assert delivered.count("RunInShopScope(seller, delegate)") == 3
+    assert "var key = RuntimeKey(seller, buyer);" in delivered
+    assert "if (key.Length == 0)" in delivered
+
+    remember = service[
+        service.index("private static void RememberKnownNonProblemMessage"):
+        service.index("private static bool IsKnownNonProblemHistoryTurn")
+    ]
+    assert "RunInShopScope(seller, delegate)" in remember
+    assert "if (scopedKey.Length == 0) return false;" in remember
+    known_key = service[
+        service.index("private static string KnownNonProblemKey"):
+        service.index("private static bool ShouldSuppressForOffHours")
+    ]
+    assert "runtimeKey.Length == 0" in known_key
+    assert "return string.Empty;" in known_key
+
+    returning = read("src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Send.cs")
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in returning
+    assert "using (ShopSettingsScope.Enter(shop))" in returning
+    assert "FirstInquiryFixedReplyService.HasPending(seller, buyer)" in returning
