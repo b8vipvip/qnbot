@@ -464,11 +464,6 @@ namespace Bot.ChromeNs
             if (!double.TryParse(Convert.ToString(parsed["confidence"]), out confidence)) confidence = 0;
             var learnedQuestion = RedactSensitive(Convert.ToString(parsed["question"])).Trim();
             var learnedAnswer = RedactSensitive(Convert.ToString(parsed["answer"])).Trim();
-            var category = Convert.ToString(parsed["category"]).Trim();
-            var keywordsToken = parsed["keywords"];
-            var keywords = keywordsToken is JArray
-                ? string.Join(",", ((JArray)keywordsToken).Select(x => x.ToString().Trim()).Where(x => x.Length > 0))
-                : Convert.ToString(keywordsToken).Trim();
             var reason = Convert.ToString(parsed["reason"]).Trim();
 
             if (!shouldLearn
