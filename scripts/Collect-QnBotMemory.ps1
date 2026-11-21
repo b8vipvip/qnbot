@@ -257,7 +257,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
             if ([int]$learningSnapshot.SchemaVersion -ne 1) {
                 $learningSnapshotStatus = 'unsupported_schema'
             }
-            elseif ($learningSnapshotAgeSeconds -lt -30 -or $learningSnapshotAgeSeconds -gt 300) {
+            elseif ($learningSnapshotAgeSeconds -lt -30 -or $learningSnapshotAgeSeconds -gt 604800) {
                 $learningSnapshotStatus = 'stale'
             }
             elseif (($runtimeStatus -ne 'fresh' -and $runtimeStatus -ne 'partial') -or [int]$learningSnapshot.ProcessId -ne $runtimeProcessId -or [long]$learningSnapshot.ProcessStartTimeUtcTicks -ne $runtimeProcessStartTicks) {
