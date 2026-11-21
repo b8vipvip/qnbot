@@ -53,3 +53,17 @@ def test_timing_profile_is_persistent_private_and_flushed_on_shutdown():
     assert "AddDays(-30)" in service
     assert "AdaptiveReplyTimingService.Flush()" in app
     assert "AdaptiveReplyTimingService.cs" in targets
+
+
+def test_adaptive_timing_profiles_are_isolated_by_shopkey():
+    service = read("src/Bot/ChromeNs/AdaptiveReplyTimingService.cs")
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+
+    assert "RecordInterval(\n            string shopKey," in service
+    assert "AdjustDelay(\n            string shopKey," in service
+    assert "GetSnapshot(string shopKey, string seller, string buyer)" in service
+    assert "BuildKey(string shopKey, string seller, string buyer)" in service
+    assert 'return (shopKey ?? string.Empty).Trim()' in service
+    assert "Legacy unscoped profiles are intentionally not reused" in service
+    assert "RecordInterval(\n                    item.ShopKey, item.SellerNick, item.BuyerNick" in coordinator
+    assert "AdjustDelay(\n                latestItem.ShopKey, latestItem.SellerNick, latestItem.BuyerNick" in coordinator
