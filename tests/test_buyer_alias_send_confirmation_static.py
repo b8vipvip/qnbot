@@ -12,7 +12,8 @@ def test_send_confirmation_observes_structured_conversation_alias_before_compari
     source = read("src/Bot/ChromeNs/QN.cs")
 
     start = source.index("private async Task<bool> EnsureActiveBuyerForSendAsync")
-    block = source[start: start + 3200]
+    end = source.index("public async void SendImageAsync", start)
+    block = source[start:end]
     observe = block.index("BuyerIdentityAliasService.Observe(")
     equivalent = block.index("BuyerIdentityAliasService.AreEquivalent(sellerNick, currentNick, buyer)")
 
