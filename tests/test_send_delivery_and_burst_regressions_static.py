@@ -73,8 +73,15 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     manual_end = progress.index("public static void ObserveNewBuyerTurn", manual_start)
     assert "SendDeliveryWatchdog.CancelConversation" not in progress[manual_start:manual_end]
     assert "Entries.TryRemove" not in progress[manual_start:manual_end]
-    assert "QueueManualAnswerComparison" in learning
-    assert "return false;" in learning[learning.index("public static bool TryBlockForManualReply"):]
+    manual = learning[
+        learning.index("public static bool TryBlockForManualReply"):
+        learning.index("public static bool TryTakeSendBlock")
+    ]
+    assert "QueueManualAnswerComparison" in manual
+    assert "SendDeliveryWatchdog.IsKnownBotAnswer" in manual
+    assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
+    assert "return true;" in manual
+    assert 'SetSendCancellation("人工接管"' in read("src/Bot/ChromeNs/QNRpa.cs)
 
 
 def test_buyer_session_runtime_bridge_uses_send_ledger_as_only_echo_authorship_source():
@@ -185,3 +192,21 @@ def test_control_plane_runtime_guard_is_installed_and_packaged():
     assert "RUNTIME_ATTEMPT_TIMEOUT_SECONDS" in guard
     assert "Interleave providers, models and protocols" in guard
     assert "for provider, models, protocols_by_model in prepared" in guard
+
+def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_generations():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
+    manual = learning[
+        learning.index("public static bool TryBlockForManualReply"):
+        learning.index("public static bool TryTakeSendBlock")
+    ]
+
+    bot_guard = manual.index("SendDeliveryWatchdog.IsKnownBotAnswer")
+    same_answer = manual.index("var sameAsCandidate =")
+    block = manual.index("return true;", same_answer)
+    greeting = manual.index("ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)")
+    assert bot_guard < same_answer < block
+    assert "sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
+    assert greeting < block
+    assert 'SetSendCancellation("人工接管"' in qnrpa
+    assert "自动发送因人工接管取消，禁止重试" in qnrpa
