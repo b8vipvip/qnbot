@@ -1,4 +1,5 @@
 name: GPTAuto Reconcile
+run-name: "GPTAuto Reconcile (${{ inputs.task_id }} / PR #${{ inputs.pr_number }})"
 on:
   workflow_dispatch:
     inputs:
