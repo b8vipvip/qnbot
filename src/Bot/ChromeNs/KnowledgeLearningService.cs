@@ -470,8 +470,9 @@ namespace Bot.ChromeNs
                 || (action != "add" && action != "update")
                 || confidence < 0.95
                 || !CanLearn(question, manualAnswer)
-                || !CanLearn(learnedQuestion, learnedAnswer)
-                || KnowledgeEngineV2Semantics.TextSimilarity(question, learnedQuestion) < 0.68
+                // The model's normalized question/answer are review metadata only. The
+                // durable write below deliberately stores the actual buyer wording and
+                // exact human reply, so a paraphrase mismatch must not discard valid evidence.
                 || ContainsUnsafeManualLearning(question + " " + manualAnswer)
                 || ContainsUnsafeManualLearning(learnedQuestion + " " + learnedAnswer))
             {
