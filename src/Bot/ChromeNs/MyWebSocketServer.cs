@@ -1252,6 +1252,9 @@ namespace Bot.ChromeNs
                     {
                         try
                         {
+                            // A close callback removes this marker before releasing the client.
+                            // Ignore any late frame emitted by the old physical socket.
+                            if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;
                             // Transport heartbeats and diagnostic/status snapshots are not
                             // seller activity. They must not keep idle duplicate pages alive
                             // forever or the idle standby sweeper can never retire them.
