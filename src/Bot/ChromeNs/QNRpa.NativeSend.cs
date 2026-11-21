@@ -87,7 +87,8 @@ namespace Bot.ChromeNs
         /// a Qianniu submission even if the real-time seller echo is late/missing, so the same text
         /// is never re-written merely because transport evidence arrived late.
         /// </summary>
-        private async Task<bool> TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart, string shopKey)
+        private async Task<bool> TrySendTextNativeFirstAsync(
+            string buyer, string text, DateTime sendStart, string shopKey, Func<bool> manualTakeoverCheck)
         {
             if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
             {
@@ -96,6 +97,11 @@ namespace Bot.ChromeNs
             }
 
             if (await StopIfPlatformSendBlockedAsync(buyer, text, "发送前", shopKey).ConfigureAwait(false)) return false;
+            if (manualTakeoverCheck != null && manualTakeoverCheck())
+            {
+                await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                return false;
+            }
 
             var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
             if (domTriggered)
@@ -124,6 +130,11 @@ namespace Bot.ChromeNs
             if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
             {
                 SetSendFailure("HWND发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
+                return false;
+            }
+            if (manualTakeoverCheck != null && manualTakeoverCheck())
+            {
+                await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
                 return false;
             }
             var hwndPosted = await RunUiActionAsync(
@@ -157,6 +168,11 @@ namespace Bot.ChromeNs
                 SetSendFailure("UIA发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
                 return false;
             }
+            if (manualTakeoverCheck != null && manualTakeoverCheck())
+            {
+                await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                return false;
+            }
             var safeUiaInvoked = await RunUiActionAsync(
                 TryInvokeCachedSendButtonNow,
                 "发送按钮左侧UIA安全调用（原生前置）",
@@ -188,7 +204,8 @@ namespace Bot.ChromeNs
                 SetSendFailure("兼容发送前店铺身份确认", "当前CDP登录身份已变化，已阻止发送回退");
                 return false;
             }
-            var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
+            var uiResult = await TrySendTextViaUiaAsync(
+                buyer, text, sendStart, manualTakeoverCheck).ConfigureAwait(false);
             if (uiResult) return true;
             if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后", shopKey).ConfigureAwait(false)) return false;
 
