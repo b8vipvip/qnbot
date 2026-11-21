@@ -90,6 +90,7 @@ namespace Bot.Knowledge
                 value.SchemaVersion = Schema;
                 value.Contacts = new List<string>();
                 value.Completed = new List<string>();
+                value.ArchivedMessages = 0;
                 value.State = "interrupted";
             }
             else if (value.SchemaVersion != Schema)
