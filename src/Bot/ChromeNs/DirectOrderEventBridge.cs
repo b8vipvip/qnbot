@@ -168,11 +168,30 @@ namespace Bot.ChromeNs
             var raw = e == null ? string.Empty : (e.NotifyContent ?? string.Empty);
             if (qn == null || raw.Length == 0 || !LooksPotential(raw)) return;
 
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("消息中心订单通知无法确认来源店铺，已跳过: error=" + ex.Message);
+                return;
+            }
+            var runtimeSeller = (qn.Seller.Nick ?? string.Empty).Trim();
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, runtimeSeller, StringComparison.Ordinal))
+            {
+                Log.Info("消息中心订单通知店铺身份不一致，已跳过: seller=" + runtimeSeller);
+                return;
+            }
+
             var hash = Hash(raw);
+            var reservationKey = shop.ShopKey + "#" + hash;
             CleanupReservations();
             DateTime until;
-            if (RawReservations.TryGetValue(hash, out until) && until >= DateTime.Now) return;
-            RawReservations[hash] = DateTime.Now.AddMinutes(2);
+            if (RawReservations.TryGetValue(reservationKey, out until) && until >= DateTime.Now) return;
+            RawReservations[reservationKey] = DateTime.Now.AddMinutes(2);
 
             try
             {
@@ -187,13 +206,22 @@ namespace Bot.ChromeNs
                         + envelope.OrderId + ", payloadHash=" + hash);
                     return;
                 }
+                if (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, envelope.Seller))
+                {
+                    Log.Info("消息中心订单通知卖家身份与来源千牛会话不一致，已跳过: shop="
+                        + shop.ShopKey + ", orderId=" + envelope.OrderId);
+                    return;
+                }
 
                 var synthetic = new QNChatMessage { summary = envelope.Text };
-                await qn.ProcessDirectOrderMessageAsync(
-                    synthetic,
-                    envelope.Seller,
-                    envelope.Buyer,
-                    "messageCenterNotify订单通知");
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    await qn.ProcessDirectOrderMessageAsync(
+                        synthetic,
+                        envelope.Seller,
+                        envelope.Buyer,
+                        "messageCenterNotify订单通知");
+                }
             }
             catch (Exception ex)
             {
@@ -229,10 +257,31 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (qn == null || seller.Length == 0 || buyer.Length == 0) return;
 
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("右侧订单面板兜底无法确认来源店铺，已跳过: seller=" + seller
+                    + ", buyer=" + buyer + ", error=" + ex.Message);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+            {
+                Log.Info("右侧订单面板兜底来源店铺与卖家昵称不一致，已跳过: seller=" + seller
+                    + ", buyer=" + buyer);
+                return;
+            }
+
             var normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             if (!string.IsNullOrWhiteSpace(normalizedBuyer)) buyer = normalizedBuyer;
-            var key = NormalizeIdentityKey(seller) + "#" + NormalizeIdentityKey(buyer);
-            if (key == "#") return;
+            // Same seller/buyer nicknames can exist in different shops. Scope both the
+            // reservation and the async retry generation by the exact QN ShopKey.
+            var key = shop.ShopKey + "#" + NormalizeIdentityKey(seller) + "#" + NormalizeIdentityKey(buyer);
+            var capturedShopKey = shop.ShopKey;
 
             var version = Interlocked.Increment(ref _visiblePanelScanVersion);
             VisiblePanelScanVersions[key] = version;
@@ -249,7 +298,19 @@ namespace Bot.ChromeNs
 
                         long latest;
                         if (!VisiblePanelScanVersions.TryGetValue(key, out latest) || latest != version) return;
-                        if (await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source).ConfigureAwait(false)) return;
+                        ShopContext currentShop;
+                        try { currentShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                        catch { return; }
+                        if (currentShop == null
+                            || !string.Equals(currentShop.ShopKey, capturedShopKey, StringComparison.Ordinal)
+                            || !string.Equals(currentShop.SellerNick, seller, StringComparison.Ordinal))
+                            return;
+
+                        using (ShopSettingsScope.Enter(currentShop))
+                        {
+                            if (await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source).ConfigureAwait(false))
+                                return;
+                        }
                     }
                 }
                 catch (Exception ex)
