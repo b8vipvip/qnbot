@@ -53,4 +53,4 @@ def test_handoff_docs_track_current_runtime_contract_instead_of_2026_08_pending_
     assert "55 秒绝对期限覆盖" in progress
     assert "1.5 秒" in progress and "9 秒" in progress
     assert "当前没有开放 PR" in handoff
-    assert "下一步应使用 `bot-v1.1.2380` 真实运行证据继续验收" in handoff
+    assert "下一步应使用 `bot-v1.1.2470` 真实运行证据继续验收" in handoff
