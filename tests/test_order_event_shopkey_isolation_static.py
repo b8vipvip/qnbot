@@ -152,3 +152,35 @@ def test_send_attempt_leases_owned_drafts_and_business_critical_authority_are_sh
     assert "IsProtectedFromBuyerUpdate(string shopKey, string seller" in authority
     assert "string.Equals(state.ShopKey, shopKey, StringComparison.Ordinal)" in authority
     assert "BeginBusinessCritical(\n                    plan.ShopKey," in order
+
+
+def test_explicit_shop_scope_is_revalidated_before_buyer_navigation_and_each_send_retry():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    helper = qn[
+        qn.index("private bool IsCurrentShopScopeValidForSend"):
+        qn.index("private async Task<bool> EnsureActiveBuyerForSendAsync")
+    ]
+    ensure = qn[
+        qn.index("private async Task<bool> EnsureActiveBuyerForSendAsync"):
+        qn.index("public async void SendImageAsync")
+    ]
+    send = qn[
+        qn.index("public async Task<bool> SendTextWithRetryAsync"):
+        qn.index("private async Task<bool> EnsureActiveBuyerForSendAsync")
+    ]
+    assert "ShopSettingsScope.Current" in helper
+    assert "client.ShopKey, expectedShopKey" in helper
+    assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in helper
+    assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in helper
+    assert ensure.count("IsCurrentShopScopeValidForSend") >= 4
+    assert "IsCurrentShopScopeValidForSend" in send
+    assert send.index("IsCurrentShopScopeValidForSend") < send.index("EnsureActiveBuyerForSendAsync")
+    assert "重试ShopKey作用域复核" in send
+
+    guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
+    verify = guard[
+        guard.index("internal async Task<bool> VerifyShopIdentityBeforeSendAsync"):
+        guard.index("private async Task<bool> StopIfPlatformSendBlockedAsync")
+    ]
+    assert "ShopSettingsScope.Current" in verify
+    assert "scopedShop.ShopKey" in verify
