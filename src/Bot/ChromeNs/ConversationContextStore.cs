@@ -352,43 +352,55 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static bool TryTakeProductLinkReply(string seller, string buyer, string question, out string reply)
+        public static bool TryTakeProductLinkReply(
+            string seller,
+            string buyer,
+            string question,
+            out string reply,
+            string shopKey = null)
         {
             reply = string.Empty;
-            TimelineState state;
-            if (!States.TryGetValue(Key(seller, buyer), out state)) return false;
-            lock (state.Sync)
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null || buyer.Length == 0) return false;
+            using (ShopSettingsScope.Enter(shop))
             {
-                var pending = state.PendingPreset;
-                if (pending == null || pending.ExpiresAt < DateTime.Now)
+                TimelineState state;
+                if (!States.TryGetValue(Key(seller, buyer), out state)) return false;
+                lock (state.Sync)
                 {
+                    var pending = state.PendingPreset;
+                    if (pending == null || pending.ExpiresAt < DateTime.Now)
+                    {
+                        state.PendingPreset = null;
+                        return false;
+                    }
+                    var normalized = NormalizeText(question);
+                    if (!string.IsNullOrWhiteSpace(pending.QuestionKey)
+                        && !string.IsNullOrWhiteSpace(normalized)
+                        && pending.QuestionKey != normalized)
+                    {
+                        return false;
+                    }
+                    // An operator may have disabled/deleted the preset while it
+                    // was waiting inside the two-minute receive buffer.
+                    var selectedReply = pending.Reply ?? string.Empty;
                     state.PendingPreset = null;
-                    return false;
+                    // Fail closed if the selected preset is disabled, edited or no longer
+                    // matches this exact item while the event waits in the queue.
+                    if (!BotReplyPresetService.GetEnabledPresets(seller).Any(x =>
+                        string.Equals(x.Id, pending.PresetId, StringComparison.Ordinal)
+                        && string.Equals(x.Text, selectedReply, StringComparison.Ordinal)
+                        && BotReplyPresetService.GetPresetsForProductLink(seller, pending.ProductItemId)
+                            .Any(y => string.Equals(x.Id, y.Id, StringComparison.Ordinal))))
+                    {
+                        reply = string.Empty;
+                        return false;
+                    }
+                    reply = selectedReply;
+                    return !string.IsNullOrWhiteSpace(reply);
                 }
-                var normalized = NormalizeText(question);
-                if (!string.IsNullOrWhiteSpace(pending.QuestionKey)
-                    && !string.IsNullOrWhiteSpace(normalized)
-                    && pending.QuestionKey != normalized)
-                {
-                    return false;
-                }
-                // An operator may have disabled/deleted the preset while it
-                // was waiting inside the two-minute receive buffer.
-                var selectedReply = pending.Reply ?? string.Empty;
-                state.PendingPreset = null;
-                // Fail closed if the selected preset is disabled, edited or no longer
-                // matches this exact item while the event waits in the queue.
-                if (!BotReplyPresetService.GetEnabledPresets(seller).Any(x =>
-                    string.Equals(x.Id, pending.PresetId, StringComparison.Ordinal)
-                    && string.Equals(x.Text, selectedReply, StringComparison.Ordinal)
-                    && BotReplyPresetService.GetPresetsForProductLink(seller, pending.ProductItemId)
-                        .Any(y => string.Equals(x.Id, y.Id, StringComparison.Ordinal))))
-                {
-                    reply = string.Empty;
-                    return false;
-                }
-                reply = selectedReply;
-                return !string.IsNullOrWhiteSpace(reply);
             }
         }
 
