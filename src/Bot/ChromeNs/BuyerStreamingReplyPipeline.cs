@@ -758,7 +758,7 @@ namespace Bot.ChromeNs
                     return "错误：该预设回复已被客服撤回，未再次发送。";
                 }
                 KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, presetReply,
-                    BotReplyPresetService.ResolveSourceLabel(seller, presetReply));
+                    BotReplyPresetService.ResolveSourceLabel(seller, presetReply, shopKey));
                 MessageProcessingTraceService.RecordKnowledgeDecision(
                     seller, buyer, "命中本地预设回复", "来源=商品链接/预设回复", 0);
                 return presetReply;
