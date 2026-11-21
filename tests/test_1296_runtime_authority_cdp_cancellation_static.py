@@ -59,3 +59,14 @@ def test_cdp_dispatcher_rejects_late_responses_from_closed_websocket_sessions():
     assert "var server = MyWebSocketServer.WSocketSvrInst;" in dispatcher
     assert "server.IsWebSocketSessionConnected(session.SessionID)" in dispatcher
     assert dispatcher.index("IsWebSocketSessionConnected") < dispatcher.index("SessionClients.TryGetValue")
+
+def test_cdp_message_handler_rechecks_connection_before_completing_waiters():
+    source = read("src/Bot/ChromeNs/CDPClient.cs")
+    handler = source[
+        source.index("private void OnWSocketRecieveMessage"):
+        source.index("private bool HasCurrentShopAuthority")
+    ]
+
+    assert "if (IsInvalidated || server == null || !server.IsWebSocketSessionConnected(session.SessionID)) return;" in handler
+    assert handler.index("IsWebSocketSessionConnected") < handler.index("if (e.Type == \"execute\")")
+    assert handler.index("IsWebSocketSessionConnected") < handler.index("DuplicateCdpInboundRecoveryBridge.TryDispatchRawInbound")
