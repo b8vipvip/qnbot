@@ -81,3 +81,30 @@ def test_each_fallback_revalidates_exact_owned_draft_and_reports_integrity_misma
 def test_native_send_helper_is_compiled_for_bot_and_wpf_temp_projects():
     props = read("src/Bot/Directory.Build.props")
     assert "ChromeNs\\QNRpa.NativeSend.cs" in props
+
+
+def test_dom_send_is_pinned_to_the_verified_authoritative_shop_session():
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    send = native[
+        native.index("private async Task<bool> TrySendTextNativeFirstAsync"):
+        native.index("private bool IsExpectedShopSessionCurrent")
+    ]
+    assert send.index("VerifyShopIdentityBeforeSendAsync(shopKey)") < send.index("TryTriggerSendViaCdpDomAsync")
+    assert "TryTriggerSendViaCdpDomAsync(buyer, shopKey, sourceClient)" in send
+    assert "禁止其他发送回退以避免重复发送" in send
+
+    authority = native[
+        native.index("private bool IsExpectedShopSessionCurrent"):
+        native.index("private async Task<bool> TryTriggerSendViaCdpDomAsync")
+    ]
+    assert "ReferenceEquals(_qn.CDP, sourceClient)" in authority
+    assert "sourceClient.IsInvalidated" in authority
+    assert "sourceClient.IsShopIdentityRetired" in authority
+    assert "server.IsAuthoritativeShopSession(expectedShopKey, sourceClient.SessionId)" in authority
+
+    dom = native[
+        native.index("private async Task<bool> TryTriggerSendViaCdpDomAsync"):
+        native.index("private bool TryPostSafeMainSendMouseMessage")
+    ]
+    assert "sourceClient.EvaluateExpressionAsync" in dom
+    assert "_qn.CDP.EvaluateExpressionAsync" not in dom
