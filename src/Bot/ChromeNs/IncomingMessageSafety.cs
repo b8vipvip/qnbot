@@ -249,7 +249,7 @@ namespace Bot.ChromeNs
         private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v" };
         private static readonly string[] AudioExtensions = { ".amr", ".mp3", ".wav", ".m4a", ".aac", ".ogg" };
 
-        public static IncomingMessageDecision Evaluate(QNChatMessage message, string messageText, DateTime safetyStartedAt)
+        public static IncomingMessageDecision Evaluate(QNChatMessage message, string messageText, DateTime safetyStartedAt, string shopKey = null)
         {
             string nonBuyerReason;
             var sellerNick = message == null || message.loginid == null ? string.Empty : message.loginid.nick;
@@ -285,7 +285,7 @@ namespace Bot.ChromeNs
                 // A buyer withdrawal must invalidate only the outgoing reply, not the already
                 // started download/vision analysis. Mark the latest image so the withdrawal-aware
                 // visual pipeline can suppress stale sending while preserving the local cache.
-                VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText);
+                VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText, shopKey);
                 return Skip("[撤回提示]", "已跳过：检测到消息撤回提示；图片若已收到将继续后台分析，但不会直接回复已撤回内容。");
             }
 
@@ -313,7 +313,7 @@ namespace Bot.ChromeNs
                 // Start downloading immediately, before the burst quiet delay. The complete image
                 // is written under the persistent user-data directory and remains available even
                 // if the buyer withdraws the remote message a moment later.
-                VisionImageCacheService.Prime(message, messageText);
+                VisionImageCacheService.Prime(message, messageText, shopKey);
             }
             if (!string.IsNullOrWhiteSpace(unsupportedType))
             {
