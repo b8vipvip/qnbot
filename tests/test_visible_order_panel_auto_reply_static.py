@@ -76,3 +76,33 @@ def test_visible_panel_reuses_order_event_hub_auto_reply_pipeline():
     assert "ProcessAcceptedOrderEventFallbackAsync(snapshot, seenAt)" in hub_fallback
     assert "cfg.EnableOrderPlacedReply" in hub_fallback
     assert "await ProcessOrderPlacedReplyAsync(plan);" in hub_fallback
+
+def test_message_center_order_deduplication_is_scoped_to_the_exact_shopkey():
+    code = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    method = code[
+        code.index("private static async void OnMessageCenterNotify"):
+        code.index("private static void OnShopRobotNewMessage")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in method
+    assert "var reservationKey = shop.ShopKey + \"#\" + hash;" in method
+    assert "RawReservations.TryGetValue(reservationKey, out until)" in method
+    assert "RawReservations[reservationKey]" in method
+    assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, envelope.Seller)" in method
+    assert "using (ShopSettingsScope.Enter(shop))" in method
+    assert "RawReservations.TryGetValue(hash, out until)" not in method
+
+
+def test_visible_order_panel_retry_generations_are_shop_scoped_and_revalidate_qn_identity():
+    code = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    method = code[
+        code.index("private static void ScheduleVisibleOrderPanelScan"):
+        code.index("private static string NormalizeIdentityKey")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in method
+    assert 'var key = shop.ShopKey + \"#\" + NormalizeIdentityKey(seller)' in method
+    assert "var capturedShopKey = shop.ShopKey;" in method
+    assert "currentShop.ShopKey, capturedShopKey, StringComparison.Ordinal" in method
+    assert "using (ShopSettingsScope.Enter(currentShop))" in method
+    assert "await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source)" in method
