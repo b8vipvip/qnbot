@@ -89,7 +89,7 @@ def test_message_center_order_deduplication_is_scoped_to_the_exact_shopkey():
     assert "RawReservations.TryGetValue(reservationKey, out until)" in method
     assert "RawReservations[reservationKey]" in method
     assert "DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, envelope.Seller)" in method
-    assert "using (ShopSettingsScope.Enter(shop))" in method
+    assert "using (ShopSettingsScope.Enter(shop, false))" in method
     assert "RawReservations.TryGetValue(hash, out until)" not in method
 
 
@@ -104,5 +104,5 @@ def test_visible_order_panel_retry_generations_are_shop_scoped_and_revalidate_qn
     assert 'var key = shop.ShopKey + \"#\" + NormalizeIdentityKey(seller)' in method
     assert "var capturedShopKey = shop.ShopKey;" in method
     assert "currentShop.ShopKey, capturedShopKey, StringComparison.Ordinal" in method
-    assert "using (ShopSettingsScope.Enter(currentShop))" in method
+    assert "using (ShopSettingsScope.Enter(currentShop, false))" in method
     assert "await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source)" in method
