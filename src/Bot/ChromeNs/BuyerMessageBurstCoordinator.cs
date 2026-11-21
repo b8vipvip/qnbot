@@ -948,7 +948,7 @@ namespace Bot.ChromeNs
                     ? DateTime.MinValue
                     : state.Items[state.Items.Count - 1].ReceivedAt;
                 AdaptiveReplyTimingService.RecordInterval(
-                    item.SellerNick, item.BuyerNick, previousReceivedAt, item.ReceivedAt);
+                    item.ShopKey, item.SellerNick, item.BuyerNick, previousReceivedAt, item.ReceivedAt);
 
                 if (state.ActivityLease == null)
                     state.ActivityLease = BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick);
@@ -1235,7 +1235,7 @@ namespace Bot.ChromeNs
             else if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24) { baseline = 800; kind = AdaptiveDelayKind.Fragment; }
             else { baseline = 350; kind = AdaptiveDelayKind.Complete; }
             return AdaptiveReplyTimingService.AdjustDelay(
-                latestItem.SellerNick, latestItem.BuyerNick, baseline, kind);
+                latestItem.ShopKey, latestItem.SellerNick, latestItem.BuyerNick, baseline, kind);
         }
 
         private static bool IsGreetingOnly(string text)
