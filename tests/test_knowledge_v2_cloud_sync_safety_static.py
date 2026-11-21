@@ -49,7 +49,8 @@ def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
     assert "lock(state.Sync)" in method
     assert "ComputeCloudSyncFingerprint(current)" in method
     assert "if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty" in method
-    assert method.index("if(!string.Equals(currentFingerprint") < method.index("state.Db.ClearTable")
+    assert method.index("if(!string.Equals(currentFingerprint") < method.index("state.Db.ReplaceRecordsInTransaction")
+    assert "state.Db.ReplaceRecordsInTransaction" in method
     assert "MirrorAllToLegacy(shop,normalized)" in method
     assert "KnowledgeEngineV2Service.ReplaceSnapshot(seller,normalized)" in method
 
