@@ -71,3 +71,30 @@ def test_recovery_does_not_hold_navigation_locks_while_processing_answers():
     release_pos = source.index("if (recoveryGateAcquired) _backgroundRecoveryGate.Release();")
     process_pos = source.index("ProcessRecoveredMessageWithKnownBuyerAsync")
     assert release_pos < process_pos
+
+def test_background_message_recovery_aliases_are_scoped_to_the_exact_qn_shop():
+    source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    key = source[
+        source.index("private string RecoveryKey"):
+        source.index("private void MarkBuyerMessageObserved")
+    ]
+    schedule = source[
+        source.index("private void ScheduleBackgroundMessageRecovery"):
+        source.index("private async Task<bool> RecoverMissedBuyerMessagesAsync")
+    ]
+    recovery = source[
+        source.index("private async Task<bool> RecoverMissedBuyerMessagesAsync"):
+        source.index("private async Task ProcessRecoveredMessageWithKnownBuyerAsync")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in key
+    assert "shop.ShopKey + \"#\" + seller + \"#\"" in key
+    assert "ShopSettingsScope.Enter(shop, false)" in key
+    assert "ResolveRecoveryShop(seller)" in schedule
+    assert "BuyerIdentityAliasService.Observe" in schedule
+    assert "ShopSettingsScope.Enter(shop, false)" in schedule
+    assert "ResolveBuyerInternalNickInShop(seller, buyer)" in recovery
+    assert "AreBuyerAliasesEquivalentInShop(seller, current.Nick, buyer)" in recovery
+    assert "ObserveBuyerAliasInShop(seller, current.Nick, current.Display, current.TargetId)" in recovery
+    assert "ResolveBuyerConversationKeyInShop(seller, current.Nick)" in recovery
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer)" not in source
