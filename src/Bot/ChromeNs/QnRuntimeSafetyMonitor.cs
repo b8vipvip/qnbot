@@ -96,9 +96,19 @@ namespace Bot.ChromeNs
             }
 
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-            if (!HasVerifiedReceptionDesk(seller))
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
             {
-                RecordNoActiveChat(qn, seller, "未检测到已验证的千牛接待聊天窗口，暂停当前买家探测");
+                Log.Info("当前买家主动探测无法确认来源ShopKey，已跳过: " + ex.Message);
+                return;
+            }
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                return;
+            if (!HasVerifiedReceptionDesk(seller, shop.ShopKey))
+            {
+                RecordNoActiveChat(qn, seller, "未检测到当前ShopKey对应的千牛接待聊天窗口，暂停买家探测");
                 return;
             }
 
@@ -112,7 +122,7 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    await ProbeCurrentConversationAsync(qn);
+                    await ProbeCurrentConversationAsync(qn, shop.ShopKey);
                 }
                 catch (Exception ex)
                 {
@@ -126,52 +136,70 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static async Task ProbeCurrentConversationAsync(QN qn)
+        private static async Task ProbeCurrentConversationAsync(QN qn, string expectedShopKey)
         {
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0 || qn.CDP == null) return;
-            if (!HasVerifiedReceptionDesk(seller))
-            {
-                RecordNoActiveChat(qn, seller, "接待聊天窗口已离开，暂停当前买家探测");
-                return;
-            }
 
-            var first = await qn.GetCurrentConversationID();
-            var firstNick = ReadConversationNick(first);
-            if (firstNick.Length == 0)
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+            catch (Exception ex)
             {
-                RecordNoActiveChat(qn, seller, "接待窗口在线，但当前没有选中的买家会话");
+                Log.Info("当前买家主动探测执行前ShopKey已失效，已跳过: " + ex.Message);
                 return;
             }
+            if (shop == null
+                || !string.Equals(shop.ShopKey, expectedShopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                return;
 
-            var currentNick = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
-            if (RejectNonBuyerProbe(qn, seller, first, currentNick, "first_read")) return;
-            if (AreSameBuyer(seller, currentNick, firstNick))
+            // Alias resolution must use this QN's exact ShopKey. Seller nickname alone is
+            // ambiguous when two stores share the same customer-service account name.
+            using (ShopSettingsScope.Enter(shop, false))
             {
-                RecordProbeSuccess(qn, seller, firstNick, false);
-                return;
-            }
+                if (!HasVerifiedReceptionDesk(seller, shop.ShopKey))
+                {
+                    RecordNoActiveChat(qn, seller, "当前ShopKey接待聊天窗口已离开，暂停买家探测");
+                    return;
+                }
 
-            await Task.Delay(220);
-            var second = await qn.GetCurrentConversationID();
-            var secondNick = ReadConversationNick(second);
-            if (secondNick.Length == 0)
-            {
-                RecordNoActiveChat(qn, seller, "当前会话切换中，第二次探测暂时为空");
-                return;
-            }
-            if (RejectNonBuyerProbe(qn, seller, second, currentNick, "stable_read")) return;
-            if (!AreSameBuyer(seller, firstNick, secondNick))
-            {
-                RecordProbeFailure(qn, "当前会话连续两次读取不稳定: first=" + firstNick + ", second=" + secondNick);
-                return;
-            }
+                var first = await qn.GetCurrentConversationID();
+                var firstNick = ReadConversationNick(first);
+                if (firstNick.Length == 0)
+                {
+                    RecordNoActiveChat(qn, seller, "接待窗口在线，但当前没有选中的买家会话");
+                    return;
+                }
 
-            var resolved = BuyerIdentityAliasService.ResolveInternalNick(seller, secondNick);
-            qn.SetActiveConversationByNick(seller, resolved, "runtimeConversationProbe");
-            Log.Info("当前买家由主动探测修正: seller=" + seller
-                + ", previous=" + currentNick + ", current=" + resolved);
-            RecordProbeSuccess(qn, seller, resolved, true);
+                var currentNick = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+                if (RejectNonBuyerProbe(qn, seller, first, currentNick, "first_read")) return;
+                if (AreSameBuyer(seller, currentNick, firstNick))
+                {
+                    RecordProbeSuccess(qn, seller, firstNick, false);
+                    return;
+                }
+
+                await Task.Delay(220);
+                var second = await qn.GetCurrentConversationID();
+                var secondNick = ReadConversationNick(second);
+                if (secondNick.Length == 0)
+                {
+                    RecordNoActiveChat(qn, seller, "当前会话切换中，第二次探测暂时为空");
+                    return;
+                }
+                if (RejectNonBuyerProbe(qn, seller, second, currentNick, "stable_read")) return;
+                if (!AreSameBuyer(seller, firstNick, secondNick))
+                {
+                    RecordProbeFailure(qn, "当前会话连续两次读取不稳定: first=" + firstNick + ", second=" + secondNick);
+                    return;
+                }
+
+                var resolved = BuyerIdentityAliasService.ResolveInternalNick(seller, secondNick);
+                qn.SetActiveConversationByNick(seller, resolved, "runtimeConversationProbe");
+                Log.Info("当前买家由主动探测修正: seller=" + seller
+                    + ", previous=" + currentNick + ", current=" + resolved);
+                RecordProbeSuccess(qn, seller, resolved, true);
+            }
         }
 
         private static bool RejectNonBuyerProbe(
@@ -198,13 +226,14 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static bool HasVerifiedReceptionDesk(string seller)
+        private static bool HasVerifiedReceptionDesk(string seller, string shopKey)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return false;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0) return false;
             try
             {
-                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
                 return desk != null && desk.IsAlive;
             }
             catch
