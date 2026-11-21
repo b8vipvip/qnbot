@@ -257,7 +257,7 @@ namespace Bot.ChromeNs
                 manualAnswer = sellerEcho;
                 var sameAsCandidate = string.Equals(
                     Normalize(sellerEcho), Normalize(candidateAnswer), StringComparison.Ordinal);
-                if (sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))
+                if (!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))
                 {
                     RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
                     if (!sameAsCandidate)
