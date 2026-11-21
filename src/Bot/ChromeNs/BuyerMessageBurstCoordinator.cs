@@ -951,7 +951,7 @@ namespace Bot.ChromeNs
                     item.ShopKey, item.SellerNick, item.BuyerNick, previousReceivedAt, item.ReceivedAt);
 
                 if (state.ActivityLease == null)
-                    state.ActivityLease = BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick);
+                    state.ActivityLease = BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick, item.ShopKey);
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12)
