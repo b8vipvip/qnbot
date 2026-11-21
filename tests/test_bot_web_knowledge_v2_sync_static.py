@@ -63,8 +63,9 @@ def test_windows_v2_cloud_revision_and_fingerprint_survive_process_restart():
     assert "States.GetOrAdd(shop.ShopKey,_=>LoadState(shop))" in s
     assert "new ShopScopedSettingsStore(shop,Paths)" in s
     assert "store.TryGetString(RevisionKey,out revisionText)" in s
-    assert "store.SetString(RevisionKey,revision)" in s
-    assert "store.SetString(FingerprintKey,fingerprint)" in s
+    assert "store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)" in s
+    assert "{ RevisionKey, revision }" in s
+    assert "{ FingerprintKey, fingerprint }" in s
 
 def test_runtime_sync_save_uses_atomic_revision_compare_and_swap():
     s=read(SERVER)
