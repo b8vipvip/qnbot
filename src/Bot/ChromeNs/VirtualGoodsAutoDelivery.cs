@@ -975,7 +975,7 @@ namespace Bot.ChromeNs
             }
         }
 
-                private bool IsAutoDeliverySourceSessionCurrent(string shopKey, CDPClient sourceClient)
+        private bool IsAutoDeliverySourceSessionCurrent(string shopKey, CDPClient sourceClient)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
             if (shopKey.Length == 0 || sourceClient == null
