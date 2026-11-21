@@ -376,21 +376,21 @@ namespace Bot.ChromeNs
 
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
-                item.SellerNick, item.BuyerNick, question, out firstReply);
+                item.SellerNick, item.BuyerNick, question, out firstReply, item.ShopKey);
             if (firstReserved)
             {
                 var firstOk = await SendFixedAsync(
                     qn, item, firstReply, "首条咨询固定回复", cancellationToken).ConfigureAwait(false);
                 if (firstOk)
                 {
-                    FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick);
+                    FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick, item.ShopKey);
                 }
                 else
                 {
                     FirstInquiryFixedReplyService.ReleaseReservation(
                         item.SellerNick,
                         item.BuyerNick,
-                        qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason());
+                        qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason(), item.ShopKey);
                     return cancellationToken.IsCancellationRequested
                         ? CanonicalPreMergeOutcome.Cancelled
                         : CanonicalPreMergeOutcome.Failed;
