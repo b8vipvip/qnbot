@@ -324,7 +324,12 @@ namespace Bot.ChromeNs
                 }
             }
 
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            AutoReplyRuleConfig cfg;
+            // The event may arrive on a background/standby QN with no ambient AsyncLocal
+            // scope. Read the rule snapshot from the exact ShopKey resolved above rather
+            // than silently falling back to the global legacy params row.
+            using (ShopSettingsScope.Enter(shop, false))
+                cfg = BotFeatureStore.GetAutoReplyRules();
             if (cfg == null || !cfg.EnableOrderPlacedReply) return true;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
 
