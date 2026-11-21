@@ -124,3 +124,31 @@ def test_order_attention_cards_render_only_in_the_exact_shop_desk():
     assert "using (ShopSettingsScope.Enter(shop, false))" in show
     assert show.index("ShopSettingsScope.Enter(shop, false)") < show.index("var desk = Desk.Inst")
     assert "desk.AddConversation(" in show
+
+
+def test_send_attempt_leases_owned_drafts_and_business_critical_authority_are_shop_scoped():
+    rpa = read("src/Bot/ChromeNs/QNRpa.cs")
+    assert "private string _lastOwnedDraftShopKey = string.Empty;" in rpa
+    assert "_lastOwnedDraftShopKey = ResolveShopKey();" in rpa
+    assert "string.Equals(_lastOwnedDraftShopKey, currentShopKey, StringComparison.Ordinal)" in rpa
+    assert "private static string AttemptKey(string shopKey, string seller, string buyer, string text)" in rpa
+    assert "AttemptKey(shopKey, SellerNick, buyer, text)" in rpa
+    assert "GetOrCreateAttemptStartedAt(shopKey, buyer, text)" in rpa
+    assert "CompleteAttemptLease(shopKey, buyer, text)" in rpa
+    assert "VerifyAnswerFreshness(shopKey, buyer, text, attemptStartedAt" in rpa
+    stale = rpa[
+        rpa.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync"):
+        rpa.index("private async Task<bool> TrySetPlainTextByCdpAsync")
+    ]
+    assert "HasOwnedRecentDraft(expected)" in stale
+
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    authority = order[
+        order.index("internal static class ReliableSendAuthority"):
+        order.index("internal sealed class OrderPlacedReplyPlan")
+    ]
+    assert "public string ShopKey;" in authority
+    assert "BeginBusinessCritical(string shopKey, string seller" in authority
+    assert "IsProtectedFromBuyerUpdate(string shopKey, string seller" in authority
+    assert "string.Equals(state.ShopKey, shopKey, StringComparison.Ordinal)" in authority
+    assert "BeginBusinessCritical(\n                    plan.ShopKey," in order
