@@ -98,3 +98,24 @@ def test_first_inquiry_fast_path_routes_by_authoritative_source_websocket_not_se
     assert "QN.FindExistingBySellerNick(seller)" not in method
     assert method.index("IsAuthoritativeShopSession(shopKey, sessionId)") < method.index("FindConnectedQnByShopKey(shopKey, sessionId)")
     assert method.index("FindConnectedQnByShopKey(shopKey, sessionId)") < method.index("ScheduleFirstInquiryFastRecovery")
+
+def test_first_inquiry_fast_path_keeps_the_exact_source_session_through_async_recovery():
+    source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+    schedule = source[
+        source.index("internal void ScheduleFirstInquiryFastRecovery"):
+        source.index("private bool IsFirstInquirySourceSessionCurrent")
+    ]
+    recovery = source[
+        source.index("private async Task<bool> TryRecoverFirstInquiryFromNotificationAsync"):
+        source.index("private static bool IsReplyableFirstInquiryCandidate")
+    ]
+
+    assert "string sourceShopKey" in schedule
+    assert "string sourceSessionId" in schedule
+    assert "IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)" in schedule
+    assert "ShopSettingsScope.Enter(shop, false)" in schedule
+    assert "sourceShopKey" in recovery and "sourceSessionId" in recovery
+    assert "ReferenceEquals(CDP, sourceClient)" in recovery
+    assert recovery.count("IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)") >= 4
+    assert "using (ShopSettingsScope.Enter(shop, false))" in recovery
+    assert "ScheduleFirstInquiryFastRecovery(\n                        seller, buyer, ccode, DateTime.Now, shopKey, sessionId)" in source
