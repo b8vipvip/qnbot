@@ -112,7 +112,7 @@ def test_business_inbound_history_recovery_is_scoped_and_revalidates_source_sess
     source = read("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
     method = source[
         source.index("internal async Task ProbeActiveConversationForMissedInboundAsync"):
-        source.index("\n    }\n}")
+        source.index("\n    }\n}", source.index("internal async Task ProbeActiveConversationForMissedInboundAsync"))
     ]
 
     assert "ShopContextLocator.ResolveRuntimeBySeller(this)" in method
