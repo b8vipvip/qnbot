@@ -401,6 +401,17 @@ namespace Bot.ChromeNs
             string buyerNick)
         {
             if (message == null) return Task.CompletedTask;
+            string shopKey;
+            try
+            {
+                shopKey = ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey;
+                if (string.IsNullOrWhiteSpace(shopKey)) throw new InvalidOperationException("ShopKey为空");
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("后台补偿买家消息无法确认唯一ShopKey，已阻止恢复回复: " + ex.Message, 20);
+                return Task.CompletedTask;
+            }
             var messageText = GetMessageText(message);
             string nonBuyerReason;
             if (NonBuyerConversationGuard.ShouldBlockMessage(message, sellerNick, messageText, out nonBuyerReason))
@@ -427,10 +438,10 @@ namespace Bot.ChromeNs
                 _messageSafetyStartedAt,
                 out orderPlan,
                 null,
-                ShopContextLocator.ResolveRuntimeBySeller(this).ShopKey))
+                shopKey))
             {
                 if (orderPlan != null && orderPlan.IsBuyerFollowUp)
-                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick);
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick, shopKey);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);
@@ -442,7 +453,7 @@ namespace Bot.ChromeNs
                 message,
                 messageText,
                 decision,
-                AiEndpointStore.GetVisionEnabledEndpoints());
+                shopKey);
 
             if (!Params.Robot.CanUseRobotReal)
             {
@@ -458,7 +469,7 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt);
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt, shopKey);
             if (visionDecision.Kind == VisionDecisionKind.Text)
             {
                 BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
@@ -469,6 +480,7 @@ namespace Bot.ChromeNs
 
             _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
             {
+                ShopKey = shopKey,
                 SellerNick = sellerNick,
                 BuyerNick = buyerNick,
                 MessageKey = messageKey,
