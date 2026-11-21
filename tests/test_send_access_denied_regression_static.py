@@ -52,7 +52,7 @@ def test_safe_uia_main_action_runs_before_legacy_physical_coordinate_fallback():
     # physical-coordinate path.
     hwnd = native.index("TryPostSafeMainSendMouseMessage")
     safe_uia = native.index("TryInvokeCachedSendButtonNow", hwnd)
-    legacy_uia = native.index("TrySendTextViaUiaAsync(buyer, text, sendStart)", safe_uia)
+    legacy_uia = native.index("TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)", safe_uia)
     assert hwnd < safe_uia < legacy_uia
     assert "发送按钮左侧UIA安全调用（原生前置）" in native
 
