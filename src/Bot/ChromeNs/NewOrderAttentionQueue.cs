@@ -1,6 +1,7 @@
 using Bot.AssistWindow.Widget.Robot;
 using Bot.Automation.ChatDeskNs;
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
