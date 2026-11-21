@@ -534,14 +534,17 @@ namespace Bot.Knowledge
                 .ToList();
             lock (state.Sync)
             {
-                state.Db.ClearTable(new List<Type> { typeof(KnowledgeV2RecordRow) });
-                if (normalized.Count > 0)
-                    state.Db.SaveRecordsInTransaction(normalized.Select(x => (object)ToRow(x)).ToList());
-                state.Db.SaveOneRecord(new KnowledgeV2MetaRow
+                var replacementRows = normalized.Select(x => (object)ToRow(x)).ToList();
+                replacementRows.Add(new KnowledgeV2MetaRow
                 {
                     Key = "schema_version",
                     Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
+                // Full-package imports are destructive replacements too. Keep the old
+                // corpus visible until every imported row and its schema marker commit.
+                state.Db.ReplaceRecordsInTransaction(
+                    new List<Type> { typeof(KnowledgeV2RecordRow) },
+                    replacementRows);
             }
             MirrorAllToLegacy(shop, normalized);
             KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized);
