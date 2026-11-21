@@ -56,7 +56,7 @@ def test_only_safe_candidate_commits_one_buyer_switch_then_revalidates_rendered_
     rendered = method.index("WaitForOrderStateAsync(sourceClient, snapshot.OrderId, TimeSpan.FromSeconds(3))")
     click_ship = method.index("ReadOrderStateAsync(sourceClient, snapshot.OrderId, true)")
     durable_barrier = method.index("AutoDeliveryCoordinator.TryPersistConfirmationIntent")
-    confirm = method.index('ReadModalStateAsync("confirm")')
+    confirm = method.index('ReadModalStateAsync(sourceClient, "confirm")')
 
     assert candidate_gate < open_chat < rendered < click_ship < durable_barrier < confirm
     assert method.count("OpenChat(expectedBuyer)") == 1
