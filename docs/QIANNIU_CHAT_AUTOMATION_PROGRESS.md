@@ -9,10 +9,10 @@ Last updated / 最后更新：2026-11-20
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：`bot-v1.1.2470`
-- Release：GitHub Release tag `bot-v1.1.2470`
-- Release target：`7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`
-- x64 package SHA-256：`98df42ddf2130bc61923fca033f5deaa049ade495fa61143ee319849f5177533`
+- Latest stable client：`bot-v1.1.2481`
+- Release：GitHub Release tag `bot-v1.1.2481`
+- Release target：`35f5ed0138eba56e3f341915b7e2a800c102007d`
+- x64 package SHA-256：`126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -134,11 +134,11 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 
 ### 4.1 2026-11-20 Windows diagnostic follow-up
 
-- Stable client baseline: `bot-v1.1.2460`, release target `7ece1834642e558cfa9ff5eb45272a8bb12a4bc2`.
+- Stable client baseline: `bot-v1.1.2481`, release target `35f5ed0138eba56e3f341915b7e2a800c102007d`. 
 - The uploaded runtime sample had one connected authoritative session, no duplicate standby, and Bot-owned loopback WebSocket 41010. It did not identify a bench_im renderer or unambiguous CDP endpoint.
 - Corrected the runtime snapshot counter so `RecoverableStandbySessions` counts actual duplicate standby sessions that also advertise recoverable capability; `StandbyCapabilitySessions` separately counts all capable sessions, including the owner.
 - Follow-up diagnostics now report AliRender command-line visibility, tolerate quoted renderer/debug-port arguments, list Qianniu-owned loopback listener candidates without probing them when bench_im identity is unknown, and read product version/tag/source SHA from the package-root `release-info.json` instead of presenting the assembly compatibility version as the product version.
-- The diagnostic follow-up source/tests are on master after the stable release and require exact-SHA CI/Windows build before they are used as the next field diagnostic. They are not included in `bot-v1.1.2460`.
+- The diagnostic follow-up source/tests were validated on exact SHA and included in `bot-v1.1.2470`; they are not included in `bot-v1.1.2460`. `bot-v1.1.2481` retains those diagnostics and adds the later multi-shop identity and alias-cache fixes.
 
 ### 4.2 2026-11-20 continued repair
 
@@ -148,6 +148,16 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - Virtual-goods delivery recovery: read-only verification now classifies seller/ShopKey identity failures and exceptions as `ConfirmationUncertain`, so repeated read-only failures reach the existing five-attempt manual-review path instead of retrying forever as generic Deferred. The consumed confirmation ledger remains a no-repeat barrier; this does not authorize another confirmation click.
 - Validated product-source SHA: `8fc1c21440f351ce336a58f2751ef16afae4cd97`. API Full Gate passed: Fast Gate `1682 passed, 16 skipped`, API package tests `141 passed`, Windows Static Gate passed, and Windows x64 build `44752223276` completed successfully. Documentation-only handoff updates followed this source SHA.
 - Release `bot-v1.1.2470` was published for exact product-source SHA `8fc1c21440f351ce336a58f2751ef16afae4cd97`; x64 package SHA-256: `30ac46a1791f986e05bc836adcd67a7d74ef9db6d88d22705aa66539bc419830`. These fixes are included in 2470, but local installation and real Qianniu runtime acceptance remain unverified.
+
+### 4.3 2026-11-21 continued repair
+
+- **Buyer identity alias cache**: replaced TTL-only cleanup with a bounded cache policy. Cleanup starts at 5,000 entries and evicts least-recently-used mappings toward 4,000; a single interlocked cleanup runs at a time, updates share a record lock, and key/value removal is conditional. This prevents fresh aliases from growing without bound and avoids scanning the whole dictionary on every message once the cache is back under the threshold.
+- **Multi-shop message identity**: buyer inbound messages and seller echoes now validate the seller endpoint and login nickname; when stable seller TargetId is available, conflicting endpoint/login TargetIds are rejected even if the visible nickname matches.
+- **Timeline shop scope**: `ConversationContextStore.RefreshAndRecord` now rejects writes when the message seller cannot be resolved to the ambient ShopKey, and skips ambiguous seller identity instead of creating a synthetic unresolved timeline entry.
+- **GPTAuto historical Reconcile**: fixed the Executor so an old dispatch marker is not treated as terminal proof. Added task-aware Reconcile run titles and a temporary exact-evidence recovery workflow. It re-dispatched PR #434 task `GA-ddf0aa319783` only after current master API/Windows gates, exact PR-head API/Windows gates, exact merge-SHA CI, and an ACTIVE lease were verified. Reconcile run `44858934200` completed successfully; Completion Lease is RELEASED, Terminal state is DONE, Merge SHA is `483b07f03eeeeef5e9339b286d2c179378489ccc`. The one-time recovery workflow was removed after the task closed; generic Executor recovery logic remains.
+- **Exact-SHA validation**: release source SHA `35f5ed0138eba56e3f341915b7e2a800c102007d`; Fast Gate `1686 passed, 16 skipped`; API package tests `141 passed`; Windows Static Gate passed; Windows x64 build `44858618045` succeeded. Post-release cleanup master SHA `5fce1c3869b19dd044cd4d39db31ae9456df1b64` also passed API Full Gate and Windows x64 build `44859065309`.
+- **Stable release**: `bot-v1.1.2481` published for exact source SHA `35f5ed0138eba56e3f341915b7e2a800c102007d`; x64 package SHA-256: `126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`. The fixes above are included in this release. Local installation is not verified.
+- **Still requires real Windows/Qianniu acceptance**: bench_im/CDP target identification, A→B→A multi-shop switching and reconnect stability, 150+ message Knowledge V2 full-corpus learning/checkpoint recovery, real order auto-reply/auto-delivery recovery, and Reception Agent approval/authorization/publish/rollback. Knowledge V2 automatic writes remain disabled; high-risk order operations remain fail-closed. Issue #366 stays open.
 
 ## 5. Validation and release rules / 验收与发布规则
 
