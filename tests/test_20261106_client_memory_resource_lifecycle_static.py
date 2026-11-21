@@ -142,3 +142,23 @@ def test_windows_memory_sampler_is_read_only_and_collects_machine_pressure():
     assert "Stop-Process" not in collector
     assert "GC]::Collect" not in collector
     assert "Get-ChildItem" not in collector
+
+def test_windows_memory_sampler_tracks_pseudonymized_runtime_shop_lifecycle_over_time():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "RuntimeSnapshotPath" in collector
+    assert "runtime-snapshot.json" in collector
+    assert "ProcessStartTimeUtcTicks" in collector
+    assert "RuntimeSnapshotStatus" in collector
+    assert "RuntimeProcessGenerationChanged" in collector
+    assert "RuntimeOwnerChangesSincePreviousSample" in collector
+    assert "RuntimeDuplicateSessions" in collector
+    assert "RuntimeUnmappedConnectedSessions" in collector
+    assert "RuntimeShopOwners" in collector
+    assert "ShopRef" in collector
+    assert "OwnerSessionRef" in collector
+    assert "Get-Process -Id $runtimeProcessId" in collector
+    assert "Get-Process -Id $runtimeProcessId" in collector
+    assert "SellerNick" not in collector
+    assert "ShopKey" not in collector
+    assert "CommandLine" not in collector
+    assert "Invoke-WebRequest" not in collector
