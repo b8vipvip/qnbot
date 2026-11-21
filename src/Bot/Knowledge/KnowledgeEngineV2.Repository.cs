@@ -927,9 +927,22 @@ namespace Bot.Knowledge
 
         private static ShopContext ResolveShopRequired(string seller)
         {
+            seller = (seller ?? string.Empty).Trim();
             var current = ShopSettingsScope.Current;
-            if (current != null) return current;
-            var shop = ShopContextLocator.ResolveBySellerNick((seller ?? string.Empty).Trim());
+            if (current != null)
+            {
+                // The AsyncLocal ShopKey is authoritative, but a caller must not be able
+                // to pass another seller's data label while inheriting this scope. Accept
+                // either the platform seller nick or the profile's display name; reject
+                // mismatches instead of silently reading/writing the scoped shop's corpus.
+                if (seller.Length > 0
+                    && !DirectOrderIdentityResolver.IdentityEquals(current.SellerNick, seller)
+                    && !DirectOrderIdentityResolver.IdentityEquals(current.DisplayName, seller))
+                    throw new InvalidOperationException(
+                        "Knowledge Center V2卖家身份与当前ShopKey作用域不匹配，已拒绝跨店访问。");
+                return current;
+            }
+            var shop = ShopContextLocator.ResolveBySellerNick(seller);
             if (shop == null) throw new InvalidOperationException("Knowledge Center V2无法确定当前店铺身份。");
             return shop;
         }
