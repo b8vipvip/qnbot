@@ -115,6 +115,13 @@ namespace Bot.ChromeNs
 
         private static async Task ProcessTextBurstStreamingAsync(QN qn, BuyerMessageBurstLease lease)
         {
+            // Consult Knowledge V2 directly in the canonical streaming handler. The old
+            // implementation raced two independent reflection patchers: depending on which
+            // timer wrapped BuyerMessageBurstCoordinator last, the streaming handler could
+            // replace the V2 wrapper without ever invoking it.
+            if (await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))
+                return;
+
             var burst = lease.Burst;
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var autoSend = Params.Robot.GetIsAutoReply();
