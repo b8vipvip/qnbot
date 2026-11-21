@@ -83,7 +83,7 @@ def test_same_shop_rollback_rejects_stale_revision_and_refreshes_snapshot():
 
 def test_manual_reviewed_answer_supports_safe_semantic_paraphrases():
     service = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
-    assert "var manualSimilar = manualExact == null" in service
+    assert "var manualSimilar = manualExact == null && !manualExactConflict" in service
     assert "IsStrongManualReviewedSimilarMatch(x, query)" in service
     helper = service.split("private static bool IsStrongManualReviewedSimilarMatch(", 1)[1].split(
         "private static bool IsSafeStandaloneLocalDirect(", 1
@@ -93,5 +93,5 @@ def test_manual_reviewed_answer_supports_safe_semantic_paraphrases():
     assert "match.IntentScore < 0.99" in helper
     assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
     assert "query.ContextDependent" in helper
-    assert "decision.HasConflict = manualExact == null && HasConflict(best, second)" in service
+    assert "decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second))" in service
 
