@@ -61,11 +61,14 @@ namespace Bot.ChromeNs
         private static Timer _flushTimer;
 
         public static void RecordInterval(
+            string shopKey,
             string seller,
             string buyer,
             DateTime previousReceivedAt,
             DateTime currentReceivedAt)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return;
             if (previousReceivedAt == DateTime.MinValue || currentReceivedAt == DateTime.MinValue) return;
             var interval = (int)Math.Round((currentReceivedAt - previousReceivedAt).TotalMilliseconds);
             // 排除同一事件重复回放、网络补抓造成的极短间隔，以及已经属于新一轮咨询的长间隔。
@@ -74,7 +77,7 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 EnsureLoaded();
-                var key = BuildKey(seller, buyer);
+                var key = BuildKey(shopKey, seller, buyer);
                 var profile = _cache.Profiles.FirstOrDefault(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal));
                 if (profile == null)
@@ -111,17 +114,20 @@ namespace Bot.ChromeNs
         }
 
         public static int AdjustDelay(
+            string shopKey,
             string seller,
             string buyer,
             int baselineMs,
             AdaptiveDelayKind kind)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
             baselineMs = Math.Max(80, Math.Min(1800, baselineMs));
+            if (shopKey.Length == 0) return baselineMs;
             AdaptiveReplyTimingSnapshot snapshot;
             lock (Sync)
             {
                 EnsureLoaded();
-                var key = BuildKey(seller, buyer);
+                var key = BuildKey(shopKey, seller, buyer);
                 var profile = _cache.Profiles.FirstOrDefault(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal));
                 if (profile == null || profile.RecentIntervalsMs == null || profile.RecentIntervalsMs.Count < 3)
@@ -163,12 +169,14 @@ namespace Bot.ChromeNs
             return adjusted;
         }
 
-        public static AdaptiveReplyTimingSnapshot GetSnapshot(string seller, string buyer)
+        public static AdaptiveReplyTimingSnapshot GetSnapshot(string shopKey, string seller, string buyer)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return new AdaptiveReplyTimingSnapshot();
             lock (Sync)
             {
                 EnsureLoaded();
-                var key = BuildKey(seller, buyer);
+                var key = BuildKey(shopKey, seller, buyer);
                 var profile = _cache.Profiles.FirstOrDefault(x => x != null
                     && string.Equals(x.Key, key, StringComparison.Ordinal));
                 return profile == null
@@ -303,9 +311,12 @@ namespace Bot.ChromeNs
                 "adaptive-reply-timing.json");
         }
 
-        private static string BuildKey(string seller, string buyer)
+        private static string BuildKey(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            // Legacy unscoped profiles are intentionally not reused: the same seller/buyer
+            // nicknames may exist in different shops and must never share learned timing.
+            return (shopKey ?? string.Empty).Trim()
+                + "|" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "|" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
 
