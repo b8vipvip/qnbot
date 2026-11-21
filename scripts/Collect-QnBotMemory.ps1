@@ -15,6 +15,7 @@ param(
     [ValidateRange(5, 50)][int]$TopProcessCount = 15,
     [string]$OutputDirectory = '',
     [string]$RuntimeSnapshotPath = '',
+    [string]$KnowledgeV2SyncSnapshotPath = '',
     [ValidateLength(0, 40)][string]$ScenarioTag = ''
 )
 
@@ -24,6 +25,9 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 if ([string]::IsNullOrWhiteSpace($RuntimeSnapshotPath)) {
     $RuntimeSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\runtime-snapshot.json'
+}
+if ([string]::IsNullOrWhiteSpace($KnowledgeV2SyncSnapshotPath)) {
+    $KnowledgeV2SyncSnapshotPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\diagnostics\knowledge-v2-sync-snapshot.json'
 }
 $ScenarioTag = [regex]::Replace([string]$ScenarioTag, '[^A-Za-z0-9_.-]', '_')
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
@@ -162,6 +166,65 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         }
     }
 
+    # Compare the V2 cloud-sync fingerprint/revision snapshot only when it belongs
+    # to the same live Bot process as the runtime snapshot above.
+    $knowledgeSyncStatus = 'missing'
+    $knowledgeSyncAgeSeconds = $null
+    $knowledgeSyncShopCount = $null
+    $knowledgeSyncConvergedShopCount = $null
+    $knowledgeSyncDivergentShopCount = $null
+    $knowledgeSyncSyncingShopCount = $null
+    $knowledgeSyncLatestRevision = $null
+    $knowledgeSyncShopStates = ''
+    $knowledgeSyncStatuses = ''
+
+    if (Test-Path -LiteralPath $KnowledgeV2SyncSnapshotPath -PathType Leaf) {
+        try {
+            $knowledgeSync = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($KnowledgeV2SyncSnapshotPath)) -ErrorAction Stop
+            $knowledgeSyncCollectedAt = [DateTimeOffset]::Parse([string]$knowledgeSync.CollectedAtUtc).UtcDateTime
+            $knowledgeSyncAgeSeconds = [math]::Round(([DateTime]::UtcNow - $knowledgeSyncCollectedAt).TotalSeconds, 1)
+            if ([int]$knowledgeSync.SchemaVersion -ne 1) {
+                $knowledgeSyncStatus = 'unsupported_schema'
+            }
+            elseif ($knowledgeSyncAgeSeconds -lt -30 -or $knowledgeSyncAgeSeconds -gt 180) {
+                $knowledgeSyncStatus = 'stale'
+            }
+            elseif ($runtimeStatus -notin @('fresh', 'partial')
+                -or [int]$knowledgeSync.ProcessId -ne $runtimeProcessId
+                -or [long]$knowledgeSync.ProcessStartTimeUtcTicks -ne $runtimeProcessStartTicks) {
+                $knowledgeSyncStatus = 'process_mismatch'
+            }
+            else {
+                $knowledgeSyncStatus = 'fresh'
+                $syncShops = @()
+                if ($null -ne $knowledgeSync.Shops) { $syncShops = @($knowledgeSync.Shops) }
+                $knowledgeSyncShopCount = $syncShops.Count
+                $knowledgeSyncConvergedShopCount = @($syncShops | Where-Object { $_.Converged -eq $true }).Count
+                $knowledgeSyncDivergentShopCount = @($syncShops | Where-Object { $_.Converged -eq $false }).Count
+                $knowledgeSyncSyncingShopCount = @($syncShops | Where-Object { $_.Syncing -eq $true }).Count
+                if ($syncShops.Count -gt 0) {
+                    $knowledgeSyncLatestRevision = ($syncShops | Measure-Object -Property CloudRevision -Maximum).Maximum
+                }
+                $syncShopStates = @()
+                $syncStatuses = @()
+                foreach ($syncShop in $syncShops) {
+                    if ($null -eq $syncShop) { continue }
+                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision
+                        + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix
+                        + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged)
+                    if (-not [string]::IsNullOrWhiteSpace([string]$syncShop.LastStatus)) {
+                        $syncStatuses += [string]$syncShop.LastStatus
+                    }
+                }
+                $knowledgeSyncShopStates = $syncShopStates -join ';'
+                $knowledgeSyncStatuses = (@($syncStatuses | Sort-Object -Unique) -join ';')
+            }
+        }
+        catch {
+            $knowledgeSyncStatus = 'invalid'
+        }
+    }
+
     # Always write machine totals, even if the user has closed both applications.
     [pscustomobject]@{
         Time                = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
@@ -199,6 +262,15 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         RuntimeShopRefs = $runtimeShopRefs
         RuntimeShopOwners = $runtimeShopOwners
         RuntimeOwnerChangesSincePreviousSample = $runtimeOwnerChanges
+        KnowledgeV2SyncSnapshotStatus = $knowledgeSyncStatus
+        KnowledgeV2SyncSnapshotAgeSeconds = $knowledgeSyncAgeSeconds
+        KnowledgeV2SyncShopCount = $knowledgeSyncShopCount
+        KnowledgeV2ConvergedShopCount = $knowledgeSyncConvergedShopCount
+        KnowledgeV2DivergentShopCount = $knowledgeSyncDivergentShopCount
+        KnowledgeV2SyncingShopCount = $knowledgeSyncSyncingShopCount
+        KnowledgeV2LatestCloudRevision = $knowledgeSyncLatestRevision
+        KnowledgeV2ShopStates = $knowledgeSyncShopStates
+        KnowledgeV2SyncStatuses = $knowledgeSyncStatuses
     } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
     $byPid = @{}
@@ -262,7 +334,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         $targets.Count + ' QnBot/Qianniu target processes, top ' +
         $top.Count + ' system processes, used=' + $usedPercent + '%, runtime=' +
         $runtimeStatus + ', shops=' + $runtimeAuthoritativeShopCount +
-        ', ownerChanges=' + $runtimeOwnerChanges + ', CSV=' + $csv)
+        ', ownerChanges=' + $runtimeOwnerChanges + ', knowledgeSync=' + $knowledgeSyncStatus +
+        ', converged=' + $knowledgeSyncConvergedShopCount + '/' + $knowledgeSyncShopCount +
+        ', CSV=' + $csv)
     if ($sample -lt $loops) { Start-Sleep -Seconds $IntervalSeconds }
 }
 Write-Host ('Saved privacy-minimized system and process samples: ' + $csv)
