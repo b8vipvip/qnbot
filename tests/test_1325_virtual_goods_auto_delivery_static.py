@@ -328,8 +328,14 @@ def test_confirmation_ledger_capacity_never_evicts_existing_at_most_once_barrier
     # Capacity is a fail-closed admission limit, never a license to discard an
     # older irreversible-confirmation barrier.
     assert "return !_failClosed && !IsAtCapacityLocked();" in operational
-    assert "if (IsAtCapacityLocked())" in has_intent
-    assert "return true;" in has_intent
+    assert "if (!TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity)) return true;" in has_intent
+    assert "return hasIntent || atCapacity;" in has_intent
+    read_intent = ledger[
+        ledger.index("private static bool TryReadIntent"):
+        ledger.index("public static bool TryRecordIntent")
+    ]
+    assert "hasIntent = _state.Records.Any" in read_intent
+    assert "atCapacity = IsAtCapacityLocked();" in read_intent
     assert "if (IsAtCapacityLocked())" in record_intent
     assert "拒绝写入新确认意图" in record_intent
     assert "private static bool IsAtCapacityLocked()" in ledger
@@ -351,7 +357,7 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
     for start, end in (
         ("public static void Initialize", "public static bool IsOperational"),
         ("public static bool IsOperational", "public static bool IsSafeOrderId"),
-        ("public static bool HasIntent", "public static bool TryRecordIntent"),
+        ("private static bool TryReadIntent", "public static bool TryRecordIntent"),
         ("public static bool TryRecordIntent", "public static bool MarkResolved"),
         ("public static bool MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
     ):
@@ -360,7 +366,7 @@ def test_confirmation_ledger_serializes_cross_process_barrier_transactions():
 
     for start, end in (
         ("public static bool IsOperational", "public static bool IsSafeOrderId"),
-        ("public static bool HasIntent", "public static bool TryRecordIntent"),
+        ("private static bool TryReadIntent", "public static bool TryRecordIntent"),
         ("public static bool TryRecordIntent", "public static bool MarkResolved"),
         ("public static bool MarkResolved", "private static bool MigratePendingConfirmationIntentsLocked"),
     ):
