@@ -28,24 +28,39 @@ namespace Bot.ChromeNs
 
         public static void ShowPending(OrderSnapshot snapshot)
         {
-            if (snapshot == null || Desk.Inst == null) return;
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.ShopKey)) return;
+
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey); }
+            catch { return; }
+            if (shop == null
+                || !string.Equals(shop.SellerNick, (snapshot.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                return;
+
             var key = Key(snapshot);
             if (Cards.ContainsKey(key)) return;
             var question = "【新订单待处理】" + (snapshot.EventType == OrderEventType.Paid ? "已付款" : "新下单")
                 + " · 订单号 " + snapshot.OrderId;
-            var ctl = Desk.Inst.AddConversation(
-                snapshot.Seller,
-                snapshot.Buyer,
-                question,
-                snapshot.BuildSummary(),
-                false,
-                "新订单待处理");
-            if (ctl == null) return;
-            Cards[key] = ctl;
-            ctl.SetProcessing(OrderAttentionSettings.IsEnabled()
-                ? "订单已进入待处理队列，等待Bot空闲后自动切换到该买家..."
-                : "订单已识别；空闲自动切换当前已关闭。"
-            );
+            // Desk.Inst is ShopSettingsScope-aware. Resolve it under the order's exact
+            // ShopKey so a background B-store order is never rendered into the active A-store panel.
+            using (ShopSettingsScope.Enter(shop, false))
+            {
+                var desk = Desk.Inst;
+                if (desk == null) return;
+                var ctl = desk.AddConversation(
+                    snapshot.Seller,
+                    snapshot.Buyer,
+                    question,
+                    snapshot.BuildSummary(),
+                    false,
+                    "新订单待处理");
+                if (ctl == null) return;
+                Cards[key] = ctl;
+                ctl.SetProcessing(OrderAttentionSettings.IsEnabled()
+                    ? "订单已进入待处理队列，等待Bot空闲后自动切换到该买家..."
+                    : "订单已识别；空闲自动切换当前已关闭。"
+                );
+            }
         }
 
         public static void SetDeferred(OrderSnapshot snapshot, string reason)
