@@ -495,3 +495,33 @@ def test_read_only_auto_delivery_recovery_failures_count_toward_manual_review():
     assert 'AutoDeliveryAttemptResult.Uncertain("只读复核发现当前千牛会话ShopKey与订单任务不一致")' in execute
     assert 'AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message)' in uncertain
     assert 'verificationOnly=" + verificationOnly' in uncertain
+
+def test_auto_delivery_cursor_uses_immutable_event_acceptance_time_not_duplicate_seen_time():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    hub = text("src/Bot/ChromeNs/OrderEventHub.cs")
+    event = seed[
+        seed.index("private sealed class HubEvent"):
+        seed.index("private sealed class HubState")
+    ]
+    helper = seed[
+        seed.index("private static DateTime GetAcceptedAt"):
+        seed.index("private static HubState LoadHubState")
+    ]
+    tick = seed[
+        seed.index("private static void Tick"):
+        seed.index("private static SellerCursor GetCursorLocked")
+    ]
+    publish = hub[
+        hub.index("public static OrderEventPublishResult Publish"):
+        hub.index("private static StateMutexLease AcquireStateMutex")
+    ]
+
+    assert "public DateTime AcceptedAt { get; set; }" in event
+    assert "entry.AcceptedAt == DateTime.MinValue ? entry.SeenAt : entry.AcceptedAt" in helper
+    assert ".Where(x => GetAcceptedAt(x) > floor)" in tick
+    assert ".OrderBy(x => GetAcceptedAt(x))" in tick
+    assert "var acceptedAt = GetAcceptedAt(entry);" in tick
+    assert "if (acceptedAt > latest) latest = acceptedAt;" in tick
+    assert "existing.SeenAt = now;" in publish
+    assert "existing.AcceptedAt" in publish
+    assert ".Where(x => x.SeenAt > floor)" not in tick
