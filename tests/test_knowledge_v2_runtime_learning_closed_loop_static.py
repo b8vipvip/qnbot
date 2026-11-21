@@ -72,3 +72,47 @@ def test_unverified_broad_session_suggestions_remain_review_only_but_verified_co
     assert "candidate.Confidence < 0.95" in session
     assert "candidate.EvidenceMessageIds.Count == 0" in session
     assert "TryApplyVerifiedSessionCorrection(" in session
+
+
+def test_manual_correction_pins_actual_buyer_question_as_priority_alias():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository[
+        repository.index("public static bool TryCorrectBotAnswer("):
+        repository.index("public static bool TryApplyVerifiedSessionCorrection(")
+    ]
+    assert "AddPreferredAlias(corrected.Aliases, buyerQuestionAlias, 40)" in method
+    assert "if (!aliasQuery.ContextDependent && !string.IsNullOrWhiteSpace(aliasQuery.Subject))" in method
+    assert "private static List<string> AddPreferredAlias(" in repository
+    assert "AddPreferredAlias(record.Aliases, question, 40)" in repository
+
+
+def test_manual_takeover_learning_keeps_real_question_when_ai_paraphrases_it():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    method = learning[
+        learning.index("private static async Task CompareManualAnswerAsync"):
+        learning.index("private static bool ContainsUnsafeManualLearning")
+    ]
+    assert "seller, question, manualAnswer" in method
+    assert "confidence < 0.95" in method
+    assert "ContainsUnsafeManualLearning(question + \" \" + manualAnswer)" in method
+    assert "TextSimilarity(question, learnedQuestion)" not in method
+
+
+def test_v2_runtime_initialization_and_working_memory_are_shop_scoped():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "shopScope.ShopKey, burst.ShopKey" in runtime
+    assert "PreparedShopKeys.TryAdd(shopKey, 1)" in runtime
+    assert "WarmingShopKeys.TryAdd(shopKey, 1)" in runtime
+    assert "ShopSettingsScope.Enter(shop, false)" in runtime
+    assert "GetWorkingMemory(shop.ShopKey, seller, buyer)" in public
+    assert "UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)" in public
+    assert "WorkingKey(string shopKey, string seller, string buyer)" in index
+
+
+def test_duplicate_manual_exact_aliases_fail_closed():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)" in public
+    assert "var manualExactConflict = manualExactMatches.Count > 1;" in public
+    assert "manualExactConflict || (manualExact == null && HasConflict(best, second))" in public
