@@ -322,7 +322,8 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert 'gh workflow run gptauto-reconcile.yml' in adoption
     assert 'gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
     assert 'if grep -Fq "$marker" <<<"$existing"; then' not in adoption
-    assert "previous dispatch marker was not treated as completion" in adoption
+    assert "dispatch lease reserved at" in adoption
+    assert "This recent marker suppresses duplicate dispatch" in adoption
 
 
 
