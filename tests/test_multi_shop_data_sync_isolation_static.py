@@ -279,3 +279,27 @@ def test_raw_agent_and_seller_echo_mirror_validate_stable_shop_target_id():
     assert "message.toid.targetId" in identity
     assert "message.loginid.targetId" in identity
     assert "qn.Seller.TargetId" in identity
+
+
+def test_inbound_timeline_and_product_presets_use_exact_shopkey():
+    safety = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+
+    assert "RefreshAndRecord(message, messageText, shopKey)" in safety
+    assert "RegisterProductLinkReply(message, messageText, shopKey)" in safety
+    refresh = context[
+        context.index("public static void RefreshAndRecord"):
+        context.index("internal static bool RecordObservedSellerMessage")
+    ]
+    assert "RefreshAndRecord(QNChatMessage message, string messageText, string shopKey = null)" in refresh
+    assert "GetSellerNick(message, shopKey)" in refresh
+    assert "ResolveShop(seller, shopKey)" in refresh
+
+    preset = context[
+        context.index("public static void RegisterProductLinkReply"):
+        context.index("public static bool TryTakeProductLinkReply")
+    ]
+    assert "RegisterProductLinkReply(QNChatMessage message, string messageText, string shopKey = null)" in preset
+    assert "ResolveShop(seller, shopKey)" in preset
+    assert "using (ShopSettingsScope.Enter(shop))" in preset
+    assert "GetPresetsForProductLink(seller, itemId)" in preset
