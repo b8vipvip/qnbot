@@ -934,7 +934,7 @@ def test_full_corpus_learning_exports_privacy_safe_history_and_resume_evidence()
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     snapshot = service[
         service.index("private static void WriteLearningDiagnosticsSnapshot"):
-        service.index("private static string BuildLearningQuestion")
+        service.index("private static ConversationSessionLearningReportEntity LoadReport")
     ]
 
     assert 'knowledge-v2-learning-snapshot.json' in snapshot
