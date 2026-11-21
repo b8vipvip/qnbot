@@ -297,17 +297,32 @@ namespace Bot.ChromeNs
             {
                 var live = FindLiveRecordLocked(key);
                 if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue) return false;
-                if (AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId))
+                bool existingIntent;
+                if (!AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent))
+                {
+                    Log.Error("自动发货无法读取该订单的长期确认账本状态；拒绝消费确认权限: seller=" + seller + ", orderId=" + orderId);
+                    return false;
+                }
+                if (existingIntent)
                 {
                     live.ConfirmationIntentAt = DateTime.Now;
                     live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
                     SaveStateLocked();
                     return false;
                 }
+                // A readable but full ledger blocks new confirmation admission. Do not
+                // manufacture a per-order ConfirmationIntentAt flag when no intent exists.
+                if (!AutoDeliveryConfirmationLedger.IsOperational())
+                {
+                    Log.Error("自动发货长期确认账本不可接纳新意图；保持队列待复核且不伪造订单确认屏障: seller=" + seller + ", orderId=" + orderId);
+                    return false;
+                }
                 var now = DateTime.Now;
                 if (!AutoDeliveryConfirmationLedger.TryRecordIntent(shopKey, seller, orderId, now))
                 {
-                    if (AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId))
+                    bool racedIntent;
+                    if (AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out racedIntent)
+                        && racedIntent)
                     {
                         live.ConfirmationIntentAt = now;
                         live.NextAttemptAt = now.Add(UncertainRetryDelay);
