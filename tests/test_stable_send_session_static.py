@@ -104,7 +104,7 @@ def test_send_path_drops_wpf_context_and_never_uses_enter_for_delivery():
     native = text("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     send = qnrpa[qnrpa.index("public async Task<bool> SendTextAsync"):qnrpa.index("private string SellerNick")]
     assert "Task.Delay(180).ConfigureAwait(false)" in send
-    assert "OpenAndSendText(buyer, text, shopKey).ConfigureAwait(false)" in send
+    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed).ConfigureAwait(false)" in send
     assert ".GetAwaiter().GetResult()" not in qnrpa
     assert "keybd_event(0x0D" not in qnrpa
     assert "PressEnter" not in qnrpa
