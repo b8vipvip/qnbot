@@ -81,8 +81,44 @@ namespace Bot.ChromeNs
                     : (active.Conversation.Ccode ?? string.Empty).Trim();
                 if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return;
 
-                var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null) return;
+                // This event is raised once per physical Bot WebSocket. Seller nickname
+                // alone is not a routing key: two shops may use the same seller nickname,
+                // and the globally active shop may be different from the event's source.
+                var session = sender as WebSocketSession;
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (session == null || server == null) return;
+                var sessionId = (session.SessionID ?? string.Empty).Trim();
+                var shopKey = server.GetShopKeyForSession(sessionId);
+                if (shopKey.Length == 0 || !server.IsAuthoritativeShopSession(shopKey, sessionId))
+                {
+                    Log.Info("首条咨询快路径拒绝非权威或已断开的WebSocket来源: sessionRef="
+                        + MyWebSocketServer.DiagnosticRef("session", sessionId));
+                    return;
+                }
+
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+                catch (Exception ex)
+                {
+                    Log.Info("首条咨询快路径无法恢复来源ShopKey，已跳过: error=" + ex.Message);
+                    return;
+                }
+                if (shop == null
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                {
+                    Log.Info("首条咨询快路径事件卖家与来源ShopKey不匹配，已跳过: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey));
+                    return;
+                }
+
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId);
+                if (qn == null || qn.Seller == null
+                    || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                {
+                    Log.Info("首条咨询快路径无法绑定来源WebSocket对应的权威QN实例，已跳过: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey));
+                    return;
+                }
                 qn.ScheduleFirstInquiryFastRecovery(seller, buyer, ccode, DateTime.Now);
             }
             catch (Exception ex)
