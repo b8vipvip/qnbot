@@ -48,7 +48,7 @@ def test_missing_active_conversation_is_not_reported_as_cdp_failure():
     )
 
     assert "HasVerifiedReceptionDesk" in monitor
-    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in monitor
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey)" in monitor
     assert 'RecordNoActiveChat(qn, seller, "接待窗口在线，但当前没有选中的买家会话")' in probe
     assert 'RecordProbeFailure(qn, "im.uiutil.GetCurrentConversationID 返回空值")' not in monitor
     assert "ConsecutiveProbeFailures.TryRemove(qn, out failures);" in neutral
@@ -64,6 +64,6 @@ def test_probe_is_paused_when_no_verified_reception_desk_exists():
         "private static async Task ProbeCurrentConversationAsync",
     )
 
-    assert "!HasVerifiedReceptionDesk(seller)" in schedule
-    assert "未检测到已验证的千牛接待聊天窗口" in schedule
+    assert "!HasVerifiedReceptionDesk(seller, shop.ShopKey)" in schedule
+    assert "未检测到当前ShopKey对应的千牛接待聊天窗口" in schedule
     assert "RecordNoActiveChat" in schedule
