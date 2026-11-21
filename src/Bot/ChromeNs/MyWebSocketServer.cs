@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
         // ensures only the newest status event can update the active buyer.
         private readonly ConcurrentDictionary<string, long> _statusBindingGenerations =
             new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        private long _statusBindingGenerationSequence;
         // Identity probes are fenced independently from buyer/status binding attempts:
         // even a heartbeat with unchanged display nicknames invalidates older CDP reads.
         private readonly ConcurrentDictionary<string, long> _shopIdentityProbeGenerations =
@@ -778,9 +779,14 @@ namespace Bot.ChromeNs
 
         private long NextStatusBindingGenerationLocked(string sessionId)
         {
-            long current;
-            _statusBindingGenerations.TryGetValue(sessionId, out current);
-            var next = current == long.MaxValue ? 1L : current + 1L;
+            // A process-wide sequence lets closed-session entries be pruned without
+            // allowing a recycled SessionID to reuse an old generation number.
+            var next = Interlocked.Increment(ref _statusBindingGenerationSequence);
+            if (next <= 0)
+            {
+                Interlocked.Exchange(ref _statusBindingGenerationSequence, 1L);
+                next = 1L;
+            }
             _statusBindingGenerations[sessionId] = next;
             return next;
         }
@@ -1421,6 +1427,8 @@ namespace Bot.ChromeNs
                         {
                             _connectedSessions.TryRemove(session.SessionID, out _);
                             NextStatusBindingGenerationLocked(session.SessionID);
+                            long ignoredStatusGeneration;
+                            _statusBindingGenerations.TryRemove(session.SessionID, out ignoredStatusGeneration);
                             NextShopIdentityProbeGenerationLocked(session.SessionID);
                         }
                         WebSocketSession ignoredSession;
