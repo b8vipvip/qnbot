@@ -556,8 +556,19 @@ namespace Bot.ChromeNs
 
         private static bool TryResolveConfirmationIntent(PendingRecord record, string resolution)
         {
-            if (!HasConfirmationIntent(record)) return true;
             if (record == null || record.Snapshot == null) return false;
+            if (record.ConfirmationIntentAt.HasValue)
+                return AutoDeliveryConfirmationLedger.MarkResolved(
+                    record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId, resolution);
+
+            // A successful/terminal silent preflight may finish an order before any confirm
+            // intent was ever consumed. Resolve only an actual durable ledger record; a full
+            // but readable ledger is not itself evidence that this order has an intent.
+            bool hasIntent;
+            if (!AutoDeliveryConfirmationLedger.TryGetIntent(
+                record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId, out hasIntent))
+                return false;
+            if (!hasIntent) return true;
             return AutoDeliveryConfirmationLedger.MarkResolved(
                 record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId, resolution);
         }
