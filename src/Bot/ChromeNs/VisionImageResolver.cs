@@ -24,18 +24,18 @@ namespace Bot.ChromeNs
     {
         private static readonly string[] AllowedMimeTypes = { "image/jpeg", "image/png", "image/webp", "image/gif" };
 
-        public async Task<VisionImageResult> ResolveAsync(QNChatMessage message, AiEndpointConfig endpoint, CancellationToken cancellationToken)
+        public async Task<VisionImageResult> ResolveAsync(QNChatMessage message, AiEndpointConfig endpoint, CancellationToken cancellationToken, string shopKey = null)
         {
             // Images are cached as soon as the incoming message is observed. Vision always reads
             // the completed local copy so a buyer withdrawing the remote message cannot interrupt
             // an analysis that has already started.
-            var cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken);
+            var cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey);
             if (cached != null && cached.Success) return cached;
 
             // This fallback is retained for compatibility with callers that reach the resolver
             // before the incoming-message cache hook has run. Prime still writes the complete file
             // locally before returning a data URI to the model.
-            VisionImageCacheService.Prime(message, string.Empty);
+            VisionImageCacheService.Prime(message, string.Empty, shopKey);
             cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken);
             return cached ?? Fail("图片未能完整缓存到本地");
         }
