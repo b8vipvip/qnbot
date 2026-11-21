@@ -207,8 +207,31 @@ namespace Bot.ChromeNs
             return preset != null;
         }
 
-        public static string ResolveSourceLabel(string seller, string answer)
+        public static string ResolveSourceLabel(string seller, string answer, string shopKey = null)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length > 0)
+            {
+                try
+                {
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null
+                        || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                        return "内置话术（来源待核实）";
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        BotReplyPreset scopedPreset;
+                        if (!TryFindPreset(seller, answer, out scopedPreset))
+                            return "内置话术（来源待核实）";
+                        return BuildSourceLabel(scopedPreset);
+                    }
+                }
+                catch
+                {
+                    return "内置话术（来源待核实）";
+                }
+            }
+
             BotReplyPreset preset;
             if (!TryFindPreset(seller, answer, out preset)) return "内置话术（来源待核实）";
             return BuildSourceLabel(preset);
@@ -233,7 +256,18 @@ namespace Bot.ChromeNs
             seller = (seller ?? string.Empty).Trim();
             if (seller.Length == 0)
                 throw new InvalidOperationException("无法确定当前店铺，不能读取或修改店铺话术。");
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            var current = ShopSettingsScope.Current;
+            ShopContext shop;
+            if (current != null)
+            {
+                if (!string.Equals((current.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                    throw new InvalidOperationException("当前ShopKey与话术卖家不匹配。");
+                shop = current;
+            }
+            else
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+            }
             return new ShopScopedSettingsStore(shop, Paths);
         }
 
