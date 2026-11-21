@@ -48,6 +48,42 @@ def setup_cp(tmp_path):
                 revision INTEGER NOT NULL DEFAULT 0,
                 records_json TEXT NOT NULL DEFAULT '[]'
             );
+            CREATE TABLE bot_knowledge_backups(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                revision INTEGER NOT NULL,
+                items_json TEXT NOT NULL DEFAULT '[]',
+                content_hash TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE bot_web_settings_ack(
+                client_id INTEGER PRIMARY KEY,
+                desired_fingerprint TEXT NOT NULL DEFAULT '',
+                revision INTEGER NOT NULL DEFAULT 1,
+                applied_revision INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE bot_web_auto_reply_rules(
+                client_id INTEGER PRIMARY KEY,
+                desired_settings_json TEXT NOT NULL DEFAULT '{}',
+                current_settings_json TEXT NOT NULL DEFAULT '{}',
+                revision INTEGER NOT NULL DEFAULT 0,
+                applied_revision INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                settings_schema_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE bot_web_ai_model_settings(
+                client_id INTEGER PRIMARY KEY,
+                desired_settings_json TEXT NOT NULL DEFAULT '{}',
+                current_settings_json TEXT NOT NULL DEFAULT '{}',
+                revision INTEGER NOT NULL DEFAULT 0,
+                applied_revision INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE bot_store_rule_state(client_id INTEGER);
             CREATE TABLE bot_message_processing_traces(client_id INTEGER);
             CREATE TABLE bot_client_bot_enabled(client_id INTEGER PRIMARY KEY,shop_key TEXT);
@@ -91,11 +127,18 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_conversation_reads",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
+            "bot_knowledge_backups",
+            "bot_web_settings_ack",
+            "bot_web_auto_reply_rules",
+            "bot_web_ai_model_settings",
             "bot_store_rule_state",
             "bot_message_processing_traces",
             "bot_client_data_backups",
         ):
             conn.execute(f"INSERT INTO {table}(client_id) VALUES(1)")
+        conn.execute("INSERT INTO bot_knowledge_backups(client_id,revision,created_at) VALUES(1,1,'2026-08-11T00:00:00+00:00')")
+        for table in ("bot_web_settings_ack", "bot_web_auto_reply_rules", "bot_web_ai_model_settings"):
+            conn.execute(f"INSERT INTO {table}(client_id,updated_at) VALUES(1,'2026-08-11T00:00:00+00:00')")
         conn.execute(
             "INSERT OR REPLACE INTO bot_client_bot_enabled(client_id,shop_key) VALUES(1,'shop_a')"
         )
