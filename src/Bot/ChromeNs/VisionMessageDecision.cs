@@ -20,7 +20,7 @@ namespace Bot.ChromeNs
             QNChatMessage message,
             string text,
             IncomingMessageDecision safetyDecision,
-            IEnumerable<AiEndpointConfig> endpoints)
+            string shopKey)
         {
             if (safetyDecision == null)
                 return Skip("[未知消息]", "已跳过：消息安全检查失败，未调用AI，也未发送给买家。");
@@ -43,7 +43,8 @@ namespace Bot.ChromeNs
                 message,
                 firstQuestion,
                 safetyDecision,
-                out fixedAnswer);
+                out fixedAnswer,
+                shopKey);
 
             var isImage = string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal);
             if (isImage)
@@ -52,8 +53,8 @@ namespace Bot.ChromeNs
                 // before deciding that the shop has no image capability. VisionRequestService executes
                 // this local route before selecting any external provider, so pre-routing must not skip
                 // the image merely because no billable vision endpoint is configured.
-                var localUsable = CanUseLocalOcrKnowledge(seller);
-                var selectedEndpoints = ResolveShopVisionEndpoints(message, endpoints);
+                var localUsable = CanUseLocalOcrKnowledge(seller, shopKey);
+                var selectedEndpoints = ResolveShopVisionEndpoints(message, shopKey);
                 var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
                     e => e != null
                         && e.Enabled
@@ -119,14 +120,16 @@ namespace Bot.ChromeNs
             return Skip("[图片]", safetyDecision.Note);
         }
 
-        private static bool CanUseLocalOcrKnowledge(string sellerNick)
+        private static bool CanUseLocalOcrKnowledge(string sellerNick, string shopKey)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
-            if (sellerNick.Length == 0) return false;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (sellerNick.Length == 0 || shopKey.Length == 0) return false;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
-                if (shop == null) return false;
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                    return false;
                 using (ShopSettingsScope.Enter(shop))
                 {
                     return KnowledgeEngineV2Service.IsEnabled(sellerNick)
@@ -144,16 +147,21 @@ namespace Bot.ChromeNs
 
         private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
             QNChatMessage message,
-            IEnumerable<AiEndpointConfig> fallback)
+            string shopKey)
         {
             try
             {
                 var sellerNick = message == null || message.toid == null
                     ? string.Empty
                     : (message.toid.nick ?? string.Empty).Trim();
-                if (sellerNick.Length == 0) return fallback;
+                shopKey = (shopKey ?? string.Empty).Trim();
+                if (sellerNick.Length == 0 || shopKey.Length == 0)
+                    return new AiEndpointConfig[0];
 
-                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                    return new AiEndpointConfig[0];
                 using (ShopSettingsScope.Enter(shop))
                 {
                     return AiEndpointStore.GetVisionEnabledEndpoints();
@@ -162,9 +170,9 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "视觉消息未能解析店铺 AI 配置，使用旧全局配置兼容模式：" + Safe(ex.Message, 220),
+                    "视觉消息未能解析唯一ShopKey的AI配置，已fail-closed且不回退全局配置：" + Safe(ex.Message, 220),
                     20);
-                return fallback;
+                return new AiEndpointConfig[0];
             }
         }
 
