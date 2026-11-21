@@ -382,3 +382,18 @@ def test_reconcile_adoption_debounces_recent_handoff_when_run_list_is_eventually
     assert "deferring recovery dispatch to avoid an eventual-consistency duplicate" in adoption
     assert "Existing Reconcile handoff timestamp is unreadable; suppressing duplicate dispatch" in adoption
     assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index("gh workflow run gptauto-reconcile.yml")
+
+def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
+    executor = read(".github/workflows/gptauto-executor.yml")
+    adoption = executor[
+        executor.index("- name: Adopt externally merged completion lease"):
+        executor.index("- name: Retry transient failed jobs only")
+    ]
+
+    lease = adoption.index('recovery_body="$marker')
+    dispatch = adoption.index('gh workflow run gptauto-reconcile.yml')
+    scheduled = adoption.index('scheduled_body="$marker')
+    assert lease < adoption.index('gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"') < dispatch
+    assert lease < adoption.index('gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"') < dispatch
+    assert dispatch < scheduled
+    assert "dispatch lease reserved at $(date -u +%Y-%m-%dT%H:%M:%SZ)" in adoption
