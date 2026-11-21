@@ -106,11 +106,32 @@ namespace Bot.ChromeNs
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
-            var shop = ResolveShop(seller);
+            var currentScope = ShopSettingsScope.Current;
+            ShopContext shop;
+            try
+            {
+                shop = ResolveShop(seller);
+            }
+            catch (AmbiguousShopIdentityException ex)
+            {
+                Log.ErrorWithMaxCount("会话时间线因卖家身份歧义而跳过写入: " + ex.Message, 10);
+                return;
+            }
+            if (currentScope != null
+                && (shop == null
+                    || !string.Equals(currentScope.ShopKey, shop.ShopKey, StringComparison.Ordinal)))
+            {
+                // A stale frame must never be recorded under an unrelated ambient
+                // ShopSettingsScope. In particular, do not fall through to the
+                // synthetic unresolved:<guid> timeline key.
+                Log.ErrorWithMaxCount("会话时间线拒绝与当前ShopKey作用域不匹配的消息。", 10);
+                return;
+            }
+
             IDisposable scope = null;
             try
             {
-                if (shop != null && ShopSettingsScope.Current == null)
+                if (shop != null && currentScope == null)
                     scope = ShopSettingsScope.Enter(shop);
                 // Live messages can carry the buyer's internal nick while the UI
                 // and the current conversation expose its display nick (or vice versa).
