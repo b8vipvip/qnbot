@@ -111,3 +111,16 @@ def test_order_attention_queue_pins_focus_actions_to_authoritative_shop_session(
     assert focus.index("IsOrderAttentionSourceCurrent(item)") < focus.index("OpenChat(snapshot.Buyer)")
     assert focus.index("OpenChat(snapshot.Buyer)") < focus.index("IsOrderAttentionSourceCurrent(item)", focus.index("OpenChat(snapshot.Buyer)"))
     assert "await Task.Delay(250);" in focus
+
+
+def test_order_attention_cards_render_only_in_the_exact_shop_desk():
+    attention = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
+    show = attention[
+        attention.index("public static void ShowPending"):
+        attention.index("public static void SetDeferred")
+    ]
+    assert "ResolveRuntimeByShopKey(snapshot.ShopKey)" in show
+    assert "string.Equals(shop.SellerNick" in show
+    assert "using (ShopSettingsScope.Enter(shop, false))" in show
+    assert show.index("ShopSettingsScope.Enter(shop, false)") < show.index("var desk = Desk.Inst")
+    assert "desk.AddConversation(" in show
