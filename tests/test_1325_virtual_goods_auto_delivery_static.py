@@ -525,3 +525,41 @@ def test_auto_delivery_cursor_uses_immutable_event_acceptance_time_not_duplicate
     assert "existing.SeenAt = now;" in publish
     assert "existing.AcceptedAt" in publish
     assert ".Where(x => x.SeenAt > floor)" not in tick
+
+def test_preflight_completed_or_terminal_order_does_not_require_a_nonexistent_confirmation_intent():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    resolve = runtime[
+        runtime.index("private static bool TryResolveConfirmationIntent("):
+        runtime.index("private static PendingRecord FindLiveRecordLocked")
+    ]
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    completed = process[
+        process.index("case AutoDeliveryAttemptOutcome.Completed:"):
+        process.index("case AutoDeliveryAttemptOutcome.TerminalNoAction:")
+    ]
+    terminal = process[
+        process.index("case AutoDeliveryAttemptOutcome.TerminalNoAction:"):
+        process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:")
+    ]
+    try_get = ledger[
+        ledger.index("public static bool TryGetIntent"):
+        ledger.index("private static bool TryReadIntent")
+    ]
+    has_intent = ledger[
+        ledger.index("public static bool HasIntent"):
+        ledger.index("public static bool TryGetIntent")
+    ]
+
+    assert "record.ConfirmationIntentAt.HasValue" in resolve
+    assert "AutoDeliveryConfirmationLedger.TryGetIntent(" in resolve
+    assert "if (!hasIntent) return true;" in resolve
+    assert "AutoDeliveryConfirmationLedger.MarkResolved(" in resolve
+    assert "TryResolveConfirmationIntent(record, \"completed\")" in completed
+    assert "TryResolveConfirmationIntent(record, \"terminal:\" + result.Reason)" in terminal
+    assert "hasIntent = false;" in try_get or "out bool hasIntent" in try_get
+    assert "return hasIntent || atCapacity;" in has_intent
+    assert "if (!TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity)) return true;" in has_intent
