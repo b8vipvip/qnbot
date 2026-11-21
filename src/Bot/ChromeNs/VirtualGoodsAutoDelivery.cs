@@ -422,7 +422,9 @@ namespace Bot.ChromeNs
             AutoDeliveryAttemptResult result;
             try
             {
-                using (ShopSettingsScope.Enter(shop))
+                // Keep identity/settings scoped without changing the globally active shop.
+                // Read-only post-confirmation recovery must not rebind or focus another store.
+                using (ShopSettingsScope.Enter(shop, false))
                 {
                     var cfg = AutoDeliverySettings.Load(snapshot.Seller);
                     if (!verificationOnly && (cfg == null || !cfg.Enabled))
@@ -859,6 +861,12 @@ namespace Bot.ChromeNs
 
             string activityReason;
             if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)) return AutoDeliveryAttemptResult.Deferred(activityReason);
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("绑定发货店铺前来源CDP会话已变化");
+            if (!MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop))
+                return AutoDeliveryAttemptResult.Deferred("当前ShopKey尚未成为活动店铺或千牛接待窗口绑定失败");
+            if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("绑定发货店铺期间来源CDP会话已变化");
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey))
+                return AutoDeliveryAttemptResult.Deferred(activityReason);
             if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("检查客服输入框前来源CDP会话已变化");
             var input = await TryGetInputboxEmptyAsync().ConfigureAwait(false);
             if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("检查客服输入框期间来源CDP会话已变化");
