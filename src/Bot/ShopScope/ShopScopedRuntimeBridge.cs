@@ -82,31 +82,39 @@ namespace Bot.ShopScope
         private static void Qn_EvBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
         {
             var qn = sender as QN;
-            if (qn == null || qn.Seller == null || string.IsNullOrWhiteSpace(qn.Seller.Nick)) return;
+            if (qn == null || qn.Seller == null || e == null || e.Seller == null) return;
 
             var forwardedSource = GetForwardedInboundSourceSession();
-            if (!string.IsNullOrWhiteSpace(forwardedSource))
+            var evidence = string.IsNullOrWhiteSpace(forwardedSource)
+                ? "authoritative-onConversationChange"
+                : "forwarded-onConversationChange:" + forwardedSource;
+            var sessionId = qn.CDP == null ? string.Empty : (qn.CDP.SessionId ?? string.Empty).Trim();
+            var eventSeller = (e.Seller.Nick ?? string.Empty).Trim();
+            var eventTargetId = (e.Seller.TargetId ?? string.Empty).Trim();
+            var buyer = e.Buyer == null ? string.Empty : (e.Buyer.Nick ?? string.Empty).Trim();
+
+            // CDPClient and DuplicateCdpInboundRecoveryBridge have already verified that this
+            // event belongs to the exact authoritative ShopKey. Promote it as foreground
+            // evidence; ObserveChatDialogActive is intentionally background-only and cannot
+            // replace an already active A shop with B.
+            if (!ActiveShopSessionRegistry.ActivateFromVerifiedConversationChange(
+                qn, eventSeller, eventTargetId, sessionId, buyer, evidence))
             {
-                // Field evidence from Qianniu 9.97: the visible seller tab can emit its real
-                // onConversationChange only from one of that seller's duplicate recent.html
-                // WebViews. The recovery bridge forwards it through the seller's authoritative
-                // CDP, so treating every forwarded event as "background" leaves the previous
-                // seller permanently active. Source-session duplication is page-level, not
-                // seller-level. The bridge already verifies sourceSession -> seller before it
-                // forwards the event, therefore this is valid seller activity evidence.
-                ActiveShopSessionRegistry.ObserveChatDialogActive(
-                    qn, "forwarded-onConversationChange:" + forwardedSource);
-                ActiveShopSessionRegistry.ReassertCurrent("forwarded-onConversationChange");
-                Log.Info("重复WebView承载的真实onConversationChange已用于切换活动客服: seller="
-                    + qn.Seller.Nick + ", sourceSession=" + forwardedSource);
+                Log.Info("真实onConversationChange未能晋升活动客服，身份/买家/权威CDP校验未通过: seller="
+                    + eventSeller + ", qnSeller=" + qn.Seller.Nick
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId)
+                    + ", sourceSessionRef=" + MyWebSocketServer.DiagnosticRef("session", forwardedSource)
+                    + ", buyer=" + buyer);
                 return;
             }
 
-            // A direct onConversationChange raised by the seller's authoritative CDP is also
-            // strong foreground evidence. Embedded CEF pages can all report focus=false, so the
-            // actual conversation-change event is more reliable than document.hasFocus alone.
-            ActiveShopSessionRegistry.ObserveChatDialogActive(qn, "authoritative-onConversationChange");
-            ActiveShopSessionRegistry.ReassertCurrent("authoritative-onConversationChange");
+            ActiveShopSessionRegistry.ReassertCurrent("verified-onConversationChange");
+            Log.Info("真实onConversationChange已晋升活动客服: seller=" + eventSeller
+                + ", shopRef=" + MyWebSocketServer.DiagnosticRef(
+                    "shop", ActiveShopSessionRegistry.GetActiveShopKey())
+                + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sessionId)
+                + ", sourceSessionRef=" + MyWebSocketServer.DiagnosticRef("session", forwardedSource)
+                + ", buyer=" + buyer);
         }
 
         private static string GetForwardedInboundSourceSession()
