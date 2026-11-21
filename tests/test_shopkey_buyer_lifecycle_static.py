@@ -360,3 +360,19 @@ def test_burst_coordinator_state_and_semantic_continuation_are_shopkey_scoped():
     assert "if (shopKey.Length == 0)" in cancel
     assert "Key(shopKey, seller, buyer)" in cancel
     assert "_sessionAgent.CancelAll(seller, buyer, reason, shopKey)" in cancel
+
+
+def test_background_recovery_and_burst_activity_are_shopkey_scoped():
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    method = recovery[
+        recovery.index("private async Task<bool> RecoverMissedBuyerMessagesAsync"):
+        recovery.index("private Task ProcessRecoveredBuyerMessageAfterMissAsync")
+    ]
+    assert "ResolveRuntimeBySeller(this)" in method
+    assert "shopKey = shop.ShopKey;" in method
+    assert 'BotActivityCoordinator.Begin("后台消息补偿", seller, buyer, shopKey)' in method
+
+    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert 'BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick, item.ShopKey)' in burst
+    template = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
+    assert 'BotActivityCoordinator.Begin("订单模板字段发送V2", plan.Seller, plan.Buyer, plan.ShopKey)' in template
