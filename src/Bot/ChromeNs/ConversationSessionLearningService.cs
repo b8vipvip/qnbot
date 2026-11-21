@@ -2585,7 +2585,7 @@ namespace Bot.ChromeNs
         {
             status=(status??string.Empty).Trim();
             if(status.IndexOf("未完成",StringComparison.Ordinal)>=0) return "running";
-            if(status.IndexOf("已完成",StringComparison.Ordinal)>=0||string.Equals(status,"完成",StringComparison.Ordinal)) return "completed";
+            if(status.IndexOf("完成",StringComparison.Ordinal)>=0) return "completed";
             if(status.IndexOf("失败",StringComparison.Ordinal)>=0||status.IndexOf("错误",StringComparison.Ordinal)>=0) return "failed";
             if(status.IndexOf("中断",StringComparison.Ordinal)>=0) return "interrupted";
             if(status.IndexOf("跳过",StringComparison.Ordinal)>=0) return "skipped";
