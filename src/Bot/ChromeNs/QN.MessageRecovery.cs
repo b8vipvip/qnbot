@@ -126,6 +126,20 @@ namespace Bot.ChromeNs
             long version,
             int attempt)
         {
+            string shopKey;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    throw new InvalidOperationException("恢复客服与当前ShopKey不匹配");
+                shopKey = shop.ShopKey;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("后台消息补偿无法确认唯一ShopKey，已停止本轮恢复: " + ex.Message, 20);
+                return false;
+            }
             buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             var key = RecoveryKey(seller, buyer);
             var sendGateAcquired = false;
@@ -156,7 +170,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                using (BotActivityCoordinator.Begin("后台消息补偿", seller, buyer))
+                using (BotActivityCoordinator.Begin("后台消息补偿", seller, buyer, shopKey))
                 {
                     long latestVersion;
                     if (!_backgroundRecoveryVersions.TryGetValue(key, out latestVersion) || latestVersion != version) return true;
