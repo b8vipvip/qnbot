@@ -296,7 +296,7 @@ def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_close
         service.index("private static bool ShouldSuppressForOffHours")
     ]
     assert "runtimeKey.Length == 0" in known_key
-    assert "return string.Empty;" in known_key
+    assert "? string.Empty" in known_key
 
     returning = read("src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Send.cs")
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in returning
