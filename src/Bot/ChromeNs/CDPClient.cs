@@ -127,6 +127,8 @@ namespace Bot.ChromeNs
         {
             var session = sender as WebSocketSession;
             if (session == null || e == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server == null || !server.IsWebSocketSessionConnected(session.SessionID)) return;
 
             WeakReference weak;
             if (!SessionClients.TryGetValue(session.SessionID, out weak) || weak == null) return;
