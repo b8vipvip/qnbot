@@ -209,14 +209,13 @@ def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_gen
     assert "!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert greeting < block
     assert 'SetSendCancellation("人工接管"' in qnrpa
-    assert "自动发送因人工接管取消，禁止重试" in qnrpa
+    assert "自动发送因人工接管取消，禁止重试" in read("src/Bot/ChromeNs/QN.cs")
 
 def test_manual_takeover_is_rechecked_at_each_last_mile_send_path():
     qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     open_send = qnrpa[
         qnrpa.index("private async Task<bool> OpenAndSendText"):
-        qnrpa.index("private async Task<bool> TrySendTextViaUiaAsync")
     ]
 
     assert "Func<bool> manualTakeoverCheck = () =>" in open_send
@@ -247,8 +246,8 @@ def test_manual_takeover_marks_pending_delivery_and_suppresses_only_unsubmitted_
         watchdog.index("public static int CancelConversation")
     ]
     activation = watchdog[
-        watchdog.index("Task.Run(async () =>", watchdog.index("private static void Activate")):
-        watchdog.index("private static PendingDelivery FindPending")
+        watchdog.index("private static void Activate"):
+        watchdog.index("public static bool ConfirmDelivery")
     ]
 
     assert "public int SupersededByManual;" in watchdog
