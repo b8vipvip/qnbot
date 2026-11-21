@@ -32,6 +32,7 @@ namespace Bot.ChromeNs
             public int Started;
             public long SubmissionAcceptedTicks;
             public string SubmissionEvidence;
+            public int SupersededByManual;
         }
 
         public static void OnBuyerMessageObserved(string seller, string buyer, DateTime observedAt)
@@ -201,6 +202,28 @@ namespace Bot.ChromeNs
             return removedCount;
         }
 
+        public static int MarkManualTakeover(
+            string seller, string buyer, string answer, string shopKey = null)
+        {
+            shopKey = ScopeKey(seller, shopKey);
+            var normalized = Normalize(answer);
+            if (shopKey.Length == 0 || normalized.Length == 0) return 0;
+            var matches = Pending.Values
+                .Where(x => x != null
+                    && x.Shop != null
+                    && string.Equals(x.Shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    && string.Equals(x.Seller, (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    && string.Equals(x.Buyer, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    && Normalize(x.Answer) == normalized)
+                .ToList();
+            foreach (var pending in matches)
+                Interlocked.Exchange(ref pending.SupersededByManual, 1);
+            if (matches.Count > 0)
+                Log.Info("本店发送回显监控已标记人工接管；后续仅核验是否已有提交证据，不产生重复发送失败告警: shop="
+                    + shopKey + ", seller=" + seller + ", buyer=" + buyer + ", count=" + matches.Count);
+            return matches.Count;
+        }
+
         public static int CancelConversation(string seller, string buyer, string reason, string shopKey = null)
         {
             shopKey = ScopeKey(seller, shopKey);
@@ -290,6 +313,16 @@ namespace Bot.ChromeNs
                             + new DateTime(submissionTicks).ToString("HH:mm:ss.fff")
                             + ", evidence=" + evidence
                             + "; 不生成发送失败异常，不触发同文本重发。");
+                        return;
+                    }
+
+                    if (!delivered
+                        && submissionTicks <= 0
+                        && Interlocked.CompareExchange(ref pending.SupersededByManual, 0, 0) != 0)
+                    {
+                        Log.Info("人工客服已接管当前会话；未观察到Bot提交证据，已抑制本次候选答案的发送失败告警: shop="
+                            + pending.Shop.ShopKey + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
+                            + ", watchdogId=" + pending.Id);
                         return;
                     }
 
