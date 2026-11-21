@@ -81,3 +81,20 @@ def test_completed_fast_recovery_keeps_window_until_age_expiry_to_block_replay()
     assert "Keep the original recovery window after success as a short replay guard" in finally_block
     assert "DateTime.Now - windowStart > TimeSpan.FromSeconds(30)" in finally_block
     assert "_firstInquiryFastRecoveryWindowStart.TryRemove(key, out ignoredStart)" in finally_block
+
+def test_first_inquiry_fast_path_routes_by_authoritative_source_websocket_not_seller_nickname():
+    source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+    method = source[
+        source.index("private static void OnWebSocketMessage"):
+        source.index("public partial class QN")
+    ]
+
+    assert "sender as WebSocketSession" in method
+    assert "session.SessionID" in method
+    assert "server.GetShopKeyForSession(sessionId)" in method
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in method
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in method
+    assert "ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId)" in method
+    assert "QN.FindExistingBySellerNick(seller)" not in method
+    assert method.index("IsAuthoritativeShopSession(shopKey, sessionId)") < method.index("FindConnectedQnByShopKey(shopKey, sessionId)")
+    assert method.index("FindConnectedQnByShopKey(shopKey, sessionId)") < method.index("ScheduleFirstInquiryFastRecovery")
