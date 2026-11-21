@@ -53,3 +53,15 @@ def test_old_history_checkpoints_are_migrated_and_forced_to_rescan():
     assert "value.Completed = new List<string>();" in decode
     assert 'value.State = "interrupted";' in decode
     assert "if (requiresFullRescan) Save(seller, value);" in decode
+
+def test_legacy_checkpoint_full_rescan_resets_archived_message_counter():
+    source = read("src/Bot/Knowledge/BuyerHistoryScanCheckpointStore.cs")
+    decode = source[
+        source.index("private static BuyerHistoryScanCheckpoint Decode"):
+        source.index("internal static BuyerHistoryScanResumeInfo Latest")
+    ]
+
+    assert "value.Contacts = new List<string>();" in decode
+    assert "value.Completed = new List<string>();" in decode
+    assert "value.ArchivedMessages = 0;" in decode
+    assert decode.index("value.ArchivedMessages = 0;") < decode.index("Save(seller, value)")
