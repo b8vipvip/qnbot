@@ -190,6 +190,18 @@ jobs:
             exit 0
           fi
           handoff_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
+          handoff_updated_at="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .updated_at // empty' <<<"$comments")"
+          if [[ -n "$handoff_updated_at" ]]; then
+            if ! handoff_epoch="$(date -u -d "$handoff_updated_at" +%s 2>/dev/null)"; then
+              echo "::warning::Existing Reconcile handoff timestamp is unreadable; suppressing duplicate dispatch until the handoff can be verified."
+              exit 0
+            fi
+            handoff_age=$(( $(date -u +%s) - handoff_epoch ))
+            if (( handoff_age < 600 )); then
+              echo "Recent Reconcile handoff marker is only ${handoff_age}s old; deferring recovery dispatch to avoid an eventual-consistency duplicate."
+              exit 0
+            fi
+          fi
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
             -f release_required="$RELEASE_REQUIRED"
