@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -11,9 +12,9 @@ namespace Bot.ChromeNs
 {
     internal static class KnowledgeEngineV2RuntimeBridge
     {
-        private static readonly ConcurrentDictionary<string, byte> PreparedSellers =
+        private static readonly ConcurrentDictionary<string, byte> PreparedShopKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, byte> WarmingSellers =
+        private static readonly ConcurrentDictionary<string, byte> WarmingShopKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static int _initialized;
 
@@ -44,44 +45,66 @@ namespace Bot.ChromeNs
             catch { }
         }
 
-        private static void PrepareSeller(string seller)
+        private static void PrepareSeller(string shopKey, string seller)
         {
-            if (!PreparedSellers.TryAdd(seller, 1)) return;
-            try
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0) return;
+
+            // Runtime state is shop-scoped. Seller nicknames are display data and can
+            // be identical across multiple logged-in Qianniu stores.
+            if (PreparedShopKeys.TryAdd(shopKey, 1))
             {
-                KnowledgeMemoryEngine.SetEnabled(seller, false);
+                try
+                {
+                    KnowledgeMemoryEngine.SetEnabled(seller, false);
+                }
+                catch (Exception ex)
+                {
+                    PreparedShopKeys.TryRemove(shopKey, out _);
+                    Log.ErrorWithMaxCount("关闭Knowledge Memory v1店铺开关失败: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey) + ", error=" + ex.Message, 10);
+                }
             }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("关闭Knowledge Memory v1店铺开关失败: seller=" + seller + ", error=" + ex.Message, 10);
-            }
-            QueueWarm(seller);
+            QueueWarm(shopKey, seller);
         }
 
-        private static void QueueWarm(string seller)
+        private static void QueueWarm(string shopKey, string seller)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0 || KnowledgeEngineV2Service.IsSnapshotReady(seller)) return;
-            if (!WarmingSellers.TryAdd(seller, 1)) return;
+            if (shopKey.Length == 0 || seller.Length == 0
+                || KnowledgeEngineV2Service.IsSnapshotReady(seller)) return;
+            if (!WarmingShopKeys.TryAdd(shopKey, 1)) return;
             Task.Run(() =>
             {
                 try
                 {
-                    KnowledgeEngineV2Service.Warm(seller);
-                    var stats = KnowledgeEngineV2Service.GetStats(seller);
-                    Log.Info("Knowledge Engine V2预热完成: seller=" + seller
-                        + ", records=" + stats.Total
-                        + ", conflicts=" + stats.Conflicts
-                        + ", snapshot=" + stats.SnapshotBuiltAt.ToString("HH:mm:ss.fff"));
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null
+                        || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                        throw new InvalidOperationException("Knowledge V2预热店铺身份与ShopKey/Seller不匹配");
+                    using (ShopSettingsScope.Enter(shop, false))
+                    {
+                        KnowledgeEngineV2Service.Warm(seller);
+                        var stats = KnowledgeEngineV2Service.GetStats(seller);
+                        Log.Info("Knowledge Engine V2预热完成: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                            + ", records=" + stats.Total
+                            + ", conflicts=" + stats.Conflicts
+                            + ", snapshot=" + stats.SnapshotBuiltAt.ToString("HH:mm:ss.fff"));
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Log.ErrorWithMaxCount("Knowledge Engine V2后台预热失败: seller=" + seller + ", error=" + ex.Message, 10);
+                    Log.ErrorWithMaxCount("Knowledge Engine V2后台预热失败: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey) + ", error=" + ex.Message, 10);
                 }
                 finally
                 {
                     byte ignored;
-                    WarmingSellers.TryRemove(seller, out ignored);
+                    WarmingShopKeys.TryRemove(shopKey, out ignored);
                 }
             });
         }
@@ -92,12 +115,23 @@ namespace Bot.ChromeNs
             if (qn == null || burst == null || burst.Items.Count < 1
                 || burst.LatestVisionItem != null || !burst.HasReplyableItem)
                 return false;
+
+            var shopScope = ShopSettingsScope.Current;
+            if (shopScope == null
+                || !string.Equals(shopScope.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                || !string.Equals(shopScope.SellerNick, burst.SellerNick, StringComparison.Ordinal))
+            {
+                Log.ErrorWithMaxCount("Knowledge Engine V2拒绝在缺少匹配ShopKey作用域的回复链路中执行: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", burst.ShopKey)
+                    + ", seller=" + burst.SellerNick, 20);
+                return false;
+            }
             if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
                 return false;
 
-            // Prepare each seller once: disable the retired v1 runtime flag and warm
-            // this exact shop's V2 snapshot before any local direct decision.
-            PrepareSeller(burst.SellerNick);
+            // Prepare each exact ShopKey once: never collapse two stores that share
+            // the same seller nickname into one warm/initialization state.
+            PrepareSeller(burst.ShopKey, burst.SellerNick);
 
             // V2 is only a fast terminal path when the shared commerce authority allows local
             // termination. The same authority is consumed by Smart Reply, so verified orders and
@@ -119,7 +153,7 @@ namespace Bot.ChromeNs
 
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
             {
-                QueueWarm(burst.SellerNick);
+                QueueWarm(burst.ShopKey, burst.SellerNick);
                 Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
                     + burst.BuyerNick);
                 return false;
