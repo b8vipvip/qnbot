@@ -932,7 +932,7 @@ namespace Bot.ChromeNs
         private void EnqueueForMerge(BuyerMessageBurstItem item)
         {
             if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)) return;
-            var key = Key(item.SellerNick, item.BuyerNick);
+            var key = Key(item.ShopKey, item.SellerNick, item.BuyerNick);
             BurstState state;
             if (!_states.TryGetValue(key, out state) || state == null) return;
 
@@ -1085,7 +1085,7 @@ namespace Bot.ChromeNs
         private void AttachSemanticContinuation(BuyerMessageBurstItem item)
         {
             if (item == null || !LooksLikeSemanticContinuation(item.DisplayText)) return;
-            var key = Key(item.SellerNick, item.BuyerNick);
+            var key = Key(item.ShopKey, item.SellerNick, item.BuyerNick);
             RecentBuyerText previous;
             if (!_recentBuyerTexts.TryGetValue(key, out previous) || previous == null) return;
             var currentAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
@@ -1124,7 +1124,7 @@ namespace Bot.ChromeNs
             if (item == null) return;
             var text = NormalizeSemanticText(item.DisplayText);
             if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
-            var key = Key(item.SellerNick, item.BuyerNick);
+            var key = Key(item.ShopKey, item.SellerNick, item.BuyerNick);
             var receivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
             SweepRecentBuyerTextsIfDue();
             var dependent = LooksLikeSemanticContinuation(text);
