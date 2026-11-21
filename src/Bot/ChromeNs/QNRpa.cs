@@ -1441,7 +1441,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查"))
+                if (!VerifyAnswerFreshness(shopKey, buyer, text, attemptStartedAt, "写入前答案时效检查"))
                 {
                     SendDeliveryWatchdog.CancelPending(
                         SellerNick, buyer, text, GetSendFailureReason(), shopKey);
@@ -1477,7 +1477,7 @@ namespace Bot.ChromeNs
                 }
 
                 await Task.Delay(80).ConfigureAwait(false);
-                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
+                if (!VerifyAnswerFreshness(shopKey, buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
                     await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(
