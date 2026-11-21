@@ -896,3 +896,24 @@ def test_incomplete_knowledge_v2_corpus_blocks_all_automatic_learning_writes():
     assert "if (EnableAutomaticWrites\n                    && corpusComplete" in finalize
     assert "if (!corpusComplete)" in finalize[suggestion_loop:knowledge_write]
     assert "禁止自动写入生产知识库" in finalize[suggestion_loop:knowledge_write]
+
+def test_corpus_batch_is_not_checkpointed_until_candidate_evidence_restoration_succeeds():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    analyze = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+    batch = analyze[
+        analyze.index("var batchResult = await AnalyzeKnowledgeCorpusBatchAsync"):
+        analyze.index("catch (Exception ex)", analyze.index("var batchResult = await AnalyzeKnowledgeCorpusBatchAsync"))
+    ]
+
+    restore = batch.index("RestoreSourceEvidenceMessageIds(")
+    stage = batch.index("var candidatesToKeep = new List<Suggestion>();")
+    append = batch.index("result.Candidates.AddRange(candidatesToKeep);")
+    completed = batch.index("result.CompletedBatchIndices.Add(batchIndex);")
+    reviewed = batch.index("result.RecordsReviewed += batch.Count;")
+
+    assert restore < stage < append < completed < reviewed
+    assert "Stage every fallible post-processing step before marking the batch complete" in batch
+    assert "If evidence-ID restoration or candidate handling throws" in batch
