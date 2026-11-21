@@ -168,8 +168,12 @@ namespace Bot.ChromeNs
         internal bool IsKnownBotOwnedDraftText(string currentText)
         {
             var expected = (LastSetPlainText ?? string.Empty).Trim();
+            var currentShopKey = ResolveShopKey();
             return expected.Length > 0
-                && HasOwnedRecentDraft(expected)
+                && currentShopKey.Length > 0
+                && string.Equals(_lastOwnedDraftShopKey, currentShopKey, StringComparison.Ordinal)
+                && _lastOwnedDraftAt != DateTime.MinValue
+                && DateTime.Now - _lastOwnedDraftAt <= OwnedDraftRetention
                 && !string.IsNullOrWhiteSpace(LastSendFailureReason)
                 && !LastSendWasCancelled
                 && EditorMatchesExpectedText(currentText, expected);
