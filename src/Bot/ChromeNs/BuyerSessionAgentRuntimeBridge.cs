@@ -324,6 +324,11 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || from.Length == 0 || to.Length == 0) return;
 
             var sellerMessage = string.Equals(from, seller, StringComparison.Ordinal);
+            if (!IsCurrentSellerIdentity(qn, message, sellerMessage))
+            {
+                Log.ErrorWithMaxCount("BuyerSessionAgent拒绝与当前千牛店铺身份不匹配的原始消息。", 20);
+                return;
+            }
             var text = GetMessageText(message);
             string nonBuyerReason;
             if (!sellerMessage && NonBuyerConversationGuard.ShouldBlockMessage(message, seller, text, out nonBuyerReason))
@@ -400,6 +405,43 @@ namespace Bot.ChromeNs
 
             var kind = ClassifyBuyerEvent(message, text, display);
             Agent.RecordEvent(seller, buyer, kind, key, sort, sourceTime, now, source + ":raw_buyer_event", false, shopKey);
+        }
+
+        private static bool IsCurrentSellerIdentity(QN qn, QNChatMessage message, bool sellerMessage)
+        {
+            if (qn == null || qn.Seller == null || message == null) return false;
+            var expectedNick = (qn.Seller.Nick ?? string.Empty).Trim();
+            if (expectedNick.Length == 0) return false;
+
+            var endpointNick = sellerMessage
+                ? (message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim())
+                : (message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim());
+            if (!string.Equals(endpointNick, expectedNick, StringComparison.Ordinal))
+                return false;
+
+            var loginNick = message.loginid == null ? string.Empty
+                : (message.loginid.nick ?? string.Empty).Trim();
+            if (loginNick.Length > 0
+                && !string.Equals(loginNick, expectedNick, StringComparison.Ordinal))
+                return false;
+
+            var expectedTargetId = (qn.Seller.TargetId ?? string.Empty).Trim();
+            if (expectedTargetId.Length == 0) return true;
+
+            var endpointTargetId = sellerMessage
+                ? (message.fromid == null ? string.Empty : (message.fromid.targetId ?? string.Empty).Trim())
+                : (message.toid == null ? string.Empty : (message.toid.targetId ?? string.Empty).Trim());
+            if (endpointTargetId.Length > 0
+                && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
+                return false;
+
+            var loginTargetId = message.loginid == null ? string.Empty
+                : (message.loginid.targetId ?? string.Empty).Trim();
+            if (loginTargetId.Length > 0
+                && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal))
+                return false;
+
+            return true;
         }
 
         private static BuyerSessionEventKind ClassifyBuyerEvent(QNChatMessage message, string text, string display)
