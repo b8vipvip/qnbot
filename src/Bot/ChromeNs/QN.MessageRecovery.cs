@@ -25,11 +25,77 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, long> _backgroundRecoveryVersions =
             new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
 
-        private static string RecoveryKey(string seller, string buyer)
+        private string RecoveryKey(string seller, string buyer)
         {
             seller = (seller ?? string.Empty).Trim();
-            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-            return seller + "#" + buyer;
+            var shopKey = string.Empty;
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                shopKey = shop.ShopKey;
+                using (ShopSettingsScope.Enter(shop, false))
+                    buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            }
+            catch
+            {
+                buyer = (buyer ?? string.Empty).Trim();
+            }
+            return shopKey + "#" + seller + "#" + (buyer ?? string.Empty).Trim();
+        }
+
+        private ShopContext ResolveRecoveryShop(string seller)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                throw new InvalidOperationException("恢复客服与当前ShopKey不匹配");
+            return shop;
+        }
+
+        private string ResolveBuyerInternalNickInShop(string seller, string buyer)
+        {
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                using (ShopSettingsScope.Enter(shop, false))
+                    return BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            }
+            catch { return (buyer ?? string.Empty).Trim(); }
+        }
+
+        private bool AreBuyerAliasesEquivalentInShop(string seller, string left, string right)
+        {
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                using (ShopSettingsScope.Enter(shop, false))
+                    return BuyerIdentityAliasService.AreEquivalent(seller, left, right);
+            }
+            catch { return string.Equals((left ?? string.Empty).Trim(),
+                (right ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase); }
+        }
+
+        private void ObserveBuyerAliasInShop(string seller, string internalNick, string display, string targetId)
+        {
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                using (ShopSettingsScope.Enter(shop, false))
+                    BuyerIdentityAliasService.Observe(seller, internalNick, display, targetId);
+            }
+            catch { }
+        }
+
+        private string ResolveBuyerConversationKeyInShop(string seller, string buyer)
+        {
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                using (ShopSettingsScope.Enter(shop, false))
+                    return BuyerIdentityAliasService.ResolveConversationKey(seller, buyer);
+            }
+            catch { return (buyer ?? string.Empty).Trim(); }
         }
 
         private void MarkBuyerMessageObserved(string seller, string buyer)
@@ -51,9 +117,22 @@ namespace Bot.ChromeNs
                 return;
             }
             var seller = (e.Seller.Nick ?? string.Empty).Trim();
-            BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
-            var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, e.Buyer.Nick);
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
+            if (string.IsNullOrWhiteSpace(seller)) return;
+            try
+            {
+                var shop = ResolveRecoveryShop(seller);
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("后台消息补偿无法绑定事件来源ShopKey，已跳过: " + ex.Message, 20);
+                return;
+            }
+            var buyer = ResolveBuyerInternalNickInShop(seller, e.Buyer.Nick);
+            if (string.IsNullOrWhiteSpace(buyer)) return;
             if (!Params.Robot.CanUseRobotReal) return;
 
             var key = RecoveryKey(seller, buyer);
@@ -129,10 +208,7 @@ namespace Bot.ChromeNs
             string shopKey;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeBySeller(this);
-                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
-                    throw new InvalidOperationException("恢复客服与当前ShopKey不匹配");
+                var shop = ResolveRecoveryShop(seller);
                 shopKey = shop.ShopKey;
             }
             catch (Exception ex)
@@ -140,7 +216,7 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("后台消息补偿无法确认唯一ShopKey，已停止本轮恢复: " + ex.Message, 20);
                 return false;
             }
-            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            buyer = ResolveBuyerInternalNickInShop(seller, buyer);
             var key = RecoveryKey(seller, buyer);
             var sendGateAcquired = false;
             var recoveryGateAcquired = false;
@@ -198,9 +274,9 @@ namespace Bot.ChromeNs
                         var response = await GetCurrentConversationID().ConfigureAwait(false);
                         current = response == null ? null : response.Result;
                         if (current != null
-                            && BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+                            && AreBuyerAliasesEquivalentInShop(seller, current.Nick, buyer))
                         {
-                            BuyerIdentityAliasService.Observe(seller, current.Nick, current.Display, current.TargetId);
+                            ObserveBuyerAliasInShop(seller, current.Nick, current.Display, current.TargetId);
                             break;
                         }
                         await Task.Delay(200).ConfigureAwait(false);
@@ -219,7 +295,7 @@ namespace Bot.ChromeNs
 
                     SetActiveConversationByNick(
                         seller,
-                        BuyerIdentityAliasService.ResolveConversationKey(seller, current.Nick),
+                        ResolveBuyerConversationKeyInShop(seller, current.Nick),
                         "backgroundRecoveryAutoSwitch");
 
                     // 会话 ID 切换成功只代表导航完成，不代表远端历史已经完成装载。
@@ -520,7 +596,7 @@ namespace Bot.ChromeNs
                 "千牛远端历史订单卡片",
                 out snapshot);
         }
-        private static bool IsRecoveredBuyerMessageForTarget(QNChatMessage message, string seller, string buyer)
+        private bool IsRecoveredBuyerMessageForTarget(QNChatMessage message, string seller, string buyer)
         {
             if (message == null || message.fromid == null) return false;
             string nonBuyerReason;
@@ -529,7 +605,7 @@ namespace Bot.ChromeNs
             // Therefore the sender identity is the authoritative buyer discriminator. Do not require
             // toid.nick to equal one exact seller alias: media/history cards can target the main seller
             // account while the active QN runtime is a dispatched sub-account.
-            return BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer);
+            return AreBuyerAliasesEquivalentInShop(seller, message.fromid.nick, buyer);
         }
 
     }
