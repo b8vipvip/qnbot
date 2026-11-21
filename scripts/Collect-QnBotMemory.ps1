@@ -244,6 +244,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
     $learningLatestFailedBatches = $null
     $learningLatestCoveragePercent = $null
     $learningLatestResumeCount = $null
+    $learningLatestRevisionStable = $null
+    $learningLatestSourceFingerprintPrefix = ''
+    $learningLatestTranscriptFingerprintPrefix = ''
     $learningReportStates = ''
 
     if (Test-Path -LiteralPath $KnowledgeV2LearningSnapshotPath -PathType Leaf) {
@@ -288,6 +291,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                     $learningLatestFailedBatches = [int]$latestLearning.KnowledgeCorpusFailedBatches
                     $learningLatestCoveragePercent = [double]$latestLearning.KnowledgeCorpusCoveragePercent
                     $learningLatestResumeCount = [int]$latestLearning.KnowledgeCorpusResumeCount
+                    $learningLatestRevisionStable = [bool]$latestLearning.KnowledgeCorpusRevisionStable
+                    $learningLatestSourceFingerprintPrefix = [string]$latestLearning.KnowledgeCorpusSourceFingerprintPrefix
+                    $learningLatestTranscriptFingerprintPrefix = [string]$latestLearning.KnowledgeCorpusTranscriptFingerprintPrefix
                 }
             }
         }
@@ -360,6 +366,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         KnowledgeV2LatestFailedBatches = $learningLatestFailedBatches
         KnowledgeV2LatestCoveragePercent = $learningLatestCoveragePercent
         KnowledgeV2LatestResumeCount = $learningLatestResumeCount
+        KnowledgeV2LatestRevisionStable = $learningLatestRevisionStable
+        KnowledgeV2LatestSourceFingerprintPrefix = $learningLatestSourceFingerprintPrefix
+        KnowledgeV2LatestTranscriptFingerprintPrefix = $learningLatestTranscriptFingerprintPrefix
         KnowledgeV2LearningReportStates = $learningReportStates
     } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
