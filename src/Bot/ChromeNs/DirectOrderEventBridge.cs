@@ -136,6 +136,24 @@ namespace Bot.ChromeNs
             var raw = e == null ? string.Empty : (e.Message ?? string.Empty);
             if (qn == null || raw.Length == 0 || !LooksPotential(raw)) return;
 
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("receiveNewMsg订单卡片无法确认来源店铺，已跳过: error=" + ex.Message);
+                return;
+            }
+            var runtimeSeller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, runtimeSeller, StringComparison.Ordinal))
+            {
+                Log.Info("receiveNewMsg订单卡片店铺身份不一致，已跳过: seller=" + runtimeSeller);
+                return;
+            }
+
             try
             {
                 var chat = JsonConvert.DeserializeObject<ChatResponse>(raw);
@@ -146,14 +164,23 @@ namespace Bot.ChromeNs
                 // A receiveNewMsg batch may contain several cards. Only pass a raw exact hint when
                 // both the payload and the business batch identify one unambiguous order.
                 var exactOrderIdHint = potential.Count == 1 ? ExtractExactOrderIdFromRaw(raw) : string.Empty;
-                foreach (var message in potential)
+                using (ShopSettingsScope.Enter(shop, false))
                 {
-                    await qn.ProcessDirectOrderMessageAsync(
-                        message,
-                        DirectOrderIdentityResolver.ResolveSeller(qn, message, null),
-                        DirectOrderIdentityResolver.ResolveBuyer(qn, message, null),
-                        "receiveNewMsg系统订单卡片",
-                        exactOrderIdHint);
+                    foreach (var message in potential)
+                    {
+                        var messageSeller = DirectOrderIdentityResolver.ResolveSeller(qn, message, null);
+                        if (!DirectOrderIdentityResolver.IdentityEquals(shop.SellerNick, messageSeller))
+                        {
+                            Log.Info("receiveNewMsg订单卡片卖家身份与来源店铺不一致，已跳过: shop=" + shop.ShopKey);
+                            continue;
+                        }
+                        await qn.ProcessDirectOrderMessageAsync(
+                            message,
+                            messageSeller,
+                            DirectOrderIdentityResolver.ResolveBuyer(qn, message, null),
+                            "receiveNewMsg系统订单卡片",
+                            exactOrderIdHint);
+                    }
                 }
             }
             catch (Exception ex)
@@ -276,7 +303,11 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            string normalizedBuyer;
+            using (ShopSettingsScope.Enter(shop, false))
+            {
+                normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            }
             if (!string.IsNullOrWhiteSpace(normalizedBuyer)) buyer = normalizedBuyer;
             // Same seller/buyer nicknames can exist in different shops. Scope both the
             // reservation and the async retry generation by the exact QN ShopKey.
