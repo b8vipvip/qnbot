@@ -150,3 +150,13 @@ def test_late_websocket_events_cannot_recreate_cdp_client_after_session_close():
     assert "lock (_sellerSessionSync)" in closed
     assert "_connectedSessions.TryRemove(session.SessionID, out _);" in closed
     assert closed.index("_connectedSessions.TryRemove(session.SessionID, out _);") < closed.index("_clients.TryRemove(session.SessionID, out removed);")
+
+def test_websocket_server_drops_late_frames_after_session_close():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    handler = server[
+        server.index("webSocket.NewMessageReceived +="):
+        server.index("webSocket.SessionClosed +=")
+    ]
+
+    assert "if (session == null || !_connectedSessions.ContainsKey(session.SessionID)) return;" in handler
+    assert handler.index("_connectedSessions.ContainsKey(session.SessionID)") < handler.index("JsonConvert.DeserializeObject<WSocketMessage>(value)")
