@@ -84,10 +84,12 @@ def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bo
 
     bot_guard = method.index("SendDeliveryWatchdog.IsKnownBotAnswer")
     same_answer = method.index("var sameAsCandidate =")
+    manual_mark = method.index("SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);")
     manual_register = method.index('RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")')
     block = method.index("return true;", same_answer)
 
-    assert bot_guard < same_answer < manual_register < block
+    assert bot_guard < same_answer < manual_mark < manual_register < block
+    assert "catch (Exception learningError)" in method
     assert "if (!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))" in method
     assert "if (!sameAsCandidate)" in method
     assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);" in method
