@@ -784,7 +784,8 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                out answer);
+                out answer,
+                burst.ShopKey);
             if (usedFirstInquiryFixedReply)
             {
                 answer = BotOutboundMessageFormatter.EnsureAiMarker(answer);
