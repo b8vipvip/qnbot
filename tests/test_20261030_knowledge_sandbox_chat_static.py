@@ -170,7 +170,7 @@ def test_shadow_mode_previews_do_not_relax_production_sending():
     assert "return ResolveInternal(seller, buyer, message, false);" in engine
     assert "return ResolveInternal(seller, buyer, message, true);" in engine
     assert "if (!decision.Enabled)" in engine
-    assert "decision.HasConflict = manualExact == null && HasConflict(best, second)" in engine
+    assert "decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second))" in engine
     assert "&& !highRisk" in engine
     assert "&& standaloneSafe" in engine
     assert "best.Score >= threshold" in engine
