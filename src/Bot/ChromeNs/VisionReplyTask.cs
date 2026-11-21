@@ -5,6 +5,7 @@ namespace Bot.ChromeNs
 {
     internal sealed class VisionReplyTask
     {
+        public string ShopKey { get; set; }
         public string SellerNick { get; set; }
         public string BuyerNick { get; set; }
         public string MessageKey { get; set; }
