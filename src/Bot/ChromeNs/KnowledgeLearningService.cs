@@ -265,18 +265,27 @@ namespace Bot.ChromeNs
                     Normalize(sellerEcho), Normalize(candidateAnswer), StringComparison.Ordinal);
                 if (!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))
                 {
-                    RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
-                    if (!sameAsCandidate)
-                    {
-                        QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
-                    }
-                    MessageProcessingTraceService.RecordManualObservation(
-                        seller,
-                        buyer,
-                        sameAsCandidate
-                            ? "人工客服已发送与Bot候选相同的答案；已阻止Bot重复发送"
-                            : "人工答案=" + Short(manualAnswer, 500) + "；当前Bot发送已阻止并进入对比学习");
+                    // Safety decision must not depend on best-effort learning persistence.
+                    // Mark the pending send as superseded before recording any comparison data.
                     SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);
+                    try
+                    {
+                        RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
+                        if (!sameAsCandidate)
+                        {
+                            QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
+                        }
+                        MessageProcessingTraceService.RecordManualObservation(
+                            seller,
+                            buyer,
+                            sameAsCandidate
+                                ? "人工客服已发送与Bot候选相同的答案；已阻止Bot重复发送"
+                                : "人工答案=" + Short(manualAnswer, 500) + "；当前Bot发送已阻止并进入对比学习");
+                    }
+                    catch (Exception learningError)
+                    {
+                        Log.Info("人工接管已生效，但人工答案学习记录失败: " + learningError.Message);
+                    }
                     Log.Info("检测到本店客服人工接管，已阻止当前Bot发送: seller="
                         + seller + ", buyer=" + buyer + ", sameAsCandidate=" + sameAsCandidate);
                     return true;
