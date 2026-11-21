@@ -148,15 +148,11 @@ namespace Bot.Knowledge
                             // Persist the cloud snapshot as the next comparison baseline.
                             // If local-only/conflicting records were retained, the next poll
                             // sends the merged set at this revision instead of discarding it.
-                            state.Revision=cloudRevision;
-                            state.Fingerprint=Fingerprint(records);
-                            PersistState(shop,state);
+                            PersistState(shop,state,cloudRevision,Fingerprint(records));
                             return;
                         }
 
-                        state.Revision=cloudRevision;
-                        state.Fingerprint=localFingerprint;
-                        PersistState(shop,state);
+                        PersistState(shop,state,cloudRevision,localFingerprint);
                     }
                 }
             }
@@ -182,13 +178,14 @@ namespace Bot.Knowledge
             }
         }
 
-        private static void PersistState(ShopContext shop,State state)
+        private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)
         {
+            if(state==null) throw new ArgumentNullException(nameof(state));
+            var revision=Math.Max(0,targetRevision).ToString();
+            var fingerprint=targetFingerprint??string.Empty;
             using(ShopSettingsScope.Enter(shop))
             {
                 var store=new ShopScopedSettingsStore(shop,Paths);
-                var revision=Math.Max(0,state.Revision).ToString();
-                var fingerprint=state.Fingerprint??string.Empty;
                 store.SetString(RevisionKey,revision);
                 store.SetString(FingerprintKey,fingerprint);
                 string storedRevision,storedFingerprint;
@@ -198,6 +195,12 @@ namespace Bot.Knowledge
                     || !string.Equals(storedFingerprint,fingerprint,StringComparison.Ordinal))
                     throw new InvalidOperationException("Knowledge V2 云同步 revision/hash 持久化失败；已保留上次成功检查点。");
             }
+
+            // Do not advance the in-memory checkpoint until both persisted values have
+            // been read back successfully. A transient disk/DPAPI error must cause the
+            // next poll to retry from the previous revision instead of skipping changes.
+            state.Revision=Math.Max(0,targetRevision);
+            state.Fingerprint=targetFingerprint??string.Empty;
         }
 
         private static List<KnowledgeV2Record> MergeCloudAndLocal(
