@@ -154,9 +154,7 @@ namespace Bot.Knowledge
                 var old = record.Answer ?? string.Empty;
                 record.Answer = answer;
                 record.ShortAnswer = answer;
-                record.Aliases = (record.Aliases ?? new List<string>())
-                    .Concat(new[] { question }).Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+                record.Aliases = AddPreferredAlias(record.Aliases, question, 40);
                 if (!matchedByAlias)
                 {
                     record.Intent = parsed.Intent;
@@ -289,8 +287,7 @@ namespace Bot.Knowledge
                 applied.Subject = parsed.Subject;
                 applied.Predicate = parsed.Predicate;
                 applied.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
-                applied.Aliases = (applied.Aliases ?? new List<string>())
-                    .Concat(new[] { question }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                applied.Aliases = AddPreferredAlias(applied.Aliases, question, 48);
                 applied.LastVerifiedAt = DateTime.Now;
                 NormalizeForSave(applied);
                 var revision = new KnowledgeV2ManualEditRevisionRow
@@ -458,29 +455,12 @@ namespace Bot.Knowledge
                     && !KnowledgeEngineV2Semantics.IsHighRisk(buyerQuestionAlias))
                 {
                     var aliasQuery = KnowledgeEngineV2Semantics.Parse(buyerQuestionAlias, null);
-                    var intentCompatible = string.Equals(aliasQuery.Intent, before.Intent, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(aliasQuery.Intent, "general", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(before.Intent, "general", StringComparison.OrdinalIgnoreCase);
-                    var predicateCompatible = string.Equals(aliasQuery.Predicate, before.Predicate, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(aliasQuery.Predicate, "general", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(before.Predicate, "general", StringComparison.OrdinalIgnoreCase);
-                    var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
-                        aliasQuery.Subject ?? string.Empty, before.Subject ?? string.Empty);
-                    var entityOverlap = (aliasQuery.Entities ?? new List<string>())
-                        .Any(x => (before.Entities ?? new List<string>())
-                            .Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase)));
-                    if (!aliasQuery.ContextDependent
-                        && !string.IsNullOrWhiteSpace(aliasQuery.Subject)
-                        && intentCompatible && predicateCompatible
-                        && (subjectSimilarity >= 0.68 || entityOverlap))
-                    {
-                        corrected.Aliases = (corrected.Aliases ?? new List<string>())
-                            .Concat(new[] { buyerQuestionAlias })
-                            .Where(x => !string.IsNullOrWhiteSpace(x))
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .Take(40)
-                            .ToList();
-                    }
+                    // The exact V2 record ID is the provenance of this answer. Once an
+                    // operator corrects that answer, retain the actual standalone buyer
+                    // wording as an exact alias even when legacy structured metadata is
+                    // missing or its parser labels differ from the canonical title.
+                    if (!aliasQuery.ContextDependent && !string.IsNullOrWhiteSpace(aliasQuery.Subject))
+                        corrected.Aliases = AddPreferredAlias(corrected.Aliases, buyerQuestionAlias, 40);
                 }
 
                 corrected.SourceType = "manual_reviewed_direct";
@@ -907,6 +887,29 @@ namespace Bot.Knowledge
             if (updatedAt != DateTime.MinValue) clone.UpdatedAt = updatedAt;
             if (verifiedAt != DateTime.MinValue) clone.LastVerifiedAt = verifiedAt;
             return clone;
+        }
+
+        private static List<string> AddPreferredAlias(
+            IEnumerable<string> existing,
+            string preferred,
+            int max)
+        {
+            var result = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var preferredValue = (preferred ?? string.Empty).Trim();
+            var preferredKey = KnowledgeEngineV2Semantics.Compact(preferredValue);
+            if (preferredValue.Length > 0 && preferredKey.Length > 0 && seen.Add(preferredKey))
+                result.Add(preferredValue);
+
+            foreach (var item in existing ?? Enumerable.Empty<string>())
+            {
+                var value = (item ?? string.Empty).Trim();
+                var key = KnowledgeEngineV2Semantics.Compact(value);
+                if (value.Length == 0 || key.Length == 0 || !seen.Add(key)) continue;
+                result.Add(value);
+                if (result.Count >= Math.Max(1, max)) break;
+            }
+            return result;
         }
 
         private static void NormalizeForSave(KnowledgeV2Record record)
