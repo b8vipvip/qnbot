@@ -214,7 +214,7 @@ namespace Bot.ChromeNs
                 }
 
                 var synthetic = new QNChatMessage { summary = envelope.Text };
-                using (ShopSettingsScope.Enter(shop))
+                using (ShopSettingsScope.Enter(shop, false))
                 {
                     await qn.ProcessDirectOrderMessageAsync(
                         synthetic,
@@ -306,7 +306,7 @@ namespace Bot.ChromeNs
                             || !string.Equals(currentShop.SellerNick, seller, StringComparison.Ordinal))
                             return;
 
-                        using (ShopSettingsScope.Enter(currentShop))
+                        using (ShopSettingsScope.Enter(currentShop, false))
                         {
                             if (await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source).ConfigureAwait(false))
                                 return;
