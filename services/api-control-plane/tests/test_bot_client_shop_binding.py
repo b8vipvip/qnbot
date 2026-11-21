@@ -43,6 +43,11 @@ def setup_cp(tmp_path):
             CREATE TABLE bot_client_state(client_id INTEGER);
             CREATE TABLE bot_conversation_reads(client_id INTEGER);
             CREATE TABLE bot_knowledge_state(client_id INTEGER);
+            CREATE TABLE bot_knowledge_v2_state(
+                client_id INTEGER PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 0,
+                records_json TEXT NOT NULL DEFAULT '[]'
+            );
             CREATE TABLE bot_store_rule_state(client_id INTEGER);
             CREATE TABLE bot_message_processing_traces(client_id INTEGER);
             CREATE TABLE bot_client_bot_enabled(client_id INTEGER PRIMARY KEY,shop_key TEXT);
@@ -85,6 +90,7 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_client_state",
             "bot_conversation_reads",
             "bot_knowledge_state",
+            "bot_knowledge_v2_state",
             "bot_store_rule_state",
             "bot_message_processing_traces",
             "bot_client_data_backups",
@@ -107,6 +113,7 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_client_state",
             "bot_conversation_reads",
             "bot_knowledge_state",
+            "bot_knowledge_v2_state",
             "bot_store_rule_state",
             "bot_message_processing_traces",
             "bot_client_bot_enabled",
