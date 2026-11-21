@@ -16,11 +16,12 @@ def test_text_send_routes_through_native_first_pipeline_before_legacy_uia():
     assert "sendResult = await TrySendTextViaUiaAsync(buyer, text, sendStart)" not in qnrpa
     assert "TryTriggerSendViaCdpDomAsync" in native
     assert "TryPostSafeMainSendMouseMessage" in native
-    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
+    assert "TrySendTextViaUiaAsync(" in native
+    assert "buyer, text, sendStart, manualTakeoverCheck" in native
 
     dom = native.index("TryTriggerSendViaCdpDomAsync")
     hwnd = native.index("TryPostSafeMainSendMouseMessage", dom)
-    uia = native.index("TrySendTextViaUiaAsync(buyer, text, sendStart)", hwnd)
+    uia = native.index("TrySendTextViaUiaAsync(", hwnd)
     assert dom < hwnd < uia
 
 
