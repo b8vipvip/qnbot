@@ -250,3 +250,32 @@ def test_conversation_timeline_rejects_ambient_shop_scope_mismatch():
     assert "currentScope.ShopKey, shop.ShopKey" in refresh
     assert "会话时间线拒绝与当前ShopKey作用域不匹配的消息" in refresh
     assert "if (shop != null && currentScope == null)" in refresh
+
+
+def test_raw_agent_and_seller_echo_mirror_validate_stable_shop_target_id():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    seller_echo = context[
+        context.index("internal static bool RecordObservedSellerMessage"):
+        context.index("public static bool IsPlatformSystemTip")
+    ]
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage"):
+        bridge.index("private static BuyerSessionEventKind ClassifyBuyerEvent")
+    ]
+    identity = bridge[
+        bridge.index("private static bool IsCurrentSellerIdentity"):
+        bridge.index("private static BuyerSessionEventKind ClassifyBuyerEvent")
+    ]
+
+    assert "shop.HasStableSellerId" in seller_echo
+    assert "shop.SellerId" in seller_echo
+    assert "message.fromid.targetId" in seller_echo
+    assert "message.loginid.targetId" in seller_echo
+    assert "message.loginid.nick" in seller_echo
+    assert "IsCurrentSellerIdentity(qn, message, sellerMessage)" in observe
+    assert observe.index("IsCurrentSellerIdentity") < observe.index("NonBuyerConversationGuard.ShouldBlockMessage")
+    assert "message.fromid.targetId" in identity
+    assert "message.toid.targetId" in identity
+    assert "message.loginid.targetId" in identity
+    assert "qn.Seller.TargetId" in identity
