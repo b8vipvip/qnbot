@@ -54,6 +54,9 @@ namespace Bot
             Bot.Knowledge.RulePolicyImportExportUi.InitializeForApp();
             ConversationSessionLearningService.Initialize();
             ManualVisualReplyLearningService.Initialize();
+            // Explicit startup call: partial-App field initializers are not a reliable
+            // bootstrap boundary under beforefieldinit semantics.
+            KnowledgeEngineV2RuntimeBridge.InitializeForApp();
             BuyerStreamingReplyPipeline.Initialize();
             VisionWithdrawalAwarePipeline.Initialize();
             VisionFollowUpContextPipeline.Initialize();
