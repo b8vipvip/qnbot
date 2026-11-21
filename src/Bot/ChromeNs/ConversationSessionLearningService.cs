@@ -725,11 +725,16 @@ namespace Bot.ChromeNs
 
                 if (historyCoverage == null || !historyCoverage.IsComplete)
                 {
+                    // A missing result is an unavailable refresh response, not proof
+                    // that the session is permanently unlearnable. Retry transient
+                    // infrastructure failures; only invalid caller scope/window is terminal.
+                    var historyErrorCode = historyCoverage == null
+                        ? "history_refresh_unavailable"
+                        : (historyCoverage.ErrorCode ?? string.Empty);
                     if (session.HistoryRetryCount < 3
-                        && historyCoverage != null
-                        && historyCoverage.ErrorCode != "missing_conversation_scope"
-                        && historyCoverage.ErrorCode != "invalid_session_window"
-                        && historyCoverage.ErrorCode != "missing_conversation_code")
+                        && historyErrorCode != "missing_conversation_scope"
+                        && historyErrorCode != "invalid_session_window"
+                        && historyErrorCode != "missing_conversation_code")
                     {
                         session.HistoryRetryCount++;
                         session.RetryCount = session.HistoryRetryCount + session.LearningRetryCount;
@@ -738,7 +743,7 @@ namespace Bot.ChromeNs
                         report.InputCoverageJson = initialCoverage.ToString(Formatting.None);
                         report.RetryCount = session.RetryCount;
                         report.Status = "等待完整历史恢复(" + session.HistoryRetryCount + "/3)";
-                        report.Error = "history_coverage_incomplete:" + historyCoverage.ErrorCode;
+                        report.Error = "history_coverage_incomplete:" + historyErrorCode;
                         SaveReport(report);
                         NotifyChanged();
                         Requeue(session);
