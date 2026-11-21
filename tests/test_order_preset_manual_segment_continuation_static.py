@@ -32,8 +32,10 @@ def test_manual_intervention_still_blocks_ordinary_ai_replies():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
     reliable = text("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
     qn = text("src/Bot/ChromeNs/QN.cs")
-    assert "KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text" in rpa
-    block = rpa[rpa.index("KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text"):][:500]
+    assert "TryCancelForManualTakeover(buyer, text, shopKey, out manualBypassConsumed)" in rpa
+    block = rpa[rpa.index("private bool TryCancelForManualTakeover"):][:900]
+    assert "KnowledgeLearningService.TryBlockForManualReply(" in block
+    assert 'SetSendCancellation("人工接管"' in block
     assert 'SetSendCancellation("人工接管"' in block
     assert "LastSendWasCancelled" in reliable
     assert "自动发送因人工接管取消，禁止重试" in qn
