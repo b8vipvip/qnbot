@@ -184,3 +184,55 @@ def test_explicit_shop_scope_is_revalidated_before_buyer_navigation_and_each_sen
     ]
     assert "ShopSettingsScope.Current" in verify
     assert "scopedShop.ShopKey" in verify
+
+def test_order_event_entrypoints_read_auto_reply_rules_from_the_exact_shop_scope():
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    plan = order[
+        order.index("public static bool TryCreatePlan"):
+        order.index("private static bool TryCreateBuyerFollowUpPlan")
+    ]
+    cfg = plan.index("BotFeatureStore.GetAutoReplyRules()")
+    scoped_read = plan.rfind("using (ShopSettingsScope.Enter(shop, false))", 0, cfg)
+    assert scoped_read >= 0
+    assert scoped_read < cfg
+
+    fallback = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
+    hub = fallback[
+        fallback.index("internal async Task ProcessAcceptedOrderEventFallbackAsync"):
+        fallback.index("private static string BuildOrderEventFallbackReservationKey")
+    ]
+    cfg = hub.index("BotFeatureStore.GetAutoReplyRules()")
+    scoped_read = hub.rfind("using (ShopSettingsScope.Enter(runtimeShop, false))", 0, cfg)
+    assert scoped_read >= 0
+    assert scoped_read < cfg
+
+
+def test_order_template_event_bridges_resolve_shop_before_reading_shop_scoped_rules():
+    source = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
+    receive = source[
+        source.index("private static void OnReceiveNewMessage"):
+        source.index("private static void TryOwnReceivePlan")
+    ]
+    notify = source[
+        source.index("private static void OnMessageNotify"):
+        source.index("internal static bool TryOwnExistingPlan")
+    ]
+
+    for handler in (receive, notify):
+        resolve = handler.index("ShopContextLocator.ResolveRuntimeBySeller(qn)")
+        scope = handler.index("using (ShopSettingsScope.Enter(runtimeShop, false))")
+        read_rules = handler.index("BotFeatureStore.GetAutoReplyRules()")
+        assert resolve < scope < read_rules
+
+    assert "snapshot.ShopKey = runtimeShop.ShopKey;" in notify
+    assert "ShopKey = runtimeShop.ShopKey" in notify
+
+
+def test_feature_settings_router_uses_explicit_shop_scope_for_feature_params():
+    bridge = read("src/Bot/ShopScope/ShopScopedParamBridge.cs")
+    persistent = read("src/BotLib/Db/Sqlite/PersistentParams.cs")
+
+    assert '"feature"' in bridge
+    assert "var shop = ShopSettingsScope.Current;" in bridge
+    assert "ScopedParamRouter.TryRead(masterKey, subKey, out scoped)" in persistent
+    assert "ScopedParamRouter.TryWrite(masterKey, subKey" in persistent
