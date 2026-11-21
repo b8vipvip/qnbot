@@ -18,6 +18,7 @@ class FakeControlPlane:
     def db(self):
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         try:
             yield conn
             conn.commit()
@@ -89,7 +90,8 @@ def setup_cp(tmp_path):
                 enabled INTEGER NOT NULL DEFAULT 0,
                 corp_id TEXT NOT NULL DEFAULT '',
                 app_secret_cipher TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id)
             );
             CREATE TABLE wecom_handoff_tickets(
                 ticket_id TEXT PRIMARY KEY,
@@ -220,6 +222,44 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
         ).fetchone()
     assert row["shop_key"] == "shop_b"
     assert row["seller"] == "seller-b"
+
+
+def test_force_rebind_rolls_back_when_wecom_handoff_cleanup_fails(tmp_path):
+    cp = setup_cp(tmp_path)
+    binding.ensure_binding(1, "shop_a", False, "seller-a")
+
+    with cp.db() as conn:
+        conn.execute("INSERT INTO wecom_client_settings(client_id,updated_at) VALUES(1,'2026-08-11')")
+        conn.execute("""INSERT INTO wecom_handoff_tickets(
+            ticket_id,client_id,client_name,seller,buyer,question,reason,notified_users,status,created_at,updated_at,expires_at
+        ) VALUES('ticket-a',1,'Bot A','seller-a','buyer-a','question-a','reason-a','user-a','reply_queued','2026-08-11','2026-08-11','2026-08-12')""")
+        conn.execute("""INSERT INTO wecom_handoff_commands(
+            ticket_id,wecom_msg_id,from_user,reply_text,status,created_at,updated_at
+        ) VALUES('ticket-a','msg-a','user-a','old-shop-reply','pending','2026-08-11','2026-08-11')""")
+        conn.execute("""
+            CREATE TRIGGER deny_wecom_handoff_cleanup
+            BEFORE DELETE ON wecom_handoff_commands
+            BEGIN
+                SELECT RAISE(ABORT, 'wecom cleanup blocked');
+            END;
+        """)
+
+    with pytest.raises(sqlite3.IntegrityError, match="wecom cleanup blocked"):
+        binding.ensure_binding(1, "shop_b", True, "seller-b")
+
+    with cp.db() as conn:
+        row = conn.execute(
+            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=1"
+        ).fetchone()
+        tickets = conn.execute("SELECT COUNT(*) FROM wecom_handoff_tickets WHERE client_id=1").fetchone()[0]
+        commands = conn.execute("SELECT COUNT(*) FROM wecom_handoff_commands").fetchone()[0]
+        settings = conn.execute("SELECT COUNT(*) FROM wecom_client_settings WHERE client_id=1").fetchone()[0]
+
+    assert row["shop_key"] == "shop_a"
+    assert row["seller"] == "seller-a"
+    assert tickets == 1
+    assert commands == 1
+    assert settings == 1
 
 
 def test_force_rebind_rolls_back_when_old_shop_state_cleanup_fails(tmp_path):
