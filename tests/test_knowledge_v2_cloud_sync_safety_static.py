@@ -83,8 +83,10 @@ def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verif
     revision_advance = persist.index("state.Revision=Math.Max(0,targetRevision);")
     fingerprint_advance = persist.index("state.Fingerprint=targetFingerprint??string.Empty;")
     assert verify < revision_advance < fingerprint_advance
-    assert "store.SetString(RevisionKey,revision);" in persist
-    assert "store.SetString(FingerprintKey,fingerprint);" in persist
+    assert "store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)" in persist
+    assert "{ RevisionKey, revision }" in persist
+    assert "{ FingerprintKey, fingerprint }" in persist
+    assert "store.SetString(" not in persist
     assert 'PersistState(shop,state,cloudRevision,Fingerprint(records));' in sync
     assert 'PersistState(shop,state,cloudRevision,localFingerprint);' in sync
     assert "state.Revision=cloudRevision;" not in sync
