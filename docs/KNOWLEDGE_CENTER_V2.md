@@ -184,16 +184,18 @@ knowledge.engine_v2.min_confidence
 
 ## 运行时接入
 
-`KnowledgeEngineV2RuntimeBridge` 安装在 `BuyerMessageBurstCoordinator` 外层：
+`KnowledgeEngineV2RuntimeBridge.TryHandleAsync` 由唯一的 `BuyerStreamingReplyPipeline.ProcessTextBurstStreamingAsync` 显式调用，且发生在 AI 生成之前：
 
 ```text
 BuyerMessageBurstCoordinator
-  -> Knowledge Engine V2
-      -> 高置信本地答案：直接进入安全发送链路
-      -> 无法证明：兼容 Smart Reply / AI 链路
+  -> BuyerStreamingReplyPipeline（唯一文本回复入口）
+      -> Knowledge Engine V2.TryHandleAsync
+          -> 高置信本地答案：直接进入安全发送链路并终结本轮
+          -> 无法证明 / V2关闭 / 订单流程：返回 false
+      -> Smart Reply / AI 生成链路
 ```
 
-V2 启动后会停止 Memory Engine v1 的运行时 Timer，并剥离已经挂载的 v1 wrapper，避免 V1/V2 重复套娃。
+V2 启动后会停止 Memory Engine v1 的运行时 Timer，并剥离已经挂载的 v1 wrapper，避免 V1/V2 重复套娃。V2 不再通过独立 Timer 反射包装 BuyerMessageBurstCoordinator；此前 V2 与 BuyerStreamingReplyPipeline 分别改写同一个 `_handler`，执行先后由启动时序决定，可能导致后安装的流式包装覆盖 V2 包装。现在由流式主入口显式调用 V2，消除包装竞争。
 
 本地答案发送仍必须经过：
 
