@@ -282,7 +282,7 @@ namespace Bot.ChromeNs
                         await Task.Delay(200).ConfigureAwait(false);
                     }
 
-                    if (current == null || !BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+                    if (current == null || !AreBuyerAliasesEquivalentInShop(seller, current.Nick, buyer))
                     {
                         Log.Info("后台消息补偿自动切换失败：无法确认目标买家会话。target=" + buyer
                             + ", current=" + (current == null ? string.Empty : current.Nick)
