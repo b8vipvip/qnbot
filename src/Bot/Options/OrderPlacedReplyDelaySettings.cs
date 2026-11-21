@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.Options;
 using Bot.ShopScope;
 using BotLib;
 using DbEntity;
