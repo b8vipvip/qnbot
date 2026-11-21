@@ -833,14 +833,21 @@ namespace Bot.ChromeNs
                 return false;
             }
             await Task.Delay(180).ConfigureAwait(false);
+            bool manualBypassConsumed;
+            if (TryCancelForManualTakeover(buyer, text, shopKey, out manualBypassConsumed)) return false;
+            return await OpenAndSendText(buyer, text, shopKey, manualBypassConsumed).ConfigureAwait(false);
+        }
+
+        private bool TryCancelForManualTakeover(
+            string buyer, string text, string shopKey, out bool bypassed)
+        {
             string manualQuestion;
             string manualAnswer;
-            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer, shopKey))
-            {
-                SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
+            if (!KnowledgeLearningService.TryBlockForManualReply(
+                _qn, buyer, text, out manualQuestion, out manualAnswer, shopKey, out bypassed))
                 return false;
-            }
-            return await OpenAndSendText(buyer, text, shopKey).ConfigureAwait(false);
+            SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
+            return true;
         }
 
         private string SellerNick
@@ -1351,16 +1358,26 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task<bool> OpenAndSendText(string buyer, string text, string shopKey)
+        private async Task<bool> OpenAndSendText(
+            string buyer, string text, string shopKey, bool manualBypassConsumed)
         {
             var sendResult = false;
             ResetSendFailure();
             var attemptStartedAt = GetOrCreateAttemptStartedAt(buyer, text);
+            Func<bool> manualTakeoverCheck = () =>
+            {
+                if (manualBypassConsumed) return false;
+                bool bypassed;
+                if (TryCancelForManualTakeover(buyer, text, shopKey, out bypassed)) return true;
+                if (bypassed) manualBypassConsumed = true;
+                return false;
+            };
             try
             {
                 Log.Info("自动发送开始: buyer=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
+                if (manualTakeoverCheck()) return false;
                 if (!await VerifyShopIdentityBeforeSendAsync(shopKey).ConfigureAwait(false))
                 {
                     SetSendFailure("店铺身份确认", "当前千牛CDP登录身份已变化或无法验证，已阻止写入和发送");
@@ -1462,10 +1479,16 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
+                if (manualTakeoverCheck())
+                {
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
+                    return false;
+                }
                 SendDeliveryWatchdog.EnsurePending(
                     SellerNick, buyer, text, shopKey);
                 var sendStart = DateTime.Now;
-                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey).ConfigureAwait(false);
+                sendResult = await TrySendTextNativeFirstAsync(
+                    buyer, text, sendStart, shopKey, manualTakeoverCheck).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "发送主按钮动作后未确认消息真实回显");
