@@ -55,3 +55,17 @@ def test_manual_edit_carries_buyer_question_alias_and_retrieval_uses_strict_simi
     assert "match.IntentScore < 0.99" in service
     assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in service
 
+
+def test_human_direct_answer_updates_existing_exact_alias_without_creating_duplicate():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository.split("public static bool TrySaveReviewedDirectAnswer(string seller, string question,", 1)[1].split(
+        "public static bool TryApplyBuyerDirect", 1
+    )[0]
+    assert "compactQuestion" in method
+    assert "x.Aliases ?? new List<string>()" in method
+    assert "var matchedByAlias" in method
+    assert "aliasQuery.ContextDependent" in method
+    assert "if (!matchedByAlias)" in method
+    assert "record.CorrectionCount++" in method
+    assert "拒绝覆盖原知识" in method
+

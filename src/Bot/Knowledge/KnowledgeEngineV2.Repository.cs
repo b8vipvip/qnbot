@@ -93,10 +93,14 @@ namespace Bot.Knowledge
             try
             {
                 var all = LoadAll(seller);
+                var compactQuestion = KnowledgeEngineV2Semantics.Compact(question);
                 var exact = all.Where(x => x != null && x.Enabled
                     && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title),
-                        KnowledgeEngineV2Semantics.Compact(question), StringComparison.Ordinal)).ToList();
+                    && (string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title),
+                            compactQuestion, StringComparison.Ordinal)
+                        || (x.Aliases ?? new List<string>()).Any(alias =>
+                            string.Equals(KnowledgeEngineV2Semantics.Compact(alias),
+                                compactQuestion, StringComparison.Ordinal)))).ToList();
                 if (exact.Count > 1)
                 {
                     result = "存在多条完全同题的启用知识，请先在知识中心消除冲突。";
@@ -110,6 +114,30 @@ namespace Bot.Knowledge
                     CreatedAt = DateTime.Now,
                     SourceId = "reviewed-" + Guid.NewGuid().ToString("N")
                 };
+                var matchedByAlias = exact.Count == 1
+                    && !string.Equals(KnowledgeEngineV2Semantics.Compact(record.Title),
+                        compactQuestion, StringComparison.Ordinal);
+                if (matchedByAlias)
+                {
+                    var aliasQuery = KnowledgeEngineV2Semantics.Parse(question, null);
+                    var intentCompatible = string.Equals(aliasQuery.Intent, record.Intent, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(aliasQuery.Intent, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.Intent, "general", StringComparison.OrdinalIgnoreCase);
+                    var predicateCompatible = string.Equals(aliasQuery.Predicate, record.Predicate, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(aliasQuery.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.Predicate, "general", StringComparison.OrdinalIgnoreCase);
+                    var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
+                        aliasQuery.Subject ?? string.Empty, record.Subject ?? string.Empty);
+                    var entityOverlap = (aliasQuery.Entities ?? new List<string>())
+                        .Any(x => (record.Entities ?? new List<string>())
+                            .Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase)));
+                    if (aliasQuery.ContextDependent || !intentCompatible || !predicateCompatible
+                        || (subjectSimilarity < 0.68 && !entityOverlap))
+                    {
+                        result = "命中的旧问法别名与当前问题主体或意图不一致，拒绝覆盖原知识。";
+                        return false;
+                    }
+                }
                 if (string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
                 {
                     result = "原有知识标记为高风险，已阻止覆盖。";
@@ -127,11 +155,17 @@ namespace Bot.Knowledge
                 record.Answer = answer;
                 record.ShortAnswer = answer;
                 record.Aliases = (record.Aliases ?? new List<string>())
-                    .Concat(new[] { question }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                record.Intent = parsed.Intent;
-                record.Subject = parsed.Subject;
-                record.Predicate = parsed.Predicate;
-                record.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
+                    .Concat(new[] { question }).Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(40).ToList();
+                if (!matchedByAlias)
+                {
+                    record.Intent = parsed.Intent;
+                    record.Subject = parsed.Subject;
+                    record.Predicate = parsed.Predicate;
+                    record.Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList();
+                }
+                if (exact.Count == 1 && !string.Equals(old, answer, StringComparison.Ordinal))
+                    record.CorrectionCount++;
                 if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
                     record.Type = "business_fact";
                 record.SourceType = "manual_reviewed_direct";
@@ -158,7 +192,7 @@ namespace Bot.Knowledge
                     "success", out error);
                 savedKnowledgeId = record.Id;
                 result = "直答已保存并立即刷新索引（知识ID：" + record.Id
-                    + "）。后续相同完整问题优先使用；安全/订单场景保护仍有效。";
+                    + "）。后续相同问法及通过严格意图/谓词/主体校验的相似问法可复用；安全/订单场景保护仍有效。";
                 return true;
             }
             catch (Exception ex)

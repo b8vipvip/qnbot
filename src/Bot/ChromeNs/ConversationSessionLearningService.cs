@@ -1066,13 +1066,29 @@ namespace Bot.ChromeNs
                 || !string.Equals(analysis.SourceFingerprint, analysis.AfterFingerprint, StringComparison.Ordinal))
                 return 0;
 
+            if (analysis.Candidates.Count == 0) return 0;
+
             // The corpus may have changed after the batch analyzer returned. Recheck
             // the exact shop-wide fingerprint immediately before the first write.
-            var currentRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)
-                .Where(x => x != null)
-                .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
-                .ToList();
-            var currentFingerprint = ComputeKnowledgeCorpusFingerprint(currentRecords);
+            string currentFingerprint;
+            try
+            {
+                var currentRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)
+                    .Where(x => x != null)
+                    .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                    .ToList();
+                currentFingerprint = ComputeKnowledgeCorpusFingerprint(currentRecords);
+            }
+            catch (Exception ex)
+            {
+                foreach (var candidate in analysis.Candidates)
+                {
+                    if (candidate == null) continue;
+                    candidate.ApplyMessage = "读取当前Knowledge V2版本失败，自动修订已拒绝：" + Clean(ex.Message, 180);
+                    skipped++;
+                }
+                return 0;
+            }
             if (!string.Equals(currentFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal))
             {
                 foreach (var candidate in analysis.Candidates)
@@ -1089,7 +1105,7 @@ namespace Bot.ChromeNs
             {
                 if (!CanAutoApplyVerifiedCorpusCorrection(candidate, session.Seller, analysis.SourceFingerprint))
                 {
-                    if (candidate != null && string.IsNullOrWhiteSpace(candidate.ApplyMessage))
+                    if (candidate != null)
                         candidate.ApplyMessage = "未达到高置信真人纠正自动应用门槛，保留候选供人工审核";
                     skipped++;
                     continue;
