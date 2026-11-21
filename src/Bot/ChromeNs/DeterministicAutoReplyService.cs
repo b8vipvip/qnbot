@@ -407,7 +407,8 @@ namespace Bot.ChromeNs
                 item.SellerNick,
                 item.BuyerNick,
                 question,
-                out firstReply);
+                out firstReply,
+                item.ShopKey);
             if (firstReserved)
             {
                 var firstOk = await SendFixedAsync(
@@ -419,7 +420,8 @@ namespace Bot.ChromeNs
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(
                         item.SellerNick,
-                        item.BuyerNick);
+                        item.BuyerNick,
+                        item.ShopKey);
                 }
                 else
                 {
@@ -428,7 +430,8 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         qn.Rpa == null
                             ? "首条咨询固定回复发送失败"
-                            : qn.Rpa.GetSendFailureReason());
+                            : qn.Rpa.GetSendFailureReason(),
+                        item.ShopKey);
                     return false;
                 }
             }
