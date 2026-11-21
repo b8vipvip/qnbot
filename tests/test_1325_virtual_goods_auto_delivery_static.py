@@ -89,7 +89,9 @@ def test_long_lived_confirmation_ledger_blocks_reenqueue_and_repeat_confirm():
     durable_write = runtime.index("AutoDeliveryConfirmationLedger.TryRecordIntent", local_consumed)
     assert persist < local_consumed < durable_write
     assert "AutoDeliveryConfirmationLedger.Remove" not in runtime
-    assert "AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId)" in runtime[persist:durable_write]
+    assert "AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent)" in runtime[persist:durable_write]
+    assert "if (!AutoDeliveryConfirmationLedger.IsOperational())" in runtime[persist:durable_write]
+    assert "if (AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out racedIntent)" in runtime[persist:]
 
 
 def test_auto_delivery_only_declares_success_on_explicit_done_status():
@@ -569,3 +571,20 @@ def test_preflight_completed_or_terminal_order_does_not_require_a_nonexistent_co
     assert "hasIntent = false;" in try_get or "out bool hasIntent" in try_get
     assert "return hasIntent || atCapacity;" in has_intent
     assert "if (!TryReadIntent(shopKey, seller, orderId, out hasIntent, out atCapacity)) return true;" in has_intent
+
+def test_full_confirmation_ledger_never_fabricates_per_order_intent_on_capacity():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    persist = runtime[
+        runtime.index("public static bool TryPersistConfirmationIntent"):
+        runtime.index("private static void ScheduleWorker")
+    ]
+
+    exact_read = persist.index("AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent)")
+    actual_intent = persist.index("if (existingIntent)", exact_read)
+    capacity_gate = persist.index("if (!AutoDeliveryConfirmationLedger.IsOperational())", actual_intent)
+    record = persist.index("AutoDeliveryConfirmationLedger.TryRecordIntent", capacity_gate)
+    race_read = persist.index("AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out racedIntent)", record)
+
+    assert exact_read < actual_intent < capacity_gate < record < race_read
+    assert "if (AutoDeliveryConfirmationLedger.HasIntent(shopKey, seller, orderId))" not in persist
+    assert "不伪造订单确认屏障" in persist
