@@ -162,3 +162,16 @@ def test_windows_memory_sampler_tracks_pseudonymized_runtime_shop_lifecycle_over
     assert "shop.ShopKey" not in collector
     assert "CommandLine" not in collector
     assert "Invoke-WebRequest" not in collector
+
+def test_windows_memory_sampler_compares_knowledge_v2_cloud_revision_and_fingerprint():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "KnowledgeV2SyncSnapshotPath" in collector
+    assert "knowledge-v2-sync-snapshot.json" in collector
+    assert "KnowledgeV2SyncSnapshotStatus" in collector
+    assert "KnowledgeV2ConvergedShopCount" in collector
+    assert "KnowledgeV2DivergentShopCount" in collector
+    assert "KnowledgeV2LatestCloudRevision" in collector
+    assert "KnowledgeV2ShopStates" in collector
+    assert "LocalFingerprintPrefix" in collector
+    assert "CloudFingerprintPrefix" in collector
+    assert "process_mismatch" in collector
