@@ -71,7 +71,16 @@ namespace Bot.ChromeNs
 
         private CDPClient GetOrCreateClient(WebSocketSession session)
         {
-            return _clients.GetOrAdd(session.SessionID, id => new CDPClient(session));
+            if (session == null || string.IsNullOrWhiteSpace(session.SessionID)) return null;
+            var sessionId = session.SessionID.Trim();
+            lock (_sellerSessionSync)
+            {
+                // SessionClosed removes the connected marker under this same lock.
+                // A late onConversationChange/receive event must not recreate a
+                // CDPClient after the close handler has already released its client.
+                if (!_connectedSessions.ContainsKey(sessionId)) return null;
+                return _clients.GetOrAdd(sessionId, id => new CDPClient(session));
+            }
         }
 
         private static string ReadJsonString(JObject jo, string name)
