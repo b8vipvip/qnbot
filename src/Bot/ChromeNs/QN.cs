@@ -495,6 +495,11 @@ namespace Bot.ChromeNs
                 || !string.Equals((endpoint.nick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
                 return false;
 
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
+            if (loginNick.Length > 0
+                && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
+                return false;
+
             // Nicknames are not unique across logged-in Qianniu accounts. When the
             // session has a stable TargetId, reject any conflicting seller identity
             // carried by the message instead of routing it into this shop's pipeline.
@@ -504,11 +509,6 @@ namespace Bot.ChromeNs
             var endpointTargetId = (endpoint.targetId ?? string.Empty).Trim();
             if (endpointTargetId.Length > 0
                 && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
-                return false;
-
-            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
-            if (loginNick.Length > 0
-                && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
                 return false;
 
             var loginTargetId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
