@@ -125,3 +125,22 @@ def test_auto_delivery_irreversible_dom_actions_are_pinned_to_the_authoritative_
     assert "ReadModalStateAsync(CDPClient sourceClient" in order_reader
     assert "sourceClient.EvaluateExpressionAsync" in order_reader
     assert "cdp.EvaluateExpressionAsync" not in order_reader
+
+def test_auto_delivery_rechecks_message_and_recovery_gates_after_preflight_and_send_lock_wait():
+    src = read("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    method = src[
+        src.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        src.index("private bool IsAutoDeliverySourceSessionCurrent")
+    ]
+
+    preflight = method.index("TrySilentAutoDeliveryPreflightAsync(snapshot)")
+    post_preflight_gate = method.index("静默预检期间消息、发送或后台恢复任务已启动")
+    shop_bind = method.index("MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop)")
+    assert preflight < post_preflight_gate < shop_bind
+
+    send_wait = method.index("await _sendGate.WaitAsync().ConfigureAwait(false)")
+    post_wait_gate = method.index("取得发送锁后发现消息或后台恢复任务正在处理")
+    activity_lease = method.index('using (BotActivityCoordinator.Begin("虚拟商品自动发货"')
+    assert send_wait < post_wait_gate < activity_lease
+    assert "_sendGate.Release();" in method[send_wait:activity_lease]
+    assert "BotActivityCoordinator.IsSafeToAutoFocus(seller, out activityReason, snapshot.ShopKey)" in method[send_wait:activity_lease]
