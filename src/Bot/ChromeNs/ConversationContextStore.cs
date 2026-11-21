@@ -304,46 +304,51 @@ namespace Bot.ChromeNs
             return match.Success ? match.Groups[1].Value : string.Empty;
         }
 
-        public static void RegisterProductLinkReply(QNChatMessage message, string messageText)
+        public static void RegisterProductLinkReply(QNChatMessage message, string messageText, string shopKey = null)
         {
             if (message == null) return;
-            var seller = GetSellerNick(message);
+            var seller = GetSellerNick(message, shopKey);
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return;
 
-            var itemId = ResolveProductItemId(message, messageText);
-            var presets = BotReplyPresetService.GetPresetsForProductLink(seller, itemId);
-            if (presets.Count == 0)
+            using (ShopSettingsScope.Enter(shop))
             {
-                var emptyState = GetState(seller, buyer);
-                lock (emptyState.Sync) emptyState.PendingPreset = null;
-                Log.Info("商品链接预设回复已全部停用，本条交由后续接待流程处理: seller=" + seller);
-                return;
-            }
-
-            var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
-            var seed = StableHash(ScopeKey(seller) + "|" + messageKey + "|" + messageText);
-            var index = (seed & int.MaxValue) % presets.Count;
-            var selectedPreset = presets[index];
-            var reply = selectedPreset.Text;
-            string exactRuleItem;
-            var exactMatch = BotReplyPresetService.TryParseExactItemTrigger(
-                selectedPreset.Trigger, out exactRuleItem);
-            Log.Info("商品链接预设匹配: presetId=" + selectedPreset.Id
-                + ", rule=" + (exactMatch ? "exact_item" : "generic")
-                + ", itemIdKnown=" + (itemId.Length > 0)
-                + ", candidates=" + presets.Count);
-            var state = GetState(seller, buyer);
-            lock (state.Sync)
-            {
-                state.PendingPreset = new PendingPresetReply
+                var itemId = ResolveProductItemId(message, messageText);
+                var presets = BotReplyPresetService.GetPresetsForProductLink(seller, itemId);
+                if (presets.Count == 0)
                 {
-                    QuestionKey = NormalizeText(messageText),
-                    Reply = reply,
-                    PresetId = selectedPreset.Id,
-                    ProductItemId = itemId,
-                    ExpiresAt = DateTime.Now.AddMinutes(2)
-                };
+                    var emptyState = GetState(seller, buyer);
+                    lock (emptyState.Sync) emptyState.PendingPreset = null;
+                    Log.Info("商品链接预设回复已全部停用，本条交由后续接待流程处理: seller=" + seller);
+                    return;
+                }
+
+                var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
+                var seed = StableHash(ScopeKey(seller) + "|" + messageKey + "|" + messageText);
+                var index = (seed & int.MaxValue) % presets.Count;
+                var selectedPreset = presets[index];
+                var reply = selectedPreset.Text;
+                string exactRuleItem;
+                var exactMatch = BotReplyPresetService.TryParseExactItemTrigger(
+                    selectedPreset.Trigger, out exactRuleItem);
+                Log.Info("商品链接预设匹配: presetId=" + selectedPreset.Id
+                    + ", rule=" + (exactMatch ? "exact_item" : "generic")
+                    + ", itemIdKnown=" + (itemId.Length > 0)
+                    + ", candidates=" + presets.Count);
+                var state = GetState(seller, buyer);
+                lock (state.Sync)
+                {
+                    state.PendingPreset = new PendingPresetReply
+                    {
+                        QuestionKey = NormalizeText(messageText),
+                        Reply = reply,
+                        PresetId = selectedPreset.Id,
+                        ProductItemId = itemId,
+                        ExpiresAt = DateTime.Now.AddMinutes(2)
+                    };
+                }
             }
         }
 
