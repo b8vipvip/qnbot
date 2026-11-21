@@ -262,7 +262,7 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "EnsurePending(" in rpa and "shopKey" in rpa
     assert "CancelPending(" in rpa and "shopKey" in rpa
     assert "if (shopKey.Length == 0)" in rpa
-    assert "OpenAndSendText(buyer, text, shopKey)" in rpa
+    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed)" in rpa
     assert "client.IsShopIdentityRetired" in send_guard
     assert "client.ShopKey" in send_guard
     assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in send_guard
