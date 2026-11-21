@@ -177,6 +177,10 @@ TOKEN_SCOPED_STATE_TABLES = (
     # Knowledge Center V2 cloud snapshots are token-scoped too. A confirmed
     # token rebind must not expose the previous shop's corpus to the new shop.
     "bot_knowledge_v2_state",
+    "bot_knowledge_backups",
+    "bot_web_settings_ack",
+    "bot_web_auto_reply_rules",
+    "bot_web_ai_model_settings",
     "bot_store_rule_state",
     "bot_message_processing_traces",
     "bot_client_bot_enabled",
