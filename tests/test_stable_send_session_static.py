@@ -58,7 +58,7 @@ def test_delivery_watchdog_starts_only_after_transaction_guards_and_is_shop_boun
     ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", draft_index)
     send_index = open_send.index("sendResult = await TrySendTextNativeFirstAsync", ensure_index)
     assert pre_session < pre_refresh < write_index < post_session < draft_index < ensure_index < send_index
-    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
     assert "pair.Value.Started == 0" in watchdog
