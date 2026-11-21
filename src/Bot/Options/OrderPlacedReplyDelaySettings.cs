@@ -940,7 +940,11 @@ namespace Bot.ChromeNs
                 EnqueueNewOrderAttention(snapshot);
             }
 
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            AutoReplyRuleConfig cfg;
+            // Rich order payloads are delivered by a background bridge. Resolve the
+            // per-shop rule snapshot explicitly; never fall back to the global params row.
+            using (ShopSettingsScope.Enter(shop, false))
+                cfg = BotFeatureStore.GetAutoReplyRules();
             if (cfg == null || !cfg.EnableOrderPlacedReply) return;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return;
 
