@@ -289,7 +289,7 @@ namespace Bot.ChromeNs
         {
             try
             {
-                using (BotActivityCoordinator.Begin("订单模板字段发送V2", plan.Seller, plan.Buyer))
+                using (BotActivityCoordinator.Begin("订单模板字段发送V2", plan.Seller, plan.Buyer, plan.ShopKey))
                 {
                     var snapshot = plan.Snapshot;
                     if (snapshot != null)
