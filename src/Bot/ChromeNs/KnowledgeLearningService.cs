@@ -241,14 +241,12 @@ namespace Bot.ChromeNs
                 var echoTime = (DateTime)timeField.GetValue(qn);
                 if (!string.Equals((echoBuyer ?? string.Empty).Trim(), (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)) return false;
                 if (echoTime < questionTime.AddMilliseconds(-500) || echoTime < DateTime.Now.AddMinutes(-20)) return false;
-                if (string.IsNullOrWhiteSpace(echoText) || Normalize(echoText) == Normalize(candidateAnswer)) return false;
+                if (string.IsNullOrWhiteSpace(echoText)) return false;
 
                 var sellerEcho = echoText.Trim();
-                // The seller-echo fields contain both human messages and Bot messages. A previous
-                // Bot reply (for example the fixed first-inquiry prelude) legitimately differs from
-                // the current candidate and must not be promoted to a manual correction. Reuse the
-                // delivery watchdog's authoritative Bot-echo ledger instead of inventing a second
-                // text/timing heuristic here.
+                // The seller-echo fields contain both human messages and Bot messages.
+                // Check the authoritative Bot-delivery ledger before comparing text: a
+                // human may intentionally send exactly the same answer as the candidate.
                 if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey))
                 {
                     Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
@@ -257,14 +255,31 @@ namespace Bot.ChromeNs
                 }
 
                 manualAnswer = sellerEcho;
-                RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
-                QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
+                var sameAsCandidate = string.Equals(
+                    Normalize(sellerEcho), Normalize(candidateAnswer), StringComparison.Ordinal);
+                if (sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))
+                {
+                    RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
+                    if (!sameAsCandidate)
+                    {
+                        QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
+                    }
+                    MessageProcessingTraceService.RecordManualObservation(
+                        seller,
+                        buyer,
+                        sameAsCandidate
+                            ? "人工客服已发送与Bot候选相同的答案；已阻止Bot重复发送"
+                            : "人工答案=" + Short(manualAnswer, 500) + "；当前Bot发送已阻止并进入对比学习");
+                    Log.Info("检测到本店客服人工接管，已阻止当前Bot发送: seller="
+                        + seller + ", buyer=" + buyer + ", sameAsCandidate=" + sameAsCandidate);
+                    return true;
+                }
+
+                // A short automatic greeting (e.g. “在的”) is not a full takeover.
+                // The main send gate still decides whether the reviewed answer may continue.
                 MessageProcessingTraceService.RecordManualObservation(
-                    seller,
-                    buyer,
-                    "人工答案=" + Short(manualAnswer, 500) + "；Bot任务继续发送并进入对比学习");
-                Log.Info("检测到本店客服人工回复但不取消Bot发送，已进入答案对比学习: seller="
-                    + seller + ", buyer=" + buyer);
+                    seller, buyer, "观察到客服简短接待语；未将其当作完整人工答案");
+                Log.Info("检测到本店简短接待语，不作为人工接管: seller=" + seller + ", buyer=" + buyer);
                 return false;
             }
             catch (Exception ex)
