@@ -25,7 +25,13 @@ namespace Bot.Knowledge
 
             Snapshot current;
             if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null)
-                return; // No warm snapshot yet; background warm/cold-path fallback owns first build.
+            {
+                // A manual answer save must be immediately retrievable on the next buyer
+                // message. Build the cold snapshot now from the just-committed SQLite row
+                // instead of waiting for a later buyer request to queue background warmup.
+                Warm(seller);
+                return;
+            }
 
             lock (BuildLocks.GetOrAdd(shop.ShopKey, _ => new object()))
             {
