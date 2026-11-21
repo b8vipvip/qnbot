@@ -120,7 +120,9 @@ namespace Bot.ChromeNs
                         + MyWebSocketServer.DiagnosticRef("shop", shopKey));
                     return;
                 }
-                qn.ScheduleFirstInquiryFastRecovery(seller, buyer, ccode, DateTime.Now);
+                using (ShopSettingsScope.Enter(shop, false))
+                    qn.ScheduleFirstInquiryFastRecovery(
+                        seller, buyer, ccode, DateTime.Now, shopKey, sessionId);
             }
             catch (Exception ex)
             {
@@ -140,11 +142,21 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string ccode,
-            DateTime notificationAt)
+            DateTime notificationAt,
+            string sourceShopKey,
+            string sourceSessionId)
         {
             seller = (seller ?? string.Empty).Trim();
-            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            sourceShopKey = (sourceShopKey ?? string.Empty).Trim();
+            sourceSessionId = (sourceSessionId ?? string.Empty).Trim();
             ccode = (ccode ?? string.Empty).Trim();
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(sourceShopKey); }
+            catch { return; }
+            if (shop == null || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || !IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return;
+            using (ShopSettingsScope.Enter(shop, false))
+                buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return;
             string nonBuyerReason;
             if (NonBuyerConversationGuard.ShouldBlockIdentity(seller, buyer, out nonBuyerReason))
@@ -180,7 +192,9 @@ namespace Bot.ChromeNs
                         seller,
                         buyer,
                         ccode,
-                        windowStart).ConfigureAwait(false);
+                        windowStart,
+                        sourceShopKey,
+                        sourceSessionId).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -207,30 +221,57 @@ namespace Bot.ChromeNs
             });
         }
 
+        private bool IsFirstInquirySourceSessionCurrent(string shopKey, string sessionId)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            var client = CDP;
+            if (server == null || shopKey.Length == 0 || sessionId.Length == 0
+                || client == null || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.SessionId, sessionId, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shopKey, sessionId))
+                return false;
+            return ReferenceEquals(
+                ShopContextLocator.FindConnectedQnByShopKey(shopKey, sessionId),
+                this);
+        }
+
         private async Task<bool> TryRecoverFirstInquiryFromNotificationAsync(
             string seller,
             string buyer,
             string ccode,
-            DateTime windowStart)
+            DateTime windowStart,
+            string sourceShopKey,
+            string sourceSessionId)
         {
+            await Task.Delay(80).ConfigureAwait(false);
+            if (!IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return false;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(sourceShopKey); }
+            catch { return false; }
+            if (shop == null || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)) return false;
+
+            using (ShopSettingsScope.Enter(shop, false))
+            {
             var key = RecoveryKey(seller, buyer);
 
             // Give a normal detailed receiveNewMsg a very small head start. This is deliberately far
             // shorter than the ordinary 1s background-recovery delay and has no message-merge wait.
-            await Task.Delay(80).ConfigureAwait(false);
-
             DateTime observedAt;
             if (_latestBuyerMessageObserved.TryGetValue(key, out observedAt)
                 && observedAt >= windowStart.AddMilliseconds(-250))
             {
                 return true;
             }
-            if (cdp == null || cdp.IsInvalidated) return false;
+            if (!IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return false;
+            var sourceClient = CDP;
+            if (sourceClient == null || sourceClient.IsInvalidated) return false;
 
             Log.Info("首条咨询后台通知快路径开始: seller=" + seller + ", buyer=" + buyer
                 + ", directCcode=true, mergeWait=false");
 
-            var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+            var history = await sourceClient.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
             {
                 cid = new { ccode = ccode, type = 1 },
                 count = 30,
@@ -238,7 +279,9 @@ namespace Bot.ChromeNs
                 msgid = "-1",
                 msgtime = "-1"
             }).ConfigureAwait(false);
-            if (history == null) return false;
+            if (history == null
+                || !ReferenceEquals(CDP, sourceClient)
+                || !IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return false;
 
             var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
             var threshold = windowStart.AddSeconds(-12).Ticks;
@@ -286,6 +329,7 @@ namespace Bot.ChromeNs
                 + ", buyer=" + buyer + ", key=" + firstKey
                 + ", mergeWait=false, aiGate=false");
 
+            if (!IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return false;
             // Feed the first substantive problem alone into the existing recovered-message pipeline.
             // BuyerMessageBurstCoordinator sends the first-inquiry greeting before normal processing.
             await ProcessRecoveredBuyerMessageAfterMissAsync(first, seller, buyer).ConfigureAwait(false);
@@ -296,6 +340,7 @@ namespace Bot.ChromeNs
 
             foreach (var message in recentBuyerMessages)
             {
+                if (!IsFirstInquirySourceSessionCurrent(sourceShopKey, sourceSessionId)) return false;
                 if (ReferenceEquals(message, first)) continue;
                 try
                 {
@@ -309,6 +354,7 @@ namespace Bot.ChromeNs
                 await Task.Delay(20).ConfigureAwait(false);
             }
             return true;
+            }
         }
 
         private static bool IsReplyableFirstInquiryCandidate(QNChatMessage message, string seller, string buyer)
