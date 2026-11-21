@@ -929,3 +929,35 @@ def test_corpus_checkpoint_rejects_duplicate_restored_candidates_for_one_knowled
     assert "var uniqueCandidateId = candidateId.Length > 0" in restore
     assert "restoredCandidateIds.Add(candidateId)" in restore
     assert "|| !uniqueCandidateId" in restore
+
+def test_full_corpus_learning_exports_privacy_safe_history_and_resume_evidence():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    snapshot = service[
+        service.index("private static void WriteLearningDiagnosticsSnapshot"):
+        service.index("private static string BuildLearningQuestion")
+    ]
+
+    assert 'knowledge-v2-learning-snapshot.json' in snapshot
+    assert '["schemaVersion"]=1' in snapshot
+    assert '["processStartTimeUtcTicks"]=processStartTicks' in snapshot
+    assert '["shopRef"]' in snapshot
+    assert '["sessionRef"]' in snapshot
+    assert '["historyMessagesFetched"]' in snapshot
+    assert '["historyMessagesInWindow"]' in snapshot
+    assert '["knowledgeCorpusRecords"]' in snapshot
+    assert '["knowledgeCorpusRecordsReviewed"]' in snapshot
+    assert '["knowledgeCorpusBatchesCompleted"]' in snapshot
+    assert '["knowledgeCorpusComplete"]' in snapshot
+    assert '["knowledgeCorpusResumeCount"]' in snapshot
+    assert '["knowledgeCorpusLastResumedAtUtc"]' in snapshot
+    assert '["knowledgeCorpusSourceFingerprintPrefix"]' in snapshot
+    assert '["knowledgeCorpusTranscriptFingerprintPrefix"]' in snapshot
+    assert "LearningStatusCode(report.Status)" in snapshot
+    assert "File.Replace(temp,path,null)" in snapshot
+    assert "report.BuyerNick" not in snapshot
+    assert "report.SellerNick" not in snapshot
+    assert "report.Question" not in snapshot
+    assert "report.Answer" not in snapshot
+    assert "report.Summary" not in snapshot
+    assert "report.InputCoverageJson" in snapshot
+    assert "knowledgeCorpusError" in snapshot
