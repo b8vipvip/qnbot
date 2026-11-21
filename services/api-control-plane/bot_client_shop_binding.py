@@ -181,6 +181,7 @@ TOKEN_SCOPED_STATE_TABLES = (
     "bot_web_settings_ack",
     "bot_web_auto_reply_rules",
     "bot_web_ai_model_settings",
+    "wecom_client_settings",
     "bot_store_rule_state",
     "bot_message_processing_traces",
     "bot_client_bot_enabled",
@@ -215,12 +216,53 @@ def _delete_if_table_exists(conn, table: str, client_id: int) -> None:
     conn.execute(f"DELETE FROM {table} WHERE client_id=?", (client_id,))
 
 
+def _delete_old_shop_wecom_handoffs(conn, client_id: int) -> None:
+    # Handoff commands do not carry client_id directly; they inherit it through their
+    # ticket. Delete child commands first so no pending old-shop reply can be claimed
+    # by the same token after it is rebound to a different ShopKey.
+    tickets_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wecom_handoff_tickets'"
+    ).fetchone() is not None
+    commands_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wecom_handoff_commands'"
+    ).fetchone() is not None
+    if not tickets_exists:
+        if commands_exists:
+            raise RuntimeError("Refusing shop rebind: wecom_handoff_commands exists without wecom_handoff_tickets")
+        return
+
+    ticket_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(wecom_handoff_tickets)").fetchall()
+    }
+    if not {"client_id", "ticket_id"}.issubset(ticket_columns):
+        raise RuntimeError("Refusing shop rebind: wecom_handoff_tickets has an incompatible schema")
+
+    if commands_exists:
+        command_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(wecom_handoff_commands)").fetchall()
+        }
+        if "ticket_id" not in command_columns:
+            raise RuntimeError("Refusing shop rebind: wecom_handoff_commands has no ticket_id column")
+        conn.execute(
+            """
+            DELETE FROM wecom_handoff_commands
+            WHERE ticket_id IN (
+                SELECT ticket_id FROM wecom_handoff_tickets WHERE client_id=?
+            )
+            """,
+            (client_id,),
+        )
+
+    conn.execute("DELETE FROM wecom_handoff_tickets WHERE client_id=?", (client_id,))
+
+
 def _reset_old_shop_server_state(conn, client_id: int) -> None:
     # A force rebind/correction must never expose the old shop's cloud/runtime state to the
     # corrected shop. Missing legacy tables are tolerated, but every existing table must
     # be verified and cleared before the new ShopKey binding can be committed.
     for table in TOKEN_SCOPED_STATE_TABLES:
         _delete_if_table_exists(conn, table, client_id)
+    _delete_old_shop_wecom_handoffs(conn, client_id)
 
 
 def ensure_binding(
