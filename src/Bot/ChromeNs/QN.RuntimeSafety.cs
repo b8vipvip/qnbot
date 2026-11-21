@@ -98,6 +98,7 @@ namespace Bot.ChromeNs
             {
                 var now = DateTime.Now;
                 var key = RuntimeKey(seller, buyer);
+                if (key.Length == 0) return string.Empty;
                 CleanupRuntimeState(key, now);
                 DateTime triggered;
                 if (TriggeredAt.TryGetValue(key, out triggered) && triggered >= now.AddMinutes(-SessionResetMinutes)) return string.Empty;
@@ -134,6 +135,7 @@ namespace Bot.ChromeNs
             {
                 var now = DateTime.Now;
                 var key = RuntimeKey(seller, buyer);
+                if (key.Length == 0) return string.Empty;
                 CleanupRuntimeState(key, now);
                 DateTime triggered;
                 if (TriggeredAt.TryGetValue(key, out triggered) && triggered >= now.AddMinutes(-SessionResetMinutes)) return string.Empty;
@@ -160,31 +162,46 @@ namespace Bot.ChromeNs
         public static void MarkDelivered(string seller, string buyer)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
-            var key = RuntimeKey(seller, buyer);
-            PendingReply ignored;
-            PendingReplies.TryRemove(key, out ignored);
-            TriggeredAt[key] = DateTime.Now;
-            Log.Info("首条咨询固定回复已确认送达，开始30分钟会话去重: seller=" + seller + ", buyer=" + buyer);
+            RunInShopScope(seller, delegate
+            {
+                var key = RuntimeKey(seller, buyer);
+                if (key.Length == 0) return false;
+                PendingReply ignored;
+                PendingReplies.TryRemove(key, out ignored);
+                TriggeredAt[key] = DateTime.Now;
+                Log.Info("首条咨询固定回复已确认送达，开始30分钟会话去重: seller=" + seller + ", buyer=" + buyer);
+                return true;
+            });
         }
 
         public static void ReleaseReservation(string seller, string buyer, string reason)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
-            PendingReply ignored;
-            if (PendingReplies.TryRemove(RuntimeKey(seller, buyer), out ignored))
-                Log.Info("首条咨询固定回复发送未完成，已释放首条资格: seller=" + seller + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
+            RunInShopScope(seller, delegate
+            {
+                var key = RuntimeKey(seller, buyer);
+                if (key.Length == 0) return false;
+                PendingReply ignored;
+                if (PendingReplies.TryRemove(key, out ignored))
+                    Log.Info("首条咨询固定回复发送未完成，已释放首条资格: seller=" + seller + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
+                return true;
+            });
         }
 
         public static bool HasPending(string seller, string buyer)
         {
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
-            var key = RuntimeKey(seller, buyer);
-            PendingReply pending;
-            if (!PendingReplies.TryGetValue(key, out pending) || pending == null) return false;
-            if (pending.ExpiresAt >= DateTime.Now && !string.IsNullOrWhiteSpace(pending.Answer)) return true;
-            PendingReply ignored;
-            PendingReplies.TryRemove(key, out ignored);
-            return false;
+            return RunInShopScope(seller, delegate
+            {
+                var key = RuntimeKey(seller, buyer);
+                if (key.Length == 0) return false;
+                PendingReply pending;
+                if (!PendingReplies.TryGetValue(key, out pending) || pending == null) return false;
+                if (pending.ExpiresAt >= DateTime.Now && !string.IsNullOrWhiteSpace(pending.Answer)) return true;
+                PendingReply ignored;
+                PendingReplies.TryRemove(key, out ignored);
+                return false;
+            });
         }
 
         internal static bool IsActualProblemMessage(
@@ -272,18 +289,23 @@ namespace Bot.ChromeNs
             if (message == null) return;
             var rawKey = IncomingMessageSafety.BuildMessageKey(message, displayText);
             if (string.IsNullOrWhiteSpace(rawKey)) return;
-            var now = DateTime.Now;
-            KnownNonProblemMessageKeys[KnownNonProblemKey(seller, buyer, rawKey)] =
-                now.AddMinutes(SessionResetMinutes);
-
-            if (KnownNonProblemMessageKeys.Count > 1024)
+            RunInShopScope(seller, delegate
             {
-                foreach (var expired in KnownNonProblemMessageKeys.Where(x => x.Value < now).Take(128).ToList())
+                var scopedKey = KnownNonProblemKey(seller, buyer, rawKey);
+                if (scopedKey.Length == 0) return false;
+                var now = DateTime.Now;
+                KnownNonProblemMessageKeys[scopedKey] = now.AddMinutes(SessionResetMinutes);
+
+                if (KnownNonProblemMessageKeys.Count > 1024)
                 {
-                    DateTime ignored;
-                    KnownNonProblemMessageKeys.TryRemove(expired.Key, out ignored);
+                    foreach (var expired in KnownNonProblemMessageKeys.Where(x => x.Value < now).Take(128).ToList())
+                    {
+                        DateTime ignored;
+                        KnownNonProblemMessageKeys.TryRemove(expired.Key, out ignored);
+                    }
                 }
-            }
+                return true;
+            });
         }
 
         private static bool IsKnownNonProblemHistoryTurn(
@@ -298,6 +320,7 @@ namespace Bot.ChromeNs
                 ? storedMessageKey.Substring(separator + 1)
                 : storedMessageKey;
             var key = KnownNonProblemKey(seller, buyer, rawKey);
+            if (key.Length == 0) return false;
             DateTime expiresAt;
             if (!KnownNonProblemMessageKeys.TryGetValue(key, out expiresAt)) return false;
             if (expiresAt >= now) return true;
@@ -313,7 +336,7 @@ namespace Bot.ChromeNs
 
         private static bool ShouldSuppressForOffHours(string seller, string buyer)
         {
-            var offHours = RunInShopScope(seller, delegate
+            return RunInShopScope(seller, delegate
             {
                 var cfg = BotFeatureStore.GetAutoReplyRules();
                 if (cfg == null || !cfg.EnableWorkHours) return false;
@@ -330,18 +353,21 @@ namespace Bot.ChromeNs
                         20);
                     return false;
                 }
-                return !IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end);
-            });
-            if (!offHours) return false;
+                var offHours = !IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end);
+                if (!offHours) return false;
 
-            PendingReply ignored;
-            var removed = PendingReplies.TryRemove(RuntimeKey(seller, buyer), out ignored);
-            if (removed)
-            {
-                Log.Info("首条咨询固定回复已取消：当前处于下班自动回复时段，由下班回复独占本轮。seller="
-                    + seller + ", buyer=" + buyer);
-            }
-            return true;
+                var key = RuntimeKey(seller, buyer);
+                if (key.Length > 0)
+                {
+                    PendingReply ignored;
+                    if (PendingReplies.TryRemove(key, out ignored))
+                    {
+                        Log.Info("首条咨询固定回复已取消：当前处于下班自动回复时段，由下班回复独占本轮。seller="
+                            + seller + ", buyer=" + buyer);
+                    }
+                }
+                return true;
+            });
         }
 
         private static bool TryParseClock(string value, out TimeSpan time)
@@ -471,7 +497,14 @@ namespace Bot.ChromeNs
 
         private static string RuntimeKey(string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            var scope = ShopSettingsScope.Current;
+            if (scope == null || string.IsNullOrWhiteSpace(scope.ShopKey)
+                || !string.Equals((scope.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)
+                || buyer.Length == 0)
+                return string.Empty;
+            return scope.ShopKey.Trim() + "#" + seller + "#" + buyer;
         }
 
         private static T RunInShopScope<T>(string seller, Func<T> action)
