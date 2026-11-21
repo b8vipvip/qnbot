@@ -69,4 +69,22 @@ def test_real_human_reply_path_remains_available_after_bot_echo_guard():
     human_tail = method[guard_end:]
     assert 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")' in human_tail
     assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer)" in human_tail
-    assert "检测到本店客服人工回复但不取消Bot发送" in human_tail
+    assert "检测到本店客服人工接管，已阻止当前Bot发送" in human_tail
+    assert "return true;" in human_tail
+
+def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bot_echo_guard():
+    source = _text(KNOWLEDGE)
+    method = source[
+        source.index("public static bool TryBlockForManualReply("):
+        source.index("public static bool TryTakeSendBlock(")
+    ]
+
+    bot_guard = method.index("SendDeliveryWatchdog.IsKnownBotAnswer")
+    same_answer = method.index("var sameAsCandidate =")
+    manual_register = method.index('RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")')
+    block = method.index("return true;", same_answer)
+
+    assert bot_guard < same_answer < manual_register < block
+    assert "if (sameAsCandidate || !ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))" in method
+    assert "if (!sameAsCandidate)" in method
+    assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);" in method
