@@ -82,8 +82,9 @@ def test_multiple_buyers_get_independent_ai_workers_while_real_sends_remain_seri
     server_router = text("services/api-control-plane/runtime_routing_guard.py")
 
     assert "ConcurrentDictionary<string, BurstState> _states" in burst
-    assert "var key = Key(item.SellerNick, item.BuyerNick);" in burst
-    assert 'return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();' in burst
+    assert "var key = Key(item.ShopKey, item.SellerNick, item.BuyerNick);" in burst
+    assert 'return shopKey + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()' in burst
+    assert "Key(item.SellerNick, item.BuyerNick)" not in burst
     assert "if (startWorker) Task.Run(() => RunAsync(key, state));" in burst
 
     text_method = qn.index("private async Task ProcessTextBurstAsync")
