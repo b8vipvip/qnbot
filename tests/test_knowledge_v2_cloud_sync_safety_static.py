@@ -61,7 +61,14 @@ def test_v2_cloud_sync_uses_same_canonical_fingerprint_for_persistence_and_compa
     assert "KnowledgeEngineV2Repository.ComputeCloudSyncFingerprint(records)" in service
     assert "new ShopScopedSettingsStore(shop,Paths)" in service
     assert "store.TryGetString(FingerprintKey,out fingerprint)" in service
-    assert "store.SetString(FingerprintKey,fingerprint)" in service
+    persist = service[
+        service.index("private static void PersistState"):
+        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal")
+    ]
+    assert "store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)" in persist
+    assert "{ RevisionKey, revision }" in persist
+    assert "{ FingerprintKey, fingerprint }" in persist
+    assert "store.SetString(" not in persist
     assert "private static State LoadState(ShopContext shop)" in service
     assert "private static void PersistState(ShopContext shop,State state,int targetRevision,string targetFingerprint)" in service
     assert "KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty)" in repository
