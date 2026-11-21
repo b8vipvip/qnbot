@@ -37,3 +37,7 @@ def test_view_source_edit_and_reverse_lookup_available_on_bot_bubble():
     assert "BotConversationHistoryStore.UpdateAnswerSource" in mirror
     for label in ("查看","复制","重发","修改","来源"):
         assert f'Header = "{label}"' in mirror
+
+def test_streaming_product_link_preset_provenance_uses_shopkey():
+    pipeline = src("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    assert "BotReplyPresetService.ResolveSourceLabel(seller, presetReply, shopKey)" in pipeline
