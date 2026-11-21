@@ -116,3 +116,14 @@ def test_duplicate_manual_exact_aliases_fail_closed():
     assert "var manualExactMatches = rankedMatches.Where(IsApprovedProductionMatch)" in public
     assert "var manualExactConflict = manualExactMatches.Count > 1;" in public
     assert "manualExactConflict || (manualExact == null && HasConflict(best, second))" in public
+
+
+def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    method = incremental[
+        incremental.index("internal static void ApplyRecordUpdate("):
+        incremental.index("internal static void ApplyRecordDelete(")
+    ]
+    assert "if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null)" in method
+    assert "Warm(seller);" in method
+    assert "just-committed SQLite row" in method
