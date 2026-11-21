@@ -303,3 +303,36 @@ def test_runtime_url_fallback_prefers_deep_test_success(control_plane, monkeypat
     )
     assert result["success"] is True
     assert calls[0] == "https://example.com/responses"
+
+def test_knowledge_v2_stale_runtime_write_cannot_overwrite_concurrent_web_edit(control_plane):
+    service_dir = Path(__file__).resolve().parents[1]
+    import importlib
+    sys.modules.pop("knowledge_v2_sync", None)
+    sync = importlib.import_module("knowledge_v2_sync")
+    sync._cp = control_plane
+    sync.init_db()
+
+    with control_plane.db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO client_tokens(name,token_hash,token_prefix,enabled,created_at) VALUES(?,?,?,?,?)",
+            ("Knowledge V2 CAS test", "knowledge-v2-cas-test-hash", "cas-test", 1, control_plane.iso_now()),
+        )
+        client_id = int(cursor.lastrowid)
+
+    initial = [{"Id": "one", "Title": "Initial", "Answer": "initial"}]
+    web_edit = [{"Id": "one", "Title": "Edited on web", "Answer": "new web answer"}]
+    stale_windows = [{"Id": "one", "Title": "Stale Windows", "Answer": "old local answer"}]
+
+    seeded = sync._save(client_id, initial, "windows", expected_revision=0)
+    assert seeded["revision"] == 1
+
+    # A runtime request read revision 1. A web edit commits revision 2 before
+    # that runtime request reaches its write phase.
+    web_saved = sync._save(client_id, web_edit, "web")
+    assert web_saved["revision"] == 2
+
+    stale_result = sync._save(client_id, stale_windows, "windows", expected_revision=1)
+    assert stale_result["revision"] == 2
+    assert stale_result["records"] == web_edit
+    assert sync._state(client_id)["records"] == web_edit
+    sys.modules.pop("knowledge_v2_sync", None)
