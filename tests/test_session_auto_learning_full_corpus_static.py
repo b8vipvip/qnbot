@@ -917,3 +917,15 @@ def test_corpus_batch_is_not_checkpointed_until_candidate_evidence_restoration_s
     assert restore < stage < append < completed < reviewed
     assert "Stage every fallible post-processing step before marking the batch complete" in batch
     assert "If evidence-ID restoration or candidate handling throws" in batch
+
+def test_corpus_checkpoint_rejects_duplicate_restored_candidates_for_one_knowledge_id():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    restore = service[
+        service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"):
+        service.index("if (!canResume)", service.index("var restoredCandidates = ParseSuggestions(priorCandidates)"))
+    ]
+
+    assert "var restoredCandidateIds = new HashSet<string>(StringComparer.Ordinal);" in restore
+    assert "var uniqueCandidateId = candidateId.Length > 0" in restore
+    assert "restoredCandidateIds.Add(candidateId)" in restore
+    assert "|| !uniqueCandidateId" in restore
