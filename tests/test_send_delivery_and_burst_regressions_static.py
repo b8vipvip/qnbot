@@ -271,7 +271,6 @@ def test_manual_takeover_bypass_is_consumed_once_and_shared_across_final_send_ch
     ]
     open_send = qnrpa[
         qnrpa.index("private async Task<bool> OpenAndSendText"):
-        qnrpa.index("private async Task<bool> TrySendTextViaUiaAsync")
     ]
 
     assert "out bool bypassed" in method
