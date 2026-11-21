@@ -11,7 +11,7 @@ def test_v2_cloud_replay_backs_up_before_any_shop_scoped_replace():
     service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
     apply = service[
         service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"):
-        service.index("PersistState(shop,state,cloudRevision,Fingerprint(records));", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
+        service.index("PersistState(shop,state,cloudRevision,cloudFingerprint);", service.index("if(!string.Equals(mergedFingerprint,latestFingerprint"))
     ]
 
     assert "Backup(shop,latestLocal,cloudRevision)" in apply
@@ -94,7 +94,7 @@ def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verif
     assert "{ RevisionKey, revision }" in persist
     assert "{ FingerprintKey, fingerprint }" in persist
     assert "store.SetString(" not in persist
-    assert 'PersistState(shop,state,cloudRevision,Fingerprint(records));' in sync
+    assert 'PersistState(shop,state,cloudRevision,cloudFingerprint);' in sync
     assert 'PersistState(shop,state,cloudRevision,localFingerprint);' in sync
     assert "state.Revision=cloudRevision;" not in sync
     assert "state.Fingerprint=Fingerprint(records);" not in sync
