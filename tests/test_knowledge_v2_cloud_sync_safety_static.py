@@ -98,3 +98,38 @@ def test_v2_cloud_sync_checkpoint_advances_only_after_persisted_values_are_verif
     assert 'PersistState(shop,state,cloudRevision,localFingerprint);' in sync
     assert "state.Revision=cloudRevision;" not in sync
     assert "state.Fingerprint=Fingerprint(records);" not in sync
+
+def test_v2_cloud_sync_publishes_privacy_safe_revision_and_fingerprint_diagnostics():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    snapshot = service[
+        service.index("private static void WriteDiagnosticsSnapshot"):
+        service.index("private static string FingerprintPrefix")
+    ]
+
+    assert 'knowledge-v2-sync-snapshot.json' in snapshot
+    assert '["schemaVersion"]=1' in snapshot
+    assert '["processStartTimeUtcTicks"]=processStartTicks' in snapshot
+    assert '["shopRef"]=state.ShopRef' in snapshot
+    assert '["cloudRevision"]=state.Revision' in snapshot
+    assert '["localFingerprintPrefix"]' in snapshot
+    assert '["cloudFingerprintPrefix"]' in snapshot
+    assert '["converged"]=state.LastConverged' in snapshot
+    assert '["lastSuccessUtc"]' in snapshot
+    assert '["lastStatus"]' in snapshot
+    assert "File.Replace(temp,path,null)" in snapshot
+    assert '"records"' not in snapshot
+    assert '"ShopKey"' not in snapshot
+    assert '"seller"' not in snapshot
+    assert '"answer"' not in snapshot
+
+
+def test_v2_cloud_sync_in_memory_checkpoint_and_diagnostic_snapshot_share_one_lock():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    persist = service[
+        service.index("private static void PersistState"):
+        service.index("private static string FingerprintPrefix")
+    ]
+
+    assert "lock(state.SyncRoot)" in persist
+    assert "state.Revision=Math.Max(0,targetRevision);" in persist
+    assert "state.Fingerprint=targetFingerprint??string.Empty;" in persist
