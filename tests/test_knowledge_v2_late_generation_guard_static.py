@@ -9,7 +9,7 @@ def read(path: str) -> str:
 
 def test_knowledge_v2_rejects_terminal_generation_before_answer_ready():
     source = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    method = source[source.index("private static async Task HandleAsync"):source.index(
+    method = source[source.index("internal static async Task<bool> TryHandleAsync"):source.index(
         "private static bool IsApprovedMatchForLogging"
     )]
 
@@ -29,7 +29,7 @@ def test_knowledge_v2_rejects_terminal_generation_before_answer_ready():
 
 def test_knowledge_v2_keeps_second_generation_barrier_immediately_before_send():
     source = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
-    method = source[source.index("private static async Task HandleAsync"):source.index(
+    method = source[source.index("internal static async Task<bool> TryHandleAsync"):source.index(
         "private static bool IsApprovedMatchForLogging"
     )]
 
