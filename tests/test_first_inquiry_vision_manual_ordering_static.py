@@ -11,9 +11,9 @@ def read(path: str) -> str:
 def test_off_hours_suppresses_first_inquiry_before_any_reservation_or_resolution():
     source = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
 
-    assert "ShouldSuppressForOffHours(seller, buyer)" in source
+    assert "ShouldSuppressForOffHours(seller, buyer, shopKey)" in source
     assert "当前处于下班自动回复时段，由下班回复独占本轮" in source
-    assert source.index("ShouldSuppressForOffHours(seller, buyer)") < source.index("var resolved = RunInShopScope")
+    assert source.index("ShouldSuppressForOffHours(seller, buyer, shopKey)") < source.index("var resolved = RunInShopScope")
 
 
 def test_first_inquiry_image_keeps_vision_route_after_greeting_reservation():
