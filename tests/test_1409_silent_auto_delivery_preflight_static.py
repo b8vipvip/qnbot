@@ -95,5 +95,5 @@ def test_silent_preflight_is_fail_closed_and_final_ui_revalidation_remains_autho
     assert "never enough to authorize an irreversible click on its own" in src
     assert "if (!before.Pending)" in src
     assert "if (!before.ShipButton)" in src
-    assert "ReadOrderStateAsync(snapshot.OrderId, true)" in src
+    assert "ReadOrderStateAsync(sourceClient, snapshot.OrderId, true)" in src
     assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent" in src
