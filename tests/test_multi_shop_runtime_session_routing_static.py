@@ -86,3 +86,24 @@ def test_new_multi_shop_sources_are_in_wpf_compile_graph():
         "AssistWindow\\Widget\\Robot\\CtlRobot.MultiShopSession.cs",
     ):
         assert name in props
+
+def test_background_buyer_liveness_probe_uses_exact_shop_scoped_desk_and_aliases():
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    schedule = monitor[
+        monitor.index("private static void ScheduleConversationProbe"):
+        monitor.index("private static bool RejectNonBuyerProbe")
+    ]
+    desk_lookup = monitor[
+        monitor.index("private static bool HasVerifiedReceptionDesk"):
+        monitor.index("private static void RecordNoActiveChat")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in schedule
+    assert "HasVerifiedReceptionDesk(seller, shop.ShopKey)" in schedule
+    assert "ProbeCurrentConversationAsync(qn, shop.ShopKey)" in schedule
+    assert "FindSellerDesk(seller, shopKey)" in desk_lookup
+    assert "ShopSettingsScope.Enter(shop, false)" in schedule
+    assert "AreSameBuyer(seller, currentNick, firstNick)" in schedule
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, secondNick)" in schedule
+    assert "FindSellerDesk(seller)" not in monitor
+    assert "HasVerifiedReceptionDesk(seller)" not in monitor
