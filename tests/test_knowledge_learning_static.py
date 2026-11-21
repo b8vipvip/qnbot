@@ -49,3 +49,15 @@ def test_knowledge_manager_refreshes_after_learning():
     source = text("src/Bot/Knowledge/KnowledgeManagerControl.cs")
     assert "KnowledgeBaseChanged" in source
     assert "OnKnowledgeBaseChanged" in source
+
+def test_unavailable_session_history_refresh_is_retried():
+    source = text("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    section = source.split("if (historyCoverage == null || !historyCoverage.IsComplete)", 1)[1].split(
+        "if (turns.Count(x => x.Role == \"user\"", 1)[0]
+    assert 'historyCoverage == null' in section
+    assert '"history_refresh_unavailable"' in section
+    assert "historyErrorCode != \"missing_conversation_scope\"" in section
+    assert "historyErrorCode != \"invalid_session_window\"" in section
+    assert "historyErrorCode != \"missing_conversation_code\"" in section
+    assert "session.HistoryRetryCount < 3" in section
+    assert 'report.Error = "history_coverage_incomplete:" + historyErrorCode;' in section
