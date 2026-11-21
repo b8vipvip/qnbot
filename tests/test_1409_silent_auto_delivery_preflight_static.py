@@ -53,7 +53,7 @@ def test_only_safe_candidate_commits_one_buyer_switch_then_revalidates_rendered_
 
     candidate_gate = method.index("preflight.Kind != AutoDeliveryPreflightKind.Candidate")
     open_chat = method.index("OpenChat(expectedBuyer)")
-    rendered = method.index("WaitForOrderStateAsync(snapshot.OrderId, TimeSpan.FromSeconds(3))")
+    rendered = method.index("WaitForOrderStateAsync(sourceClient, snapshot.OrderId, TimeSpan.FromSeconds(3))")
     click_ship = method.index("ReadOrderStateAsync(snapshot.OrderId, true)")
     durable_barrier = method.index("AutoDeliveryCoordinator.TryPersistConfirmationIntent")
     confirm = method.index('ReadModalStateAsync("confirm")')
