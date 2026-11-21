@@ -490,9 +490,10 @@ namespace Bot.ChromeNs
             var sellerNick = (_seller.Nick ?? string.Empty).Trim();
             if (sellerNick.Length == 0) return false;
 
-            var endpoint = sellerIsFrom ? message.fromid : message.toid;
-            if (endpoint == null
-                || !string.Equals((endpoint.nick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+            var endpointNick = sellerIsFrom
+                ? (message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim())
+                : (message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim());
+            if (!string.Equals(endpointNick, sellerNick, StringComparison.Ordinal))
                 return false;
 
             var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
@@ -506,7 +507,9 @@ namespace Bot.ChromeNs
             var expectedTargetId = (_seller.TargetId ?? string.Empty).Trim();
             if (expectedTargetId.Length == 0) return true;
 
-            var endpointTargetId = (endpoint.targetId ?? string.Empty).Trim();
+            var endpointTargetId = sellerIsFrom
+                ? (message.fromid == null ? string.Empty : (message.fromid.targetId ?? string.Empty).Trim())
+                : (message.toid == null ? string.Empty : (message.toid.targetId ?? string.Empty).Trim());
             if (endpointTargetId.Length > 0
                 && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
                 return false;
