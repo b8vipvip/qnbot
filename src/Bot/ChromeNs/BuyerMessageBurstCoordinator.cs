@@ -630,7 +630,7 @@ namespace Bot.ChromeNs
                 "single_owner_lane",
                 item.ShopKey);
 
-            var key = Key(item.SellerNick, item.BuyerNick);
+            var key = Key(item.ShopKey, item.SellerNick, item.BuyerNick);
             while (true)
             {
                 var state = _states.GetOrAdd(key, _ => new BurstState());
@@ -917,10 +917,10 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool HasPendingBuyerMessages(string seller, string buyer)
+        private bool HasPendingBuyerMessages(string shopKey, string seller, string buyer)
         {
             BurstState state;
-            if (!_states.TryGetValue(Key(seller, buyer), out state) || state == null) return false;
+            if (!_states.TryGetValue(Key(shopKey, seller, buyer), out state) || state == null) return false;
             lock (state.Sync)
             {
                 return state.PendingRules.Count > 0
@@ -981,7 +981,13 @@ namespace Bot.ChromeNs
 
         public void CancelBuyer(string seller, string buyer, string reason, string shopKey = null)
         {
-            var key = Key(seller, buyer);
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+            {
+                Log.ErrorWithMaxCount("买家任务取消缺少唯一ShopKey，拒绝按卖家/买家昵称跨店取消。", 20);
+                return;
+            }
+            var key = Key(shopKey, seller, buyer);
             BurstState state;
             if (_states.TryGetValue(key, out state) && state != null)
             {
@@ -1259,9 +1265,12 @@ namespace Bot.ChromeNs
             state.ActivityLease = null;
         }
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return string.Empty;
+            return shopKey + "#" + (seller ?? string.Empty).Trim().ToLowerInvariant()
+                + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
 
         private static string Safe(string value, int max)
