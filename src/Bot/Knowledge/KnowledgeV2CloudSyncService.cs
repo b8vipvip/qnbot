@@ -186,8 +186,11 @@ namespace Bot.Knowledge
             using(ShopSettingsScope.Enter(shop))
             {
                 var store=new ShopScopedSettingsStore(shop,Paths);
-                store.SetString(RevisionKey,revision);
-                store.SetString(FingerprintKey,fingerprint);
+                store.MergeValues(new Dictionary<string,string>(StringComparer.Ordinal)
+                {
+                    { RevisionKey, revision },
+                    { FingerprintKey, fingerprint }
+                }, true);
                 string storedRevision,storedFingerprint;
                 if(!store.TryGetString(RevisionKey,out storedRevision)
                     || !store.TryGetString(FingerprintKey,out storedFingerprint)
