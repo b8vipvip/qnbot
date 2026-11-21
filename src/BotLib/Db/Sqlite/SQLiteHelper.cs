@@ -198,6 +198,35 @@ namespace BotLib.Db.Sqlite
             }
         }
 
+        /// <summary>
+        /// Atomically replaces the contents of one or more tables. Clearing the old rows,
+        /// inserting the replacement rows, and writing associated metadata must share one
+        /// SQLite transaction so a process crash cannot leave a half-empty repository.
+        /// </summary>
+        public void ReplaceRecordsInTransaction(List<Type> tables, List<object> records)
+        {
+            using (var conn = GetConnection())
+            {
+                conn.RunInTransaction(() =>
+                {
+                    if (tables != null)
+                    {
+                        foreach (var table in tables)
+                        {
+                            if (table != null) conn.DeleteAll(table);
+                        }
+                    }
+                    if (records != null)
+                    {
+                        foreach (var record in records)
+                        {
+                            if (record != null) conn.InsertOrReplace(record);
+                        }
+                    }
+                });
+            }
+        }
+
         public int DeleteInTransaction(List<object> olist)
         {
             int n = 0;
