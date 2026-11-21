@@ -695,7 +695,7 @@ namespace Bot.ChromeNs
                     : ProcessOrderPlacedReplyAsync(orderPlan);
             }
 
-            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
+            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey);
             var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
             var visionDecision = VisionMessageDecision.Decide(
                 message,
@@ -917,6 +917,7 @@ namespace Bot.ChromeNs
                 burst.ShopKey);
             var task = new VisionReplyTask
             {
+                ShopKey = burst.ShopKey,
                 SellerNick = burst.SellerNick,
                 BuyerNick = burst.BuyerNick,
                 MessageKey = visionItem.MessageKey,
