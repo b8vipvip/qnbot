@@ -107,9 +107,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 else {
                     $runtimeStatus = 'fresh'
                     $counts = $runtime.Counts
-                    $hasCompleteRuntimeSchema = $null -ne $runtime.PSObject.Properties['Shops'] -and
-                        $null -ne $runtime.PSObject.Properties['Counts'] -and
-                        $null -ne $counts.PSObject.Properties['StandbyCapabilitySessions']
+                    $hasCompleteRuntimeSchema = ($null -ne $runtime.PSObject.Properties['Shops']) -and ($null -ne $runtime.PSObject.Properties['Counts']) -and ($null -ne $counts.PSObject.Properties['StandbyCapabilitySessions'])
                     if (-not $hasCompleteRuntimeSchema) { $runtimeStatus = 'partial' }
                     $runtimeConnectedSessions = [int]$counts.ConnectedSessions
                     $runtimeAuthoritativeShopCount = [int]$counts.AuthoritativeShopCount
@@ -270,11 +268,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $learningStates = @()
                 foreach ($learningReport in $learningReports) {
                     if ($null -eq $learningReport) { continue }
-                    $learningStates += ([string]$learningReport.ShopRef + '=' + [string]$learningReport.SessionRef
-                        + ':' + [string]$learningReport.Status + ':' + [string]$learningReport.HistoryMessagesInWindow
-                        + ':' + [string]$learningReport.KnowledgeCorpusRecordsReviewed + '/' + [string]$learningReport.KnowledgeCorpusRecords
-                        + ':' + [string]$learningReport.KnowledgeCorpusBatchesCompleted + '/' + [string]$learningReport.KnowledgeCorpusBatches
-                        + ':' + [string]$learningReport.KnowledgeCorpusComplete + ':resume=' + [string]$learningReport.KnowledgeCorpusResumeCount)
+                    $learningStates += ([string]$learningReport.ShopRef + '=' + [string]$learningReport.SessionRef + ':' + [string]$learningReport.Status + ':' + [string]$learningReport.HistoryMessagesInWindow + ':' + [string]$learningReport.KnowledgeCorpusRecordsReviewed + '/' + [string]$learningReport.KnowledgeCorpusRecords + ':' + [string]$learningReport.KnowledgeCorpusBatchesCompleted + '/' + [string]$learningReport.KnowledgeCorpusBatches + ':' + [string]$learningReport.KnowledgeCorpusComplete + ':resume=' + [string]$learningReport.KnowledgeCorpusResumeCount)
                 }
                 $learningReportStates = $learningStates -join ';'
                 if ($learningReports.Count -gt 0) {
