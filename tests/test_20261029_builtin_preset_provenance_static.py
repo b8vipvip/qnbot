@@ -15,7 +15,7 @@ def test_product_link_preset_provenance_is_exact_and_editable():
     assert "BotReplyPresetService.IsPresetReply(seller, answer)" in store
     assert "TryFindPreset(string seller, string answer" in catalog
     assert 'normalized.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)' not in store
-    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply)" in pipeline
+    assert "BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in pipeline
     assert "ProductLinkReplies[Math" not in store
 
 def test_confirmed_bot_echo_stamps_own_source_or_marks_unknown():
