@@ -188,4 +188,7 @@ def test_windows_memory_sampler_includes_150_message_and_restart_checkpoint_metr
     assert "KnowledgeV2LatestBatchesCompleted" in collector
     assert "KnowledgeV2LatestCorpusComplete" in collector
     assert "KnowledgeV2LatestResumeCount" in collector
+    assert "KnowledgeV2LatestRevisionStable" in collector
+    assert "KnowledgeV2LatestSourceFingerprintPrefix" in collector
+    assert "KnowledgeV2LatestTranscriptFingerprintPrefix" in collector
     assert "KnowledgeV2LearningReportStates" in collector
