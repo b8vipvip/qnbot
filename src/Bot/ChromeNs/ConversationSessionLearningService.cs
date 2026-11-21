@@ -98,10 +98,11 @@ namespace Bot.ChromeNs
         private const int KnowledgeCorpusTimeoutSeconds = 120;
         private const int KnowledgeCorpusCircuitFailureThreshold = 3;
         private static readonly TimeSpan KnowledgeCorpusCircuitCooldown = TimeSpan.FromMinutes(5);
-        // Keep candidate generation observable, but do not mutate production V2
-        // knowledge until full-corpus coverage, transactional rollback and canary
-        // acceptance are implemented and verified.
+        // Broad session-level AI suggestions remain review-only because they do not
+        // carry per-message source IDs. Exact-ID corpus corrections backed by verified
+        // human correction messages have a separate, narrow automatic write gate.
         private const bool EnableAutomaticWrites = false;
+        private const bool EnableVerifiedCorpusCorrectionWrites = true;
         public const int ReportRetentionDays = 90;
         public const int MaxReports = 1000;
 
@@ -706,7 +707,8 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusEvidenceRejected"] = 0,
                     ["knowledgeCorpusFailedBatches"] = 0,
                     ["knowledgeCorpusError"] = string.Empty,
-                    ["writeMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
+                    ["writeMode"] = EnableVerifiedCorpusCorrectionWrites ? "verified_human_evidence" : "dry_run",
+                    ["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
                 };
@@ -886,6 +888,8 @@ namespace Bot.ChromeNs
                     .ToList();
                 var applied = 0;
                 var skipped = 0;
+                var corpusApplied = 0;
+                var corpusSkipped = 0;
                 // Reuse the same resolved ShopKey for analysis and knowledge writes.
                 // No alternate or ambient-shop fallback is allowed in an idle timer.
                 using (ShopSettingsScope.Enter(shop))
@@ -932,24 +936,31 @@ namespace Bot.ChromeNs
                         suggestion.ApplyMessage = result == null ? "知识写入结果为空" : result.Message;
                         if (suggestion.Applied) applied++; else skipped++;
                     }
+
+                    if (EnableVerifiedCorpusCorrectionWrites)
+                        corpusApplied = ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped);
                 }
 
                 report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
                 var allSuggestions = suggestions.Concat(corpusAnalysis.Candidates).ToList();
-                report.Status = EnableAutomaticWrites
-                    ? (corpusComplete ? "学习完成" : "学习完成（V2全库覆盖不完整）")
-                    : (corpusComplete ? "学习完成（dry-run）" : "学习完成（dry-run，V2全库覆盖不完整）");
+                report.Status = !corpusComplete
+                    ? "V2全库覆盖不完整，自动修订已禁止"
+                    : (corpusApplied > 0
+                        ? "学习完成（已自动应用" + corpusApplied + "条真人纠正；通用候选待审核）"
+                        : "学习完成（全库分析完成；无符合自动应用门槛的真人纠正）");
                 report.Summary = summary
                     + (corpusComplete
-                        ? "（Knowledge V2全库已完成分批对照；当前仍为dry-run，未写入生产知识库）"
-                        : "（Knowledge V2全库对照未完成或版本发生变化；本轮候选仅供查看，未写入生产知识库）");
+                        ? "（Knowledge V2全库已完成分批对照；自动应用真人纠正=" + corpusApplied
+                            + "条；未关联可靠消息ID的通用建议仍待人工审核）"
+                        : "（Knowledge V2全库对照未完成或源版本发生变化；本轮禁止自动写入生产知识库）");
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
                     allSuggestions, analysis["workflow_proposals"] as JArray, session.Seller);
                 report.InputCoverageJson = report.InputCoverageJson ?? string.Empty;
-                report.AppliedCount = applied;
-                report.SkippedCount = skipped + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted;
+                report.AppliedCount = applied + corpusApplied;
+                report.SkippedCount = skipped + corpusSkipped
+                    + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted;
                 report.Error = corpusComplete ? string.Empty
                     : "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500);
                 var retryCorpus = !corpusComplete && session.LearningRetryCount < 3;
@@ -983,7 +994,8 @@ namespace Bot.ChromeNs
                     + ", corpus_batches=" + corpusAnalysis.BatchesCompleted + "/" + corpusAnalysis.BatchCount
                     + ", corpus_complete=" + corpusComplete
                     + ", corpus_candidates=" + corpusAnalysis.Candidates.Count
-                    + ", applied=" + applied + ", skipped=" + report.SkippedCount);
+                    + ", corpus_applied=" + corpusApplied
+                    + ", applied=" + report.AppliedCount + ", skipped=" + report.SkippedCount);
             }
             catch (Exception ex)
             {
@@ -1041,6 +1053,91 @@ namespace Bot.ChromeNs
             if (lastActivity == DateTime.MinValue) lastActivity = session.StartedAt;
             if (lastActivity == DateTime.MinValue) return DateTime.MinValue;
             return lastActivity.AddMinutes(InactivityMinutes);
+        }
+
+        private static int ApplyVerifiedCorpusCorrections(
+            ActiveSession session,
+            KnowledgeCorpusAnalysisResult analysis,
+            out int skipped)
+        {
+            skipped = 0;
+            if (!EnableVerifiedCorpusCorrectionWrites || session == null || analysis == null
+                || !analysis.Complete
+                || !string.Equals(analysis.SourceFingerprint, analysis.AfterFingerprint, StringComparison.Ordinal))
+                return 0;
+
+            // The corpus may have changed after the batch analyzer returned. Recheck
+            // the exact shop-wide fingerprint immediately before the first write.
+            var currentRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)
+                .Where(x => x != null)
+                .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                .ToList();
+            var currentFingerprint = ComputeKnowledgeCorpusFingerprint(currentRecords);
+            if (!string.Equals(currentFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal))
+            {
+                foreach (var candidate in analysis.Candidates)
+                {
+                    if (candidate == null) continue;
+                    candidate.ApplyMessage = "分析完成后Knowledge V2源版本发生变化，自动修订已拒绝；请重新学习";
+                    skipped++;
+                }
+                return 0;
+            }
+
+            var applied = 0;
+            foreach (var candidate in analysis.Candidates)
+            {
+                if (!CanAutoApplyVerifiedCorpusCorrection(candidate, session.Seller, analysis.SourceFingerprint))
+                {
+                    if (candidate != null && string.IsNullOrWhiteSpace(candidate.ApplyMessage))
+                        candidate.ApplyMessage = "未达到高置信真人纠正自动应用门槛，保留候选供人工审核";
+                    skipped++;
+                    continue;
+                }
+
+                string applyMessage;
+                var success = KnowledgeEngineV2Repository.TryApplyVerifiedSessionCorrection(
+                    session.Seller,
+                    candidate.KnowledgeId,
+                    candidate.OldAnswer,
+                    candidate.Answer,
+                    candidate.EvidenceMessageIds,
+                    candidate.Confidence,
+                    out applyMessage);
+                candidate.Applied = success;
+                candidate.ApplyMessage = applyMessage;
+                if (success) applied++; else skipped++;
+            }
+            return applied;
+        }
+
+        private static bool CanAutoApplyVerifiedCorpusCorrection(
+            Suggestion candidate,
+            string seller,
+            string sourceFingerprint)
+        {
+            if (candidate == null || !string.Equals(candidate.Action, "update", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(candidate.KnowledgeId)
+                || string.IsNullOrWhiteSpace(candidate.OldAnswer)
+                || string.IsNullOrWhiteSpace(candidate.Question)
+                || string.IsNullOrWhiteSpace(candidate.Answer))
+                return false;
+            if (!string.Equals(candidate.SourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
+                return false;
+            var evidenceType = (candidate.EvidenceType ?? string.Empty).Trim().ToLowerInvariant();
+            if (evidenceType != "manual_correction" && evidenceType != "withdrawn_bot_then_manual")
+                return false;
+            if (candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count == 0)
+                return false;
+            if (double.IsNaN(candidate.Confidence) || double.IsInfinity(candidate.Confidence)
+                || candidate.Confidence < 0.95 || candidate.Confidence > 1.0)
+                return false;
+            if (ContainsHighRisk(candidate.Question + " " + candidate.Answer)
+                || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Question + " " + candidate.Answer))
+                return false;
+            if (KugouReceptionPolicy.Applies(seller) && RequiresWorkflowReview(candidate))
+                return false;
+            return true;
         }
 
         private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync(
@@ -1347,7 +1444,7 @@ namespace Bot.ChromeNs
                 else
                 {
                     foreach (var candidate in result.Candidates)
-                        candidate.ApplyMessage = "全量语料已对照；默认dry-run，仅供人工审核，未写入生产知识库";
+                        candidate.ApplyMessage = "全量语料已对照；等待真人纠正自动应用门禁验证";
                 }
 
                 coverage = ParseCoverage(report.InputCoverageJson);

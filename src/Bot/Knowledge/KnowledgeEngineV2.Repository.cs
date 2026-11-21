@@ -353,7 +353,8 @@ namespace Bot.Knowledge
         }
 
         public static bool TryCorrectBotAnswer(string seller, string knowledgeId,
-            string observedAnswer, string correctedAnswer, string messageRecordId, out string result)
+            string observedAnswer, string correctedAnswer, string messageRecordId,
+            string buyerQuestion, out string result)
         {
             result = string.Empty;
             knowledgeId = (knowledgeId ?? string.Empty).Trim();
@@ -414,6 +415,40 @@ namespace Bot.Knowledge
                 if (string.IsNullOrWhiteSpace(corrected.ShortAnswer)
                     || string.Equals(corrected.ShortAnswer.Trim(), before.Answer.Trim(), StringComparison.Ordinal))
                     corrected.ShortAnswer = correctedAnswer;
+
+                // Preserve the actual buyer wording that caused this source-stamped
+                // answer. The record ID proves which V2 row generated the reply; only
+                // standalone, same-scope wording may be added as an alias.
+                var buyerQuestionAlias = (buyerQuestion ?? string.Empty).Trim();
+                if (buyerQuestionAlias.Length >= 5 && buyerQuestionAlias.Length <= 500
+                    && !KnowledgeEngineV2Semantics.IsHighRisk(buyerQuestionAlias))
+                {
+                    var aliasQuery = KnowledgeEngineV2Semantics.Parse(buyerQuestionAlias, null);
+                    var intentCompatible = string.Equals(aliasQuery.Intent, before.Intent, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(aliasQuery.Intent, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(before.Intent, "general", StringComparison.OrdinalIgnoreCase);
+                    var predicateCompatible = string.Equals(aliasQuery.Predicate, before.Predicate, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(aliasQuery.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(before.Predicate, "general", StringComparison.OrdinalIgnoreCase);
+                    var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
+                        aliasQuery.Subject ?? string.Empty, before.Subject ?? string.Empty);
+                    var entityOverlap = (aliasQuery.Entities ?? new List<string>())
+                        .Any(x => (before.Entities ?? new List<string>())
+                            .Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase)));
+                    if (!aliasQuery.ContextDependent
+                        && !string.IsNullOrWhiteSpace(aliasQuery.Subject)
+                        && intentCompatible && predicateCompatible
+                        && (subjectSimilarity >= 0.68 || entityOverlap))
+                    {
+                        corrected.Aliases = (corrected.Aliases ?? new List<string>())
+                            .Concat(new[] { buyerQuestionAlias })
+                            .Where(x => !string.IsNullOrWhiteSpace(x))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Take(40)
+                            .ToList();
+                    }
+                }
+
                 corrected.SourceType = "manual_reviewed_direct";
                 corrected.Authority = Math.Max(corrected.Authority, 0.98);
                 corrected.Confidence = Math.Max(corrected.Confidence, 0.99);
@@ -443,6 +478,142 @@ namespace Bot.Knowledge
                 "人工确认的Bot答案按实际Knowledge V2记录ID精确更新；原快照已保存，可回滚。",
                 "success", out auditError);
             result = "已精确更新Knowledge V2知识并刷新检索索引；历史答案已留存，可从知识中心回滚。";
+            return true;
+        }
+
+        /// <summary>
+        /// Applies a high-confidence correction derived from verified human messages in
+        /// a complete, revision-stable conversation/corpus scan. The exact V2 record ID
+        /// and observed old answer are optimistic concurrency guards; the write and
+        /// reversible revision are committed together.
+        /// </summary>
+        public static bool TryApplyVerifiedSessionCorrection(
+            string seller,
+            string knowledgeId,
+            string observedAnswer,
+            string correctedAnswer,
+            IEnumerable<string> evidenceMessageIds,
+            double confidence,
+            out string result)
+        {
+            result = string.Empty;
+            knowledgeId = (knowledgeId ?? string.Empty).Trim();
+            observedAnswer = (observedAnswer ?? string.Empty).Trim();
+            correctedAnswer = (correctedAnswer ?? string.Empty).Trim();
+            var evidenceIds = (evidenceMessageIds ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .Take(12)
+                .ToList();
+
+            if (knowledgeId.Length == 0 || observedAnswer.Length == 0
+                || correctedAnswer.Length < 2 || correctedAnswer.Length > 1200
+                || evidenceIds.Count == 0
+                || double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.95 || confidence > 1.0)
+            {
+                result = "真人证据、知识ID、答案或置信度未达到自动修订门槛。";
+                return false;
+            }
+            if (KnowledgeEngineV2Semantics.IsHighRisk(correctedAnswer))
+            {
+                result = "修订答案涉及高风险内容，保留候选并转人工审核。";
+                return false;
+            }
+
+            var shop = ResolveShopRequired(seller);
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            KnowledgeV2Record corrected = null;
+            KnowledgeV2Record before = null;
+            lock (state.Sync)
+            {
+                var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == knowledgeId);
+                if (row == null)
+                {
+                    result = "目标Knowledge V2记录不存在，未应用自动修订。";
+                    return false;
+                }
+
+                before = FromRow(row);
+                if (!before.Enabled
+                    || string.Equals(before.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(before.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(before.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = "目标知识不是启用的生产记录，未应用自动修订。";
+                    return false;
+                }
+
+                var sourceType = (before.SourceType ?? string.Empty).Trim();
+                if (KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType)
+                    || sourceType.IndexOf("人工", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sourceType.IndexOf("manual", StringComparison.OrdinalIgnoreCase) >= 0
+                    || sourceType.IndexOf("手工", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    result = "目标知识属于人工维护来源，自动学习不得覆盖人工维护内容。";
+                    return false;
+                }
+                if (string.Equals(before.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || KnowledgeEngineV2Semantics.IsHighRisk((before.Title ?? string.Empty) + " " + correctedAnswer))
+                {
+                    result = "目标知识或修订答案涉及高风险内容，保留候选并转人工审核。";
+                    return false;
+                }
+                if (!string.Equals((before.Answer ?? string.Empty).Trim(), observedAnswer, StringComparison.Ordinal))
+                {
+                    result = "知识原答案已变化，自动修订候选已失效，未覆盖新内容。";
+                    return false;
+                }
+                if (string.Equals(before.Answer.Trim(), correctedAnswer, StringComparison.Ordinal))
+                {
+                    result = "人工纠正后的答案与现有知识一致，无需更新。";
+                    return true;
+                }
+
+                corrected = JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                    JsonConvert.SerializeObject(before));
+                corrected.Answer = correctedAnswer;
+                if (string.IsNullOrWhiteSpace(corrected.ShortAnswer)
+                    || string.Equals(corrected.ShortAnswer.Trim(), before.Answer.Trim(), StringComparison.Ordinal))
+                    corrected.ShortAnswer = correctedAnswer;
+                corrected.SourceType = "human_evidence_auto_reviewed";
+                corrected.Status = "active";
+                if (string.Equals(corrected.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
+                    corrected.Type = "business_fact";
+                corrected.Authority = Math.Max(corrected.Authority, 0.97);
+                corrected.Confidence = Math.Max(corrected.Confidence, Math.Min(0.99, confidence));
+                corrected.CorrectionCount++;
+                corrected.LastVerifiedAt = DateTime.Now;
+                NormalizeForSave(corrected);
+
+                var revision = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = knowledgeId,
+                    MessageRecordId = "session-human-evidence:" + string.Join(",", evidenceIds),
+                    Action = "apply",
+                    PreviousJson = JsonConvert.SerializeObject(before),
+                    CurrentJson = JsonConvert.SerializeObject(corrected),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });
+            }
+
+            MirrorOneToLegacy(shop, corrected);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+                seller, "session_human_evidence_auto_apply", "knowledge", knowledgeId,
+                string.Join(",", evidenceIds), corrected.Title,
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(before),
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(corrected),
+                "仅基于完整且版本稳定的语料扫描中可追溯的真人纠正消息自动修订；confidence="
+                    + confidence.ToString("0.00") + "; evidence_count=" + evidenceIds.Count
+                    + "; 原答案已保存，可回滚。",
+                "success", out auditError);
+            result = "已根据完整聊天中的真人纠正自动更新Knowledge V2，并保存可回滚历史。";
             return true;
         }
 

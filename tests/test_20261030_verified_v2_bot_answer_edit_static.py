@@ -31,7 +31,7 @@ def test_verified_v2_edit_does_not_go_through_fuzzy_learning():
     assert "!e.SourceWasManuallyCorrected" in block
     assert "route.Kind == BotReplySourceRouting.RouteKind.KnowledgeRecord" in block
     assert "KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller," in block
-    assert "route.TargetId, e.Answer, corrected, e.MessageRecordId" in block
+    assert "route.TargetId, e.Answer, corrected, e.MessageRecordId, e.Question" in block
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in block
     assert "KnowledgeLearningService.LearnAsync(" not in block
     assert block.index("KnowledgeEngineV2Repository.TryCorrectBotAnswer") < block.index(
@@ -53,6 +53,8 @@ def test_exact_id_edit_is_transactional_and_snapshot_is_immediate():
     assert "KnowledgeEngineV2Semantics.IsHighRisk(correctedAnswer)" in method
     assert 'corrected.SourceType = "manual_reviewed_direct";' in method
     assert "corrected.CorrectionCount++" in method
+    assert "buyerQuestionAlias" in method
+    assert "corrected.Aliases" in method
     assert "new KnowledgeV2ManualEditRevisionRow" in method
     assert 'Action = "apply"' in method
     assert "state.Db.SaveRecordsInTransaction(new List<object> { ToRow(corrected), revision });" in method
@@ -78,3 +80,18 @@ def test_same_shop_rollback_rejects_stale_revision_and_refreshes_snapshot():
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, restored)" in rollback
     assert 'Btn("回滚Bot人工纠错", 138)' in page
     assert "TryRollbackLastBotCorrection(_seller, id, out reason)" in page
+
+def test_manual_reviewed_answer_supports_safe_semantic_paraphrases():
+    service = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert "var manualSimilar = manualExact == null" in service
+    assert "IsStrongManualReviewedSimilarMatch(x, query)" in service
+    helper = service.split("private static bool IsStrongManualReviewedSimilarMatch(", 1)[1].split(
+        "private static bool IsSafeStandaloneLocalDirect(", 1
+    )[0]
+    assert "match.AliasScore < 0.80" in helper
+    assert "match.PredicateScore < 0.99" in helper
+    assert "match.IntentScore < 0.99" in helper
+    assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
+    assert "query.ContextDependent" in helper
+    assert "decision.HasConflict = manualExact == null && HasConflict(best, second)" in service
+

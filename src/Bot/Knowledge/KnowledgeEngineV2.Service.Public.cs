@@ -131,7 +131,13 @@ namespace Bot.Knowledge
                 && (x.Record.Aliases ?? new List<string>()).Concat(new[] { x.Record.Title })
                     .Any(a => string.Equals(KnowledgeEngineV2Semantics.Compact(a),
                         query.Normalized, StringComparison.Ordinal)));
-            var best = manualExact ?? productionMatches.FirstOrDefault();
+            var manualSimilar = manualExact == null
+                ? productionMatches
+                    .Where(x => IsStrongManualReviewedSimilarMatch(x, query))
+                    .OrderByDescending(x => x.AliasScore)
+                    .FirstOrDefault()
+                : null;
+            var best = manualExact ?? manualSimilar ?? productionMatches.FirstOrDefault();
             var visibleMatches = rankedMatches.Take(5).ToList();
             if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);
             decision.Matches = visibleMatches;
@@ -159,6 +165,7 @@ namespace Bot.Knowledge
             var standaloneSafe = IsSafeStandaloneLocalDirect(query, message);
 
             var approvedExact = manualExact != null && object.ReferenceEquals(best, manualExact);
+            var approvedSimilar = manualSimilar != null && object.ReferenceEquals(best, manualSimilar);
             decision.CanDirectReply = !decision.HasConflict
                 && !highRisk
                 && standaloneSafe
@@ -169,11 +176,36 @@ namespace Bot.Knowledge
                     && (effectiveMargin >= 0.08 || best.AliasScore >= 0.98)));
             decision.Answer = decision.CanDirectReply ? (best.Record.Answer ?? string.Empty).Trim() : string.Empty;
             decision.Reason = decision.CanDirectReply
-                ? (approvedExact ? "人工审核精确问法直答即时生效：score=" : "V2结构化知识已通过直答安全检查：score=")
+                ? (approvedExact ? "人工审核精确问法直答即时生效：score="
+                    : (approvedSimilar ? "人工审核相似问法通过同意图/同谓词/主体校验直答：score="
+                    : "V2结构化知识已通过直答安全检查：score="))
                     + best.Score.ToString("0.00") + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count + (safeConsensus ? ", consensus=safe" : string.Empty)
                 : (!standaloneSafe ? "当前消息依赖Working Memory或属于状态/投诉/人工等控制语义，禁止V2本地直答，继续完整上下文/AI/人工链路" : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
             Finish(decision, total, decideSw);
             return decision;
+        }
+
+        private static bool IsStrongManualReviewedSimilarMatch(
+            KnowledgeV2Match match,
+            KnowledgeV2Query query)
+        {
+            if (match == null || match.Record == null || query == null
+                || query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason))
+                return false;
+            if (!string.Equals((match.Record.SourceType ?? string.Empty).Trim(),
+                    "manual_reviewed_direct", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (match.Score < 0.82 || match.AliasScore < 0.80
+                || match.PredicateScore < 0.99 || match.IntentScore < 0.99
+                || match.ConfidenceScore < 0.94)
+                return false;
+            if (KnowledgeEngineV2Semantics.IsHighRisk(query.Original)
+                || KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer))
+                return false;
+
+            var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
+                query.Subject ?? string.Empty, match.Record.Subject ?? string.Empty);
+            return match.EntityScore >= 0.66 || subjectSimilarity >= 0.82;
         }
 
         private static bool IsSafeStandaloneLocalDirect(KnowledgeV2Query query, string message)

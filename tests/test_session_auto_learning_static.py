@@ -188,12 +188,15 @@ def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_
     assert "remote_history_turn_count_mismatch" in finalize
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
     assert "private const bool EnableAutomaticWrites = false;" in service
-    assert "knowledgeCorpusComplete" in finalize
-    assert '"dry_run"' in finalize
+    assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in service
+    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped)" in finalize
+    assert '"verified_human_evidence"' in finalize
+    assert "genericSuggestionWriteMode" in finalize
     assert "默认dry-run" in finalize
     assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
         "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
     )
+    assert "corpusApplied = ApplyVerifiedCorpusCorrections" in finalize
 
 
 def test_myopenai_endpoint_discovery_is_scoped_in_learning():

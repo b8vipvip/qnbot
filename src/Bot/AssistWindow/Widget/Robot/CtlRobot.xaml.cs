@@ -420,7 +420,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     {
                         using (ShopSettingsScope.Enter(shop))
                             return KnowledgeEngineV2Repository.TryCorrectBotAnswer(e.Seller,
-                                route.TargetId, e.Answer, corrected, e.MessageRecordId, out message);
+                                route.TargetId, e.Answer, corrected, e.MessageRecordId, e.Question, out message);
                     });
                     // If a historical source ID is stale, do not overwrite that
                     // unrelated record. A confirmed edit may instead create an

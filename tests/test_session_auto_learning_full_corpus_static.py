@@ -961,3 +961,18 @@ def test_full_corpus_learning_exports_privacy_safe_history_and_resume_evidence()
     assert "report.Summary" not in snapshot
     assert "report.InputCoverageJson" in snapshot
     assert "knowledgeCorpusError" in snapshot
+
+def test_only_complete_stable_high_confidence_human_corrections_auto_write_to_exact_v2_rows():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    apply = service.split("private static int ApplyVerifiedCorpusCorrections(", 1)[1].split(
+        "private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync(", 1
+    )[0]
+    assert "analysis.Complete" in apply
+    assert "analysis.SourceFingerprint, analysis.AfterFingerprint" in apply
+    assert "ComputeKnowledgeCorpusFingerprint(currentRecords)" in apply
+    assert "TryApplyVerifiedSessionCorrection(" in apply
+    assert 'evidenceType != "manual_correction" && evidenceType != "withdrawn_bot_then_manual"' in apply
+    assert "candidate.Confidence < 0.95" in apply
+    assert "candidate.EvidenceMessageIds.Count == 0" in apply
+    assert "candidate.SourceFingerprint, sourceFingerprint" in apply
+

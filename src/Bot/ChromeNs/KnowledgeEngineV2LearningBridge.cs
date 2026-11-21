@@ -220,7 +220,8 @@ namespace Bot.Knowledge
                 || source.IndexOf("manual_reviewed_direct", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("manual_edit", StringComparison.OrdinalIgnoreCase) >= 0
                 || source.IndexOf("manual_confirmed", StringComparison.OrdinalIgnoreCase) >= 0
-                || source.IndexOf("human_reviewed", StringComparison.OrdinalIgnoreCase) >= 0;
+                || source.IndexOf("human_reviewed", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("human_evidence_auto_reviewed", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static bool ShouldImportLegacyEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)

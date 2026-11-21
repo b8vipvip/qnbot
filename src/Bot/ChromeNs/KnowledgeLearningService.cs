@@ -415,7 +415,7 @@ namespace Bot.ChromeNs
                         "你是电商客服知识纠错审查器。比较Bot候选答案和真人客服实际答案，判断是否存在可跨买家复用的稳定知识修正。只输出JSON："
                         + "{\"should_learn\":true|false,\"action\":\"add|update|skip\",\"question\":\"通用化问题\",\"answer\":\"最终可复用答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"reason\":\"原因\"}。"
                         + "人工答案优先级高于Bot，但不能因为措辞不同就修改知识。只有人工答案明确纠正了事实、补充了稳定必要步骤、或Bot遗漏了可复用关键条件时才should_learn=true。"
-                        + "寒暄、临时价格/库存、单个订单进度、个人承诺、退款赔偿投诉、账号安全、验证码、手机号、订单号等必须skip。不得编造人工答案中不存在的事实。confidence低于0.90必须skip。"
+                        + "寒暄、临时价格/库存、单个订单进度、个人承诺、退款赔偿投诉、账号安全、验证码、手机号、订单号等必须skip。不得编造人工答案中不存在的事实。confidence低于0.95必须skip。"
                 },
                 new JObject
                 {
@@ -466,38 +466,44 @@ namespace Bot.ChromeNs
 
             if (!shouldLearn
                 || (action != "add" && action != "update")
-                || confidence < 0.90
+                || confidence < 0.95
+                || !CanLearn(question, manualAnswer)
                 || !CanLearn(learnedQuestion, learnedAnswer)
+                || KnowledgeEngineV2Semantics.TextSimilarity(question, learnedQuestion) < 0.68
+                || ContainsUnsafeManualLearning(question + " " + manualAnswer)
                 || ContainsUnsafeManualLearning(learnedQuestion + " " + learnedAnswer))
             {
                 MessageProcessingTraceService.RecordLearningComparison(
                     seller,
                     buyer,
                     "skipped",
-                    "对比结论：无需升级知识。confidence=" + confidence.ToString("0.00")
+                    "对比结论：未达到高置信真人纠正自动入库门槛。confidence=" + confidence.ToString("0.00")
                         + "；reason=" + Short(reason, 500),
                     true);
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(category)) category = "人工对照学习";
-            var saved = SaveLearned(
-                learnedQuestion,
-                learnedAnswer,
-                category,
-                keywords,
-                "人工对照学习");
+            // The model only decides whether the human reply is a reusable correction.
+            // Never store its paraphrase as fact: preserve the actual question and the
+            // exact human-authored reply, then let the V2 repository apply its own
+            // standalone/high-risk/context checks and immediately refresh the index.
+            string saveMessage = string.Empty;
+            string savedKnowledgeId = string.Empty;
+            var saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
+                seller, question, manualAnswer, string.Empty, out saveMessage, out savedKnowledgeId);
             MessageProcessingTraceService.RecordLearningComparison(
                 seller,
                 buyer,
-                saved != null && saved.Success ? "ready" : "failed",
-                "对比结论：" + (saved == null ? "知识写入结果为空" : saved.Message)
+                saved ? "ready" : "skipped",
+                "对比结论：" + (saved
+                    ? "真人实际回复已直接保存到Knowledge V2（知识ID：" + savedKnowledgeId + "）"
+                    : "Knowledge V2拒绝自动直答：" + saveMessage)
                     + "；confidence=" + confidence.ToString("0.00")
                     + "；reason=" + Short(reason, 500),
                 true);
             Log.Info("人工答案对比学习完成: seller=" + seller + ", buyer=" + buyer
                 + ", confidence=" + confidence.ToString("0.00")
-                + ", result=" + (saved == null ? "null" : saved.Message));
+                + ", saved=" + saved + ", knowledgeId=" + savedKnowledgeId);
         }
 
         private static bool ContainsUnsafeManualLearning(string value)
