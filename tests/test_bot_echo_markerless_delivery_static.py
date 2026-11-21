@@ -29,7 +29,7 @@ def test_rpa_registers_pending_delivery_before_real_send_action():
 
     pending = rpa.index("SendDeliveryWatchdog.EnsurePending(")
     assert "shopKey" in rpa[pending:pending + 180]
-    real_send = rpa.index("TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey)", pending)
+    real_send = rpa.index("TrySendTextNativeFirstAsync(buyer, text, sendStart, shopKey, manualTakeoverCheck)", pending)
 
     assert pending < real_send
 
