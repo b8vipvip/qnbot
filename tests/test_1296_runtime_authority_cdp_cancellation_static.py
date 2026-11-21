@@ -48,3 +48,14 @@ def test_duplicate_websocket_recovery_channels_are_bounded_as_lightweight_standb
     assert "_recoverableStandbySessions" in ws
     assert "_liveSessions.TryRemove(session.SessionID" in ws
     assert "_sessionLastActivityUtc.TryRemove(session.SessionID" in ws
+
+def test_cdp_dispatcher_rejects_late_responses_from_closed_websocket_sessions():
+    source = read("src/Bot/ChromeNs/CDPClient.cs")
+    dispatcher = source[
+        source.index("private static void DispatchWebSocketMessage"):
+        source.index("internal static bool TryGetBySessionId")
+    ]
+
+    assert "var server = MyWebSocketServer.WSocketSvrInst;" in dispatcher
+    assert "server.IsWebSocketSessionConnected(session.SessionID)" in dispatcher
+    assert dispatcher.index("IsWebSocketSessionConnected") < dispatcher.index("SessionClients.TryGetValue")
