@@ -20,7 +20,14 @@ def test_reliable_send_has_backward_compatible_cancellation_aware_overload():
 def test_reliable_send_checks_cancellation_before_real_ui_side_effects():
     qn = read("src/Bot/ChromeNs/QN.cs")
     confirm = qn.split("private async Task<bool> EnsureActiveBuyerForSendAsync", 1)[1]
-    assert "cancellationToken.ThrowIfCancellationRequested();\n                        OpenChat(buyer);" in confirm
+    open_positions = [i for i in range(len(confirm)) if confirm.startswith("OpenChat(buyer);", i)]
+    assert len(open_positions) == 2
+    for position in open_positions:
+        branch = confirm[:position]
+        branch_start = branch.rfind("if (attempt == 0)")
+        assert branch_start >= 0
+        assert branch.rfind("cancellationToken.ThrowIfCancellationRequested();") > branch_start
+        assert branch.rfind("IsCurrentShopScopeValidForSend(out shopScopeReason)") > branch_start
     send = qn.split("public async Task<bool> SendTextWithRetryAsync(", 1)[1]
     assert send.count("cancellationToken.ThrowIfCancellationRequested();") >= 3
     assert "Task.Delay(120, cancellationToken)" in qn
