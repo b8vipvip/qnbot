@@ -104,8 +104,10 @@ def test_fresh_actual_problem_can_prepare_fixed_reply_with_full_message_metadata
     ordinary_text = router.index("if (safetyDecision.ShouldCallAi)", prepare)
     image_route = router.index('if (!string.Equals(safetyDecision.MessageLabel, "[图片]"', ordinary_text)
     assert prepare < ordinary_text < image_route
-    prepare_call = router[prepare:router.index("out fixedAnswer);", prepare)]
+    prepare_call = router[prepare:router.index("shopKey);", prepare)]
     assert "message," in prepare_call
+    assert "out fixedAnswer," in prepare_call
+    assert "shopKey" in prepare_call
     assert "IncomingMessageSafety.GetDisplayText(message, text)" in router
     assert "Kind = VisionDecisionKind.Text" in router[prepare:ordinary_text]
     assert "随后同一实际问题继续进入正常文本回复处理" in router
@@ -296,4 +298,4 @@ def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_close
     returning = read("src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Send.cs")
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in returning
     assert "using (ShopSettingsScope.Enter(shop))" in returning
-    assert "FirstInquiryFixedReplyService.HasPending(seller, buyer)" in returning
+    assert "FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey)" in returning
