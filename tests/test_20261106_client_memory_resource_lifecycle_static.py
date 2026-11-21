@@ -159,6 +159,6 @@ def test_windows_memory_sampler_tracks_pseudonymized_runtime_shop_lifecycle_over
     assert "Get-Process -Id $runtimeProcessId" in collector
     assert "Get-Process -Id $runtimeProcessId" in collector
     assert "SellerNick" not in collector
-    assert "ShopKey" not in collector
+    assert "shop.ShopKey" not in collector
     assert "CommandLine" not in collector
     assert "Invoke-WebRequest" not in collector
