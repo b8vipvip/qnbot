@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
     internal sealed class OrderAttentionItem
     {
         public OrderSnapshot Snapshot { get; set; }
+        public CDPClient SourceClient { get; set; }
         public DateTime EnqueuedAt { get; set; }
         public int Attempts { get; set; }
         public DateTime LastUiUpdateAt { get; set; }
@@ -113,17 +114,25 @@ namespace Bot.ChromeNs
             OrderAttentionUiService.ShowPending(snapshot);
             if (!OrderAttentionSettings.IsEnabled()) return;
 
+            var item = new OrderAttentionItem
+            {
+                Snapshot = snapshot,
+                SourceClient = cdp,
+                EnqueuedAt = DateTime.Now,
+                Attempts = 0,
+                LastUiUpdateAt = DateTime.MinValue
+            };
+            if (!TryRefreshOrderAttentionSource(item))
+            {
+                OrderAttentionUiService.SetFocusFailed(snapshot, "订单来源店铺或CDP会话身份无法确认，已阻止自动切换");
+                return;
+            }
+
             lock (_orderAttentionSync)
             {
                 var key = AttentionKey(snapshot);
                 if (_orderAttentionItems.Any(x => x != null && x.Snapshot != null && AttentionKey(x.Snapshot) == key)) return;
-                _orderAttentionItems.Add(new OrderAttentionItem
-                {
-                    Snapshot = snapshot,
-                    EnqueuedAt = DateTime.Now,
-                    Attempts = 0,
-                    LastUiUpdateAt = DateTime.MinValue
-                });
+                _orderAttentionItems.Add(item);
             }
 
             Log.Info("新订单已加入空闲自动切换队列: seller=" + snapshot.Seller
@@ -160,7 +169,7 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    var check = await CanAutoFocusOrderAsync(item.Snapshot);
+                    var check = await CanAutoFocusOrderAsync(item);
                     if (!check.Allowed)
                     {
                         item.Attempts++;
@@ -171,7 +180,7 @@ namespace Bot.ChromeNs
 
                     // 二次稳定确认，避免刚判定为空闲时恰好开始生成、发送或人工输入。
                     await Task.Delay(650);
-                    check = await CanAutoFocusOrderAsync(item.Snapshot);
+                    check = await CanAutoFocusOrderAsync(item);
                     if (!check.Allowed)
                     {
                         item.Attempts++;
@@ -180,7 +189,7 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    var focused = await FocusOrderBuyerAsync(item.Snapshot);
+                    var focused = await FocusOrderBuyerAsync(item);
                     if (focused)
                     {
                         RemoveOrderAttention(item);
@@ -246,11 +255,12 @@ namespace Bot.ChromeNs
             OrderAttentionUiService.SetDeferred(item.Snapshot, reason);
         }
 
-        private async Task<AutoFocusCheck> CanAutoFocusOrderAsync(OrderSnapshot snapshot)
+        private async Task<AutoFocusCheck> CanAutoFocusOrderAsync(OrderAttentionItem item)
         {
+            var snapshot = item == null ? null : item.Snapshot;
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Buyer)) return Denied("订单缺少买家信息");
             if (!Params.Robot.CanUseRobotReal) return Denied("Bot当前未启用");
-            if (cdp == null) return Denied("千牛CDP尚未连接");
+            if (!TryRefreshOrderAttentionSource(item)) return Denied("订单来源店铺身份或千牛CDP会话已变化");
             if (_incomingMessageGate.CurrentCount < 1) return Denied("正在处理千牛新消息");
             if (_sendGate.CurrentCount < 1) return Denied("正在切换会话或发送消息");
             if (_backgroundRecoveryGate.CurrentCount < 1) return Denied("正在补抓后台消息");
@@ -271,6 +281,7 @@ namespace Bot.ChromeNs
             }
 
             var input = await TryGetInputboxEmptyAsync();
+            if (!IsOrderAttentionSourceCurrent(item)) return Denied("读取输入框期间订单来源CDP会话发生变化");
             if (!input.Success) return Denied("暂时无法确认输入框状态");
             if (!input.Empty)
             {
@@ -283,6 +294,7 @@ namespace Bot.ChromeNs
             }
 
             var current = await TryGetCurrentBuyerAsync();
+            if (!IsOrderAttentionSourceCurrent(item)) return Denied("读取当前买家期间订单来源CDP会话发生变化");
             ObserveVisibleBuyer(snapshot.ShopKey, snapshot.Seller, current);
             if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason, snapshot.ShopKey)) return Denied(reason);
             if (!string.Equals(current, snapshot.Buyer, StringComparison.Ordinal)
@@ -301,14 +313,18 @@ namespace Bot.ChromeNs
             return new AutoFocusCheck { Allowed = true, Reason = string.Empty };
         }
 
-        private async Task<bool> FocusOrderBuyerAsync(OrderSnapshot snapshot)
+        private async Task<bool> FocusOrderBuyerAsync(OrderAttentionItem item)
         {
+            var snapshot = item == null ? null : item.Snapshot;
+            if (snapshot == null || !TryRefreshOrderAttentionSource(item)) return false;
             await _sendGate.WaitAsync();
             using (BotActivityCoordinator.Begin("新订单自动切换", snapshot.Seller, snapshot.Buyer, snapshot.ShopKey))
             {
                 try
                 {
+                    if (!IsOrderAttentionSourceCurrent(item)) return false;
                     var input = await TryGetInputboxEmptyAsync();
+                    if (!IsOrderAttentionSourceCurrent(item)) return false;
                     if (!input.Success || !input.Empty)
                     {
                         if (input.Success && !input.Empty)
@@ -327,6 +343,7 @@ namespace Bot.ChromeNs
                     }
 
                     var current = await TryGetCurrentBuyerAsync();
+                    if (!IsOrderAttentionSourceCurrent(item)) return false;
                     if (string.Equals(current, snapshot.Buyer, StringComparison.Ordinal))
                     {
                         SetActiveConversationByNick(snapshot.Seller, snapshot.Buyer, "newOrderAlreadyActive");
@@ -339,10 +356,15 @@ namespace Bot.ChromeNs
                         + ", buyer=" + snapshot.Buyer
                         + ", orderId=" + snapshot.OrderId
                         + ", current=" + current);
+                    if (!IsOrderAttentionSourceCurrent(item)) return false;
                     OpenChat(snapshot.Buyer);
+                    if (!IsOrderAttentionSourceCurrent(item)) return false;
                     for (var attempt = 0; attempt < 24; attempt++)
                     {
+                        await Task.Delay(250);
+                        if (!IsOrderAttentionSourceCurrent(item)) return false;
                         current = await TryGetCurrentBuyerAsync();
+                        if (!IsOrderAttentionSourceCurrent(item)) return false;
                         if (string.Equals(current, snapshot.Buyer, StringComparison.Ordinal))
                         {
                             SetActiveConversationByNick(snapshot.Seller, snapshot.Buyer, "newOrderAutoFocus");
@@ -353,7 +375,6 @@ namespace Bot.ChromeNs
                             Log.Info("新订单买家自动切换成功: buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId);
                             return true;
                         }
-                        await Task.Delay(250);
                     }
                     Log.Info("新订单买家自动切换未确认: buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId);
                     return false;
@@ -367,6 +388,63 @@ namespace Bot.ChromeNs
                 {
                     _sendGate.Release();
                 }
+            }
+        }
+
+        private bool TryRefreshOrderAttentionSource(OrderAttentionItem item)
+        {
+            var snapshot = item == null ? null : item.Snapshot;
+            var shopKey = snapshot == null ? string.Empty : (snapshot.ShopKey ?? string.Empty).Trim();
+            var sourceClient = cdp;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (shopKey.Length == 0 || sourceClient == null || server == null
+                || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, shopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shopKey, sourceClient.SessionId))
+                return false;
+
+            try
+            {
+                var runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                if (runtimeShop == null
+                    || !string.Equals(runtimeShop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !ReferenceEquals(ShopContextLocator.FindConnectedQnByShopKey(shopKey, sourceClient.SessionId), this))
+                    return false;
+
+                // A reconnect is accepted only after the new physical session proves the
+                // same persisted ShopKey. A same-nickname different shop cannot inherit
+                // the queued order's focus action.
+                item.SourceClient = sourceClient;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool IsOrderAttentionSourceCurrent(OrderAttentionItem item)
+        {
+            var snapshot = item == null ? null : item.Snapshot;
+            var sourceClient = item == null ? null : item.SourceClient;
+            var shopKey = snapshot == null ? string.Empty : (snapshot.ShopKey ?? string.Empty).Trim();
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (shopKey.Length == 0 || sourceClient == null || server == null
+                || !ReferenceEquals(cdp, sourceClient)
+                || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, shopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shopKey, sourceClient.SessionId))
+                return false;
+            try
+            {
+                var runtimeShop = ShopContextLocator.ResolveRuntimeBySeller(this);
+                return runtimeShop != null
+                    && string.Equals(runtimeShop.ShopKey, shopKey, StringComparison.Ordinal)
+                    && ReferenceEquals(ShopContextLocator.FindConnectedQnByShopKey(shopKey, sourceClient.SessionId), this);
+            }
+            catch
+            {
+                return false;
             }
         }
 
