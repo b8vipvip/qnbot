@@ -1111,8 +1111,13 @@ namespace Bot.ChromeNs
                     var knownIds = new HashSet<string>(
                         records.Where(x => !string.IsNullOrWhiteSpace(x.Id)).Select(x => x.Id),
                         StringComparer.Ordinal);
+                    var restoredCandidateIds = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var candidate in restoredCandidates)
                     {
+                        var candidateId = candidate == null
+                            ? string.Empty : (candidate.KnowledgeId ?? string.Empty).Trim();
+                        var uniqueCandidateId = candidateId.Length > 0
+                            && restoredCandidateIds.Add(candidateId);
                         var batchIndex = candidate == null ? 0 : candidate.CorpusBatchIndex;
                         var belongsToBatch = candidate != null
                             && batchIndex >= 1 && batchIndex <= batches.Count
@@ -1133,6 +1138,7 @@ namespace Bot.ChromeNs
                         if (candidate == null
                             || candidate.Action != "update"
                             || string.IsNullOrWhiteSpace(candidate.KnowledgeId)
+                            || !uniqueCandidateId
                             || !knownIds.Contains(candidate.KnowledgeId)
                             || !belongsToBatch
                             || !string.Equals(candidate.SourceFingerprint, result.SourceFingerprint, StringComparison.Ordinal)
