@@ -586,14 +586,18 @@ namespace Bot.Knowledge
                 if(!string.Equals(currentFingerprint,expectedFingerprint??string.Empty,StringComparison.Ordinal))
                     return false;
 
-                state.Db.ClearTable(new List<Type>{typeof(KnowledgeV2RecordRow)});
-                if(normalized.Count>0)
-                    state.Db.SaveRecordsInTransaction(normalized.Select(x=>(object)ToRow(x)).ToList());
-                state.Db.SaveOneRecord(new KnowledgeV2MetaRow
+                var replacementRows = normalized.Select(x => (object)ToRow(x)).ToList();
+                replacementRows.Add(new KnowledgeV2MetaRow
                 {
-                    Key="schema_version",
-                    Value=KnowledgeEngineV2Constants.SchemaVersion.ToString()
+                    Key = "schema_version",
+                    Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
+                // The compare-and-swap check and replacement remain under the repository
+                // lock; the actual DELETE + INSERT + metadata write are now one SQLite
+                // transaction, so a process crash cannot leave a partially cleared corpus.
+                state.Db.ReplaceRecordsInTransaction(
+                    new List<Type> { typeof(KnowledgeV2RecordRow) },
+                    replacementRows);
             }
 
             MirrorAllToLegacy(shop,normalized);
