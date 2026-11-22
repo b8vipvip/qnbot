@@ -281,7 +281,24 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(sessionId)) return;
             WebSocketSession session;
             if (!_liveSessions.TryGetValue(sessionId, out session) || session == null) return;
-            if (!_standbyLoggedSessions.TryAdd(sessionId, true)) return;
+            lock (_sellerSessionSync)
+            {
+                string duplicateShopKey;
+                string mappedShopKey;
+                string currentOwner;
+                // Revalidate the exact standby lease while serialized with promotion.
+                // A stale retirement command must never close a session that has since
+                // become authoritative or changed its verified ShopKey.
+                if (!_connectedSessions.ContainsKey(sessionId)
+                    || !_duplicateShopSessions.TryGetValue(sessionId, out duplicateShopKey)
+                    || !string.Equals(duplicateShopKey, shopKey, StringComparison.Ordinal)
+                    || !_sessionShopKeys.TryGetValue(sessionId, out mappedShopKey)
+                    || !string.Equals(mappedShopKey, shopKey, StringComparison.Ordinal)
+                    || (_shopSessions.TryGetValue(shopKey, out currentOwner)
+                        && string.Equals(currentOwner, sessionId, StringComparison.Ordinal))
+                    || !_standbyLoggedSessions.TryAdd(sessionId, true))
+                    return;
+            }
 
             // Retire excess duplicate sockets for one ShopKey only. Different shops
             // with the same seller nickname must retain independent WebSocket owners.
@@ -586,6 +603,7 @@ namespace Bot.ChromeNs
             lock (_sellerSessionSync)
             {
                 if (!_connectedSessions.ContainsKey(sessionId) || client.IsInvalidated
+                    || _standbyLoggedSessions.ContainsKey(sessionId)
                     || (expectedIdentityProbeGeneration.HasValue
                         && !IsCurrentShopIdentityProbeLocked(sessionId, expectedIdentityProbeGeneration.Value)))
                     return false;
@@ -733,6 +751,7 @@ namespace Bot.ChromeNs
                     .Where(x => string.Equals(x.Value, shopKey, StringComparison.Ordinal)
                         && !string.Equals(x.Key, excludedSessionId, StringComparison.Ordinal)
                         && !_closingDuplicateSessions.ContainsKey(x.Key)
+                        && !_standbyLoggedSessions.ContainsKey(x.Key)
                         && _connectedSessions.ContainsKey(x.Key))
                     .OrderByDescending(x =>
                     {
