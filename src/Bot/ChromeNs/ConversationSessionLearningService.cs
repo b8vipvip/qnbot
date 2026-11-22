@@ -2638,6 +2638,7 @@ namespace Bot.ChromeNs
                     || KnowledgeEngineV2Semantics.IsHighRisk(value)
                     || ContainsHighRisk(value)
                     || HasUnverifiedKnowledgeAnchors(sourceText, value)
+                    || HasMissingKnowledgeAnchors(sourceQuestion, value)
                     || HasDifferentKnowledgeNumbers(sourceQuestion, value)
                     || HasKnowledgeQualifierMismatch(sourceQuestion, value)
                     || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)

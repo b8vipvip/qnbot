@@ -86,6 +86,7 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
     assert "HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion)" in generated
     assert "HasKnowledgeQualifierMismatch(sourceQuestion, candidateQuestion)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, value)" in generated
     assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in generated
     assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in generated
     assert "private static bool HasDifferentKnowledgeNumbers(" in generated
@@ -167,9 +168,16 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
     assert "var exactMatches = currentRecords" in method
-    assert "var exactMatches = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
-    assert "var similar = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
-    assert "Old dry-run candidates are not production answers" in method
+    assert "var exactMatches = currentRecords\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "var similar = currentRecords\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "HasExplicitlyRemovedKnowledge(state, sourceId, questionVariants)" in method
+    assert "Enabled dry-run candidates are not production answers" in method
+    assert "disabled candidate" in method
+    assert "private static bool BlocksVerifiedAutoAddRecreation(" in repository
+    assert "!record.Enabled" in repository
+    assert "private static bool HasExplicitlyRemovedKnowledge(" in repository
+    assert "deleted.SourceId, sourceId" in repository
+    assert "deletedVariants.Any(variants.Contains)" in repository
     assert "exactMatches.All(x =>" in method
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
@@ -321,3 +329,64 @@ def test_ai_answer_grounding_checks_all_source_numbers_and_entity_polarity():
     assert "sourcePositive != generatedPositive" in generated
     assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
     assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
+
+def test_operator_disabled_candidates_block_automatic_recreation_but_enabled_dry_run_candidates_do_not():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    helper = repository.split("private static bool BlocksVerifiedAutoAddRecreation(", 1)[1].split(
+        "private static bool HasExplicitlyRemovedKnowledge(", 1
+    )[0]
+
+    assert "record != null" in helper
+    assert "!record.Enabled" in helper
+    assert 'record.Status, "disabled"' in helper
+    assert 'record.Status, "deleted"' in helper
+    assert "!KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
+
+
+def test_operator_delete_is_persisted_as_a_suppression_tombstone_for_future_auto_learning():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    delete = repository.split("public static bool Delete(", 1)[1].split(
+        "public static void ReplaceAll(", 1
+    )[0]
+    suppression = repository.split("private static bool HasExplicitlyRemovedKnowledge(", 1)[1].split(
+        "private static bool IsSafeAutomaticNewKnowledge(", 1
+    )[0]
+
+    assert 'Action = "delete"' in delete
+    assert "PreviousJson = JsonConvert.SerializeObject(deleted)" in delete
+    assert delete.index("state.Db.SaveOneRecord(revision);") < delete.index("state.Db.Delete(row);")
+    assert 'x.Action, "delete"' in suppression
+    assert 'x.Action, "buyer_direct_rollback"' in suppression
+    assert "string.IsNullOrWhiteSpace(x.CurrentJson)" in suppression
+    assert "deleted.SourceId, sourceId" in suppression
+    assert "deleted.Title" in suppression
+    assert "deleted.Aliases" in suppression
+    assert "deletedVariants.Any(variants.Contains)" in suppression
+
+def test_generated_search_aliases_cannot_drop_platform_or_product_entities_from_buyer_question():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+    alias_validation = generated.split("foreach (var alias in generatedAliases", 1)[1].split(
+        "var sourceEntities =", 1
+    )[0]
+
+    assert "HasUnverifiedKnowledgeAnchors(sourceText, value)" in alias_validation
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, value)" in alias_validation
+    assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in alias_validation
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in alias_validation
+
+def test_rollback_of_new_manual_direct_answer_is_also_an_explicit_auto_learning_suppression():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    rollback = repository.split("public static bool TryRollbackBuyerDirect(", 1)[1].split(
+        "public static bool Delete(", 1
+    )[0]
+    suppression = repository.split("private static bool HasExplicitlyRemovedKnowledge(", 1)[1].split(
+        "private static bool IsSafeAutomaticNewKnowledge(", 1
+    )[0]
+
+    assert 'Action = "buyer_direct_rollback"' in rollback
+    assert 'CurrentJson = delete ? "" : JsonConvert.SerializeObject(restore)' in rollback
+    assert 'x.Action, "buyer_direct_rollback"' in suppression
+    assert "string.IsNullOrWhiteSpace(x.CurrentJson)" in suppression
