@@ -352,11 +352,17 @@ namespace Bot.Knowledge
                     .Where(x => x.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                var exactMatches = currentRecords.Where(x =>
-                    questionVariants.Any(compact =>
-                        string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compact, StringComparison.Ordinal)
-                        || (x.Aliases ?? new List<string>()).Any(alias =>
-                            string.Equals(KnowledgeEngineV2Semantics.Compact(alias), compact, StringComparison.Ordinal))))
+                // Old dry-run candidates are not production answers. They must not
+                // block a newly verified human-evidence record from becoming active.
+                // Disabled/deleted records and all non-candidate records still block
+                // automatic recreation so an intentional operator disable is respected.
+                var exactMatches = currentRecords
+                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))
+                    .Where(x =>
+                        questionVariants.Any(compact =>
+                            string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compact, StringComparison.Ordinal)
+                            || (x.Aliases ?? new List<string>()).Any(alias =>
+                                string.Equals(KnowledgeEngineV2Semantics.Compact(alias), compact, StringComparison.Ordinal))))
                     .ToList();
                 if (exactMatches.Count > 0)
                 {
@@ -368,7 +374,9 @@ namespace Bot.Knowledge
                     return false;
                 }
 
-                var similar = currentRecords.Any(existing =>
+                var similar = currentRecords
+                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))
+                    .Any(existing =>
                 {
                     if (existing == null) return false;
                     var existingAliases = (existing.Aliases ?? new List<string>())
