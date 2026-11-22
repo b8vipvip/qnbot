@@ -93,8 +93,15 @@ namespace Bot.AssistWindow.Widget.Robot
                 }
             }
 
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
-                return null;
+            if (_desk != null)
+            {
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                catch { return null; }
+                if (shop == null || !DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(
+                    _desk, seller, shop.ShopKey))
+                    return null;
+            }
 
             return qn;
         }

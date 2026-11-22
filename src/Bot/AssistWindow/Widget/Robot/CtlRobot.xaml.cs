@@ -498,13 +498,14 @@ namespace Bot.AssistWindow.Widget.Robot
             var current = QN.CurQN;
             if (current == null || current.Seller == null || current.Buyer == null) return;
             var activeShopKey = ActiveShopSessionRegistry.GetActiveShopKey();
-            if (activeShopKey.Length > 0 && !ActiveShopSessionRegistry.IsActive(current))
+            if (activeShopKey.Length > 0
+                && !ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current))
                 return;
             var seller = (current.Seller.Nick ?? string.Empty).Trim();
             string shopKey;
             try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(current).ShopKey; }
             catch { return; }
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey))
+            if (_desk != null && !DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(_desk, seller, shopKey))
                 return;
 
             _preQN = current;

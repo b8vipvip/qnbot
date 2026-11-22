@@ -69,7 +69,8 @@ def test_each_attached_robot_is_resynchronized_from_its_active_qn():
     session = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in session
+    assert "DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(" in session
+    assert "_desk, seller, shopKey)" in session
     assert "ReferenceEquals(_preQN, qn)" in session
     assert "_preQN = qn" in session
     assert "RefreshConversations();" in session

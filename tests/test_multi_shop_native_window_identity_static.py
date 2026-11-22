@@ -69,6 +69,7 @@ def test_focused_webview_not_background_buyer_switch_owns_shared_desk():
 def test_attached_bot_ui_accepts_only_its_proven_seller():
     robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     props = read("src/Bot/Directory.Build.props")
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot
+    assert "DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(" in robot
+    assert "_desk, seller, shopKey)" in robot
     assert "AssistWindow\\WndAssist.MultiShopAttached.cs" in props
     assert "Automation\\ChatDeskNs\\DeskSellerBindingRegistry.cs" in props

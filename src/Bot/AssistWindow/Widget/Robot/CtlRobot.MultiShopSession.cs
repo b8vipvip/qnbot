@@ -17,13 +17,15 @@ namespace Bot.AssistWindow.Widget.Robot
         internal void SynchronizeSellerSession(QN qn)
         {
             if (qn == null || qn.Seller == null) return;
+            if (!ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn)) return;
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return;
 
             string shopKey;
             try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
             catch { return; }
-            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey))
+            if (_desk != null && !DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(
+                _desk, seller, shopKey))
             {
                 return;
             }

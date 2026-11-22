@@ -182,3 +182,49 @@ def test_message_mirror_recovers_using_exact_active_shop_and_cdp_session():
     assert "var activeSessionId = ActiveShopSessionRegistry.GetActiveSessionId();" in mirror
     assert "ShopContextLocator.FindConnectedQnByShopKey(\n                        activeShopKey, activeSessionId)" in mirror
     assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current)" in mirror
+
+def test_read_only_bot_panel_identity_checks_do_not_require_qianniu_foreground():
+    registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
+    native_binding = registry.split(
+        "internal static bool IsSellerForDesk(Desk desk, string seller, string shopKey)", 1
+    )[1].split("internal static bool IsBoundToDeskForReadOnlyUi", 1)[0]
+    read_only_binding = registry.split(
+        "internal static bool IsBoundToDeskForReadOnlyUi", 1
+    )[1].split("internal static Desk BindResolvedSeller", 1)[0]
+
+    # Keep strict foreground proof for side-effecting/native automation, but use
+    # stable HWND + ShopKey + seller ownership for read-only assistant rendering.
+    assert "desk.IsForeground" in native_binding
+    assert "desk.IsForeground" not in read_only_binding
+    assert "ShopToHwnd.TryGetValue(shopKey" in read_only_binding
+    assert "ActiveShopByHwnd.TryGetValue(hwnd" in read_only_binding
+    assert "ActiveSellerByHwnd.TryGetValue(hwnd" in read_only_binding
+
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    resolver = mirror.split(
+        "private QN ResolveMessageMirrorQn()", 1
+    )[1].split("private List<ConversationContextTurn> LoadMessageMirrorTurns", 1)[0]
+    assert "IsBoundToDeskForReadOnlyUi(" in resolver
+    assert "_desk, seller, shop.ShopKey)" in resolver
+    assert "IsSellerForDesk(_desk, seller)" not in resolver
+
+    session_ui = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
+    assert "IsCurrentSessionForReadOnlyUi(qn)" in session_ui
+    assert "IsBoundToDeskForReadOnlyUi(" in session_ui
+    assert "_desk, seller, shopKey)" in session_ui
+
+    robot_ui = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.xaml.cs")
+    reshow = robot_ui.split("public void ReShowAfterQNChange()", 1)[1].split(
+        "private void RefreshConversations()", 1
+    )[0]
+    assert "IsCurrentSessionForReadOnlyUi(current)" in reshow
+    assert "IsBoundToDeskForReadOnlyUi(_desk, seller, shopKey)" in reshow
+    assert "IsActive(current)" not in reshow
+
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    sync_ui = coordinator.split("private static void SyncAttachedUi(QN qn)", 1)[1].split(
+        "\n        private static ", 1
+    )[0]
+    assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn)" in sync_ui
+    assert "IsBoundToDeskForReadOnlyUi(desk, seller, shopKey)" in sync_ui
+    assert "ActiveShopSessionRegistry.IsActive(qn)" not in sync_ui

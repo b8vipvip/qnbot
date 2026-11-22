@@ -165,7 +165,8 @@ def test_native_desk_registry_uses_shopkey_for_window_and_composer_ownership():
     assert coordinator.count("DeskSellerBindingRegistry.BindForegroundSeller(") == 1
     assert "!ShopToHwnd.TryGetValue(shopKey, out mappedHwnd) || mappedHwnd != hwnd" in registry
     assert "FindSellerDesk(sellerNick, scopedShop.ShopKey)" in desk
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot_ui
+    assert "DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(" in robot_ui
+    assert "_desk, seller, shopKey)" in robot_ui
     assert "DeskSellerBindingRegistry.IsSingleShopRuntime" in desk
 
 

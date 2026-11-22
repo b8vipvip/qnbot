@@ -101,6 +101,38 @@ namespace Bot.Automation.ChatDeskNs
                 && string.Equals(GetSeller(desk), seller, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Validates the stable ShopKey-to-Desk binding for read-only UI.
+        /// The assistant window can own keyboard focus while this panel is being used;
+        /// that must not make the already-bound Qianniu conversation disappear.
+        /// Native automation continues to use IsSellerForDesk, which requires foreground.
+        /// </summary>
+        internal static bool IsBoundToDeskForReadOnlyUi(Desk desk, string seller, string shopKey)
+        {
+            seller = NormalizeSeller(seller);
+            shopKey = NormalizeSeller(shopKey);
+            if (desk == null || !desk.IsAlive || desk.Hwnd == null || seller.Length == 0
+                || shopKey.Length == 0 || !IsAuthenticatedShop(seller, shopKey))
+                return false;
+
+            var hwnd = desk.Hwnd.Handle;
+            lock (Sync)
+            {
+                int mappedHwnd;
+                if (!ShopToHwnd.TryGetValue(shopKey, out mappedHwnd) || mappedHwnd != hwnd)
+                    return false;
+
+                string activeShopKey;
+                if (!ActiveShopByHwnd.TryGetValue(hwnd, out activeShopKey)
+                    || !string.Equals(NormalizeSeller(activeShopKey), shopKey, StringComparison.Ordinal))
+                    return false;
+
+                string activeSeller;
+                return ActiveSellerByHwnd.TryGetValue(hwnd, out activeSeller)
+                    && string.Equals(NormalizeSeller(activeSeller), seller, StringComparison.Ordinal);
+            }
+        }
+
         internal static Desk BindResolvedSeller(Desk desk, string seller, string evidence)
         {
             return BindResolvedSeller(desk, seller, evidence, ResolveUniqueShopKey(seller));

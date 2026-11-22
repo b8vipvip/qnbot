@@ -53,6 +53,7 @@ def test_attached_bot_ui_only_follows_active_seller_on_shared_desk():
     )
 
     assert "ActiveShopSessionRegistry.IsActive(qn)" in coordinator
-    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller, shopKey)" in robot
+    assert "DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(" in robot
+    assert "_desk, seller, shopKey)" in robot
     assert "txtSeller.Text = seller;" in robot
     assert "txtBuyer.Text = buyer.Length == 0" in robot

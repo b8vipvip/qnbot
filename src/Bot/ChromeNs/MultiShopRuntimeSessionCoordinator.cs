@@ -246,9 +246,14 @@ namespace Bot.ChromeNs
         {
             var seller = Seller(qn);
             var shopKey = ShopKey(qn);
-            if (seller.Length == 0 || shopKey.Length == 0 || !ActiveShopSessionRegistry.IsActive(qn)) return;
+            // This method only refreshes the attached read-only UI. Do not require
+            // native-window foreground/focus proof: the user may be interacting with
+            // the assistant panel while the Qianniu Desk remains the same bound shop.
+            if (seller.Length == 0 || shopKey.Length == 0
+                || !ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn)) return;
             var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
-            if (desk == null || !DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)) return;
+            if (desk == null
+                || !DeskSellerBindingRegistry.IsBoundToDeskForReadOnlyUi(desk, seller, shopKey)) return;
             var assist = desk.AssistWindow;
             if (assist == null || assist.Dispatcher == null) return;
             Action action = () =>
