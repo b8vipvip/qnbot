@@ -82,9 +82,10 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "private static bool HasMissingKnowledgeAnchors(" in generated
     assert "private static bool HasUnverifiedKnowledgeAnchors(" in generated
     assert "|| !appearsInSource" in generated
-    assert String.raw`@"\\d+(?:\\.\\d+)?"` in generated
-    assert "ai_generated_answer_introduced_unverified_numeric_fact" in generated
-    assert "ai_generated_answer_exceeds_human_evidence_scope" in generated
+    assert r'Regex.Matches(sourceAnswer, @"\d+(?:\.\d+)?")' in generated
+    assert "candidateAnswer.Length <= Math.Max(160, sourceAnswer.Length * 2)" in generated
+    assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
+    assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
     assert "evidenceCandidate.Question = question;" in generated
     assert "evidenceCandidate.Answer = answer;" in generated
     assert "evidenceCandidate.Category = category;" in generated
