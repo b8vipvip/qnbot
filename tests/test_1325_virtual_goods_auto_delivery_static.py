@@ -726,6 +726,13 @@ def test_auto_delivery_worker_claim_token_fences_stale_processes_before_irrevers
     ]
     assert "AutoDeliveryCoordinator.RenewWorkerClaim(" in execute
     assert "snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId" in execute
+    preflight = execute.index("TrySilentAutoDeliveryPreflightAsync(snapshot)")
+    renew_after_preflight = execute.index("RenewWorkerClaim(", preflight)
+    focus_after_preflight = execute.index("BotActivityCoordinator.IsSafeToAutoFocus", preflight)
+    send_lock = execute.index("await _sendGate.WaitAsync()")
+    renew_after_send_lock = execute.index("RenewWorkerClaim(", send_lock)
+    assert preflight < renew_after_preflight < focus_after_preflight
+    assert send_lock < renew_after_send_lock
     persist = execute.index("TryPersistConfirmationIntent(")
     renew_before_click = execute.index("RenewWorkerClaim(", persist)
     click = execute.index('ReadModalStateAsync(sourceClient, "confirm")', renew_before_click)
