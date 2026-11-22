@@ -441,3 +441,18 @@ def test_auto_published_human_evidence_answers_strongly_similar_questions_withou
     assert "query.ContextDependent" in helper
     assert "KnowledgeEngineV2Semantics.IsHighRisk(query.Original)" in helper
     assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
+
+
+def test_verified_auto_add_persists_native_qianniu_ids_not_synthesized_message_keys():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    candidate = service.split("private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1)[1].split(
+        "private static ConversationContextTurn FindUniqueTurnByMessageId(", 1
+    )[0]
+
+    assert "questionTurn.NativeAliases" in candidate
+    assert "answerTurn.NativeAliases" in candidate
+    assert "original_native_message_id_missing" in candidate
+    assert "buyerMessageIds.Contains(nativeQuestionId)" in candidate
+    assert "humanMessageIds.Contains(nativeAnswerId)" in candidate
+    assert "questionMessageId = nativeQuestionId;" in candidate
+    assert "answerMessageId = nativeAnswerId;" in candidate
