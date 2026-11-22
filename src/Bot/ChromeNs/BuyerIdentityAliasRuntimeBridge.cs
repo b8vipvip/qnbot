@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Bot.ChromeNs
@@ -15,7 +16,8 @@ namespace Bot.ChromeNs
     internal static class BuyerIdentityAliasRuntimeBridge
     {
         private static readonly object Sync = new object();
-        private static readonly HashSet<QN> Attached = new HashSet<QN>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
         private static Timer _timer;
         private static int _initialized;
 
@@ -35,12 +37,13 @@ namespace Bot.ChromeNs
                     if (qn == null) continue;
                     lock (Sync)
                     {
-                        if (Attached.Contains(qn)) continue;
-                        Attached.Add(qn);
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                        qn.EvBuyerSwitched += OnBuyerSwitched;
+                        qn.EvSellerSwitched += OnSellerSwitched;
+                        Attached.Add(qn, new object());
                     }
-                    qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                    qn.EvBuyerSwitched += OnBuyerSwitched;
-                    qn.EvSellerSwitched += OnSellerSwitched;
                     Log.Info("买家昵称别名桥接已绑定客服实例: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
