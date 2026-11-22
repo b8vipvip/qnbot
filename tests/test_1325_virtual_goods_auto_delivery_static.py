@@ -449,8 +449,10 @@ def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_neve
     assert execute.index("TrySilentAutoDeliveryPreflightAsync(snapshot)") < execute.index("if (verificationOnly)")
     assert "保持只读，不切换前台买家且绝不再次确认发货" in execute
     assert execute.index("if (verificationOnly)") < execute.index("BotActivityCoordinator.IsSafeToAutoFocus")
-    assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)" in execute
-    assert execute.index("TryPersistConfirmationIntent") < execute.index('ReadModalStateAsync(sourceClient, "confirm")')
+    assert "AutoDeliveryCoordinator.TryPersistConfirmationIntent(" in execute
+    assert "snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId" in execute
+    assert execute.index("TryPersistConfirmationIntent") < execute.index("RenewWorkerClaim", execute.index("TryPersistConfirmationIntent"))
+    assert execute.index("RenewWorkerClaim", execute.index("TryPersistConfirmationIntent")) < execute.index('ReadModalStateAsync(sourceClient, "confirm")')
     assert "repeatConfirm=false" in execute
     assert "live.ConfirmationUncertainCount++;" in uncertain
     assert "live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);" in uncertain
@@ -687,3 +689,43 @@ def test_auto_delivery_queue_claims_and_every_mutation_are_cross_process_seriali
     execute = worker.index("await ProcessRecordAsync(record).ConfigureAwait(false);", persist)
     assert claim < persist < execute
     assert "暂停执行以避免重复领取任务" in worker
+
+
+def test_auto_delivery_worker_claim_token_fences_stale_processes_before_irreversible_confirm():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    coordinator = runtime[
+        runtime.index("internal static class AutoDeliveryCoordinator"):
+        runtime.index("public partial class QN")
+    ]
+    process = coordinator[
+        coordinator.index("private static async Task ProcessRecordAsync"):
+        coordinator.index("private static bool IsSilentPreflightReason")
+    ]
+    renew = coordinator[
+        coordinator.index("public static bool RenewWorkerClaim"):
+        coordinator.index("private static bool IsWorkerClaimCurrent")
+    ]
+    execute = runtime[
+        runtime.index("internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync"):
+        runtime.index("private bool IsAutoDeliverySourceSessionCurrent")
+    ]
+
+    assert "public string WorkerClaimId { get; set; }" in coordinator
+    assert 'record.WorkerClaimId = Guid.NewGuid().ToString("N");' in coordinator
+    assert "Guid.TryParseExact(workerClaimId, \"N\", out claimGuid)" in renew
+    assert "live.NextAttemptAt <= now" in renew
+    assert "if (!IsWorkerClaimCurrent(record))" in process
+    assert "if (!IsSameWorkerClaim(live, record)) return;" in process
+    assert "if (!IsSameWorkerClaim(live, record)) return;" in coordinator[
+        coordinator.index("private static void DeferRecord"):
+        coordinator.index("private static void RemoveRecord")
+    ]
+    assert "if (!IsSameWorkerClaim(live, record)) return;" in coordinator[
+        coordinator.index("private static void RemoveRecord"):
+        coordinator.index("private static bool HasConfirmationIntent")
+    ]
+    assert "RenewWorkerClaim(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId)" in execute
+    persist = execute.index("TryPersistConfirmationIntent(")
+    renew_before_click = execute.index("RenewWorkerClaim(", persist)
+    click = execute.index('ReadModalStateAsync(sourceClient, "confirm")', renew_before_click)
+    assert persist < renew_before_click < click
