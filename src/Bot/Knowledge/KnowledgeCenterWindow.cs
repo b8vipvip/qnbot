@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -980,7 +981,8 @@ namespace Bot.ChromeNs
 
     internal static class ManualReplyAiComparisonBridge
     {
-        private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Attached = new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static Timer _timer;
         private static int _started;
 
@@ -1000,8 +1002,14 @@ namespace Bot.ChromeNs
             {
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
-                    if (qn == null || !Attached.TryAdd(qn, 0)) continue;
-                    qn.EvRecieveNewMessage += OnReceive;
+                    if (qn == null) continue;
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        qn.EvRecieveNewMessage += OnReceive;
+                        Attached.Add(qn, new object());
+                    }
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("绑定人工接管AI即时对比失败：" + ex.Message, 10); }
