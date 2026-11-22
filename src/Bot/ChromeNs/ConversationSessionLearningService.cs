@@ -716,9 +716,17 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusCandidates"] = 0,
                     ["knowledgeCorpusCandidatesOmitted"] = 0,
                     ["knowledgeCorpusEvidenceRejected"] = 0,
+                    ["knowledgeCorpusNewCandidateAnalysisComplete"] = false,
+                    ["knowledgeCorpusNewCandidateSuggestions"] = new JArray(),
+                    ["knowledgeCorpusNewCandidateEvidenceRejected"] = 0,
+                    ["knowledgeCorpusNewCandidateApplied"] = 0,
+                    ["knowledgeCorpusNewCandidateSkipped"] = 0,
+                    ["knowledgeCorpusNewCandidateError"] = string.Empty,
                     ["knowledgeCorpusFailedBatches"] = 0,
                     ["knowledgeCorpusError"] = string.Empty,
-                    ["writeMode"] = EnableVerifiedCorpusCorrectionWrites ? "verified_human_evidence" : "dry_run",
+                    ["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites || EnableVerifiedCorpusCorrectionWrites
+                        ? "verified_human_evidence_add_and_update" : "dry_run",
+                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "verified_human_evidence_add" : "dry_run",
                     ["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
