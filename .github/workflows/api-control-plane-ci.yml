@@ -181,6 +181,8 @@ jobs:
           set -o pipefail
           mkdir -p "$DATA_DIR"
           python -m pytest -q --tb=short 2>&1 | tee pytest.log
+      - name: Run Knowledge V2 bridge integration regressions
+        run: python -m pytest -q ../../tests/test_bot_web_knowledge_v2_sync_static.py --tb=short
       - name: Upload pytest diagnostics
         if: always()
         uses: actions/upload-artifact@v7
