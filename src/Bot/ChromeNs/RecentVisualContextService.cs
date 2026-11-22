@@ -291,10 +291,6 @@ namespace Bot.ChromeNs
                     return true;
                 }
                 return false;
-            }
-            catch
-            {
-                return false;
                 }
             }
             catch
