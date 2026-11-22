@@ -649,6 +649,20 @@ namespace Bot.ChromeNs
                         .OrderBy(x => x.CreatedAtTicks)
                         .ThenBy(x => x.UpdatedAtTicks)
                         .ToList();
+
+                    // A same-nickname legacy row without ShopKey cannot safely be
+                    // attributed to this store. If it remains after the guarded
+                    // backfill, the history is not complete enough to classify a
+                    // seller echo as human-authored.
+                    var unscoped = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "where (ShopKey is null or ShopKey = '') and Seller = ? and Buyer = ? and UpdatedAtTicks >= ? limit 1",
+                        seller, buyer, cutoffTicks);
+                    if (unscoped != null && unscoped.Count > 0)
+                    {
+                        records = new List<BotConversationHistoryEntity>();
+                        return false;
+                    }
                     return true;
                 }
             }
