@@ -354,7 +354,11 @@ def test_operator_delete_is_persisted_as_a_suppression_tombstone_for_future_auto
 
     assert 'Action = "delete"' in delete
     assert "PreviousJson = JsonConvert.SerializeObject(deleted)" in delete
-    assert delete.index("state.Db.SaveOneRecord(revision);") < delete.index("state.Db.Delete(row);")
+    assert "tombstone.Enabled = false;" in delete
+    assert 'tombstone.Status = "deleted";' in delete
+    assert "CurrentJson = JsonConvert.SerializeObject(tombstone)" in delete
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });" in delete
+    assert "state.Db.Delete(row);" not in delete
     assert 'x.Action, "delete"' in suppression
     assert 'x.Action, "buyer_direct_rollback"' in suppression
     assert "string.IsNullOrWhiteSpace(x.CurrentJson)" in suppression
@@ -388,5 +392,9 @@ def test_rollback_of_new_manual_direct_answer_is_also_an_explicit_auto_learning_
 
     assert 'Action = "buyer_direct_rollback"' in rollback
     assert 'CurrentJson = delete ? "" : JsonConvert.SerializeObject(restore)' in rollback
+    assert "tombstone.Enabled = false;" in rollback
+    assert 'tombstone.Status = "deleted";' in rollback
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(tombstone), rollback });" in rollback
+    assert "state.Db.Delete(row);" not in rollback
     assert 'x.Action, "buyer_direct_rollback"' in suppression
     assert "string.IsNullOrWhiteSpace(x.CurrentJson)" in suppression
