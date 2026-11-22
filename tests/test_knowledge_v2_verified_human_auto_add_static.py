@@ -104,7 +104,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "Concat(normalizedKeywords)" in method
     assert "ResolveShopRequired(seller)" in method
     assert "shop.ShopKey, expectedShopKey" in method
-    assert "KnowledgeV2Service.IsEnabled(seller)" in method
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in method
     assert "lock (state.Sync)" in method
     assert "ComputeRepositoryCorpusFingerprint(currentRecords)" in method
     assert "currentFingerprint, expectedCorpusFingerprint" in method
@@ -119,7 +119,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
     assert "PreviousJson = JsonConvert.SerializeObject(tombstone)" in method
     assert "MirrorOneToLegacy(shop, record)" in method
-    assert "KnowledgeV2Service.ApplyRecordUpdate(seller, record)" in method
+    assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
     assert "session_ai_auto_add" in method
     assert "AutoLearningPersonalData.IsMatch(value)" in repository
     assert "API密钥|远程控制|下载并运行|执行命令" in repository
