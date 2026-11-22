@@ -27,10 +27,10 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, RepositoryState> States =
             new ConcurrentDictionary<string, RepositoryState>(StringComparer.Ordinal);
         private static readonly Regex AutoLearningNonReusableFact = new Regex(
-            @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|账号|登录|绑定|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉",
+            @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|账号|登录|绑定|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉|忽略(之前|以上|系统|规则)|系统提示|提示词|API密钥|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex AutoLearningPersonalData = new Regex(
-            @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)",
+            @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static List<KnowledgeV2Record> LoadAll(string seller)
