@@ -401,7 +401,7 @@ namespace Bot.Knowledge
                 record = new KnowledgeV2Record
                 {
                     Id = Guid.NewGuid().ToString("N"),
-                    Type = "business_fact",
+                    Type = knowledgeType,
                     Title = question,
                     Intent = parsed.Intent,
                     Subject = parsed.Subject,

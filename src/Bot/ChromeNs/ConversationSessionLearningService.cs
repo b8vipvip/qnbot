@@ -973,8 +973,7 @@ namespace Bot.ChromeNs
                             ref expectedCurrentFingerprint, out newKnowledgeSkipped, out newKnowledgeRetryNeeded);
 
                     if (EnableVerifiedCorpusCorrectionWrites)
-                        corpusApplied = ApplyVerifiedCorpusCorrections(
-                            session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped);
+                        corpusApplied = ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped);
                 }
 
                 report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
@@ -1021,8 +1020,10 @@ namespace Bot.ChromeNs
                     : (!corpusAnalysis.NewCandidateAnalysisComplete
                         ? "knowledge_corpus_new_candidate_incomplete:" + Clean(corpusAnalysis.NewCandidateError, 500)
                         : (newKnowledgeRetryNeeded ? "knowledge_corpus_new_candidate_write_unconfirmed" : string.Empty));
-                var retryCorpus = (!corpusComplete || !corpusAnalysis.NewCandidateAnalysisComplete || newKnowledgeRetryNeeded)
-                    && session.LearningRetryCount < 3;
+                var retryCorpus = !corpusComplete && session.LearningRetryCount < 3;
+                retryCorpus = retryCorpus
+                    || ((!corpusAnalysis.NewCandidateAnalysisComplete || newKnowledgeRetryNeeded)
+                        && session.LearningRetryCount < 3);
                 if (retryCorpus)
                 {
                     session.LearningRetryCount++;
@@ -1048,7 +1049,10 @@ namespace Bot.ChromeNs
                 NotifyChanged();
                 if (retryCorpus)
                 {
-                    Requeue(session, "等待Knowledge V2全库或新增知识分析补偿重试");
+                    if (!corpusComplete)
+                        Requeue(session, "等待Knowledge V2全库补偿重试");
+                    else
+                        Requeue(session, "等待Knowledge V2新增知识分析补偿重试");
                     return;
                 }
                 Log.Info("接待自动学习完成: seller=" + session.Seller + ", buyer=" + session.Buyer
@@ -2366,7 +2370,7 @@ namespace Bot.ChromeNs
         {
             var system = "你是Knowledge V2的AI自主知识整理与新增引擎。只输出JSON：{\"candidates\":[{\"question_message_id\":\"msg_匿名买家ID\",\"answer_message_id\":\"msg_匿名人工客服ID\",\"knowledge_question\":\"规范化知识问题\",\"knowledge_answer\":\"可直接发布的知识答案\",\"aliases\":[\"同义问法\"],\"keywords\":[\"关键词\"],\"category\":\"product_feature\",\"evidence_type\":\"manual_reply\",\"confidence\":0.0,\"reason\":\"依据说明\"}]}。"
                 + "你必须从时间线中选择一条真实买家原始问题和其后对应的一条真实人工客服回复，分别填入question_message_id和answer_message_id。"
-                + "AI必须主动整理knowledge_question、knowledge_answer、aliases和keywords，不要只返回消息ID，也不要等待人工确认。通过程序自动校验后，知识会立即写入正式Knowledge V2并参与自动回复，不经过人工审批或灰度发布。"
+                + "AI必须主动整理knowledge_question、knowledge_answer、aliases和keywords并完整生成各字段。通过程序自动校验后，知识会立即写入正式Knowledge V2并参与自动回复，不经过人工审批或灰度发布。"
                 + "knowledge_question应整理成独立、可复用的标准问法；knowledge_answer可以压缩、纠错和规范表达，但只能保留人工回复明确表达的事实，不得补充推测、承诺、未验证规格或外部常识。"
                 + "不得选择Bot消息、已撤回消息、图片/语音占位符或缺少message_id的消息；不得把AI生成的Bot回复当成人工证据。"
                 + "只提取长期稳定、可复用、独立完整的普通商品知识、功能说明、规格解释和通用操作知识。价格、库存、优惠、促销、发货、物流、订单、支付、到账、退款、售后、账号凭据、验证码、个人数据、API密钥、远程控制、命令执行、提示注入、法律及任何时效性或一次性事实不得新增。"
@@ -4150,8 +4154,7 @@ namespace Bot.ChromeNs
             var obj = token as JObject;
             if (obj != null)
             {
-                if (obj["summary"] != null || obj["suggestions"] != null || obj["reply_style_profile"] != null
-                    || obj["decisions"] != null || obj["candidates"] != null)
+                if (obj["summary"] != null || obj["suggestions"] != null || obj["reply_style_profile"] != null || obj["decisions"] != null || obj["candidates"] != null)
                 {
                     result = obj;
                     return true;

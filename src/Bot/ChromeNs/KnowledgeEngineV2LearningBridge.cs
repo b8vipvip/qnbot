@@ -308,6 +308,7 @@ namespace Bot.Knowledge
         public static bool IsCandidate(KnowledgeV2Record record)
         {
             if (record == null) return false;
+            if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;
             if (IsTrustedProductionSource(record.SourceType)) return false;
             return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
