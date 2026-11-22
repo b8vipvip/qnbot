@@ -2698,8 +2698,8 @@ namespace Bot.ChromeNs
 
         private static bool HasKnowledgePolarityMismatch(string sourceAnswer, string generatedAnswer)
         {
-            var negative = @"不支持|不兼容|不适配|不适用|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
-            var positive = @"支持|兼容|适配|适用|可以|能用|可用|允许|提供|包含|开通|能够|可使用|可登录|可安装";
+            var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
+            var positive = @"支持|兼容|适配|适用|适合|推荐|建议|符合|可以|能用|可用|允许|提供|包含|开通|能够|可使用|可登录|可安装";
             var sourceNegative = Regex.IsMatch(sourceAnswer ?? string.Empty, negative);
             var generatedNegative = Regex.IsMatch(generatedAnswer ?? string.Empty, negative);
             var sourcePositive = Regex.IsMatch(sourceAnswer ?? string.Empty, positive);
