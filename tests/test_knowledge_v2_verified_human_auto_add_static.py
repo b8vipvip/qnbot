@@ -60,6 +60,8 @@ def test_new_knowledge_requires_standalone_question_temporal_pair_and_safe_reusa
     assert "confidence < 0.95" in evidence
     assert "answerTurn.Timestamp <= questionTurn.Timestamp" in evidence
     assert "TimeSpan.FromMinutes(30)" in evidence
+    assert "questionTurn.PreciseTimeTicks > 0" in evidence
+    assert "answerTurn.PreciseTimeTicks > 0" in evidence
     assert "another_buyer_message_interrupted_the_evidence_pair" in evidence
     assert "KnowledgeV2Semantics.IsContextDependent(question)" in evidence
     assert "string.IsNullOrWhiteSpace(parsed.Subject)" in evidence
