@@ -63,3 +63,19 @@ def test_even_non_generic_execute_calls_consume_their_response_channel():
     assert 'SendExecuteAndWait(cmd, "Invoke:" + apiName)' in source
     assert 'SendExecuteAndWait(cmd, "InvokeMTop:" + apiName)' in source
     assert "旧实现允许多个异步调用并发" in source
+
+
+def test_runtime_session_snapshot_consumers_match_the_list_contract():
+    contract = text("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    assert "internal static List<QN> GetRuntimeSafetySnapshot()" in contract
+
+    for path in (
+        "src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs",
+        "src/Bot/Knowledge/KnowledgeCenterWindow.cs",
+        "src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs",
+    ):
+        source = text(path)
+        assert "GetRuntimeSafetySnapshot() ?? new QN[0]" not in source
+
+    monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    assert '", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Count' in monitor
