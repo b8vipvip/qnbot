@@ -1118,6 +1118,9 @@ namespace Bot.ChromeNs
                 return verificationOnly
                     ? AutoDeliveryAttemptResult.Uncertain("静默预检期间来源CDP会话发生变化")
                     : AutoDeliveryAttemptResult.Deferred("静默预检期间来源CDP会话发生变化");
+            if (!AutoDeliveryCoordinator.RenewWorkerClaim(
+                snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId))
+                return AutoDeliveryAttemptResult.Deferred("静默预检期间自动发货工作租约已转移，取消后续前台操作");
             if (preflight.Kind == AutoDeliveryPreflightKind.Completed) return AutoDeliveryAttemptResult.Completed(preflight.Reason);
             if (preflight.Kind == AutoDeliveryPreflightKind.Terminal) return AutoDeliveryAttemptResult.Terminal(preflight.Reason);
             if (preflight.Kind != AutoDeliveryPreflightKind.Candidate) return verificationOnly ? AutoDeliveryAttemptResult.Uncertain(preflight.Reason) : AutoDeliveryAttemptResult.Deferred(preflight.Reason);
@@ -1186,7 +1189,14 @@ namespace Bot.ChromeNs
             if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("获取发送锁前来源CDP会话已变化");
             await _sendGate.WaitAsync().ConfigureAwait(false);
             // The send lock may have been contended while this task was navigating.
-            // Revalidate queued buyer work before claiming the irreversible-action lease.
+            // Revalidate both the durable cross-process claim and queued buyer work
+            // before claiming the irreversible-action lease.
+            if (!AutoDeliveryCoordinator.RenewWorkerClaim(
+                snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId))
+            {
+                _sendGate.Release();
+                return AutoDeliveryAttemptResult.Deferred("取得发送锁后发现自动发货工作租约已转移，取消本次前台操作");
+            }
             if (_incomingMessageGate.CurrentCount < 1 || _backgroundRecoveryGate.CurrentCount < 1)
             {
                 _sendGate.Release();
