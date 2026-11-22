@@ -273,6 +273,7 @@ def test_ai_normalization_cannot_flip_human_answer_polarity_or_invent_known_prod
     assert "sourceNegative != generatedNegative" in generated
     assert "sourcePositive != generatedPositive" in generated
     assert "Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙" in generated
+    assert "语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步" in generated
     assert "return Regex.Matches(generatedText ?? string.Empty, anchors" in generated
 
 
