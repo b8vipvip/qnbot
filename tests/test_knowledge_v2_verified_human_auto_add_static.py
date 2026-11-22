@@ -255,8 +255,8 @@ def test_ai_normalization_cannot_flip_human_answer_polarity_or_invent_known_prod
         "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
     )[0]
 
-    assert 'var negative = @"不支持|不兼容|不适配|不适用|不可以|不能|无法|不可用' in generated
-    assert 'var positive = @"支持|兼容|适配|适用|可以|能用|可用|允许|提供|包含' in generated
+    assert 'var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合' in generated
+    assert 'var positive = @"支持|兼容|适配|适用|适合|推荐|建议|符合|可以|能用|可用|允许|提供|包含' in generated
     assert "sourceNegative != generatedNegative" in generated
     assert "sourcePositive != generatedPositive" in generated
     assert "Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙" in generated
