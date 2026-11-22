@@ -25,7 +25,7 @@ def test_seller_echo_is_strictly_shop_scoped_and_id_deduplicated():
     segment = store.split(
         "internal static bool RecordObservedSellerMessage(", 1
     )[1].split("public static bool IsPlatformSystemTip(", 1)[0]
-    assert "string.Equals(from, seller, StringComparison.Ordinal)" in segment
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in segment
     assert "string.Equals(to, buyer, StringComparison.Ordinal)" in segment
     assert "var shop = ResolveShop(seller, shopKey);" in segment
     assert "if (shop == null) return false;" in segment
