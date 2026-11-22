@@ -68,6 +68,10 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45" in generated
     assert "TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45" in generated
     assert "HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "private static bool HasKnowledgeQualifierMismatch(" in generated
+    assert '"免费", "收费", "付费", "订阅", "会员"' in generated
+    assert '"工作日", "周末", "每天", "每日", "每周", "按周"' in generated
     assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
     assert "NormalizeKnowledgeAnchor(source.Value)" in generated
     assert 'case "大屏":' in generated
