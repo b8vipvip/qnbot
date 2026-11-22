@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -202,6 +203,8 @@ def web_v2_runtime_settings_save(payload: KnowledgeV2RuntimeSettingsInput, clien
         raise HTTPException(status_code=400,detail="运行模式只能是 production 或 shadow")
     threshold=float(payload.direct_threshold)
     confidence=float(payload.min_confidence)
+    if not math.isfinite(threshold) or not math.isfinite(confidence):
+        raise HTTPException(status_code=400,detail="运行阈值必须是有限数值")
     if threshold<0.70 or threshold>0.96:
         raise HTTPException(status_code=400,detail="本地直答匹配阈值必须在 0.70~0.96")
     if confidence<0.50 or confidence>0.95:
