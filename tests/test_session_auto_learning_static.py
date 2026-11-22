@@ -535,7 +535,7 @@ def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
     assert "seller, buyer, variants[0], manualAt, shop.ShopKey" in bridge
     assert "using (ShopSettingsScope.Enter(shop))" in bridge
     assert "MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)" in bridge
-    assert "StartForManualReply(\n                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey)" in bridge
+    assert "StartForManualReply(\n                            seller, buyer, variants[0], manualAt, shop.ShopKey)" in bridge
     assert "GetRecords(shopKey, seller, 500)" in history_ui
     assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in history_ui
 
