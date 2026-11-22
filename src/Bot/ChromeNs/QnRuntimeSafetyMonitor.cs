@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,10 +21,13 @@ namespace Bot.ChromeNs
         private const int ConversationProbeIntervalMilliseconds = 2500;
         private const int HeartbeatIntervalSeconds = 60;
 
-        private static readonly ConcurrentDictionary<QN, byte> Subscribed =
-            new ConcurrentDictionary<QN, byte>();
-        private static readonly ConcurrentDictionary<QN, byte> VersionGuardLogged =
-            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Subscribed =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly ConditionalWeakTable<QN, object> VersionGuardLogged =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object QnMarkerSync = new object();
+        private static readonly TimeSpan QnStateSweepInterval = TimeSpan.FromMinutes(1);
+        private static long _lastQnStateSweepUtcTicks;
         private static readonly ConcurrentDictionary<QN, DateTime> NextConversationProbeAt =
             new ConcurrentDictionary<QN, DateTime>();
         private static readonly ConcurrentDictionary<QN, byte> ConversationProbeRunning =
@@ -69,21 +73,50 @@ namespace Bot.ChromeNs
         {
             try
             {
-                foreach (var qn in QN.GetRuntimeSafetySnapshot())
+                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
+                foreach (var qn in sessions)
                 {
                     if (qn == null) continue;
                     NormalizeUnknownVersion(qn);
-                    if (Subscribed.TryAdd(qn, 0))
+                    lock (QnMarkerSync)
                     {
-                        qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
+                        object marker;
+                        if (!Subscribed.TryGetValue(qn, out marker))
+                        {
+                            qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
+                            Subscribed.Add(qn, new object());
+                        }
                     }
                     ScheduleConversationProbe(qn);
                 }
+                CleanupRetiredQnState(sessions);
                 WriteHeartbeatIfDue();
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("刷新千牛运行时安全监控失败：" + ex.Message, 5);
+            }
+        }
+
+        private static void CleanupRetiredQnState(QN[] sessions)
+        {
+            var now = DateTime.UtcNow;
+            var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
+            if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
+
+            var alive = new HashSet<QN>((sessions ?? new QN[0]).Where(x => x != null));
+            foreach (var qn in NextConversationProbeAt.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                DateTime ignored;
+                NextConversationProbeAt.TryRemove(qn, out ignored);
+            }
+            foreach (var qn in ConsecutiveProbeFailures.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                int ignored;
+                ConsecutiveProbeFailures.TryRemove(qn, out ignored);
             }
         }
 
@@ -358,7 +391,7 @@ namespace Bot.ChromeNs
                                 .DefaultIfEmpty(0L).Max()
                             + ", pendingCancelledAi=" + BuyerStreamingReplyPipeline.UnfinishedAnswerTasksAfterCancel
                             + ", cancelledAiTasksTotal=" + BuyerStreamingReplyPipeline.AnswerTasksOutlivedCancellation
-                            + ", monitoredQn=" + Subscribed.Count
+                            + ", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Length
                             + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount)
                             + ", timelineStates=" + ConversationContextStore.CachedTimelineCount
                             + ", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount
@@ -390,10 +423,18 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(value) && Version.TryParse(normalized, out parsed)) return;
 
             qn.QnVersion = "999.999.999N";
-            if (VersionGuardLogged.TryAdd(qn, 0))
+            var shouldLog = false;
+            lock (QnMarkerSync)
             {
-                Log.Info("千牛版本为空或无法解析，已强制启用可靠RPA发送链路，禁止误走SendSmartTipMsg。original=" + value);
+                object marker;
+                if (!VersionGuardLogged.TryGetValue(qn, out marker))
+                {
+                    VersionGuardLogged.Add(qn, new object());
+                    shouldLog = true;
+                }
             }
+            if (shouldLog)
+                Log.Info("千牛版本为空或无法解析，已强制启用可靠RPA发送链路，禁止误走SendSmartTipMsg。original=" + value);
         }
 
         private static void Qn_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
