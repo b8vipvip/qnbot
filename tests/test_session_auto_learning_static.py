@@ -197,7 +197,7 @@ def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_
     assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
     assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
     assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
-    assert '"verified_human_evidence"' in finalize
+    assert '"ai_auto_publish_new_knowledge_and_verified_updates"' in finalize
     assert "genericSuggestionWriteMode" in finalize
     assert "通用会话AI建议仍为dry-run" in finalize
     assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
