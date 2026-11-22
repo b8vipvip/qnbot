@@ -916,6 +916,7 @@ namespace Bot.ChromeNs
                 var corpusSkipped = 0;
                 var newKnowledgeApplied = 0;
                 var newKnowledgeSkipped = 0;
+                var newKnowledgeRetryNeeded = false;
                 var expectedCurrentFingerprint = corpusAnalysis == null
                     ? string.Empty : corpusAnalysis.SourceFingerprint;
                 // Reuse the same resolved ShopKey for analysis and knowledge writes.
@@ -968,7 +969,7 @@ namespace Bot.ChromeNs
                     if (EnableVerifiedCorpusNewKnowledgeWrites)
                         newKnowledgeApplied = ApplyVerifiedCorpusNewKnowledge(
                             session, corpusAnalysis, turns, cards,
-                            ref expectedCurrentFingerprint, out newKnowledgeSkipped);
+                            ref expectedCurrentFingerprint, out newKnowledgeSkipped, out newKnowledgeRetryNeeded);
 
                     if (EnableVerifiedCorpusCorrectionWrites)
                         corpusApplied = ApplyVerifiedCorpusCorrections(
@@ -984,9 +985,11 @@ namespace Bot.ChromeNs
                     ? "V2全库覆盖不完整，自动新增与修订均已禁止"
                     : (!corpusAnalysis.NewCandidateAnalysisComplete
                         ? "Knowledge V2新增知识提取未完成，等待补偿重试"
-                        : (newKnowledgeApplied > 0 || corpusApplied > 0
-                            ? "学习完成（自动新增" + newKnowledgeApplied + "条真人证据知识；自动修订" + corpusApplied + "条真人纠正）"
-                            : "学习完成（未发现达到真人证据自动新增/修订门槛的知识）"));
+                        : (newKnowledgeRetryNeeded
+                            ? "Knowledge V2新增知识写入结果未确认，等待补偿重试"
+                            : (newKnowledgeApplied > 0 || corpusApplied > 0
+                                ? "学习完成（自动新增" + newKnowledgeApplied + "条真人证据知识；自动修订" + corpusApplied + "条真人纠正）"
+                                : "学习完成（未发现达到真人证据自动新增/修订门槛的知识）")));
                 report.Summary = summary
                     + (corpusComplete
                         ? "（Knowledge V2全库已完成分批对照；真人证据自动新增=" + newKnowledgeApplied
@@ -1010,8 +1013,8 @@ namespace Bot.ChromeNs
                     ? "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500)
                     : (!corpusAnalysis.NewCandidateAnalysisComplete
                         ? "knowledge_corpus_new_candidate_incomplete:" + Clean(corpusAnalysis.NewCandidateError, 500)
-                        : string.Empty);
-                var retryCorpus = (!corpusComplete || !corpusAnalysis.NewCandidateAnalysisComplete)
+                        : (newKnowledgeRetryNeeded ? "knowledge_corpus_new_candidate_write_unconfirmed" : string.Empty));
+                var retryCorpus = (!corpusComplete || !corpusAnalysis.NewCandidateAnalysisComplete || newKnowledgeRetryNeeded)
                     && session.LearningRetryCount < 3;
                 if (retryCorpus)
                 {
@@ -1024,7 +1027,9 @@ namespace Bot.ChromeNs
                     report.InputCoverageJson = retryCoverage.ToString(Formatting.None);
                     report.Status = !corpusComplete
                         ? "V2全库覆盖不完整，等待补偿重试(" + session.LearningRetryCount + "/3)"
-                        : "Knowledge V2新增知识提取未完成，等待补偿重试(" + session.LearningRetryCount + "/3)";
+                        : (!corpusAnalysis.NewCandidateAnalysisComplete
+                            ? "Knowledge V2新增知识提取未完成，等待补偿重试(" + session.LearningRetryCount + "/3)"
+                            : "Knowledge V2新增知识写入结果未确认，等待补偿重试(" + session.LearningRetryCount + "/3)");
                     report.CompletedAtTicks = 0;
                 }
                 else
@@ -1112,9 +1117,11 @@ namespace Bot.ChromeNs
             List<ConversationContextTurn> turns,
             List<BotConversationHistoryEntity> cards,
             ref string expectedCurrentFingerprint,
-            out int skipped)
+            out int skipped,
+            out bool retryNeeded)
         {
             skipped = 0;
+            retryNeeded = false;
             if (!EnableVerifiedCorpusNewKnowledgeWrites || session == null || analysis == null
                 || !analysis.Complete
                 || !analysis.NewCandidateAnalysisComplete
@@ -1181,6 +1188,7 @@ namespace Bot.ChromeNs
                             // corpus. Do not let the correction path treat that external
                             // version as our own expected post-add snapshot.
                             expectedCurrentFingerprint = string.Empty;
+                            retryNeeded = true;
                             foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                             {
                                 if (remaining == null) continue;
@@ -1201,6 +1209,7 @@ namespace Bot.ChromeNs
                     // correction writes in this session; the source-ID idempotency key makes
                     // a later retry safe.
                     expectedCurrentFingerprint = string.Empty;
+                    retryNeeded = true;
                     foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                     {
                         if (remaining == null) continue;
