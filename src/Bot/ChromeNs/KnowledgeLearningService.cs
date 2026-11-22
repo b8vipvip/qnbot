@@ -273,7 +273,24 @@ namespace Bot.ChromeNs
                         RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
                         if (!sameAsCandidate)
                         {
-                            QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey);
+                            string buyerMessageId;
+                            string humanMessageId;
+                            if (TryResolveManualEvidenceMessageIds(
+                                seller, buyer, question, questionTime, manualAnswer, echoTime,
+                                shopKey, out buyerMessageId, out humanMessageId))
+                            {
+                                QueueManualAnswerComparison(
+                                    question, candidateAnswer, manualAnswer, seller, buyer,
+                                    buyerMessageId, humanMessageId, shopKey);
+                            }
+                            else
+                            {
+                                // Do not auto-publish a correction from a reflected text
+                                // echo alone. The full idle-session learner can still
+                                // recover it later from the complete history with IDs.
+                                Log.Info("人工接管已生效，但未找到唯一的原始买家/人工消息ID；即时自动学习已跳过，等待完整会话学习: seller="
+                                    + seller + ", buyer=" + buyer);
+                            }
                         }
                         MessageProcessingTraceService.RecordManualObservation(
                             seller,
@@ -322,22 +339,92 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private static bool TryResolveManualEvidenceMessageIds(
+            string seller,
+            string buyer,
+            string question,
+            DateTime questionTime,
+            string manualAnswer,
+            DateTime answerTime,
+            string shopKey,
+            out string buyerMessageId,
+            out string humanMessageId)
+        {
+            buyerMessageId = string.Empty;
+            humanMessageId = string.Empty;
+            if (questionTime == DateTime.MinValue || answerTime == DateTime.MinValue
+                || answerTime <= questionTime
+                || answerTime - questionTime > TimeSpan.FromMinutes(30))
+                return false;
+
+            var turns = ConversationContextStore.GetMirrorTurns(seller, buyer, 100)
+                .Where(x => x != null && !x.Withdrawn)
+                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
+                .ToList();
+            var normalizedQuestion = Normalize(question);
+            var normalizedAnswer = Normalize(manualAnswer);
+            var questionMatches = turns.Where(x => x.Role == "user"
+                && x.Timestamp != DateTime.MinValue
+                && Math.Abs((x.Timestamp - questionTime).TotalSeconds) <= 3
+                && string.Equals(Normalize(x.Text), normalizedQuestion, StringComparison.Ordinal)
+                && x.NativeAliases != null && x.NativeAliases.Any(y => !string.IsNullOrWhiteSpace(y)))
+                .ToList();
+            var answerMatches = turns.Where(x => x.Role == "assistant"
+                && x.Timestamp != DateTime.MinValue
+                && Math.Abs((x.Timestamp - answerTime).TotalSeconds) <= 5
+                && string.Equals(Normalize(x.Text), normalizedAnswer, StringComparison.Ordinal)
+                && x.NativeAliases != null && x.NativeAliases.Any(y => !string.IsNullOrWhiteSpace(y))
+                && !SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, x.Text, shopKey))
+                .ToList();
+            if (questionMatches.Count != 1 || answerMatches.Count != 1) return false;
+
+            var questionTurn = questionMatches[0];
+            var answerTurn = answerMatches[0];
+            var questionIndex = turns.IndexOf(questionTurn);
+            var answerIndex = turns.IndexOf(answerTurn);
+            if (questionIndex < 0 || answerIndex <= questionIndex) return false;
+            if (turns.Skip(questionIndex + 1).Take(answerIndex - questionIndex - 1)
+                .Any(x => x.Role == "user"))
+                return false;
+
+            // The native aliases are the actual Qianniu message IDs; a synthesized
+            // text/timestamp key is not sufficient provenance for automatic writes.
+            buyerMessageId = questionTurn.NativeAliases
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty;
+            humanMessageId = answerTurn.NativeAliases
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty;
+            if (buyerMessageId.Length == 0 || humanMessageId.Length == 0
+                || string.Equals(buyerMessageId, humanMessageId, StringComparison.Ordinal))
+            {
+                buyerMessageId = string.Empty;
+                humanMessageId = string.Empty;
+                return false;
+            }
+            return true;
+        }
+
         private static void QueueManualAnswerComparison(
             string question,
             string botAnswer,
             string manualAnswer,
             string seller,
             string buyer,
+            string buyerMessageId,
+            string humanMessageId,
             string shopKey)
         {
             question = (question ?? string.Empty).Trim();
             botAnswer = StripBotMarker(botAnswer);
             manualAnswer = StripBotMarker(manualAnswer);
             shopKey = (shopKey ?? string.Empty).Trim();
-            if (shopKey.Length == 0 || !CanLearn(question, manualAnswer)
-                || string.IsNullOrWhiteSpace(botAnswer)) return;
+            buyerMessageId = (buyerMessageId ?? string.Empty).Trim();
+            humanMessageId = (humanMessageId ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || buyerMessageId.Length == 0 || humanMessageId.Length == 0
+                || string.Equals(buyerMessageId, humanMessageId, StringComparison.Ordinal)
+                || !CanLearn(question, manualAnswer) || string.IsNullOrWhiteSpace(botAnswer)) return;
 
-            var comparisonKey = shopKey + "|" + SendKey(seller, buyer, question + "|" + botAnswer + "|" + manualAnswer);
+            var comparisonKey = shopKey + "|" + SendKey(seller, buyer,
+                buyerMessageId + "|" + humanMessageId + "|" + question + "|" + botAnswer + "|" + manualAnswer);
             DateTime existing;
             if (ManualComparisons.TryGetValue(comparisonKey, out existing)
                 && existing >= DateTime.Now.AddMinutes(-10)) return;
@@ -354,7 +441,9 @@ namespace Bot.ChromeNs
                         || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
                         throw new InvalidOperationException("人工答案学习拒绝使用不匹配的ShopKey/Seller身份");
                     scope = ShopSettingsScope.Enter(shop);
-                    await CompareManualAnswerAsync(question, botAnswer, manualAnswer, seller, buyer);
+                    await CompareManualAnswerAsync(
+                        question, botAnswer, manualAnswer, seller, buyer,
+                        buyerMessageId, humanMessageId);
                 }
                 catch (OperationCanceledException)
                 {
@@ -378,7 +467,9 @@ namespace Bot.ChromeNs
             string botAnswer,
             string manualAnswer,
             string seller,
-            string buyer)
+            string buyer,
+            string buyerMessageId,
+            string humanMessageId)
         {
             MessageProcessingTraceService.RecordLearningComparison(
                 seller,
@@ -492,8 +583,9 @@ namespace Bot.ChromeNs
             // standalone/high-risk/context checks and immediately refresh the index.
             string saveMessage = string.Empty;
             string savedKnowledgeId = string.Empty;
+            var sourceMessageIds = buyerMessageId + "|" + humanMessageId;
             var saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
-                seller, question, manualAnswer, string.Empty, out saveMessage, out savedKnowledgeId);
+                seller, question, manualAnswer, sourceMessageIds, out saveMessage, out savedKnowledgeId);
             MessageProcessingTraceService.RecordLearningComparison(
                 seller,
                 buyer,
