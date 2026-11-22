@@ -2360,7 +2360,7 @@ namespace Bot.ChromeNs
             string invalidAnswer,
             string parseError)
         {
-            var system = "你是Knowledge V2的AI自主知识整理与新增引擎。只输出JSON：{\"candidates\":[{\"question_message_id\":\"msg_匿名买家ID\",\"answer_message_id\":\"msg_匿名人工客服ID\",\"knowledge_question\":\"规范化知识问题\",\"knowledge_answer\":\"可直接发布的知识答案\",\"aliases\":[\"同义问法\"],\"keywords\":[\"关键词\"],\"category\":\"product_feature|usage_guide|business_fact\",\"evidence_type\":\"manual_reply\",\"confidence\":0.0,\"reason\":\"依据说明\"}]}。"
+            var system = "你是Knowledge V2的AI自主知识整理与新增引擎。只输出JSON：{\"candidates\":[{\"question_message_id\":\"msg_匿名买家ID\",\"answer_message_id\":\"msg_匿名人工客服ID\",\"knowledge_question\":\"规范化知识问题\",\"knowledge_answer\":\"可直接发布的知识答案\",\"aliases\":[\"同义问法\"],\"keywords\":[\"关键词\"],\"category\":\"product_feature\",\"evidence_type\":\"manual_reply\",\"confidence\":0.0,\"reason\":\"依据说明\"}]}。"
                 + "你必须从时间线中选择一条真实买家原始问题和其后对应的一条真实人工客服回复，分别填入question_message_id和answer_message_id。"
                 + "AI必须主动整理knowledge_question、knowledge_answer、aliases和keywords，不要只返回消息ID，也不要等待人工确认。通过程序自动校验后，知识会立即写入正式Knowledge V2并参与自动回复，不经过人工审批或灰度发布。"
                 + "knowledge_question应整理成独立、可复用的标准问法；knowledge_answer可以压缩、纠错和规范表达，但只能保留人工回复明确表达的事实，不得补充推测、承诺、未验证规格或外部常识。"
