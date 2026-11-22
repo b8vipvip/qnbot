@@ -571,9 +571,14 @@ namespace Bot.ChromeNs
                 reason = "买家有后续消息，但未明确否定前一问题，允许作为补充答案发送";
                 return true;
             }
-            catch
+            catch (Exception)
             {
-                return true;
+                // This gate protects against a newer buyer correction and a real
+                // human takeover. If the timeline/event ledger cannot be read, sending
+                // anyway would turn an evidence failure into a duplicate or stale reply.
+                reason = "发送前无法确认会话相关性或人工接管状态，已阻止自动回复";
+                Log.ErrorWithMaxCount("自动回复最后相关性校验失败；因无法确认最新会话状态而安全抑制发送。", 20);
+                return false;
             }
         }
     }
