@@ -179,3 +179,20 @@ def test_v2_repository_rejects_seller_mismatch_inside_an_explicit_shop_scope():
     assert "DirectOrderIdentityResolver.IdentityEquals(current.DisplayName, seller)" in resolve
     assert "已拒绝跨店访问" in resolve
     assert "ShopContextLocator.ResolveBySellerNick(seller)" in resolve
+
+def test_delete_tombstones_remain_in_cloud_snapshots_and_are_accepted_by_runtime_sync():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    delete = repository.split("public static bool Delete(", 1)[1].split(
+        "public static void ReplaceAll(", 1
+    )[0]
+    sync = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    api = read("services/api-control-plane/knowledge_v2_sync.py")
+
+    assert "tombstone.Enabled = false;" in delete
+    assert 'tombstone.Status = "deleted";' in delete
+    assert "tombstone.Answer =" not in delete
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });" in delete
+    assert "var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);" in sync
+    assert 'payload["records"]=JArray.FromObject(local);' in sync
+    assert '"Enabled","Status"' in api
+    assert 'not str(row.get("Answer") or "").strip()' in api
