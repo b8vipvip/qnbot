@@ -40,6 +40,7 @@ def test_session_corpus_correction_is_exact_id_revision_guarded_and_rollbackable
 def test_verified_auto_learning_source_is_production_approved():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     assert 'source.IndexOf("human_evidence_auto_reviewed", StringComparison.OrdinalIgnoreCase) >= 0' in bridge
+    assert 'source.IndexOf("human_evidence_auto_learned", StringComparison.OrdinalIgnoreCase) >= 0' in bridge
     assert "if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;" in bridge
 
 
