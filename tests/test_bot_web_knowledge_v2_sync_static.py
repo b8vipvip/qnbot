@@ -1,5 +1,13 @@
 from pathlib import Path
 
+import importlib.util
+import sqlite3
+import sys
+import types
+from contextlib import contextmanager
+
+import pytest
+
 ROOT=Path(__file__).resolve().parents[1]
 SERVER=ROOT/"services/api-control-plane/knowledge_v2_sync.py"
 BOOT=ROOT/"services/api-control-plane/bootstrap.py"
@@ -109,3 +117,123 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
     assert 'bot-web-v2.js?v=11' in html
+
+
+class _V2CasFakeControlPlane:
+    def __init__(self, path):
+        self.path = path
+
+    @contextmanager
+    def db(self):
+        conn = sqlite3.connect(str(self.path))
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def iso_now():
+        return "2026-11-22T08:00:00+00:00"
+
+
+def _load_v2_cas_module(tmp_path):
+    core = types.ModuleType("bot_web_console")
+    core._web_client = lambda request=None: {"id": 1}
+    core._runtime_client = lambda request=None: {"id": 1}
+    sys.modules["bot_web_console"] = core
+
+    name = "knowledge_v2_sync_revision_cas_under_test"
+    spec = importlib.util.spec_from_file_location(name, ROOT / "services/api-control-plane/knowledge_v2_sync.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+
+    module._cp = _V2CasFakeControlPlane(tmp_path / "knowledge-v2.db")
+    module.bot_web_console = core
+    with module._cp.db() as conn:
+        conn.execute("CREATE TABLE client_tokens (id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+    module.init_db()
+    return module
+
+
+def _v2_cas_record(answer):
+    return {
+        "Id": "a",
+        "Type": "general",
+        "Title": "same question",
+        "Intent": "general",
+        "Subject": "device",
+        "Predicate": "compatibility",
+        "Entities": [],
+        "Aliases": [],
+        "Answer": answer,
+        "ShortAnswer": "",
+        "Conditions": [],
+        "Exclusions": [],
+        "RequiredContext": [],
+        "ProductIds": [],
+        "RiskLevel": "normal",
+        "SourceType": "web_manual",
+        "SourceId": "",
+        "Authority": 0.92,
+        "Confidence": 0.92,
+        "Enabled": True,
+        "Status": "active",
+    }
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_stale_web_v2_editor_cannot_overwrite_newer_cloud_revision(tmp_path):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    first = module._save(1, [_v2_cas_record("windows answer")], "windows", expected_revision=0)
+    assert first["revision"] == 1
+
+    with pytest.raises(HTTPException) as conflict:
+        module.web_put(
+            module.KnowledgeV2WebInput(
+                records=[_v2_cas_record("stale web answer")],
+                expected_revision=0,
+            ),
+            client={"id": 1},
+        )
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "revision_conflict"
+    assert conflict.value.detail["current_revision"] == 1
+    assert module._state(1)["records"][0]["Answer"] == "windows answer"
+
+    updated = module.web_put(
+        module.KnowledgeV2WebInput(
+            records=[_v2_cas_record("fresh web answer")],
+            expected_revision=1,
+        ),
+        client={"id": 1},
+    )
+    assert updated["revision"] == 2
+    assert updated["records"][0]["Answer"] == "fresh web answer"
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_stale_windows_v2_sync_returns_newer_web_revision_without_overwrite(tmp_path):
+    module = _load_v2_cas_module(tmp_path)
+    module._save(1, [_v2_cas_record("windows answer")], "windows", expected_revision=0)
+    module._save(
+        1,
+        [_v2_cas_record("web answer")],
+        "web",
+        expected_revision=1,
+        raise_on_conflict=True,
+    )
+
+    stale = module._save(1, [_v2_cas_record("stale windows answer")], "windows", expected_revision=1)
+    assert stale["revision"] == 2
+    assert stale["records"][0]["Answer"] == "web answer"
+    assert module._state(1)["records"][0]["Answer"] == "web answer"
