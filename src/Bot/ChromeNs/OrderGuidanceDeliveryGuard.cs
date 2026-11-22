@@ -363,6 +363,7 @@ namespace Bot.ChromeNs
                 {
                     string visualEvidence;
                     if (RecentVisualContextService.TrySatisfyOrderPhotoRequirement(
+                        plan.ShopKey,
                         plan.Seller,
                         plan.Buyer,
                         answer,
