@@ -25,6 +25,7 @@ def test_new_knowledge_candidates_require_distinct_real_buyer_and_human_message_
     assert "promptIdentifiers.PromptToSource.TryGetValue(answerPromptId, out answerMessageId)" in parser
     assert "buyerMessageIds.Contains(questionMessageId)" in parser
     assert "humanMessageIds.Contains(answerMessageId)" in parser
+    assert "reusedAnswerIds" in parser
     assert 'questionTurn.Role, "user"' in evidence
     assert 'answerTurn.Role, "assistant"' in evidence
     assert "IsBotTurn(answerTurn, cards)" in evidence
