@@ -191,7 +191,9 @@ def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
     assert "private const bool EnableAutomaticWrites = false;" in service
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in service
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped)" in finalize
+    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in finalize
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
     assert '"verified_human_evidence"' in finalize
     assert "genericSuggestionWriteMode" in finalize
     assert "默认dry-run" in finalize
