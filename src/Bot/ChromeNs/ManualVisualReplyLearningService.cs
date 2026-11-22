@@ -121,11 +121,32 @@ namespace Bot.ChromeNs
         private static void ObserveSellerReplyScoped(QN qn, QNChatMessage message, string shopKey)
         {
             if (message == null || message.fromid == null || message.toid == null) return;
-            var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0 && message.loginid != null) seller = (message.loginid.nick ?? string.Empty).Trim();
+            var shop = ShopSettingsScope.Current;
+            var seller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+            if (seller.Length == 0)
+                seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            if (seller.Length == 0 && message.loginid != null)
+                seller = (message.loginid.nick ?? string.Empty).Trim();
             var from = (message.fromid.nick ?? string.Empty).Trim();
             var buyer = (message.toid.nick ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0 || !string.Equals(from, seller, StringComparison.Ordinal)) return;
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0
+                || !DirectOrderIdentityResolver.IdentityEquals(from, seller)
+                || (loginNick.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)))
+                return;
+            if (shop != null && shop.HasStableSellerId)
+            {
+                var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
+                var endpointTargetId = (message.fromid.targetId ?? string.Empty).Trim();
+                var loginTargetId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
+                if ((endpointTargetId.Length > 0 && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
+                    || (loginTargetId.Length > 0 && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal)))
+                    return;
+            }
+            BuyerIdentityAliasService.ObserveMessage(seller, message);
+            var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
+            if (DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
 
             var text = ExtractMessageText(message);
             if (string.IsNullOrWhiteSpace(text)
