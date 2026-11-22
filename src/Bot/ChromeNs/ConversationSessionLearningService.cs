@@ -2358,7 +2358,7 @@ namespace Bot.ChromeNs
             string invalidAnswer,
             string parseError)
         {
-            var system = "你是Knowledge V2的AI自主知识整理与新增引擎。只输出JSON：{\"candidates\":[{\"question_message_id\":\"msg_匿名买家ID\",\"answer_message_id\":\"msg_匿名人工客服ID\",\"knowledge_question\":\"规范化知识问题\",\"knowledge_answer\":\"可直接发布的知识答案\",\"aliases\":[\"同义问法\\],\"keywords\":[\"关键词\"],\"category\":\"business_fact\",\"evidence_type\":\"manual_reply\",\"confidence\":0.0,\"reason\":\"依据说明\"}]}。"
+            var system = "你是Knowledge V2的AI自主知识整理与新增引擎。只输出JSON：{\"candidates\":[{\"question_message_id\":\"msg_匿名买家ID\",\"answer_message_id\":\"msg_匿名人工客服ID\",\"knowledge_question\":\"规范化知识问题\",\"knowledge_answer\":\"可直接发布的知识答案\",\"aliases\":[\"同义问法\"],,\"keywords\":[\"关键词\"],\"category\":\"business_fact\",\"evidence_type\":\"manual_reply\",\"confidence\":0.0,\"reason\":\"依据说明\"}]}。"
                 + "你必须从时间线中选择一条真实买家原始问题和其后对应的一条真实人工客服回复，分别填入question_message_id和answer_message_id。"
                 + "AI必须主动整理knowledge_question、knowledge_answer、aliases和keywords，不要只返回消息ID，也不要等待人工确认。通过程序自动校验后，知识会立即写入正式Knowledge V2并参与自动回复，不经过人工审批或灰度发布。"
                 + "knowledge_question应整理成独立、可复用的标准问法；knowledge_answer可以压缩、纠错和规范表达，但只能保留人工回复明确表达的事实，不得补充推测、承诺、未验证规格或外部常识。"
@@ -2547,7 +2547,7 @@ namespace Bot.ChromeNs
                 || KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
                 || ContainsHighRisk(question + " " + answer)
                 || Regex.IsMatch(question + " " + answer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.",
+                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.|(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
                     RegexOptions.IgnoreCase))
             {
                 rejection = "ai_generated_knowledge_contains_context_or_sensitive_content";
@@ -2592,6 +2592,7 @@ namespace Bot.ChromeNs
                 var value = Redact(Clean(alias, 200));
                 if (value.Length < 5 || KnowledgeEngineV2Semantics.IsContextDependent(value)
                     || KnowledgeEngineV2Semantics.IsHighRisk(value)
+                    || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
                     || KnowledgeEngineV2Semantics.TextSimilarity(question, value) < 0.30
                     || aliases.Any(x => string.Equals(
                         KnowledgeEngineV2Semantics.Compact(x),
@@ -2607,6 +2608,9 @@ namespace Bot.ChromeNs
             {
                 var value = Redact(Clean(keyword, 80));
                 if (value.Length < 2 || KnowledgeEngineV2Semantics.IsHighRisk(value)
+                    || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
+                    || (!question.Contains(value) && !answer.Contains(value)
+                        && KnowledgeEngineV2Semantics.TextSimilarity(value, question + " " + answer) < 0.15)
                     || keywords.Contains(value, StringComparer.OrdinalIgnoreCase))
                     continue;
                 keywords.Add(value);
