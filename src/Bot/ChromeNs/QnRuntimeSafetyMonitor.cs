@@ -459,29 +459,12 @@ namespace Bot.ChromeNs
                 {
                 foreach (var message in response.result.Where(x => x != null))
                 {
-                    if (message.fromid == null || message.toid == null) continue;
+                    if (!DirectOrderIdentityResolver.IsMessageFromShop(message, shop)) continue;
                     var from = (message.fromid.nick ?? string.Empty).Trim();
                     var to = (message.toid.nick ?? string.Empty).Trim();
-                    var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
-                    if (loginNick.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)) continue;
                     var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
                     var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
                     if (fromIsSeller == toIsSeller) continue;
-
-                    if (shop.HasStableSellerId)
-                    {
-                        var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
-                        var sellerEndpointTargetId = fromIsSeller
-                            ? (message.fromid.targetId ?? string.Empty).Trim()
-                            : (message.toid.targetId ?? string.Empty).Trim();
-                        var loginTargetId = message.loginid == null ? string.Empty
-                            : (message.loginid.targetId ?? string.Empty).Trim();
-                        if ((sellerEndpointTargetId.Length > 0
-                                && !string.Equals(sellerEndpointTargetId, expectedTargetId, StringComparison.Ordinal))
-                            || (loginTargetId.Length > 0
-                                && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal)))
-                            continue;
-                    }
 
                     // Only a role- and account-verified event may update the alias map
                     // or per-shop buyer ordering state.
