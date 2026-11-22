@@ -68,13 +68,21 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45" in generated
     assert "TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45" in generated
     assert "HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
     assert "HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
     assert "HasUnverifiedKnowledgeAnchors(sourceQuestion + \" \" + sourceAnswer, candidateAnswer)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
+    assert "sourceNumbers.Any(x => !generatedNumbers.Contains(x))" in generated
+    assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
     assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
     assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
     assert "private static bool HasKnowledgePolarityMismatch(" in generated
+    assert "private static bool HasKnowledgeEntityPolarityMismatch(" in generated
+    assert "private static bool HasMissingKnowledgeAnchors(" in generated
     assert "private static bool HasUnverifiedKnowledgeAnchors(" in generated
     assert "|| !appearsInSource" in generated
+    assert String.raw`@"\\d+(?:\\.\\d+)?"` in generated
     assert "ai_generated_answer_introduced_unverified_numeric_fact" in generated
     assert "ai_generated_answer_exceeds_human_evidence_scope" in generated
     assert "evidenceCandidate.Question = question;" in generated
@@ -258,3 +266,16 @@ def test_unverifiable_ai_rewrite_falls_back_to_the_exact_human_question_and_answ
     assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
     assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
     assert "无法充分验证的改写自动回退至人工原文" in generated
+
+def test_ai_answer_grounding_checks_all_source_numbers_and_entity_polarity():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "sourceNumbers.Any(x => !generatedNumbers.Contains(x))" in generated
+    assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
+    assert "sourceNegative != generatedNegative" in generated
+    assert "sourcePositive != generatedPositive" in generated
+    assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
