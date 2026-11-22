@@ -100,3 +100,13 @@ def test_settings_audit_does_not_log_secrets_or_complete_knowledge_payloads():
     assert "_mode" in section
     assert "_threshold" in section
     assert "_confidence" in section
+
+
+def test_one_line_knowledge_ai_rejects_non_finite_confidence_metadata():
+    source = read("src/Bot/Knowledge/KnowledgeV2NaturalLanguageService.cs")
+    number = source[
+        source.index("private static double Number("):
+        source.index("private static double Clamp(", source.index("private static double Number("))
+    ]
+    assert "!double.IsNaN(value)" in number
+    assert "!double.IsInfinity(value)" in number
