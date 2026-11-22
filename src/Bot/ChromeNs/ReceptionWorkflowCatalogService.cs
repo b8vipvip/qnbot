@@ -48,6 +48,7 @@ namespace Bot.ChromeNs
             return new JObject {
                 ["schema"] = Schema,
                 ["catalog_version"] = 1,
+                ["draft_revision"] = 0,
                 ["flows"] = new JArray {
                     new JObject {
                         ["flow_id"] = "example-flow",
@@ -78,9 +79,20 @@ namespace Bot.ChromeNs
 
         private static JObject Validate(string json)
         {
-            var root = JObject.Parse(json ?? "");
+            if (string.IsNullOrWhiteSpace(json) || json.Length > 1024 * 1024)
+                throw new InvalidDataException("流程草稿为空或超过1MiB安全上限");
+            var root = JObject.Parse(json);
             if (Convert.ToString(root["schema"]) != Schema || root.Value<int?>("catalog_version") != 1)
                 throw new InvalidDataException("流程草稿协议不支持");
+            long draftRevision = 0;
+            var revisionToken = root["draft_revision"];
+            if (revisionToken != null)
+            {
+                if (revisionToken.Type != JTokenType.Integer
+                    || !long.TryParse(revisionToken.ToString(), out draftRevision)
+                    || draftRevision < 0)
+                    throw new InvalidDataException("流程草稿修订版本无效");
+            }
             var flows = root["flows"] as JArray;
             if (flows == null || flows.Count > 50) throw new InvalidDataException("流程数量超出安全范围");
             var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -141,6 +153,7 @@ namespace Bot.ChromeNs
             var canonical = new JObject {
                 ["schema"] = Schema,
                 ["catalog_version"] = 1,
+                ["draft_revision"] = draftRevision,
                 ["flows"] = new JArray(flows.Select(f => {
                     var flow = (JObject)f;
                     return new JObject {
@@ -171,9 +184,33 @@ namespace Bot.ChromeNs
         private static void CheckKeys(JArray array, string label)
         {
             if (array == null || array.Count > 100) throw new InvalidDataException(label + " 列表无效");
+            var unique = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in array)
+            {
                 if (id.Type != JTokenType.String || !ValidKey(Convert.ToString(id)))
                     throw new InvalidDataException(label + " 存在非法标识");
+                if (!unique.Add(Convert.ToString(id)))
+                    throw new InvalidDataException(label + " 不允许重复标识");
+            }
+        }
+
+        private static long ReadCurrentRevision(string path)
+        {
+            if (!File.Exists(path)) return 0;
+            string error;
+            var contents = CrossProcessAtomicStateFile.ReadAllTextShared(path, 3, 30, out error);
+            if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
+            if (string.IsNullOrWhiteSpace(contents))
+                throw new InvalidDataException("当前流程草稿文件为空；拒绝覆盖未知版本");
+            return Validate(contents).Value<long>("draft_revision");
+        }
+
+        private static string CreateBackupPath(string path)
+        {
+            // Seven fractional timestamp digits preserve chronological lexical ordering
+            // even when multiple edits are saved within the same millisecond.
+            return path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfffffff")
+                + "-" + Guid.NewGuid().ToString("N");
         }
 
         public static string GetDraftJson(string seller)
@@ -188,21 +225,28 @@ namespace Bot.ChromeNs
 
         public static string SaveDraft(string seller, string json)
         {
-            var data = Validate(json).ToString(Formatting.Indented);
+            var data = Validate(json);
+            var expectedRevision = data.Value<long>("draft_revision");
             var path = PathForShop(seller);
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowDraft", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取草稿写锁");
+                var currentRevision = ReadCurrentRevision(path);
+                if (expectedRevision != currentRevision)
+                    throw new InvalidOperationException("流程草稿已被其他窗口更新；本次修改未覆盖任何数据，请重新读取最新草稿后再编辑");
+                if (currentRevision == long.MaxValue)
+                    throw new InvalidOperationException("流程草稿修订版本已达到上限，拒绝继续覆盖");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
                 if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
-                        + "-" + Guid.NewGuid().ToString("N"), false);
+                    File.Copy(path, CreateBackupPath(path), false);
+                data["draft_revision"] = currentRevision + 1;
                 string error;
-                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, data, 3, 50, out error))
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                    path, data.ToString(Formatting.Indented), 3, 50, out error))
                     throw new IOException(error);
             }
-            return "流程草稿保存成功；未被激活，未赋予消息发送、充值或退款权限。";
+            return "流程草稿保存成功；已递增修订版本，仍未激活或赋予消息发送、充值、退款权限。";
         }
 
         public static string RestoreLatestDraft(string seller)
@@ -212,17 +256,20 @@ namespace Bot.ChromeNs
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowDraft", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("无法获取恢复写锁");
+                var currentRevision = ReadCurrentRevision(path);
+                if (currentRevision == long.MaxValue)
+                    throw new InvalidOperationException("流程草稿修订版本已达到上限，拒绝恢复覆盖");
                 var folder = Path.GetDirectoryName(path);
                 if (!Directory.Exists(folder)) throw new FileNotFoundException("暂无草稿备份");
                 var backups = Directory.GetFiles(folder, Path.GetFileName(path) + ".backup.*")
                     .OrderByDescending(x => x, StringComparer.Ordinal).ToList();
                 if (backups.Count == 0) throw new FileNotFoundException("暂无草稿备份");
-                string validated = null;
+                JObject restored = null;
                 foreach (var candidate in backups)
                 {
                     try
                     {
-                        validated = Validate(File.ReadAllText(candidate, Encoding.UTF8)).ToString(Formatting.Indented);
+                        restored = Validate(File.ReadAllText(candidate, Encoding.UTF8));
                         selectedBackup = candidate;
                         break;
                     }
@@ -232,17 +279,20 @@ namespace Bot.ChromeNs
                             + Path.GetFileName(candidate) + ", error=" + ex.Message, 10);
                     }
                 }
-                if (validated == null)
+                if (restored == null)
                     throw new InvalidDataException("没有找到有效的流程草稿备份，当前草稿未修改。");
                 if (File.Exists(path))
-                    File.Copy(path, path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")
-                        + "-" + Guid.NewGuid().ToString("N"), false);
+                    File.Copy(path, CreateBackupPath(path), false);
+                // Restoring old content must still advance the revision. Otherwise a
+                // stale editor holding the restored backup's revision could overwrite it.
+                restored["draft_revision"] = currentRevision + 1;
                 string error;
-                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
+                if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                    path, restored.ToString(Formatting.Indented), 3, 50, out error))
                     throw new IOException(error);
             }
             return "已恢复最近一份有效的流程草稿备份：" + Path.GetFileName(selectedBackup)
-                + "；仍需单独人工审核和灰度激活。";
+                + "；修订版本已递增，仍需单独人工审核和灰度激活。";
         }
     }
 }
