@@ -19,6 +19,7 @@ class KnowledgeV2SyncInput(BaseModel):
 
 class KnowledgeV2WebInput(BaseModel):
     records: list[dict[str, Any]]
+    expected_revision: int
 
 class KnowledgeV2SmartImportInput(BaseModel):
     text: str
@@ -78,7 +79,7 @@ def _state(client_id):
         return {"revision":0,"records":[],"updated_at":"","updated_by":""}
     return {"revision":int(row["revision"] or 0),"records":json.loads(row["records_json"] or "[]"),"updated_at":row["updated_at"] or "","updated_by":row["updated_by"] or ""}
 
-def _save(client_id, records, updated_by, expected_revision=None):
+def _save(client_id, records, updated_by, expected_revision=None, raise_on_conflict=False):
     records=_validate_records(records)
     encoded=json.dumps(records,ensure_ascii=False,separators=(",",":"),sort_keys=True)
     now=_cp.iso_now()
@@ -100,6 +101,15 @@ def _save(client_id, records, updated_by, expected_revision=None):
                 "updated_by":row["updated_by"] or ""
             }
         if expected_revision is not None and current["revision"] != expected_revision:
+            if raise_on_conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "revision_conflict",
+                        "message": "Knowledge V2 云端版本已被另一设备修改，请刷新后重试",
+                        "current_revision": current["revision"],
+                    },
+                )
             return current
         current_encoded=json.dumps(current["records"],ensure_ascii=False,separators=(",",":"),sort_keys=True)
         if encoded==current_encoded:
@@ -116,7 +126,13 @@ def web_get(client=Depends(bot_web_console._web_client)):
 
 @router.put("/api/bot-web/knowledge-v2")
 def web_put(payload: KnowledgeV2WebInput, client=Depends(bot_web_console._web_client)):
-    return _save(int(client["id"]), payload.records, "web")
+    return _save(
+        int(client["id"]),
+        payload.records,
+        "web",
+        expected_revision=payload.expected_revision,
+        raise_on_conflict=True,
+    )
 
 @router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")
 def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: str | None = Header(default=None)):
