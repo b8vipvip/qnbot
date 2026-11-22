@@ -1050,9 +1050,10 @@ def test_manual_reply_optimization_distinguishes_empty_bot_history_from_storage_
         history.index("public static List<BotConversationHistoryEntity> LoadRange(")
     ]
     window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    bridge_start = window.index("private static bool MatchesRecentBotAnswer(")
     bridge = window[
-        window.index("private static bool MatchesRecentBotAnswer("):
-        window.index("private static bool HasAiMarker(")
+        bridge_start:
+        window.index("private static bool HasAiMarker(", bridge_start)
     ]
 
     assert "out List<BotConversationHistoryEntity> records" in load
