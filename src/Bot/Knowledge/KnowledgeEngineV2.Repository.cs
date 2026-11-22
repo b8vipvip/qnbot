@@ -531,6 +531,7 @@ namespace Bot.Knowledge
         {
             return record != null
                 && (!record.Enabled
+                    || string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase)
                     || !KnowledgeV2AuthorityPolicy.IsCandidate(record));
         }
