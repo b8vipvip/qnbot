@@ -122,31 +122,17 @@ namespace Bot.ChromeNs
         {
             if (message == null || message.fromid == null || message.toid == null) return;
             var shop = ShopSettingsScope.Current;
-            var seller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
-            if (seller.Length == 0)
-                seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0 && message.loginid != null)
-                seller = (message.loginid.nick ?? string.Empty).Trim();
+            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(shop.SellerNick)
+                || !DirectOrderIdentityResolver.IsMessageFromShop(message, shop)) return;
+            var seller = shop.SellerNick.Trim();
             var from = (message.fromid.nick ?? string.Empty).Trim();
             var buyer = (message.toid.nick ?? string.Empty).Trim();
-            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0
-                || !DirectOrderIdentityResolver.IdentityEquals(from, seller)
-                || (loginNick.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)))
-                return;
-            if (shop != null && shop.HasStableSellerId)
-            {
-                var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
-                var endpointTargetId = (message.fromid.targetId ?? string.Empty).Trim();
-                var loginTargetId = message.loginid == null ? string.Empty : (message.loginid.targetId ?? string.Empty).Trim();
-                if ((endpointTargetId.Length > 0 && !string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
-                    || (loginTargetId.Length > 0 && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal)))
-                    return;
-            }
+            if (!DirectOrderIdentityResolver.IdentityEquals(from, seller)
+                || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
             BuyerIdentityAliasService.ObserveMessage(seller, message);
             var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
-            if (DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
 
             var text = ExtractMessageText(message);
             if (string.IsNullOrWhiteSpace(text)
@@ -272,7 +258,8 @@ namespace Bot.ChromeNs
             {
                 var byMessage = (DbHelper.Db.Select(
                     typeof(VisualKnowledgeObservationEntity),
-                    "where Seller = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
+                    "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
+                    pending.ShopKey,
                     pending.Seller,
                     pending.MessageKey) ?? new List<object>())
                     .OfType<VisualKnowledgeObservationEntity>()
@@ -283,7 +270,8 @@ namespace Bot.ChromeNs
                 var until = pending.ImageObservedAt.AddMinutes(5).Ticks;
                 return (DbHelper.Db.Select(
                     typeof(VisualKnowledgeObservationEntity),
-                    "where Seller = ? and ObservedAtTicks >= ? and ObservedAtTicks <= ? order by ObservedAtTicks desc limit 12",
+                    "where ShopKey = ? and Seller = ? and ObservedAtTicks >= ? and ObservedAtTicks <= ? order by ObservedAtTicks desc limit 12",
+                    pending.ShopKey,
                     pending.Seller,
                     since,
                     until) ?? new List<object>())
@@ -305,7 +293,8 @@ namespace Bot.ChromeNs
                 VisualKnowledgeEntryEntity target = null;
                 var entries = (DbHelper.Db.Select(
                     typeof(VisualKnowledgeEntryEntity),
-                    "where Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit 500",
+                    "where ShopKey = ? and Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit 500",
+                    observation.ShopKey,
                     observation.Seller) ?? new List<object>())
                     .OfType<VisualKnowledgeEntryEntity>()
                     .ToList();
@@ -330,6 +319,7 @@ namespace Bot.ChromeNs
                     target = new VisualKnowledgeEntryEntity
                     {
                         EntityId = Guid.NewGuid().ToString("N"),
+                        ShopKey = observation.ShopKey,
                         Seller = observation.Seller,
                         VisualQuestion = observation.VisualQuestion,
                         VisualSummary = observation.VisualSummary,
@@ -360,9 +350,11 @@ namespace Bot.ChromeNs
                 observation.UpdatedAtTicks = now;
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { target, observation });
                 DbHelper.Db.Execute(
-                    "delete from VisualKnowledgeEntryEntity where Seller = ? and EntityId not in "
-                    + "(select EntityId from VisualKnowledgeEntryEntity where Seller = ? order by UpdatedAtTicks desc limit 500)",
+                    "delete from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? and EntityId not in "
+                    + "(select EntityId from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit 500)",
+                    observation.ShopKey,
                     observation.Seller,
+                    observation.ShopKey,
                     observation.Seller);
                 return target;
             }
