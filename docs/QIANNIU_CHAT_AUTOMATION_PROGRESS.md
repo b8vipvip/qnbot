@@ -164,13 +164,26 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - **Stable release**: `bot-v1.1.2481` published for exact source SHA `35f5ed0138eba56e3f341915b7e2a800c102007d`; x64 package SHA-256: `126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`. The fixes above are included in this release. Local installation is not verified.
 - **Still requires real Windows/Qianniu acceptance**: bench_im/CDP target identification, A→B→A multi-shop switching and reconnect stability, 150+ message Knowledge V2 full-corpus learning/checkpoint recovery, real order auto-reply/auto-delivery recovery, and Reception Agent approval/authorization/publish/rollback. Knowledge V2 automatic writes remain disabled; high-risk order operations remain fail-closed. Issue #366 stays open.
 
+## 4.4 2026-11-22 Knowledge V2 AI auto-publish implementation
+
+Working branch: `feat/knowledge-v2-human-evidence-auto-add` (not yet merged into `master` or included in the stable client).
+
+- The new FAQ pass asks AI to generate a canonical question, answer, aliases and keywords instead of returning only source-message IDs.
+- Each generated record must still cite one exact buyer message and one later non-Bot human seller reply from the same complete ShopKey transcript. AI-generated text is checked against the source pair; unsupported numeric facts, PII, high-risk/dynamic business facts, prompt injection and unrelated aliases/keywords are rejected.
+- Safe FAQ records are committed directly to Knowledge V2 as enabled `active` production records. There is no human approval queue and no gray rollout for this narrow path.
+- The write path performs a second ShopKey and corpus-fingerprint check under the repository lock, source-pair idempotency, title/alias collision detection, one-transaction record + rollback-revision persistence, readback verification, legacy mirror, incremental retrieval-index refresh and governance audit.
+- AI auto-published provenance is distinguished from explicit human-confirmed provenance so the record remains production-approved without falsely claiming an operator approved it.
+- Generic session suggestions without a valid buyer/human evidence pair, style changes and workflow proposals remain outside this direct-publish path. Order/payment/account/fulfillment actions continue to use their independent fail-closed authorization logic.
+- Prompt version/checkpoint version was bumped so old ID-only candidate checkpoints are not reused as AI-generated knowledge.
+- This implementation has not yet been validated by exact-SHA CI/Windows build and is not a production release. Do not claim that the stable client already contains it.
+
 ## 5. Validation and release rules / 验收与发布规则
 
 1. 源码修复必须有回归测试；Windows 专属脚本必须通过 Windows PowerShell 5.1 parser。
 2. CI 和构建必须针对精确 master SHA 通过。
 3. Windows/千牛行为、消息投递、真实 CDP 目标和资源趋势必须由真实运行证据验证。
 4. 诊断报告先由用户检查，脱敏后再提供；不要求上传原始日志或客户数据。
-5. Knowledge V2 自动写入、高风险接待流程动作保持关闭，直到审批/回滚闭环成立。
+5. 当前 master/稳定客户端的 Knowledge V2 自动写入仍保持关闭；新分支的安全 FAQ 自动发布路径不需要人工审批或灰度，但必须通过精确 SHA CI/构建、事务/回滚与来源校验。高风险接待流程动作仍保持 fail-closed。
 6. 发布与生产安装是不同动作；GitHub Release 不能替代用户确认安装或部署。
 7. #366 是唯一统一追踪 Issue；不新增普通 Issue/分支，持续在 master 与 #366 更新。
 

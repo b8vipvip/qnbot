@@ -224,10 +224,23 @@ namespace Bot.Knowledge
                 || source.IndexOf("human_evidence_auto_reviewed", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        public static bool IsAutoPublishedHumanEvidenceSource(string sourceType)
+        {
+            var source = (sourceType ?? string.Empty).Trim();
+            return source.IndexOf("ai_auto_learned_human_evidence", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("human_evidence_auto_learned", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsTrustedProductionSource(string sourceType)
+        {
+            return IsExplicitHumanConfirmationSource(sourceType)
+                || IsAutoPublishedHumanEvidenceSource(sourceType);
+        }
+
         public static bool ShouldImportLegacyEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (entry == null || string.IsNullOrWhiteSpace(entry.Answer)) return false;
-            if (IsExplicitHumanConfirmationSource(entry.SourceType)) return true;
+            if (IsTrustedProductionSource(entry.SourceType)) return true;
             var value = (entry.SourceType ?? string.Empty) + " " + (entry.Category ?? string.Empty);
             return value.IndexOf("学习", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("人工回复", StringComparison.OrdinalIgnoreCase) >= 0
@@ -250,6 +263,13 @@ namespace Bot.Knowledge
                     && record.Authority >= 0.98
                     && record.Confidence >= 0.94;
             }
+            if (IsAutoPublishedHumanEvidenceSource(expectedSource))
+            {
+                return string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                    && record.Authority >= 0.90
+                    && record.Confidence >= 0.90;
+            }
 
             return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
@@ -265,6 +285,11 @@ namespace Bot.Knowledge
                 ApplyHumanConfirmed(record);
                 return;
             }
+            if (IsAutoPublishedHumanEvidenceSource(record.SourceType))
+            {
+                ApplyAutoPublished(record);
+                return;
+            }
 
             record.Type = "learning_candidate";
             record.Status = "candidate";
@@ -275,6 +300,8 @@ namespace Bot.Knowledge
         {
             if (record != null && IsExplicitHumanConfirmationSource(record.SourceType))
                 ApplyHumanConfirmed(record);
+            else if (record != null && IsAutoPublishedHumanEvidenceSource(record.SourceType))
+                ApplyAutoPublished(record);
             return record;
         }
 
@@ -282,6 +309,7 @@ namespace Bot.Knowledge
         {
             if (record == null) return false;
             if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;
+            if (IsTrustedProductionSource(record.SourceType)) return false;
             return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
         }
@@ -298,6 +326,18 @@ namespace Bot.Knowledge
             if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
                 record.Type = "business_fact";
             record.Confidence = Math.Max(record.Confidence, 0.82);
+        }
+
+        private static void ApplyAutoPublished(KnowledgeV2Record record)
+        {
+            if (record == null) return;
+            record.Status = "active";
+            if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(record.Type))
+                record.Type = "business_fact";
+            record.Authority = Math.Max(record.Authority, 0.90);
+            record.Confidence = Math.Max(record.Confidence, 0.90);
+            if (record.LastVerifiedAt == DateTime.MinValue) record.LastVerifiedAt = DateTime.Now;
         }
 
         private static void ApplyHumanConfirmed(KnowledgeV2Record record)

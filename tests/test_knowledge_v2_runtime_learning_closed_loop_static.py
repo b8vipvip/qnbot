@@ -67,7 +67,9 @@ def test_unverified_broad_session_suggestions_remain_review_only_but_verified_co
     session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     assert "private const bool EnableAutomaticWrites = false;" in session
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in session
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped)" in session
+    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in session
+    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in session
+    assert "ApplyVerifiedCorpusNewKnowledge(" in session
     assert "CanAutoApplyVerifiedCorpusCorrection" in session
     assert "candidate.Confidence < 0.95" in session
     assert "candidate.EvidenceMessageIds.Count == 0" in session

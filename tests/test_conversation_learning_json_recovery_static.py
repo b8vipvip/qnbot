@@ -21,7 +21,8 @@ def test_learning_parser_requires_expected_learning_shape():
 
     expected_gate = (
         'obj["summary"] != null || obj["suggestions"] != null '
-        '|| obj["reply_style_profile"] != null'
+        '|| obj["reply_style_profile"] != null '
+        '|| obj["decisions"] != null || obj["candidates"] != null'
     )
     assert expected_gate in source
     assert "IndexOf('{')" not in source

@@ -113,7 +113,9 @@ def test_session_learning_stays_dry_run_and_persists_live_coverage_progress():
     assert "AnalyzeKnowledgeCorpusAsync(" in finalize
     assert "SaveReport(report);" in finalize
     assert '["knowledgeCorpusComplete"] = false' in finalize
-    assert "allSuggestions = suggestions.Concat(corpusAnalysis.Candidates)" in finalize
+    assert "allSuggestions = suggestions" in finalize
+    assert ".Concat(corpusAnalysis.Candidates)" in finalize
+    assert ".Concat(corpusAnalysis.NewCandidates)" in finalize
     assert "corpusAnalysis.Complete" in finalize
     assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge" in finalize
     assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(

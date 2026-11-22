@@ -75,7 +75,7 @@ Qianniu renderer
 - Multi-shop runtime coordinator uses exact ShopKey / CDP SessionId / TargetId and focused WebView proof.
 - Generation watchdog, bounded CDP execute gate, active buyer confirmation deadline and reliable-send evidence checks are in the production source.
 - Knowledge V2 session learning uses five-minute inactivity, complete paginated history, full-corpus batches, durable checkpoints, source/transcript fingerprints and per-ShopKey circuit breakers.
-- Knowledge V2 automatic writes remain disabled (dry-run). No production write enablement without transaction/backup/rollback and real Windows canary.
+- The current `master` / stable client baseline still has the previous dry-run policy. Working branch `feat/knowledge-v2-human-evidence-auto-add` adds a separate AI-authored FAQ path: AI generates normalized questions, answers, aliases and keywords from exact buyer + non-Bot human-reply evidence; passing automatic checks writes active production V2 records immediately, with no operator approval queue or gray rollout. This branch is not yet in master or the stable client.
 - BuyerIdentityAliasService now has a bounded 5,000-entry trigger / 4,000-entry LRU target with coalesced cleanup and conditional key/value removal.
 - QN inbound buyer messages and seller echoes validate the seller endpoint/login nickname and stable TargetId when available; ConversationContextStore rejects timeline writes outside the exact ambient ShopKey scope.
 - PRs #426/#429/#430/#431 are already merged into master and included in the 1.1.2379 lineage; 1.1.2380 adds the ShopKey catalog refresh/settings fix.
@@ -99,7 +99,7 @@ Qianniu renderer
 - 150+ turns, complete timeline, all current V2 records covered in batches.
 - Restart checkpoint resume, source revision drift, upstream 502/503 and scheduler invariant circuit recovery.
 - Human evidence IDs must map to the exact current transcript.
-- Keep automatic writes disabled until human approval, atomic transaction, backup and rollback are verified.
+- The current master baseline remains dry-run. The new branch intentionally removes human approval and gray rollout for the narrow AI-generated FAQ auto-publish path; it still requires exact-SHA CI/build, shop isolation, evidence/PII/risk/dedup/version gates, atomic transaction, rollback history and immediate index refresh before merge/release.
 
 ### P1 — reception workflow Agent (#346)
 - Persisted multi-shop/product/SKU/version workflow state.

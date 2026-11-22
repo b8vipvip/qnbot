@@ -17,8 +17,9 @@ def test_session_learning_waits_five_minutes_and_keeps_audit_records():
     assert "StoreReplyStyleProfileEntity" in source
     assert 'report.Status = !corpusComplete' in source
     assert 'EnableVerifiedCorpusCorrectionWrites = true' in source
-    assert '学习完成（已自动应用' in source
-    assert '通用候选待审核' in source
+    assert '自动新增' in source
+    assert '自动修订' in source
+    assert '通用AI建议仍待人工审核' in source
     assert "ResumePending" in source
 
 
@@ -191,10 +192,14 @@ def test_incomplete_session_history_is_fail_closed_and_learning_defaults_to_dry_
     assert "未达到完整历史覆盖门槛，未调用AI，也未写入生产知识库" in finalize
     assert "private const bool EnableAutomaticWrites = false;" in service
     assert "private const bool EnableVerifiedCorpusCorrectionWrites = true;" in service
-    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped)" in finalize
-    assert '"verified_human_evidence"' in finalize
+    assert "ApplyVerifiedCorpusCorrections(session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped)" in finalize
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
+    assert "ApplyVerifiedCorpusNewKnowledge(" in finalize
+    assert "EnableVerifiedCorpusNewKnowledgeWrites = true" in service
+    assert '"ai_auto_publish_new_knowledge_and_verified_updates"' in finalize
     assert "genericSuggestionWriteMode" in finalize
-    assert "默认dry-run" in finalize
+    assert "通用会话AI建议仍为dry-run" in finalize
     assert finalize.index("if (!EnableAutomaticWrites)") < finalize.index(
         "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge"
     )

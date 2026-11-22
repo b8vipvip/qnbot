@@ -49,6 +49,9 @@ def test_direct_answers_only_from_exact_reviewed_knowledge_not_similarity():
 def test_review_and_rollback_are_bound_to_exact_knowledge_revision():
     repo = source("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     archive = source("src/Bot/Knowledge/BuyerMessageArchiveService.cs")
+    reviewed = repo.split("public static bool TrySaveReviewedDirectAnswer(string seller, string question,", 1)[1].split(
+        "public static bool TryCreateVerifiedSessionKnowledge(", 1)[0]
+    assert 'Type = "business_fact"' in reviewed
     assert "TryApplyBuyerDirect(" in repo
     assert "TryRollbackBuyerDirect(" in repo
     apply = repo.split("public static bool TryApplyBuyerDirect(",1)[1].split(
