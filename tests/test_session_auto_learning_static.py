@@ -933,3 +933,21 @@ def test_legacy_knowledge_center_history_filters_session_reports_before_limit():
 
     assert "ConversationSessionLearningService.GetReportsForShop(shopKey, seller, 500)" in refresh
     assert "ConversationSessionLearningService.GetReports(500)" not in refresh
+
+
+def test_runtime_observers_use_weak_qn_identity_and_do_not_retain_retired_sessions():
+    for path in (
+        "src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs",
+        "src/Bot/ChromeNs/BuyerIdentityAliasRuntimeBridge.cs",
+        "src/Bot/ChromeNs/DirectOrderEventBridge.cs",
+        "src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs",
+        "src/Bot/ChromeNs/ManualVisualReplyLearningService.cs",
+        "src/Bot/ChromeNs/KnowledgeEngineV2FeedbackBridge.cs",
+    ):
+        source = read(path)
+        assert "ConditionalWeakTable<QN, object> Attached" in source
+        assert "Attached.TryGetValue(qn, out marker)" in source
+        assert "Attached.Add(qn, new object())" in source
+        assert "RuntimeHelpers.GetHashCode(qn)" not in source
+        assert "ConcurrentDictionary<int, bool> Attached" not in source
+        assert "HashSet<QN> Attached" not in source
