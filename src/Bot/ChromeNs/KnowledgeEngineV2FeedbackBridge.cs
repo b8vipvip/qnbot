@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using DbEntity.Response;
 using Newtonsoft.Json;
@@ -86,32 +87,83 @@ namespace Bot.ChromeNs
             var messageTime = GetMessageTime(message);
             if (messageTime != DateTime.MinValue && messageTime < StartedAt.AddSeconds(-8)) return;
 
-            var text = ExtractMessageText(message);
-            var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
-            if (!string.IsNullOrWhiteSpace(messageKey) && !Seen.TryAdd("v2-feedback:" + messageKey, DateTime.Now)) return;
-
-            var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(seller) && message.loginid != null)
-                seller = (message.loginid.nick ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(seller)) return;
-
-            var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
-            var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
-            var buyer = from == seller ? to : (to == seller ? from : string.Empty);
-            if (string.IsNullOrWhiteSpace(buyer)) return;
-
-            var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, text);
-            if (isWithdrawal)
+            ShopContext shop;
+            try
             {
-                KnowledgeEngineV2FeedbackService.ObserveWithdrawal(seller, buyer, text);
+                // The event's QN wrapper is the authoritative source of ShopKey.
+                // Never let identical native message IDs in two shops share a dedup key.
+                shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2反馈观察拒绝无法唯一解析消息来源店铺: " + ex.Message, 10);
                 return;
             }
-            if (ConversationContextStore.IsPlatformSystemTip(message, text)) return;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || string.IsNullOrWhiteSpace(shop.SellerNick)) return;
 
-            if (from == buyer && to == seller)
-                KnowledgeEngineV2FeedbackService.ObserveBuyerMessage(seller, buyer, text);
-            else if (from == seller && to == buyer)
-                KnowledgeEngineV2FeedbackService.ObserveSellerMessage(seller, buyer, text);
+            using (ShopSettingsScope.Enter(shop))
+            {
+                var seller = shop.SellerNick.Trim();
+                var qnSeller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+                if (qnSeller.Length > 0
+                    && !DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)) return;
+                var loginNick = message.loginid == null ? string.Empty
+                    : (message.loginid.nick ?? string.Empty).Trim();
+                if (loginNick.Length > 0
+                    && !DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)) return;
+
+                var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
+                var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
+                var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
+                var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
+                if (fromIsSeller == toIsSeller) return;
+                var buyer = fromIsSeller ? to : from;
+                if (string.IsNullOrWhiteSpace(buyer)
+                    || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
+
+                if (shop.HasStableSellerId)
+                {
+                    var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
+                    var sellerEndpointTargetId = fromIsSeller
+                        ? (message.fromid == null ? string.Empty : (message.fromid.targetId ?? string.Empty).Trim())
+                        : (message.toid == null ? string.Empty : (message.toid.targetId ?? string.Empty).Trim());
+                    var loginTargetId = message.loginid == null ? string.Empty
+                        : (message.loginid.targetId ?? string.Empty).Trim();
+                    if (sellerEndpointTargetId.Length > 0
+                        && !string.Equals(sellerEndpointTargetId, expectedTargetId, StringComparison.Ordinal)) return;
+                    if (loginTargetId.Length > 0
+                        && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal)) return;
+                }
+
+                // Observe the exact native identity pair before alias-aware role classification.
+                BuyerIdentityAliasService.ObserveMessage(seller, message);
+                var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
+
+                var text = ExtractMessageText(message);
+                var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
+                var scopedKey = shop.ShopKey + "|v2-feedback:" + messageKey;
+                if (!string.IsNullOrWhiteSpace(messageKey)
+                    && !Seen.TryAdd(scopedKey, DateTime.Now)) return;
+
+                var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);
+                var toIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, to, buyer);
+                var isBuyer = fromIsBuyer && toIsSeller;
+                var isSeller = fromIsSeller && toIsBuyer;
+                var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, text);
+                if (isWithdrawal)
+                {
+                    KnowledgeEngineV2FeedbackService.ObserveWithdrawal(seller, buyer, text);
+                    return;
+                }
+                if (ConversationContextStore.IsPlatformSystemTip(message, text)) return;
+
+                if (isBuyer)
+                    KnowledgeEngineV2FeedbackService.ObserveBuyerMessage(seller, buyer, text);
+                else if (isSeller)
+                    KnowledgeEngineV2FeedbackService.ObserveSellerMessage(seller, buyer, text);
+            }
         }
 
         private static string ExtractMessageText(QNChatMessage message)
