@@ -19,7 +19,9 @@ def test_explicit_bot_echo_is_checked_before_human_observation():
     assert "ResponseProgressTracker.MarkDeliveryConfirmed" in source
     assert "卖家消息多字段命中Bot署名，未判定人工回复" in source
     assert "人工客服回复已记录为对比学习证据，Bot任务继续" in source
-    assert "ResolveRuntimeBySeller(qn).ShopKey" in source
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in source
+    assert "var shopKey = shop.ShopKey;" in source
+    assert "ShopSettingsScope.Enter(shop)" in source
 
 
 def test_bot_marker_fallback_accepts_supported_bracket_styles_only_at_message_end():
