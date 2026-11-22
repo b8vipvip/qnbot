@@ -30,3 +30,13 @@ def test_public_docs_do_not_contain_merchant_literals_or_real_hosts():
         if LIVE_URL.search(data) or GIT_URL.search(data):
             violations.append(f"{path.relative_to(ROOT)} contains a live hostname")
     assert not violations, "\n".join(violations)
+
+
+def test_qnbot_progress_release_evidence_uses_ids_not_live_hosts():
+    progress = ROOT / "docs" / "QIANNIU_CHAT_AUTOMATION_PROGRESS.md"
+    data = progress.read_text(encoding="utf-8-sig")
+    assert "bot-v1.1.2821" in data
+    assert "Run ID: 44998075693" in data
+    assert "Run ID: 44998075683" in data
+    assert "https://" not in data.lower()
+    assert "http://" not in data.lower()
