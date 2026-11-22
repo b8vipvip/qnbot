@@ -202,14 +202,14 @@ namespace Bot.ChromeNs
             }
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;
 
-            var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(seller)
-                && message.loginid != null
-                && !string.IsNullOrWhiteSpace(message.loginid.nick))
-            {
-                seller = message.loginid.nick.Trim();
-            }
-            if (string.IsNullOrWhiteSpace(seller)) return;
+            var seller = (shop.SellerNick ?? string.Empty).Trim();
+            var qnSeller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            if (seller.Length == 0
+                || (qnSeller.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)))
+                return;
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
+            if (loginNick.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(loginNick, seller))
+                return;
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
@@ -223,6 +223,10 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(buyer)
                 || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
 
+            BuyerIdentityAliasService.ObserveMessage(seller, message);
+            var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
+
             // Do not consume the message fingerprint until its exact shop, seller and buyer
             // identities are known. A standby CDP page may deliver the same payload before
             // the authoritative QN binding is ready; that early copy must not suppress the
@@ -231,7 +235,9 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(messageKey)
                 && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
 
-            var isBuyer = from == buyer && to == seller;
+            var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);
+            var toIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, to, buyer);
+            var isBuyer = fromIsBuyer && toIsSeller;
             if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))
             {
                 // Archive all incoming buyer message text independently from reply success
