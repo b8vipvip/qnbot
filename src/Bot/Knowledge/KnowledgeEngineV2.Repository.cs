@@ -342,7 +342,7 @@ namespace Bot.Knowledge
                 if (exactMatches.Count > 0)
                 {
                     updatedCorpusFingerprint = currentFingerprint;
-                    result = exactMatches.Any(x =>
+                    result = exactMatches.All(x =>
                         string.Equals((x.Answer ?? string.Empty).Trim(), answer, StringComparison.Ordinal))
                         ? "现有Knowledge V2已经覆盖该问法，不重复新增。"
                         : "现有Knowledge V2存在同题不同答案，自动新增已拒绝，未覆盖生产知识。";
