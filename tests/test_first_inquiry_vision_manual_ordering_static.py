@@ -44,7 +44,9 @@ def test_stale_manual_reply_is_detected_before_nonblocking_learning_observation(
     source = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
 
     assert "LatestBuyerSourceSort" in source
-    assert "RecordBuyerSourceSort(seller, from, message, shopKey);" in source
+    assert "var incomingBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, from);" in source
+    assert "RecordBuyerSourceSort(seller, incomingBuyer, message, shopKey);" in source
+    assert "if (fromIsSeller == toIsSeller) continue;" in source
     assert "IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message, shopKey)" in source
     assert "return buyerSort > sellerSort;" in source
     guard_index = source.index("if (IsSellerReplyOlderThanLatestBuyerTurn")
