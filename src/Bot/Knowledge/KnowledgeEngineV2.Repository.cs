@@ -118,7 +118,7 @@ namespace Bot.Knowledge
                 var record = exact.Count == 1 ? exact[0] : new KnowledgeV2Record
                 {
                     Id = Guid.NewGuid().ToString("N"),
-                    Type = knowledgeType,
+                    Type = "business_fact",
                     Title = question,
                     CreatedAt = DateTime.Now,
                     SourceId = "reviewed-" + Guid.NewGuid().ToString("N")
