@@ -89,6 +89,8 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
     assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
     assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
+    assert "Always preserve the exact buyer wording as a searchable alias" in generated
+    assert "aliases.Add(sourceQuestion);" in generated
     assert "private static bool HasKnowledgePolarityMismatch(" in generated
     assert "private static bool HasKnowledgeEntityPolarityMismatch(" in generated
     assert "private static bool HasMissingKnowledgeAnchors(" in generated
