@@ -98,6 +98,7 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "ExtractKnowledgeNumericFacts(candidateAnswer)" in generated
     assert "private static HashSet<string> ExtractKnowledgeNumericFacts(" in generated
     assert "个月|分钟|小时|天|日|周|月|年|秒|元|块|美元" in generated
+    assert r"Pro\s*Max|Pro|Plus|Ultra|Max" in generated
     assert "candidateAnswer.Length <= Math.Max(64, sourceAnswer.Length + 24)" in generated
     assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
     assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
