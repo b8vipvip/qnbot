@@ -1088,6 +1088,8 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<QN, DateTime> NextProbeAt = new ConcurrentDictionary<QN, DateTime>();
         private static readonly ConcurrentDictionary<QN, DateTime> NextPanelProbeAt = new ConcurrentDictionary<QN, DateTime>();
         private static readonly ConcurrentDictionary<QN, byte> Running = new ConcurrentDictionary<QN, byte>();
+        private static readonly TimeSpan QnStateSweepInterval = TimeSpan.FromMinutes(1);
+        private static long _lastQnStateSweepUtcTicks;
         private static Timer _timer;
         private static int _started;
 
@@ -1105,8 +1107,9 @@ namespace Bot.ChromeNs
         {
             try
             {
+                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
                 var now = DateTime.UtcNow;
-                foreach (var qn in QN.GetRuntimeSafetySnapshot())
+                foreach (var qn in sessions)
                 {
                     if (qn == null || qn.CDP == null || qn.Seller == null || string.IsNullOrWhiteSpace(qn.Seller.Nick)) continue;
                     DateTime next;
@@ -1119,8 +1122,30 @@ namespace Bot.ChromeNs
                         finally { byte ignored; Running.TryRemove(qn, out ignored); }
                     });
                 }
+                CleanupRetiredQnState(sessions);
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("业务入站主动核对调度失败：" + ex.Message, 10); }
+        }
+
+        private static void CleanupRetiredQnState(QN[] sessions)
+        {
+            var now = DateTime.UtcNow;
+            var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
+            if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
+            var alive = new HashSet<QN>((sessions ?? new QN[0]).Where(x => x != null));
+            foreach (var qn in NextProbeAt.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                DateTime ignored;
+                NextProbeAt.TryRemove(qn, out ignored);
+            }
+            foreach (var qn in NextPanelProbeAt.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                DateTime ignored;
+                NextPanelProbeAt.TryRemove(qn, out ignored);
+            }
         }
 
         private static async Task ProbeAsync(QN qn)
