@@ -2498,9 +2498,17 @@ namespace Bot.ChromeNs
             }
 
             if (questionTurn.Timestamp == DateTime.MinValue
-                || answerTurn.Timestamp == DateTime.MinValue
-                || answerTurn.Timestamp <= questionTurn.Timestamp
-                || answerTurn.Timestamp - questionTurn.Timestamp > TimeSpan.FromMinutes(30))
+                || answerTurn.Timestamp == DateTime.MinValue)
+            {
+                rejection = "question_answer_timestamp_missing";
+                return false;
+            }
+            var questionOrderTicks = questionTurn.PreciseTimeTicks > 0
+                ? questionTurn.PreciseTimeTicks : questionTurn.Timestamp.Ticks;
+            var answerOrderTicks = answerTurn.PreciseTimeTicks > 0
+                ? answerTurn.PreciseTimeTicks : answerTurn.Timestamp.Ticks;
+            if (answerOrderTicks <= questionOrderTicks
+                || answerOrderTicks - questionOrderTicks > TimeSpan.FromMinutes(30).Ticks)
             {
                 rejection = "question_answer_time_order_invalid";
                 return false;
@@ -2508,7 +2516,7 @@ namespace Bot.ChromeNs
 
             var orderedTurns = (turns ?? new List<ConversationContextTurn>())
                 .Where(x => x != null)
-                .OrderBy(x => x.Timestamp)
+                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
                 .ToList();
             var questionIndex = orderedTurns.IndexOf(questionTurn);
             var answerIndex = orderedTurns.IndexOf(answerTurn);
