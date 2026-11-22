@@ -1,6 +1,6 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-11-20
+Last updated / 最后更新：2026-11-22
 
 本文件记录当前生产基线、源码已完成项、尚需真实 Windows/千牛验收的项目，以及本轮新增的只读诊断工具。所有状态区分“源码实现”“CI/构建通过”“正式发布”“真实客户端验收”，不能互相替代。
 
@@ -9,10 +9,9 @@ Last updated / 最后更新：2026-11-20
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：`bot-v1.1.2481`
-- Release：GitHub Release tag `bot-v1.1.2481`
-- Release target：`35f5ed0138eba56e3f341915b7e2a800c102007d`
-- x64 package SHA-256：`126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`
+- Latest stable client：[bot-v1.1.2821](https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2821)
+- Release target：ad8575dc5dc37d45c9fa10d019a64ba5c8529551
+- x64 package SHA-256：33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -37,8 +36,9 @@ Last updated / 最后更新：2026-11-20
 - 完整历史缺失、消息数不一致、时间戳未知或知识语料版本漂移时 fail-closed。
 - Knowledge V2 全库按批次对照，记录消息/语料覆盖率、批次检查点、模型/协议、版本指纹及候选证据。
 - 上游错误按 ShopKey 熔断并支持断点续跑。
-- **生产自动写入仍保持关闭（dry-run）**。没有完成原子更新/回滚、人工审核授权和 Windows 灰度验收前，不得启用自动写入。
-- 高风险店铺规则、账户、付款、隐私和履约事实必须保留人工审核。
+- **Knowledge V2 真人证据 FAQ 自动新增已启用**：AI 生成标准问法、答案和别名；必须绑定同店铺买家原始消息与非 Bot 人工回复的千牛原生消息 ID，通过完整历史、全量语料稳定指纹、内容安全、去重、原子事务、回滚记录和治理审计后，直接发布到正式库，不需要人工确认或灰度。
+- 高置信真人纠正按知识 ID、原答案、消息证据和版本指纹执行自动修订；没有完整证据的通用会话建议和回复风格仍保持 dry-run。
+- 高风险店铺规则、账户、付款、隐私和履约事实仍由独立业务流程处理，继续 fail-closed。
 
 ### 2.4 Multi-shop and catalog
 - #426：CDP 身份切换、旧队列/迟到帧隔离。
@@ -162,11 +162,11 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - **GPTAuto historical Reconcile**: fixed the Executor so an old dispatch marker is not treated as terminal proof. Added task-aware Reconcile run titles and a temporary exact-evidence recovery workflow. It re-dispatched PR #434 task `GA-ddf0aa319783` only after current master API/Windows gates, exact PR-head API/Windows gates, exact merge-SHA CI, and an ACTIVE lease were verified. Reconcile run `44858934200` completed successfully; Completion Lease is RELEASED, Terminal state is DONE, Merge SHA is `483b07f03eeeeef5e9339b286d2c179378489ccc`. The one-time recovery workflow was removed after the task closed; generic Executor recovery logic remains.
 - **Exact-SHA validation**: release source SHA `35f5ed0138eba56e3f341915b7e2a800c102007d`; Fast Gate `1686 passed, 16 skipped`; API package tests `141 passed`; Windows Static Gate passed; Windows x64 build `44858618045` succeeded. Post-release cleanup master SHA `5fce1c3869b19dd044cd4d39db31ae9456df1b64` also passed API Full Gate and Windows x64 build `44859065309`.
 - **Stable release**: `bot-v1.1.2481` published for exact source SHA `35f5ed0138eba56e3f341915b7e2a800c102007d`; x64 package SHA-256: `126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`. The fixes above are included in this release. Local installation is not verified.
-- **Still requires real Windows/Qianniu acceptance**: bench_im/CDP target identification, A→B→A multi-shop switching and reconnect stability, 150+ message Knowledge V2 full-corpus learning/checkpoint recovery, real order auto-reply/auto-delivery recovery, and Reception Agent approval/authorization/publish/rollback. Knowledge V2 automatic writes remain disabled; high-risk order operations remain fail-closed. Issue #366 stays open.
+- **Still requires real Windows/Qianniu acceptance**: bench_im/CDP target identification, A→B→A multi-shop switching and reconnect stability, 150+ message Knowledge V2 full-corpus learning/checkpoint recovery, real order auto-reply/auto-delivery recovery, and Reception Agent approval/authorization/publish/rollback. At this 2026-11-21 checkpoint, the new FAQ auto-publish path had not yet landed; section 4.5 records the later master release. High-risk order operations remain fail-closed. Issue #366 stays open.
 
 ## 4.4 2026-11-22 Knowledge V2 AI auto-publish implementation
 
-Working branch: `feat/knowledge-v2-human-evidence-auto-add` (not yet merged into `master` or included in the stable client).
+Historical pre-merge implementation snapshot. Its former branch status is superseded by section 4.5, which records the direct master commits and stable release.
 
 - The new FAQ pass asks AI to generate a canonical question, answer, aliases and keywords instead of returning only source-message IDs.
 - Each generated record must still cite one exact buyer message and one later non-Bot human seller reply from the same complete ShopKey transcript. AI-generated text is checked against the source pair; unsupported numeric facts, PII, high-risk/dynamic business facts, prompt injection and unrelated aliases/keywords are rejected.
@@ -175,7 +175,17 @@ Working branch: `feat/knowledge-v2-human-evidence-auto-add` (not yet merged into
 - AI auto-published provenance is distinguished from explicit human-confirmed provenance so the record remains production-approved without falsely claiming an operator approved it.
 - Generic session suggestions without a valid buyer/human evidence pair, style changes and workflow proposals remain outside this direct-publish path. Order/payment/account/fulfillment actions continue to use their independent fail-closed authorization logic.
 - Prompt version/checkpoint version was bumped so old ID-only candidate checkpoints are not reused as AI-generated knowledge.
-- This implementation has not yet been validated by exact-SHA CI/Windows build and is not a production release. Do not claim that the stable client already contains it.
+- At the time this section was written, exact-SHA CI/Windows validation and release were still pending; those gates and the stable release are recorded in section 4.5.
+
+## 4.5 2026-11-22 master auto-publish, retrieval hardening and stable release
+
+- Knowledge V2 AI auto-publish is now on master: the dedicated FAQ pass generates the canonical question, answer, aliases and keywords, but every published record must cite the original Qianniu-native buyer-message ID and later non-Bot human-reply ID from the same complete ShopKey transcript. The AI-generated content is checked against the source pair; unverifiable rewrites fall back to the original buyer question and human answer.
+- The narrow FAQ path writes directly to active production Knowledge V2 with a rollback revision, exact corpus-fingerprint CAS, source-pair idempotency, collision checks, readback verification, legacy mirror, immediate retrieval refresh and governance audit. It does not require human approval or gray rollout. Generic session suggestions and style changes remain dry-run; high-risk order/payment/account/fulfillment actions remain fail-closed.
+- Additional retrieval bypass fix (a3b6697c363df6c540266a2629568e21d7ee062b; regression test ad8575dc5dc37d45c9fa10d019a64ba5c8529551): auto-published human-evidence records can now enter production ranking only through an exact saved title/alias or the strict semantic gate (score, alias, predicate, intent, confidence, entity/subject, standalone and risk checks). The generic production fallback can no longer bypass that gate.
+- Exact-head API control-plane CI on ad8575d: success, Fast Gate 1797 passed / 16 skipped, Windows Static Gate and Full Gate / Build Package succeeded. Run: https://github.com/b8vipvip/qnbot/actions/runs/44998075693.
+- Exact-head Windows x64 release build: success, including PowerShell 5.1 checks, lifecycle regression tests, MSBuild x64, complete package assembly and verification. Run: https://github.com/b8vipvip/qnbot/actions/runs/44998075683.
+- GPTAuto Observer/Executor runs succeeded. Stable release: bot-v1.1.2821, target ad8575dc5dc37d45c9fa10d019a64ba5c8529551; x64 package SHA-256: 33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd. Release: https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2821.
+- This verifies source, tests, Windows build and release packaging only. Real Windows/千牛 validation remains open: 150+ messages and full-corpus resume, cross-device sync, multi-shop identity switching, manual takeover/automatic reply races, live test-order delivery recovery, long-running WS/CDP stability and Reception Agent authorization/publish/rollback. Issue #366 remains open until these runtime gates have evidence.
 
 ## 5. Validation and release rules / 验收与发布规则
 
@@ -183,14 +193,14 @@ Working branch: `feat/knowledge-v2-human-evidence-auto-add` (not yet merged into
 2. CI 和构建必须针对精确 master SHA 通过。
 3. Windows/千牛行为、消息投递、真实 CDP 目标和资源趋势必须由真实运行证据验证。
 4. 诊断报告先由用户检查，脱敏后再提供；不要求上传原始日志或客户数据。
-5. 当前 master/稳定客户端的 Knowledge V2 自动写入仍保持关闭；新分支的安全 FAQ 自动发布路径不需要人工审批或灰度，但必须通过精确 SHA CI/构建、事务/回滚与来源校验。高风险接待流程动作仍保持 fail-closed。
+5. Knowledge V2 真人证据 FAQ 自动新增已在 master/稳定版启用：满足原生消息证据、完整覆盖、版本、内容安全、去重、原子写入和审计门禁后直接发布，不需要人工确认或灰度。通用 AI 建议和风格学习仍 dry-run；高风险接待流程动作继续 fail-closed。
 6. 发布与生产安装是不同动作；GitHub Release 不能替代用户确认安装或部署。
 7. #366 是唯一统一追踪 Issue；不新增普通 Issue/分支，持续在 master 与 #366 更新。
 
 ## 6. Next execution / 下一步
 
-1. 先完成 master 源码审计和回归测试。
-2. 使用只读诊断脚本准备一份不含客户内容的 Windows 状态报告。
-3. 依据报告和少量真实测试定位剩余消息通道/多店问题。
-4. 再完成 Knowledge V2 全库覆盖与断点恢复验收。
-5. 最后完成接待流程 Agent 审批、灰度与 GPTAuto Reconcile 端到端验收。
+1. 在真实千牛会话中完成 150+ 条消息、完整 Knowledge V2 语料覆盖、重启断点恢复及跨设备同步验收。
+2. 完成同昵称多店铺 A→B→A、WebSocket/CDP 断线重连和长时间运行验收。
+3. 验证自动回复的人工接管、撤回、失败重试、并发与防重复发送。
+4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认。
+5. 完成接待流程 Agent 的审批、身份授权、发布、回滚及 GPTAuto Reconcile 真实终态验收。
