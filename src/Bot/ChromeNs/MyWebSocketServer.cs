@@ -49,7 +49,7 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, DateTime> _sessionLastActivityUtc = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _closingDuplicateSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, bool> _recoverableStandbySessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, bool> _standbyLoggedSessions = new ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _standbyLoggedSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
         private readonly object _webSocketStartSync = new object();
         private const int MaxDuplicateShopSessions = 3;
@@ -296,7 +296,7 @@ namespace Bot.ChromeNs
                     || !string.Equals(mappedShopKey, shopKey, StringComparison.Ordinal)
                     || (_shopSessions.TryGetValue(shopKey, out currentOwner)
                         && string.Equals(currentOwner, sessionId, StringComparison.Ordinal))
-                    || !_standbyLoggedSessions.TryAdd(sessionId, true))
+                    || !_standbyLoggedSessions.TryAdd(sessionId, shopKey))
                     return;
             }
 
@@ -313,7 +313,35 @@ namespace Bot.ChromeNs
                         reason = reason ?? "duplicate",
                         retryAfterMs = retryAfterMs
                     });
-                    session.Send(command);
+                    lock (_sellerSessionSync)
+                    {
+                        string pendingShopKey;
+                        string duplicateShopKey;
+                        string mappedShopKey;
+                        string currentOwner;
+                        // Identity can change after scheduling but before this task runs.
+                        // Revalidate the exact retirement lease immediately before sending;
+                        // an old-shop command must not close the same page after A→B rebinding.
+                        if (!_connectedSessions.ContainsKey(sessionId)
+                            || !_standbyLoggedSessions.TryGetValue(sessionId, out pendingShopKey)
+                            || !string.Equals(pendingShopKey, shopKey, StringComparison.Ordinal)
+                            || !_duplicateShopSessions.TryGetValue(sessionId, out duplicateShopKey)
+                            || !string.Equals(duplicateShopKey, shopKey, StringComparison.Ordinal)
+                            || !_sessionShopKeys.TryGetValue(sessionId, out mappedShopKey)
+                            || !string.Equals(mappedShopKey, shopKey, StringComparison.Ordinal)
+                            || (_shopSessions.TryGetValue(shopKey, out currentOwner)
+                                && string.Equals(currentOwner, sessionId, StringComparison.Ordinal)))
+                        {
+                            if (_standbyLoggedSessions.TryGetValue(sessionId, out pendingShopKey)
+                                && string.Equals(pendingShopKey, shopKey, StringComparison.Ordinal))
+                            {
+                                string ignored;
+                                _standbyLoggedSessions.TryRemove(sessionId, out ignored);
+                            }
+                            return;
+                        }
+                        session.Send(command);
+                    }
                     Log.Info("非权威千牛WebSocket页面已降级为可恢复离线standby: shopRef="
                         + DiagnosticRef("shop", shopKey)
                         + ", sessionRef=" + DiagnosticRef("session", sessionId)
@@ -321,8 +349,16 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
-                    bool ignored;
-                    _standbyLoggedSessions.TryRemove(sessionId, out ignored);
+                    lock (_sellerSessionSync)
+                    {
+                        string pendingShopKey;
+                        if (_standbyLoggedSessions.TryGetValue(sessionId, out pendingShopKey)
+                            && string.Equals(pendingShopKey, shopKey, StringComparison.Ordinal))
+                        {
+                            string ignored;
+                            _standbyLoggedSessions.TryRemove(sessionId, out ignored);
+                        }
+                    }
                     Log.Exception(ex, "RetireDuplicateSession:" + DiagnosticRef("session", sessionId));
                 }
             });
@@ -416,6 +452,11 @@ namespace Bot.ChromeNs
                     // duplicate-page bridge must stop interpreting any in-flight payload
                     // from this socket under the previous shop during the transition.
                     DuplicateCdpInboundRecoveryBridge.MarkSessionIdentityTransition(sessionId);
+                    // Cancel any retirement lease scoped to the previous shop. Its queued
+                    // task revalidates the stored ShopKey before sending and cannot affect
+                    // a later identity bound to this same physical page.
+                    string ignoredRetirementShop;
+                    _standbyLoggedSessions.TryRemove(sessionId, out ignoredRetirementShop);
                     // One physical WebSocket must never silently migrate its old QN/CDP
                     // object to a different shop. Detach the previous identity first and
                     // let the next status event establish a fresh ShopKey binding.
@@ -1203,7 +1244,7 @@ namespace Bot.ChromeNs
                 _sessionLastActivityUtc.TryRemove(sessionId, out ignoredTime);
                 _closingDuplicateSessions.TryRemove(sessionId, out ignoredBool);
                 _recoverableStandbySessions.TryRemove(sessionId, out ignoredBool);
-                _standbyLoggedSessions.TryRemove(sessionId, out ignoredBool);
+                _standbyLoggedSessions.TryRemove(sessionId, out ignoredString);
                 _lastStatusBindings.TryRemove(sessionId, out ignoredString);
                 _lastStatusBindingRefreshUtc.TryRemove(sessionId, out ignoredTime);
                 _initialized.TryRemove(sessionId, out ignoredBool);
@@ -1454,7 +1495,7 @@ namespace Bot.ChromeNs
                         DateTime ignoredActivity;
                         bool ignoredClosing;
                         bool ignoredCapability;
-                        bool ignoredStandbyLog;
+                        string ignoredStandbyLog;
                         _liveSessions.TryRemove(session.SessionID, out ignoredSession);
                         _sessionLastActivityUtc.TryRemove(session.SessionID, out ignoredActivity);
                         _closingDuplicateSessions.TryRemove(session.SessionID, out ignoredClosing);
