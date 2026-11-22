@@ -23,6 +23,7 @@ def test_ai_generates_complete_knowledge_content_and_requests_direct_production_
     assert '\\"aliases\\":[\\"同义问法\\"],\\"keywords\\"' in prompt
     assert "只返回消息ID" not in prompt
     assert "不得补充推测、承诺、未验证规格或外部常识" in prompt
+    assert "如果答案被拆分为多条客服消息" in prompt
 
 
 def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message_ids():
@@ -49,6 +50,9 @@ def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message
     assert "questionTurn.Withdrawn || answerTurn.Withdrawn" in evidence
     assert "TimeSpan.FromMinutes(30)" in evidence
     assert "another_buyer_message_interrupted_the_evidence_pair" in evidence
+    assert "humanReplyTurns.Count != 1" in evidence
+    assert "ReferenceEquals(humanReplyTurns[0], answerTurn)" in evidence
+    assert "human_reply_is_split_across_multiple_messages" in evidence
 
 
 def test_ai_generated_question_answer_are_automatically_checked_against_source_evidence():
@@ -65,13 +69,60 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "token[\"knowledge_question\"]" in parser
     assert "token[\"knowledge_answer\"]" in parser
     assert "TryCreateAiGeneratedKnowledgeCandidate(" in parser
-    assert "TextSimilarity(evidenceCandidate.Question, question) < 0.25" in generated
-    assert "TextSimilarity(evidenceCandidate.Answer, answer) < 0.25" in generated
-    assert "ai_generated_answer_introduced_unverified_numeric_fact" in generated
-    assert "ai_generated_answer_exceeds_human_evidence_scope" in generated
+    assert "TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45" in generated
+    assert "TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45" in generated
+    assert "HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "private static bool HasKnowledgeQualifierMismatch(" in generated
+    assert '"免费", "收费", "付费", "订阅", "会员"' in generated
+    assert '"工作日", "周末", "每天", "每日", "每周", "按周"' in generated
+    assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "NormalizeKnowledgeAnchor(source.Value)" in generated
+    assert 'case "大屏":' in generated
+    assert 'case "android":' in generated
+    assert "HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
+    assert "HasUnverifiedKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
+    assert "HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, candidateQuestion)" in generated
+    assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in generated
+    assert "private static bool HasDifferentKnowledgeNumbers(" in generated
+    assert "sourceNumbers.Any(x => !generatedNumbers.Contains(x))" in generated
+    assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
+    assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
+    assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
+    assert "Always preserve the exact buyer wording as a searchable alias" in generated
+    assert "aliases.Add(sourceQuestion);" in generated
+    assert "private static bool HasKnowledgePolarityMismatch(" in generated
+    assert "private static bool HasKnowledgeEntityPolarityMismatch(" in generated
+    assert "private static bool HasMissingKnowledgeAnchors(" in generated
+    assert "private static bool HasUnverifiedKnowledgeAnchors(" in generated
+    assert "|| !appearsInSource" in generated
+    assert "ExtractKnowledgeNumericFacts(sourceAnswer)" in generated
+    assert "ExtractKnowledgeNumericFacts(candidateAnswer)" in generated
+    assert "private static HashSet<string> ExtractKnowledgeNumericFacts(" in generated
+    assert "个月|分钟|小时|天|日|周|月|年|秒|元|块|美元" in generated
+    assert r"Pro\s*Max|Pro|Plus|Ultra|Max" in generated
+    assert "candidateAnswer.Length <= Math.Max(64, sourceAnswer.Length + 24)" in generated
+    assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
+    assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
     assert "evidenceCandidate.Question = question;" in generated
     assert "evidenceCandidate.Answer = answer;" in generated
     assert "evidenceCandidate.Category = category;" in generated
+
+
+def test_ai_generated_alias_validation_uses_the_existing_knowledge_semantics_type():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "KnowledgeEngineV2Semantics.Compact(sourceQuestion)" in generated
+    assert "KnowledgeEngineV2Semantics.Compact(question)" in generated
+    assert "KnowledgeEngineV2Semantics.TextSimilarity(question, sourceQuestion)" in generated
+    assert "KnowledgeV2Semantics." not in generated
 
 
 def test_no_human_review_gate_for_safe_faq_auto_add_and_eight_candidates_can_publish():
@@ -115,6 +166,10 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "currentFingerprint, expectedCorpusFingerprint" in method
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
+    assert "var exactMatches = currentRecords" in method
+    assert "var exactMatches = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
+    assert "var similar = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
+    assert "Old dry-run candidates are not production answers" in method
     assert "exactMatches.All(x =>" in method
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
@@ -224,3 +279,45 @@ def test_structured_json_recovery_accepts_full_corpus_decisions_and_ai_candidate
 
     assert 'obj["decisions"] != null' in parser
     assert 'obj["candidates"] != null' in parser
+
+def test_ai_normalization_cannot_flip_human_answer_polarity_or_invent_known_product_anchors():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert 'var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合' in generated
+    assert 'var positive = @"支持|兼容|适配|适用|适合|推荐|建议|符合|可以|能用|可用|允许|提供|包含' in generated
+    assert "sourceNegative != generatedNegative" in generated
+    assert "sourcePositive != generatedPositive" in generated
+    assert "Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙" in generated
+    assert "语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步" in generated
+    assert "return Regex.Matches(generatedText ?? string.Empty, anchors" in generated
+
+
+def test_unverifiable_ai_rewrite_falls_back_to_the_exact_human_question_and_answer():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
+    assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
+    assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
+    assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
+    assert "无法充分验证的改写自动回退至人工原文" in generated
+    assert "questionGrounded && answerGrounded" in generated
+    assert "AI问法改写未达到充分证据门槛" in generated
+
+def test_ai_answer_grounding_checks_all_source_numbers_and_entity_polarity():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "sourceNumbers.Any(x => !generatedNumbers.Contains(x))" in generated
+    assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
+    assert "sourceNegative != generatedNegative" in generated
+    assert "sourcePositive != generatedPositive" in generated
+    assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
