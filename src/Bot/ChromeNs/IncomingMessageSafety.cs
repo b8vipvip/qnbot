@@ -78,7 +78,7 @@ namespace Bot.ChromeNs
             var candidateNick = Normalize(conversation.Nick);
             var candidateTargetId = Normalize(conversation.TargetId);
 
-            if (SameNonEmpty(sellerNick, candidateNick)
+            if (DirectOrderIdentityResolver.IdentityEquals(sellerNick, candidateNick)
                 || SameNonEmpty(sellerTargetId, candidateTargetId))
             {
                 reason = "self_identity";
@@ -110,7 +110,7 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             sellerNick = Normalize(sellerNick);
             candidateNick = Normalize(candidateNick);
-            if (SameNonEmpty(sellerNick, candidateNick))
+            if (DirectOrderIdentityResolver.IdentityEquals(sellerNick, candidateNick))
             {
                 reason = "self_identity";
                 return true;
@@ -136,7 +136,7 @@ namespace Bot.ChromeNs
             var fromDisplay = message.fromid == null ? string.Empty : Normalize(message.fromid.display);
 
             // Never classify seller echoes as non-buyer ingress; they are observational delivery/learning evidence.
-            if (SameNonEmpty(sellerNick, fromNick)) return false;
+            if (DirectOrderIdentityResolver.IdentityEquals(sellerNick, fromNick)) return false;
 
             if (message.fromid != null && IsNonBuyerSourceToken(message.fromid.targetType))
             {
