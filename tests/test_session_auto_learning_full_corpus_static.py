@@ -45,8 +45,9 @@ def test_corpus_revision_drift_or_any_failed_batch_prevents_complete_status():
         service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
     ]
 
-    assert "ComputeKnowledgeCorpusFingerprint(records)" in method
+    assert "ComputeKnowledgeCorpusFingerprint(allRecords)" in method
     assert "ComputeKnowledgeCorpusFingerprint(afterRecords)" in method
+    assert "var records = allRecords" in method
     assert "result.SourceFingerprint, result.AfterFingerprint" in method
     assert "result.BatchesCompleted == result.BatchCount" in method
     assert "&& result.FailedBatches == 0" in method
