@@ -107,4 +107,6 @@ def test_feedback_observer_uses_weak_qn_identity_and_retryable_attachment():
     assert "lock (AttachSync)" in attach
     assert "Attached.TryGetValue(qn, out marker)" in attach
     assert "Attached.Add(qn, new object())" in attach
+    assert "var seller = qn.Seller" in attach
+    assert "var seller = captured.Seller" not in attach
     assert "RuntimeHelpers.GetHashCode(qn)" not in attach
