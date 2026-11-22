@@ -62,7 +62,7 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
+                var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
                     if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.Seller == null
