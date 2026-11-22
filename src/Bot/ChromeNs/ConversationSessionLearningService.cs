@@ -1709,13 +1709,15 @@ namespace Bot.ChromeNs
                     // It is checkpointed against the same exact corpus and transcript
                     // fingerprints, and only returns message IDs; question/answer text is
                     // reconstructed from the verified source turns below.
+                    var newCandidateInputFingerprint = ComputeKnowledgeCorpusTranscriptFingerprint(
+                        transcript, corpusSessionSummary, localFirst);
                     var priorNewCandidates = priorCoverage["knowledgeCorpusNewCandidateSuggestions"] as JArray;
                     var canResumeNewCandidates = priorCoverage.Value<bool?>("knowledgeCorpusNewCandidateAnalysisComplete") == true
                         && priorCoverage.Value<int?>("knowledgeCorpusNewCandidatePromptVersion") == KnowledgeCorpusNewCandidatePromptVersion
                         && string.Equals(Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateSourceFingerprint"]),
                             result.SourceFingerprint, StringComparison.Ordinal)
                         && string.Equals(Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateTranscriptFingerprint"]),
-                            transcriptFingerprint, StringComparison.Ordinal)
+                            newCandidateInputFingerprint, StringComparison.Ordinal)
                         && priorNewCandidates != null;
                     if (canResumeNewCandidates)
                     {
@@ -1751,9 +1753,13 @@ namespace Bot.ChromeNs
                             result.NewCandidates.Add(restored);
                         }
                         result.NewCandidateAnalysisComplete = true;
+                        result.NewCandidateEvidenceRejected = priorCoverage.Value<int?>("knowledgeCorpusNewCandidateEvidenceRejected") ?? 0;
                         result.NewCandidateModel = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateModel"]);
                         result.NewCandidateProtocol = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateProtocol"]);
                         result.NewCandidateEndpoint = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateEndpoint"]);
+                        if (!string.IsNullOrWhiteSpace(result.NewCandidateModel)) result.Models.Add(result.NewCandidateModel);
+                        if (!string.IsNullOrWhiteSpace(result.NewCandidateProtocol)) result.Protocols.Add(result.NewCandidateProtocol);
+                        if (!string.IsNullOrWhiteSpace(result.NewCandidateEndpoint)) result.Endpoints.Add(result.NewCandidateEndpoint);
                     }
                     else if (promptBuyerMessageIds.Count == 0 || promptHumanMessageIds.Count == 0)
                     {
@@ -1830,7 +1836,8 @@ namespace Bot.ChromeNs
                 coverage["knowledgeCorpusNewCandidateAnalysisComplete"] = result.NewCandidateAnalysisComplete;
                 coverage["knowledgeCorpusNewCandidatePromptVersion"] = KnowledgeCorpusNewCandidatePromptVersion;
                 coverage["knowledgeCorpusNewCandidateSourceFingerprint"] = result.SourceFingerprint;
-                coverage["knowledgeCorpusNewCandidateTranscriptFingerprint"] = transcriptFingerprint;
+                coverage["knowledgeCorpusNewCandidateTranscriptFingerprint"] = ComputeKnowledgeCorpusTranscriptFingerprint(
+                    transcript, corpusSessionSummary, localFirst);
                 coverage["knowledgeCorpusNewCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.NewCandidates));
                 coverage["knowledgeCorpusNewCandidates"] = result.NewCandidates.Count;
                 coverage["knowledgeCorpusNewCandidateEvidenceRejected"] = result.NewCandidateEvidenceRejected;
