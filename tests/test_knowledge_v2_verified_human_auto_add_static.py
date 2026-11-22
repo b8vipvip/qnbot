@@ -99,6 +99,9 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     ]
 
     assert "IEnumerable<string> aliases" in method
+    assert "IEnumerable<string> keywords" in method
+    assert "var normalizedKeywords" in method
+    assert "Concat(normalizedKeywords)" in method
     assert "ResolveShopRequired(seller)" in method
     assert "shop.ShopKey, expectedShopKey" in method
     assert "KnowledgeV2Service.IsEnabled(seller)" in method
@@ -107,6 +110,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "currentFingerprint, expectedCorpusFingerprint" in method
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
+    assert "exactMatches.All(x =>" in method
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
     assert "SourceType = \"ai_auto_learned_human_evidence\"" in method
