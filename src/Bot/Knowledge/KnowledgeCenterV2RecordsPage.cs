@@ -233,6 +233,7 @@ namespace Bot.Knowledge
             if (_view == null) return;
             var query = string.Join(" ", new[] { _globalSearch, _search == null ? string.Empty : _search.Text }).Trim();
             var filtered = (_all ?? new List<KnowledgeV2Record>())
+                .Where(x => x != null && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                 .Where(MatchesMode)
                 .Where(x => MatchesQuery(x, query))
                 .OrderByDescending(x => x.UpdatedAt)
@@ -259,7 +260,9 @@ namespace Bot.Knowledge
                         + "（可能已删除或未同步）；不会自动选择相似条目。";
                 return;
             }
-            if (_count != null) _count.Text = "V2记录 " + _all.Count + " 条；当前显示 " + _view.Count + " 条";
+            var visibleCount = (_all ?? new List<KnowledgeV2Record>())
+                .Count(x => x != null && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase));
+            if (_count != null) _count.Text = "V2记录 " + visibleCount + " 条；当前显示 " + _view.Count + " 条";
         }
 
         private bool MatchesMode(KnowledgeV2Record item)
