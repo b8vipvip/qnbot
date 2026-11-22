@@ -205,7 +205,7 @@ def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_me
         service.index("private static void AddUnique")
     ]
     compare = service[
-        service.index("private static bool SameRecordContent"):
+        service.index("private static bool SameList"):
         service.index("private static KnowledgeV2Record CloneRecord")
     ]
 
