@@ -743,7 +743,10 @@ namespace Bot.Knowledge
         private static List<BotReplyKnowledgeResult> RankKnowledge(string seller, string question, string answer)
         {
             var records = KnowledgeEngineV2Repository.LoadAll(seller);
-            return records.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Title))
+            return records.Where(x => x != null && x.Enabled
+                    && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    && !KnowledgeV2AuthorityPolicy.IsCandidate(x)
+                    && !string.IsNullOrWhiteSpace(x.Title))
                 .Select(record =>
                 {
                     var titleFields = string.Join(" ", new[]
