@@ -37,7 +37,7 @@ def test_auto_delivery_queue_and_confirmation_barrier_are_shop_scoped():
     assert "TryRecordIntent(string shopKey, string seller, string orderId" in ledger
     assert "MarkResolved(string shopKey, string seller, string orderId" in ledger
     assert "BuildLegacyKey(seller, orderId)" in ledger
-    assert "旧版任务无法唯一恢复ShopKey" in queue
+    assert "ResolveRuntimeBySellerNick(snapshot.Seller)" in queue and "旧版任务等待唯一ShopKey恢复" in queue
 
 
 def test_auto_delivery_event_cursors_are_per_shopkey_not_seller_nickname():
