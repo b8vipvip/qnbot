@@ -2592,12 +2592,8 @@ namespace Bot.ChromeNs
                 && candidateAnswer.Length <= Math.Max(64, sourceAnswer.Length + 24);
             if (answerGrounded)
             {
-                var sourceNumbers = new HashSet<string>(
-                    Regex.Matches(sourceAnswer, @"\d+(?:\.\d+)?")
-                        .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
-                var generatedNumbers = new HashSet<string>(
-                    Regex.Matches(candidateAnswer, @"\d+(?:\.\d+)?")
-                        .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+                var sourceNumbers = ExtractKnowledgeNumericFacts(sourceAnswer);
+                var generatedNumbers = ExtractKnowledgeNumericFacts(candidateAnswer);
                 if (sourceNumbers.Any(x => !generatedNumbers.Contains(x))
                     || generatedNumbers.Any(x => !sourceNumbers.Contains(x)))
                     answerGrounded = false;
@@ -2685,14 +2681,22 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private static HashSet<string> ExtractKnowledgeNumericFacts(string value)
+        {
+            return new HashSet<string>(
+                Regex.Matches(value ?? string.Empty,
+                    @"\d+(?:\.\d+)?\s*(?:个月|分钟|小时|天|日|周|月|年|秒|元|块|美元|美金|人民币|GB|MB|TB|KB|Pro|Plus|Ultra|Max|Mini|Lite|Note|SE|G|M|寸|英寸|版本|人|件|张|台|次|%)?",
+                    RegexOptions.IgnoreCase)
+                    .Cast<Match>()
+                    .Select(x => Regex.Replace(x.Value, @"\s+", string.Empty))
+                    .Where(x => x.Length > 0),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
         private static bool HasDifferentKnowledgeNumbers(string sourceText, string generatedText)
         {
-            var sourceNumbers = new HashSet<string>(
-                Regex.Matches(sourceText ?? string.Empty, @"\d+(?:\.\d+)?")
-                    .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
-            var generatedNumbers = new HashSet<string>(
-                Regex.Matches(generatedText ?? string.Empty, @"\d+(?:\.\d+)?")
-                    .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+            var sourceNumbers = ExtractKnowledgeNumericFacts(sourceText);
+            var generatedNumbers = ExtractKnowledgeNumericFacts(generatedText);
             return !sourceNumbers.SetEquals(generatedNumbers);
         }
 
