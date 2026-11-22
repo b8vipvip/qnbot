@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Bot
@@ -27,8 +28,9 @@ namespace Bot.ShopScope
             new ConcurrentDictionary<string, LogWriter>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> LogReadyMarkers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<QN, byte> ForegroundSubscribed =
-            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> ForegroundSubscribed =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object ForegroundSubscriptionSync = new object();
         private static readonly object ProfileCacheSync = new object();
         private static readonly ConcurrentDictionary<string, ShopContext> ShopByKey =
             new ConcurrentDictionary<string, ShopContext>(StringComparer.Ordinal);
@@ -67,8 +69,13 @@ namespace Bot.ShopScope
             {
                 foreach (var qn in QN.GetRuntimeSafetySnapshot().Where(x => x != null))
                 {
-                    if (!ForegroundSubscribed.TryAdd(qn, 0)) continue;
-                    qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
+                    lock (ForegroundSubscriptionSync)
+                    {
+                        object marker;
+                        if (ForegroundSubscribed.TryGetValue(qn, out marker)) continue;
+                        qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
+                        ForegroundSubscribed.Add(qn, new object());
+                    }
                 }
                 RefreshProfileCacheIfNeeded();
                 EnsureShopLogWriters();
