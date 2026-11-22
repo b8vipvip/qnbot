@@ -1161,7 +1161,7 @@ namespace Bot.ChromeNs
                     string applyMessage;
                     string savedKnowledgeId;
                     string nextFingerprint;
-                    var success = KnowledgeV2Repository.TryCreateVerifiedSessionKnowledge(
+                    var success = KnowledgeEngineV2Repository.TryCreateVerifiedSessionKnowledge(
                         session.Seller,
                         session.ShopKey,
                         session.EntityId,
