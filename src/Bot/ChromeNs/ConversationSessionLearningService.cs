@@ -2688,7 +2688,7 @@ namespace Bot.ChromeNs
         {
             return new HashSet<string>(
                 Regex.Matches(value ?? string.Empty,
-                    @"\d+(?:\.\d+)?\s*(?:个月|分钟|小时|天|日|周|月|年|秒|元|块|美元|美金|人民币|GB|MB|TB|KB|Pro|Plus|Ultra|Max|Mini|Lite|Note|SE|G|M|寸|英寸|版本|人|件|张|台|次|%)?",
+                    @"\d+(?:\.\d+)?\s*(?:个月|分钟|小时|天|日|周|月|年|秒|元|块|美元|美金|人民币|GB|MB|TB|KB|Pro\s*Max|Pro|Plus|Ultra|Max|Mini|Lite|Note|SE|G|M|寸|英寸|版本|人|件|张|台|次|%)?",
                     RegexOptions.IgnoreCase)
                     .Cast<Match>()
                     .Select(x => Regex.Replace(x.Value, @"\s+", string.Empty))
