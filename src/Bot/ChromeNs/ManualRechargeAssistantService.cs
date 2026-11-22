@@ -109,7 +109,7 @@ namespace Bot.ChromeNs
                 if (!TryFindRecentRedeemCode(seller, buyer, out orderId)) return false;
 
                 KugouAccountEvidence evidence;
-                if (!RecentVisualContextService.TryGetRecentKugouAccountEvidence(seller, buyer, out evidence)
+                if (!RecentVisualContextService.TryGetRecentKugouAccountEvidence(shop.ShopKey, seller, buyer, out evidence)
                     || evidence == null)
                 {
                     return false;
