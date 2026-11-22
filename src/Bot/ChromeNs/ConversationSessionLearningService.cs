@@ -1480,11 +1480,105 @@ namespace Bot.ChromeNs
                 {
                     foreach (var candidate in result.Candidates)
                         candidate.ApplyMessage = "语料覆盖不完整或源版本发生变化；此候选不可应用，仅供人工查看";
+                    result.NewCandidateError = "knowledge_corpus_incomplete";
                 }
                 else
                 {
                     foreach (var candidate in result.Candidates)
                         candidate.ApplyMessage = "全量语料已对照；等待真人纠正自动应用门禁验证";
+
+                    // The new-knowledge pass is independent of existing-record decisions.
+                    // It is checkpointed against the same exact corpus and transcript
+                    // fingerprints, and only returns message IDs; question/answer text is
+                    // reconstructed from the verified source turns below.
+                    var priorNewCandidates = priorCoverage["knowledgeCorpusNewCandidateSuggestions"] as JArray;
+                    var canResumeNewCandidates = priorCoverage.Value<bool?>("knowledgeCorpusNewCandidateAnalysisComplete") == true
+                        && priorCoverage.Value<int?>("knowledgeCorpusNewCandidatePromptVersion") == KnowledgeCorpusNewCandidatePromptVersion
+                        && string.Equals(Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateSourceFingerprint"]),
+                            result.SourceFingerprint, StringComparison.Ordinal)
+                        && string.Equals(Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateTranscriptFingerprint"]),
+                            transcriptFingerprint, StringComparison.Ordinal)
+                        && priorNewCandidates != null;
+                    if (canResumeNewCandidates)
+                    {
+                        foreach (var savedCandidate in ParseSuggestions(priorNewCandidates))
+                        {
+                            if (savedCandidate == null || savedCandidate.EvidenceMessageIds == null
+                                || savedCandidate.EvidenceMessageIds.Count != 2
+                                || !string.Equals(savedCandidate.SourceFingerprint, result.SourceFingerprint, StringComparison.Ordinal))
+                            {
+                                result.NewCandidateEvidenceRejected++;
+                                continue;
+                            }
+
+                            Suggestion restored;
+                            string rejection;
+                            if (!TryCreateVerifiedNewKnowledgeCandidate(
+                                session.Seller,
+                                savedCandidate.EvidenceMessageIds[0],
+                                savedCandidate.EvidenceMessageIds[1],
+                                savedCandidate.Confidence,
+                                savedCandidate.Reason,
+                                result.SourceFingerprint,
+                                turns,
+                                cards,
+                                buyerMessageIds,
+                                humanMessageIds,
+                                out restored,
+                                out rejection))
+                            {
+                                result.NewCandidateEvidenceRejected++;
+                                continue;
+                            }
+                            result.NewCandidates.Add(restored);
+                        }
+                        result.NewCandidateAnalysisComplete = true;
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var newCandidateBatch = await AnalyzeKnowledgeNewCandidatesAsync(
+                                session.ShopKey,
+                                result.SourceFingerprint,
+                                transcript,
+                                corpusSessionSummary,
+                                promptBuyerMessageIds,
+                                promptHumanMessageIds,
+                                promptIdentifiers,
+                                buyerMessageIds,
+                                humanMessageIds,
+                                turns,
+                                cards,
+                                session.Seller);
+                            result.NewCandidateAnalysisComplete = newCandidateBatch != null && newCandidateBatch.Success;
+                            if (result.NewCandidateAnalysisComplete)
+                            {
+                                result.NewCandidates.AddRange(newCandidateBatch.Candidates);
+                                result.NewCandidateEvidenceRejected = newCandidateBatch.EvidenceRejected;
+                                result.NewCandidateModel = newCandidateBatch.Model ?? string.Empty;
+                                result.NewCandidateProtocol = newCandidateBatch.Protocol ?? string.Empty;
+                                result.NewCandidateEndpoint = newCandidateBatch.EndpointName ?? string.Empty;
+                                if (!string.IsNullOrWhiteSpace(result.NewCandidateModel)) result.Models.Add(result.NewCandidateModel);
+                                if (!string.IsNullOrWhiteSpace(result.NewCandidateProtocol)) result.Protocols.Add(result.NewCandidateProtocol);
+                                if (!string.IsNullOrWhiteSpace(result.NewCandidateEndpoint)) result.Endpoints.Add(result.NewCandidateEndpoint);
+                            }
+                            else
+                            {
+                                result.NewCandidateError = newCandidateBatch == null
+                                    ? "new_candidate_analysis_result_null"
+                                    : Clean(newCandidateBatch.Error, 500);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.NewCandidateAnalysisComplete = false;
+                            result.NewCandidateError = Clean(ex.Message, 500);
+                        }
+                    }
+
+                    foreach (var candidate in result.NewCandidates)
+                        candidate.ApplyMessage = "已从真实买家消息和非Bot人工回复提取；等待原子写入与重复知识门禁";
                 }
 
                 coverage = ParseCoverage(report.InputCoverageJson);
@@ -1506,6 +1600,17 @@ namespace Bot.ChromeNs
                 coverage["knowledgeCorpusCandidates"] = result.Candidates.Count;
                 coverage["knowledgeCorpusCandidatesOmitted"] = result.CandidatesOmitted;
                 coverage["knowledgeCorpusEvidenceRejected"] = result.EvidenceRejected;
+                coverage["knowledgeCorpusNewCandidateAnalysisComplete"] = result.NewCandidateAnalysisComplete;
+                coverage["knowledgeCorpusNewCandidatePromptVersion"] = KnowledgeCorpusNewCandidatePromptVersion;
+                coverage["knowledgeCorpusNewCandidateSourceFingerprint"] = result.SourceFingerprint;
+                coverage["knowledgeCorpusNewCandidateTranscriptFingerprint"] = transcriptFingerprint;
+                coverage["knowledgeCorpusNewCandidateSuggestions"] = JArray.Parse(SerializeSuggestions(result.NewCandidates));
+                coverage["knowledgeCorpusNewCandidates"] = result.NewCandidates.Count;
+                coverage["knowledgeCorpusNewCandidateEvidenceRejected"] = result.NewCandidateEvidenceRejected;
+                coverage["knowledgeCorpusNewCandidateError"] = result.NewCandidateError;
+                coverage["knowledgeCorpusNewCandidateModel"] = result.NewCandidateModel;
+                coverage["knowledgeCorpusNewCandidateProtocol"] = result.NewCandidateProtocol;
+                coverage["knowledgeCorpusNewCandidateEndpoint"] = result.NewCandidateEndpoint;
                 coverage["knowledgeCorpusFailedBatches"] = result.FailedBatches;
                 coverage["knowledgeCorpusModel"] = string.Join(",", result.Models.OrderBy(x => x, StringComparer.Ordinal));
                 coverage["knowledgeCorpusProtocol"] = string.Join(",", result.Protocols.OrderBy(x => x, StringComparer.Ordinal));
