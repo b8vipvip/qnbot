@@ -195,7 +195,8 @@ def test_delete_tombstones_remain_in_cloud_snapshots_and_are_accepted_by_runtime
     assert "var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);" in sync
     assert 'payload["records"]=JArray.FromObject(local);' in sync
     assert '"Enabled","Status"' in api
-    assert 'not str(row.get("Answer") or "").strip()' in api
+    assert "not isinstance(answer,str)" in api
+    assert "not answer.strip()" in api
 
 
 def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_metadata():
