@@ -78,3 +78,20 @@ def test_runtime_bootstraps_feedback_observer_and_quality_ui():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert "KnowledgeV2QualityUiBridge.Initialize()" in runtime
     assert "KnowledgeEngineV2FeedbackBridge.Initialize()" in runtime
+
+
+def test_feedback_ingress_deduplicates_by_shopkey_and_uses_canonical_message_roles():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2FeedbackBridge.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage"):
+        bridge.index("private static string ExtractMessageText")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in observe
+    assert "using (ShopSettingsScope.Enter(shop))" in observe
+    assert 'shop.ShopKey + "|v2-feedback:" + messageKey' in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in observe
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in observe
+    assert "var isBuyer = fromIsBuyer && toIsSeller;" in observe
+    assert "var isSeller = fromIsSeller && toIsBuyer;" in observe
