@@ -129,3 +129,43 @@ def test_durable_manual_save_warms_a_cold_snapshot_before_next_buyer_question():
     assert "if (!Snapshots.TryGetValue(shop.ShopKey, out current) || current == null)" in method
     assert "Warm(seller);" in method
     assert "just-committed SQLite row" in method
+
+
+def test_manual_takeover_auto_learning_requires_native_buyer_and_human_message_ids():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    queue = learning.split("private static void QueueManualAnswerComparison(", 1)[1].split(
+        "private static async Task CompareManualAnswerAsync(", 1
+    )[0]
+    resolver = learning.split("private static bool TryResolveManualEvidenceMessageIds(", 1)[1].split(
+        "private static void QueueManualAnswerComparison(", 1
+    )[0]
+    compare = learning.split("private static async Task CompareManualAnswerAsync(", 1)[1].split(
+        "private static bool ContainsUnsafeManualLearning(", 1
+    )[0]
+
+    assert "TryResolveManualEvidenceMessageIds(" in learning
+    assert "questionTurn.NativeAliases" in resolver
+    assert "answerTurn.NativeAliases" in resolver
+    assert "questionMatches.Count != 1 || answerMatches.Count != 1" in resolver
+    assert "SendDeliveryWatchdog.IsKnownBotAnswer" in resolver
+    assert "buyerMessageId.Length == 0 || humanMessageId.Length == 0" in resolver
+    assert "buyerMessageId + \"|\" + humanMessageId" in compare
+    assert "string.Empty, out saveMessage" not in compare
+    assert "buyerMessageId.Length == 0 || humanMessageId.Length == 0" in queue
+
+
+def test_manual_takeover_direct_answer_is_atomic_reversible_and_respects_operator_disable():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository.split("public static bool TrySaveReviewedDirectAnswer(string seller, string question,", 1)[1].split(
+        "public static bool TryCreateVerifiedSessionKnowledge(", 1
+    )[0]
+
+    assert "var suppressed = all.Where(matchingQuestion)" in method
+    assert "!x.Enabled" in method
+    assert 'x.Status, "deleted"' in method
+    assert 'x.Status, "disabled"' in method
+    assert "PreviousJson = previousJson" in method
+    assert "CurrentJson = JsonConvert.SerializeObject(record)" in method
+    assert "MessageRecordId = (sourceMessageId ?? string.Empty).Trim()" in method
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
+    assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);" in method
