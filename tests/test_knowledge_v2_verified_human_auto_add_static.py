@@ -103,6 +103,8 @@ def test_new_knowledge_addition_is_shop_scoped_fingerprint_guarded_idempotent_an
     assert "priorEvidence != null" in method
     assert "exactMatches.Count > 0" in method
     assert "if (similar)" in method
+    assert "predicateStrong" in method
+    assert "subjectSimilarity >= 0.90" in method
     assert "SourceType = \"human_evidence_auto_learned\"" in method
     assert "Status = \"active\"" in method
     assert "Authority = 0.98" in method
