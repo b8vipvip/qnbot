@@ -213,8 +213,15 @@ namespace Bot.ChromeNs
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
-            var buyer = from == seller ? to : (to == seller ? from : string.Empty);
-            if (string.IsNullOrWhiteSpace(buyer)) return;
+            // The transport may prefix seller nicknames with "cntaobao". Resolve
+            // the seller endpoint canonically instead of dropping otherwise valid
+            // messages through exact string comparison.
+            var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
+            var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
+            if (fromIsSeller == toIsSeller) return;
+            var buyer = fromIsSeller ? to : from;
+            if (string.IsNullOrWhiteSpace(buyer)
+                || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
 
             // Do not consume the message fingerprint until its exact shop, seller and buyer
             // identities are known. A standby CDP page may deliver the same payload before
