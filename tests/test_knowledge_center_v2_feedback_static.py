@@ -95,3 +95,16 @@ def test_feedback_ingress_deduplicates_by_shopkey_and_uses_canonical_message_rol
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in observe
     assert "var isBuyer = fromIsBuyer && toIsSeller;" in observe
     assert "var isSeller = fromIsSeller && toIsBuyer;" in observe
+
+
+def test_feedback_observer_uses_weak_qn_identity_and_retryable_attachment():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2FeedbackBridge.cs")
+    attach = bridge[
+        bridge.index("private static void AttachExisting"):
+        bridge.index("private static void OnRawMessages")
+    ]
+    assert "ConditionalWeakTable<QN, object> Attached" in bridge
+    assert "lock (AttachSync)" in attach
+    assert "Attached.TryGetValue(qn, out marker)" in attach
+    assert "Attached.Add(qn, new object())" in attach
+    assert "RuntimeHelpers.GetHashCode(qn)" not in attach
