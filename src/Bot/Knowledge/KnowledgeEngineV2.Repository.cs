@@ -1435,8 +1435,10 @@ namespace Bot.Knowledge
             record.Exclusions = NormalizeList(record.Exclusions, 20);
             record.RequiredContext = NormalizeList(record.RequiredContext, 20);
             record.ProductIds = NormalizeList(record.ProductIds, 20);
-            record.Authority = Clamp(record.Authority <= 0 ? 0.90 : record.Authority);
-            record.Confidence = Clamp(record.Confidence <= 0 ? 0.80 : record.Confidence);
+            record.Authority = double.IsNaN(record.Authority) || double.IsInfinity(record.Authority) || record.Authority <= 0
+                ? 0.90 : Clamp(record.Authority);
+            record.Confidence = double.IsNaN(record.Confidence) || double.IsInfinity(record.Confidence) || record.Confidence <= 0
+                ? 0.80 : Clamp(record.Confidence);
             if (record.CreatedAt == DateTime.MinValue) record.CreatedAt = DateTime.Now;
             record.UpdatedAt = DateTime.Now;
             if (record.LastVerifiedAt == DateTime.MinValue) record.LastVerifiedAt = record.UpdatedAt;
@@ -1669,6 +1671,7 @@ namespace Bot.Knowledge
 
         private static double Clamp(double value)
         {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return 0;
             return Math.Max(0, Math.Min(1, value));
         }
     }
