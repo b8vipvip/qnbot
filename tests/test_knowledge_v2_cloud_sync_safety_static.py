@@ -196,3 +196,32 @@ def test_delete_tombstones_remain_in_cloud_snapshots_and_are_accepted_by_runtime
     assert 'payload["records"]=JArray.FromObject(local);' in sync
     assert '"Enabled","Status"' in api
     assert 'not str(row.get("Answer") or "").strip()' in api
+
+
+def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_metadata():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service[
+        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("private static void AddUnique")
+    ]
+    compare = service[
+        service.index("private static bool SameRecordContent"):
+        service.index("private static KnowledgeV2Record CloneRecord")
+    ]
+
+    assert "MergeRecordMetadata(cloud,local)" in merge
+    for field in (
+        "ShortAnswer", "Subject", "Predicate", "Entities", "Aliases",
+        "Conditions", "Exclusions", "RequiredContext", "ProductIds",
+        "RiskLevel", "SourceType", "SourceId", "Authority", "Confidence",
+    ):
+        assert f"left.{field}" in compare and f"right.{field}" in compare
+    assert "left.Enabled==right.Enabled" in compare
+    assert "left.Status" in compare
+    assert "left.Type" in compare
+    assert "left.Intent" in compare
+    assert "SequenceEqual" in compare
+    metadata = compare[compare.index("private static void MergeRecordMetadata"):]
+    for field in ("UseCount", "AcceptedCount", "CorrectionCount", "WithdrawCount"):
+        assert f"target.{field}=Math.Max" in metadata
+    assert "target.LastVerifiedAt=source.LastVerifiedAt" in metadata
