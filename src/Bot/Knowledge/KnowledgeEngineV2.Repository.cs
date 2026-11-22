@@ -443,11 +443,11 @@ namespace Bot.Knowledge
             MirrorOneToLegacy(shop, record);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             string auditError;
-            KnowledgeV2GovernanceAuditService.TryAppendAction(
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                 seller, "session_human_evidence_auto_add", "knowledge", record.Id,
                 questionMessageId + "," + answerMessageId, record.Title,
                 "no_existing_knowledge",
-                KnowledgeV2GovernanceAuditService.DescribeRecord(record),
+                KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
                 "仅根据完整会话中的真实买家问题与非Bot人工客服回复自动新增；confidence="
                     + confidence.ToString("0.00") + "; source=" + sourceId
                     + "; 已保存可回滚修订历史。",
