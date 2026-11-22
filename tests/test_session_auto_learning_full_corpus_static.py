@@ -992,3 +992,27 @@ def test_deleted_knowledge_tombstones_change_the_fingerprint_but_are_not_sent_ba
     assert "var records = allRecords" in method
     assert "result.RecordCount = records.Count;" in method
     assert "BuildKnowledgeCorpusBatches(records)" in method
+
+
+def test_live_learning_message_roles_accept_canonical_cntaobao_seller_and_buyer_aliases():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage"):
+        bridge.index("private static void InjectLearnedStyle")
+    ]
+    classify = service[
+        service.index("public static void ObserveLiveMessage"):
+        service.index("public static string BuildReplyStylePromptAddon")
+    ]
+
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in observe
+    assert "if (fromIsSeller == toIsSeller) return;" in observe
+    assert "var buyer = fromIsSeller ? to : from;" in observe
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, from, buyer)" in classify
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)" in classify
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in classify
+    assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in classify
+    assert "var isBuyer = fromIsBuyer && toIsSeller;" in classify
+    assert "var isSeller = fromIsSeller && toIsBuyer;" in classify
