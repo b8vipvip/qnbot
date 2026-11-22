@@ -55,4 +55,6 @@ def test_existing_reviewed_answer_path_is_durable_deduplicated_and_immediate():
     assert 'Exact-title duplicates are updated instead of creating competing facts' in KNOWLEDGE
     assert 'KnowledgeEngineV2Semantics.Compact(x.Title)' in KNOWLEDGE
     assert 'record.SourceType = "manual_reviewed_direct";' in KNOWLEDGE
-    assert 'Save(seller, record); // Durable write + immediate immutable snapshot update.' in KNOWLEDGE
+    assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in KNOWLEDGE
+    assert "MirrorOneToLegacy(shop, record);" in KNOWLEDGE
+    assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);" in KNOWLEDGE
