@@ -9,7 +9,7 @@ Last updated / 最后更新：2026-11-22
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：[bot-v1.1.2821](https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2821)
+- Latest stable client：bot-v1.1.2821
 - Release target：ad8575dc5dc37d45c9fa10d019a64ba5c8529551
 - x64 package SHA-256：33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
@@ -182,9 +182,9 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - Knowledge V2 AI auto-publish is now on master: the dedicated FAQ pass generates the canonical question, answer, aliases and keywords, but every published record must cite the original Qianniu-native buyer-message ID and later non-Bot human-reply ID from the same complete ShopKey transcript. The AI-generated content is checked against the source pair; unverifiable rewrites fall back to the original buyer question and human answer.
 - The narrow FAQ path writes directly to active production Knowledge V2 with a rollback revision, exact corpus-fingerprint CAS, source-pair idempotency, collision checks, readback verification, legacy mirror, immediate retrieval refresh and governance audit. It does not require human approval or gray rollout. Generic session suggestions and style changes remain dry-run; high-risk order/payment/account/fulfillment actions remain fail-closed.
 - Additional retrieval bypass fix (a3b6697c363df6c540266a2629568e21d7ee062b; regression test ad8575dc5dc37d45c9fa10d019a64ba5c8529551): auto-published human-evidence records can now enter production ranking only through an exact saved title/alias or the strict semantic gate (score, alias, predicate, intent, confidence, entity/subject, standalone and risk checks). The generic production fallback can no longer bypass that gate.
-- Exact-head API control-plane CI on ad8575d: success, Fast Gate 1797 passed / 16 skipped, Windows Static Gate and Full Gate / Build Package succeeded. Run: https://github.com/b8vipvip/qnbot/actions/runs/44998075693.
-- Exact-head Windows x64 release build: success, including PowerShell 5.1 checks, lifecycle regression tests, MSBuild x64, complete package assembly and verification. Run: https://github.com/b8vipvip/qnbot/actions/runs/44998075683.
-- GPTAuto Observer/Executor runs succeeded. Stable release: bot-v1.1.2821, target ad8575dc5dc37d45c9fa10d019a64ba5c8529551; x64 package SHA-256: 33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd. Release: https://github.com/b8vipvip/qnbot/releases/tag/bot-v1.1.2821.
+- Exact-head API control-plane CI on ad8575d: success, Fast Gate 1797 passed / 16 skipped, Windows Static Gate and Full Gate / Build Package succeeded. Run ID: 44998075693.
+- Exact-head Windows x64 release build: success, including PowerShell 5.1 checks, lifecycle regression tests, MSBuild x64, complete package assembly and verification. Run ID: 44998075683.
+- GPTAuto Observer/Executor runs succeeded. Stable release: bot-v1.1.2821, target ad8575dc5dc37d45c9fa10d019a64ba5c8529551; x64 package SHA-256: 33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd. Release tag: bot-v1.1.2821.
 - This verifies source, tests, Windows build and release packaging only. Real Windows/千牛 validation remains open: 150+ messages and full-corpus resume, cross-device sync, multi-shop identity switching, manual takeover/automatic reply races, live test-order delivery recovery, long-running WS/CDP stability and Reception Agent authorization/publish/rollback. Issue #366 remains open until these runtime gates have evidence.
 
 ## 5. Validation and release rules / 验收与发布规则
