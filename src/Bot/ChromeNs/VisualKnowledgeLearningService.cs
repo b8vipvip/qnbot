@@ -2,6 +2,7 @@ using Bot.ChatRecord;
 using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -16,6 +17,7 @@ namespace Bot.ChromeNs
     internal sealed class VisualKnowledgeObservationEntity
     {
         [PrimaryKey] public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string MessageKey { get; set; }
@@ -32,6 +34,7 @@ namespace Bot.ChromeNs
     internal sealed class VisualKnowledgeEntryEntity
     {
         [PrimaryKey] public string EntityId { get; set; }
+        public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string VisualQuestion { get; set; }
         public string VisualSummary { get; set; }
@@ -70,6 +73,7 @@ namespace Bot.ChromeNs
         private static int _schemaReady;
 
         public static void RecordVisionAnalysis(
+            string shopKey,
             string seller,
             string buyer,
             QNChatMessage message,
@@ -79,20 +83,23 @@ namespace Bot.ChromeNs
             string visualTags,
             string generatedAnswer)
         {
+            shopKey = Clean(shopKey, 200);
             seller = Clean(seller, 160);
             buyer = Clean(buyer, 160);
             visualQuestion = Clean(visualQuestion, 500);
             visualSummary = Redact(Clean(visualSummary, 1600));
             visualTags = NormalizeTags(Redact(visualTags));
             generatedAnswer = Clean(generatedAnswer, 1200);
-            if (seller.Length == 0 || buyer.Length == 0 || visualSummary.Length == 0) return;
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || visualSummary.Length == 0) return;
 
             EnsureInitialized();
+            BackfillLegacyShopRows(shopKey, seller);
             var observedAt = GetMessageTime(message);
             if (observedAt == DateTime.MinValue || observedAt > DateTime.Now.AddMinutes(2)) observedAt = DateTime.Now;
             var entity = new VisualKnowledgeObservationEntity
             {
                 EntityId = Guid.NewGuid().ToString("N"),
+                ShopKey = shopKey,
                 Seller = seller,
                 Buyer = buyer,
                 MessageKey = Clean(messageKey, 500),
@@ -110,8 +117,8 @@ namespace Bot.ChromeNs
             {
                 if (!string.IsNullOrWhiteSpace(entity.MessageKey))
                 {
-                    var old = SelectObservations("where Seller = ? and Buyer = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
-                        seller, buyer, entity.MessageKey).FirstOrDefault();
+                    var old = SelectObservations("where ShopKey = ? and Seller = ? and Buyer = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
+                        shopKey, seller, buyer, entity.MessageKey).FirstOrDefault();
                     if (old != null)
                     {
                         old.VisualQuestion = entity.VisualQuestion;
@@ -130,6 +137,7 @@ namespace Bot.ChromeNs
         }
 
         public static bool TryFindMatch(
+            string shopKey,
             string seller,
             string visualQuestion,
             string visualSummary,
@@ -137,17 +145,19 @@ namespace Bot.ChromeNs
             out VisualKnowledgeMatch match)
         {
             match = null;
+            shopKey = Clean(shopKey, 200);
             seller = Clean(seller, 160);
             visualQuestion = Clean(visualQuestion, 500);
             visualSummary = Redact(Clean(visualSummary, 1600));
             visualTags = NormalizeTags(Redact(visualTags));
-            if (seller.Length == 0 || visualSummary.Length == 0) return false;
+            if (shopKey.Length == 0 || seller.Length == 0 || visualSummary.Length == 0) return false;
 
             EnsureInitialized();
+            BackfillLegacyShopRows(shopKey, seller);
             List<VisualKnowledgeEntryEntity> entries;
             lock (DbSync)
             {
-                entries = SelectKnowledge("where Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit " + MaxKnowledgeEntriesPerSeller, seller);
+                entries = SelectKnowledge("where ShopKey = ? and Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit " + MaxKnowledgeEntriesPerSeller, shopKey, seller);
             }
 
             VisualKnowledgeEntryEntity best = null;
@@ -173,7 +183,7 @@ namespace Bot.ChromeNs
                 VisualTags = best.VisualTags,
                 Score = bestScore
             };
-            Log.Info("命中视觉人工知识: seller=" + seller + ", knowledgeId=" + best.EntityId
+            Log.Info("命中视觉人工知识: shopKey=" + shopKey + ", seller=" + seller + ", knowledgeId=" + best.EntityId
                 + ", score=" + bestScore.ToString("0.00", CultureInfo.InvariantCulture));
             return true;
         }
@@ -203,6 +213,17 @@ namespace Bot.ChromeNs
         {
             var observation = LoadObservation(id);
             if (observation == null || observation.Status != "等待人工接待结束") return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(observation.ShopKey); }
+            catch { Schedule(id, TimeSpan.FromMinutes(1)); return; }
+            if (shop == null || !string.Equals(shop.ShopKey, observation.ShopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, observation.Seller, StringComparison.Ordinal))
+            {
+                Schedule(id, TimeSpan.FromMinutes(1));
+                return;
+            }
+            using (ShopSettingsScope.Enter(shop))
+            {
             var observedAt = FromTicks(observation.ObservedAtTicks);
             var turns = ConversationContextStore.GetRecentTurns(observation.Seller, observation.Buyer, string.Empty, 24)
                 .Where(x => x != null && x.Timestamp != DateTime.MinValue)
@@ -249,8 +270,9 @@ namespace Bot.ChromeNs
                 knowledge == null ? string.Empty : knowledge.EntityId);
             if (knowledge != null)
             {
-                Log.Info("视觉人工知识学习完成: seller=" + observation.Seller + ", buyer=" + observation.Buyer
+                Log.Info("视觉人工知识学习完成: shopKey=" + observation.ShopKey + ", seller=" + observation.Seller + ", buyer=" + observation.Buyer
                     + ", knowledgeId=" + knowledge.EntityId + ", answer=" + Short(answer, 120));
+            }
             }
         }
 
@@ -260,8 +282,8 @@ namespace Bot.ChromeNs
             {
                 lock (DbSync)
                 {
-                    var entries = SelectKnowledge("where Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit "
-                        + MaxKnowledgeEntriesPerSeller, observation.Seller);
+                    var entries = SelectKnowledge("where ShopKey = ? and Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit "
+                        + MaxKnowledgeEntriesPerSeller, observation.ShopKey, observation.Seller);
                     VisualKnowledgeEntryEntity best = null;
                     var bestScore = 0.0;
                     foreach (var entry in entries)
@@ -288,6 +310,7 @@ namespace Bot.ChromeNs
                     var created = new VisualKnowledgeEntryEntity
                     {
                         EntityId = Guid.NewGuid().ToString("N"),
+                        ShopKey = observation.ShopKey,
                         Seller = observation.Seller,
                         VisualQuestion = observation.VisualQuestion,
                         VisualSummary = observation.VisualSummary,
@@ -300,9 +323,9 @@ namespace Bot.ChromeNs
                         UpdatedAtTicks = now
                     };
                     DbHelper.Db.SaveRecordsInTransaction(new List<object> { created });
-                    DbHelper.Db.Execute("delete from VisualKnowledgeEntryEntity where Seller = ? and EntityId not in "
-                        + "(select EntityId from VisualKnowledgeEntryEntity where Seller = ? order by UpdatedAtTicks desc limit "
-                        + MaxKnowledgeEntriesPerSeller + ")", observation.Seller, observation.Seller);
+                    DbHelper.Db.Execute("delete from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? and EntityId not in "
+                        + "(select EntityId from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "
+                        + MaxKnowledgeEntriesPerSeller + ")", observation.ShopKey, observation.Seller, observation.ShopKey, observation.Seller);
                     return created;
                 }
             }
@@ -351,6 +374,19 @@ namespace Bot.ChromeNs
                 }
                 foreach (var item in pending)
                 {
+                    if (string.IsNullOrWhiteSpace(item.ShopKey))
+                    {
+                        try
+                        {
+                            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.Seller);
+                            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
+                            item.ShopKey = shop.ShopKey;
+                            lock (DbSync) DbHelper.Db.SaveRecordsInTransaction(new List<object> { item });
+                        }
+                        catch (AmbiguousShopIdentityException) { continue; }
+                        catch { continue; }
+                    }
+                    BackfillLegacyShopRows(item.ShopKey, item.Seller);
                     var due = TimeSpan.FromMinutes(BuyerQuietMinutes) - (DateTime.Now - FromTicks(item.ObservedAtTicks));
                     Schedule(item.EntityId, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
                 }
@@ -364,11 +400,43 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,GeneratedAnswer text,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
-                DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeObservation_SellerBuyer on VisualKnowledgeObservationEntity(Seller,Buyer,ObservedAtTicks)");
-                DbHelper.Db.Execute("create table if not exists VisualKnowledgeEntryEntity (EntityId text primary key not null,Seller text,VisualQuestion text,VisualSummary text,VisualTags text,Answer text,SourceType text,Confirmations integer not null default 0,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
-                DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeEntry_Seller on VisualKnowledgeEntryEntity(Seller,Enabled,UpdatedAtTicks)");
+                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,GeneratedAnswer text,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column ShopKey text"); } catch { }
+                DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeObservation_ShopSellerBuyer on VisualKnowledgeObservationEntity(ShopKey,Seller,Buyer,ObservedAtTicks)");
+                DbHelper.Db.Execute("create table if not exists VisualKnowledgeEntryEntity (EntityId text primary key not null,ShopKey text,Seller text,VisualQuestion text,VisualSummary text,VisualTags text,Answer text,SourceType text,Confirmations integer not null default 0,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeEntryEntity add column ShopKey text"); } catch { }
+                DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeEntry_ShopSeller on VisualKnowledgeEntryEntity(ShopKey,Seller,Enabled,UpdatedAtTicks)");
                 Volatile.Write(ref _schemaReady, 1);
+            }
+        }
+
+        private static void BackfillLegacyShopRows(string shopKey, string seller)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0) return;
+            try
+            {
+                var resolved = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                if (resolved == null || !string.Equals(resolved.ShopKey, shopKey, StringComparison.Ordinal))
+                    return;
+                lock (DbSync)
+                {
+                    DbHelper.Db.Execute(
+                        "update VisualKnowledgeObservationEntity set ShopKey = ? where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                    DbHelper.Db.Execute(
+                        "update VisualKnowledgeEntryEntity set ShopKey = ? where Seller = ? and (ShopKey is null or ShopKey = '')",
+                        shopKey, seller);
+                }
+            }
+            catch (AmbiguousShopIdentityException)
+            {
+                // Legacy visual knowledge remains unassigned when the seller nickname is shared.
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("迁移旧版视觉知识店铺归属失败: " + ex.Message, 5);
             }
         }
 
