@@ -458,7 +458,8 @@ namespace Bot.Knowledge
         private static double Number(JObject obj, string name, double fallback)
         {
             double value;
-            return double.TryParse(Text(obj, name), out value) ? value : fallback;
+            return double.TryParse(Text(obj, name), out value)
+                && !double.IsNaN(value) && !double.IsInfinity(value) ? value : fallback;
         }
 
         private static List<string> Clean(IEnumerable<string> values)
@@ -467,7 +468,11 @@ namespace Bot.Knowledge
                 .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToList();
         }
 
-        private static double Clamp(double value) { return value < 0 ? 0 : (value > 1 ? 1 : value); }
+        private static double Clamp(double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return 0;
+            return value < 0 ? 0 : (value > 1 ? 1 : value);
+        }
 
         private static string BuildShortAnswer(string requested, string answer)
         {
