@@ -17,6 +17,7 @@ def test_ai_generates_complete_knowledge_content_and_requests_direct_production_
     assert "knowledge_question" in prompt
     assert "knowledge_answer" in prompt
     assert "aliases" in prompt and "keywords" in prompt
+    assert "category" in prompt and "product_feature" in prompt and "usage_guide" in prompt
     assert "AI必须主动整理" in prompt
     assert "不经过人工审批或灰度发布" in prompt
     assert '\\"aliases\\":[\\"同义问法\\"],\\"keywords\\"' in prompt
@@ -70,6 +71,7 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "ai_generated_answer_exceeds_human_evidence_scope" in generated
     assert "evidenceCandidate.Question = question;" in generated
     assert "evidenceCandidate.Answer = answer;" in generated
+    assert "evidenceCandidate.Category = category;" in generated
 
 
 def test_no_human_review_gate_for_safe_faq_auto_add_and_eight_candidates_can_publish():
@@ -99,6 +101,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
         repository.index("private static bool IsSafeAutomaticNewKnowledge")
     ]
 
+    assert "string category" in method
     assert "IEnumerable<string> aliases" in method
     assert "IEnumerable<string> keywords" in method
     assert "normalizedKeywords" in method
@@ -116,6 +119,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
     assert "SourceType = \"ai_auto_learned_human_evidence\"" in method
+    assert "Type = knowledgeType" in method
     assert "Enabled = true" in method
     assert "Status = \"active\"" in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
