@@ -316,12 +316,10 @@ namespace Bot.ChromeNs
                 }
                 finally
                 {
-                    ProbeState current;
-                    if (Probes.TryGetValue(key, out current) && ReferenceEquals(current, state))
-                    {
-                        ProbeState ignored;
-                        Probes.TryRemove(key, out ignored);
-                    }
+                    // A replacement probe may be installed between a value check
+                    // and key-only TryRemove. Compare-and-remove the exact state instead.
+                    ((ICollection<KeyValuePair<string, ProbeState>>)Probes)
+                        .Remove(new KeyValuePair<string, ProbeState>(key, state));
                 }
                 }
             });
@@ -391,17 +389,20 @@ namespace Bot.ChromeNs
         private static void Cleanup()
         {
             var now = DateTime.Now;
+            var exactWakes = (ICollection<KeyValuePair<string, GenericWake>>)GenericWakes;
             foreach (var pair in GenericWakes)
             {
                 if (pair.Value != null && pair.Value.LastSeenAt >= now.Subtract(GenericWakeLifetime)) continue;
-                GenericWake ignored;
-                GenericWakes.TryRemove(pair.Key, out ignored);
+                // Remove only the expired snapshot. A concurrent fresh wake for the
+                // same seller must not be deleted by this stale cleanup pass.
+                exactWakes.Remove(pair);
             }
+            var exactSignals = (ICollection<KeyValuePair<string, BuyerSignal>>)RecentBuyerSignals;
             foreach (var pair in RecentBuyerSignals)
             {
                 if (pair.Value != null && pair.Value.SeenAt >= now.AddMinutes(-3)) continue;
-                BuyerSignal ignored;
-                RecentBuyerSignals.TryRemove(pair.Key, out ignored);
+                // Preserve a newer buyer signal that replaced this expired snapshot.
+                exactSignals.Remove(pair);
             }
         }
 

@@ -142,3 +142,30 @@ def test_new_partial_files_are_in_windows_build():
     assert "QN.MessageRecovery.cs" in targets
     assert "OrderPlacedAutoReplyService.cs" in targets
     assert "OrderPaymentNotificationFallback.cs" in targets
+
+def test_order_signal_cleanup_uses_compare_and_remove_for_replaced_entries():
+    source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+    coordinator = between(
+        source, "internal static class OrderAutomationCoordinator",
+        "internal static class OrderPaymentNotificationFallback"
+    )
+    cleanup = between(coordinator, "private static void Cleanup()", "private static string Normalize")
+    probe = between(coordinator, "private static void ScheduleCorrelatedProbe", "private static bool TryActivateTargetIfSafeAsync")
+
+    assert "ICollection<KeyValuePair<string, GenericWake>>" in cleanup
+    assert "exactWakes.Remove(pair);" in cleanup
+    assert "ICollection<KeyValuePair<string, BuyerSignal>>" in cleanup
+    assert "exactSignals.Remove(pair);" in cleanup
+    assert "GenericWakes.TryRemove(pair.Key" not in cleanup
+    assert "RecentBuyerSignals.TryRemove(pair.Key" not in cleanup
+    assert "ICollection<KeyValuePair<string, ProbeState>>" in probe
+    assert ".Remove(new KeyValuePair<string, ProbeState>(key, state))" in probe
+    assert "Probes.TryRemove(key" not in probe
+
+
+def test_direct_order_raw_reservation_cleanup_does_not_remove_a_renewed_key():
+    source = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    cleanup = between(source, "private static void CleanupReservations()", "    }\n\n    internal static class DirectOrderIdentityResolver")
+    assert "ICollection<KeyValuePair<string, DateTime>>" in cleanup
+    assert "exactReservations.Remove(pair);" in cleanup
+    assert "RawReservations.TryRemove(pair.Key" not in cleanup

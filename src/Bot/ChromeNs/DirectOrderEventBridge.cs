@@ -587,11 +587,12 @@ namespace Bot.ChromeNs
         private static void CleanupReservations()
         {
             var now = DateTime.Now;
+            var exactReservations = (ICollection<KeyValuePair<string, DateTime>>)RawReservations;
             foreach (var pair in RawReservations)
             {
                 if (pair.Value >= now) continue;
-                DateTime ignored;
-                RawReservations.TryRemove(pair.Key, out ignored);
+                // Do not remove a renewed reservation written after this snapshot.
+                exactReservations.Remove(pair);
             }
         }
     }
