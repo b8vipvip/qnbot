@@ -161,6 +161,7 @@ namespace Bot.Knowledge
                             // poll re-negotiate from revision 0. If the server still has data,
                             // runtime_sync returns it and the normal merge path preserves both
                             // local-only facts and cloud facts as disabled conflict candidates.
+                            var previousRevision=state.Revision;
                             var rollbackBackup=Backup(shop,local,cloudRevision);
                             PersistState(shop,state,0,string.Empty);
                             lock(state.SyncRoot)
@@ -171,7 +172,7 @@ namespace Bot.Knowledge
                             }
                             Log.Info("Knowledge V2 检测到云端 revision 命名空间重置，已备份本地语料并重置同步检查点；下一轮将重新协商而非覆盖: shopRef="
                                 +MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey)
-                                +", local_revision="+(state.Revision)+", cloud_revision="+cloudRevision
+                                +", local_revision="+previousRevision+", cloud_revision="+cloudRevision
                                 +", backup="+Path.GetFileName(rollbackBackup));
                             return;
                         }
