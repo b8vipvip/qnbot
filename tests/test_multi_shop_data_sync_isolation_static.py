@@ -322,3 +322,25 @@ def test_inbound_timeline_and_product_presets_use_exact_shopkey():
     assert "ResolveRuntimeBySellerNick(seller)" in create_store
     assert "ResolveSourceLabel(string seller, string answer, string shopKey = null)" in preset_service
     assert "ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey)" in read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+
+
+def test_reception_agent_normalizes_seller_transport_nick_before_classifying_shop_events():
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage"):
+        bridge.index("private static bool IsCurrentSellerIdentity")
+    ]
+    identity = bridge[
+        bridge.index("private static bool IsCurrentSellerIdentity"):
+        bridge.index("private static BuyerSessionEventKind ClassifyBuyerEvent")
+    ]
+
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in observe
+    assert "ResolveRuntimeByShopKey(shopKey)" in observe
+    assert "using (ShopSettingsScope.Enter(shop))" in observe
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in observe
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(endpointNick, expectedNick)" in identity
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, expectedNick)" in identity
+    assert "message.fromid.targetId" in identity
+    assert "message.toid.targetId" in identity
