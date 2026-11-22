@@ -724,7 +724,8 @@ def test_auto_delivery_worker_claim_token_fences_stale_processes_before_irrevers
         coordinator.index("private static void RemoveRecord"):
         coordinator.index("private static bool HasConfirmationIntent")
     ]
-    assert "RenewWorkerClaim(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId)" in execute
+    assert "AutoDeliveryCoordinator.RenewWorkerClaim(" in execute
+    assert "snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId" in execute
     persist = execute.index("TryPersistConfirmationIntent(")
     renew_before_click = execute.index("RenewWorkerClaim(", persist)
     click = execute.index('ReadModalStateAsync(sourceClient, "confirm")', renew_before_click)
