@@ -47,7 +47,9 @@ def test_workflow_restore_skips_corrupt_newest_backup_and_keeps_draft_fail_close
     assert "foreach (var candidate in backups)" in restore
     assert "Validate(File.ReadAllText(candidate, Encoding.UTF8))" in restore
     assert "没有找到有效的流程草稿备份，当前草稿未修改" in restore
-    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error)" in restore
+    assert 'restored["draft_revision"] = currentRevision + 1' in restore
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in restore
+    assert 'path, restored.ToString(Formatting.Indented), 3, 50, out error' in restore
     assert "仍需单独人工审核和灰度激活" in restore
 
 def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
