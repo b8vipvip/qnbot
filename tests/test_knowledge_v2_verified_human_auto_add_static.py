@@ -274,6 +274,8 @@ def test_unverifiable_ai_rewrite_falls_back_to_the_exact_human_question_and_answ
     assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
     assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
     assert "无法充分验证的改写自动回退至人工原文" in generated
+    assert "questionGrounded && answerGrounded" in generated
+    assert "AI问法改写未达到充分证据门槛" in generated
 
 def test_ai_answer_grounding_checks_all_source_numbers_and_entity_polarity():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
