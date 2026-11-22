@@ -398,3 +398,27 @@ def test_rollback_of_new_manual_direct_answer_is_also_an_explicit_auto_learning_
     assert "state.Db.Delete(row);" not in rollback
     assert 'x.Action, "buyer_direct_rollback"' in suppression
     assert "string.IsNullOrWhiteSpace(x.CurrentJson)" in suppression
+
+
+def test_auto_add_fails_closed_when_operator_delete_history_is_corrupt():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    suppression = repository.split("private static bool HasExplicitlyRemovedKnowledge(", 1)[1].split(
+        "private static bool IsSafeAutomaticNewKnowledge(", 1
+    )[0]
+
+    assert "catch" in suppression
+    assert "return true;" in suppression
+    assert "if (deleted == null) return true;" in suppression
+    assert "防止复活" in repository
+
+
+def test_auto_add_does_not_report_success_when_governance_audit_write_fails():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository.split("public static bool TryCreateVerifiedSessionKnowledge(", 1)[1].split(
+        "private static bool BlocksVerifiedAutoAddRecreation(", 1
+    )[0]
+
+    assert "if (!KnowledgeEngineV2GovernanceAuditService.TryAppendAction(" in method
+    assert "throw new InvalidOperationException(" in method
+    assert "等待幂等恢复重试" in method
+    assert 'recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add"' in method
