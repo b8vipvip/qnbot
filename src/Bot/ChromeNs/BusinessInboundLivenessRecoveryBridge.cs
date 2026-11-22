@@ -108,13 +108,13 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void CleanupRetiredQnState(QN[] sessions)
+        private static void CleanupRetiredQnState(IEnumerable<QN> sessions)
         {
             var now = DateTime.UtcNow;
             var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
             if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
             if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
-            var alive = new HashSet<QN>((sessions ?? new QN[0]).Where(x => x != null));
+            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>()).Where(x => x != null));
             foreach (var qn in NextHistoryProbeAt.Keys)
             {
                 if (alive.Contains(qn)) continue;
