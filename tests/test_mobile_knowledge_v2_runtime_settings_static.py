@@ -17,6 +17,8 @@ def test_runtime_settings_api_is_client_isolated_and_validated():
     assert '"knowledge_v2_settings_set"' in s
     assert "threshold<0.70 or threshold>0.96" in s
     assert "confidence<0.50 or confidence>0.95" in s
+    assert "math.isfinite(threshold)" in s
+    assert "math.isfinite(confidence)" in s
     assert "WHERE id=? AND client_id=?" in s
 
 def test_windows_reads_and_applies_existing_shop_scoped_v2_settings():
