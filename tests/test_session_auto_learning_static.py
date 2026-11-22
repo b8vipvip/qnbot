@@ -969,9 +969,10 @@ def test_learning_timeline_archives_buyer_turns_with_canonical_shop_and_alias_id
     assert "var seller = (shop.SellerNick ?? string.Empty).Trim();" in observe
     assert "DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)" in observe
     assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in observe
-    assert "shop.HasStableSellerId" in observe
-    assert "sellerEndpointTargetId" in observe
-    assert "loginTargetId" in observe
+    assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in observe
+    assert observe.index("DirectOrderIdentityResolver.IsMessageFromShop(message, shop)") < observe.index(
+        "BuyerIdentityAliasService.ObserveMessage(seller, message)"
+    )
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in observe
     assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in observe
     assert "var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);" in observe
