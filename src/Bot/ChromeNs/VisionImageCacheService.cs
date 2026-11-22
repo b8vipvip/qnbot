@@ -662,26 +662,33 @@ namespace Bot.ChromeNs
 
         private static string GetSellerNick(QNChatMessage message, string shopKey = null)
         {
-            if (message != null && message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
-                return message.loginid.nick.Trim();
-
+            if (message == null) return string.Empty;
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
             if (shopKey.Length > 0)
             {
                 try
                 {
                     var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                    if (shop != null) return (shop.SellerNick ?? string.Empty).Trim();
+                    if (shop == null || string.IsNullOrWhiteSpace(shop.SellerNick)
+                        || (loginNick.Length > 0
+                            && !DirectOrderIdentityResolver.IdentityEquals(loginNick, shop.SellerNick)))
+                        return string.Empty;
+                    return shop.SellerNick.Trim();
                 }
                 catch { return string.Empty; }
             }
 
             var current = ShopSettingsScope.Current;
             if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
+            {
+                if (loginNick.Length > 0
+                    && !DirectOrderIdentityResolver.IdentityEquals(loginNick, current.SellerNick))
+                    return string.Empty;
                 return current.SellerNick.Trim();
-            return message == null || message.toid == null
-                ? string.Empty
-                : (message.toid.nick ?? string.Empty).Trim();
+            }
+            if (loginNick.Length > 0) return loginNick;
+            return message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
         }
 
         private static string GetBuyerNick(QNChatMessage message, string seller)
@@ -689,9 +696,10 @@ namespace Bot.ChromeNs
             if (message == null) return string.Empty;
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
-            if (!string.IsNullOrWhiteSpace(from) && !string.Equals(from, seller, StringComparison.Ordinal)) return from;
-            if (!string.IsNullOrWhiteSpace(to) && !string.Equals(to, seller, StringComparison.Ordinal)) return to;
-            return string.Empty;
+            var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
+            var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
+            if (fromIsSeller == toIsSeller) return string.Empty;
+            return fromIsSeller ? to : from;
         }
 
         private static bool SameConversation(
