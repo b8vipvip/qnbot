@@ -65,8 +65,16 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "token[\"knowledge_question\"]" in parser
     assert "token[\"knowledge_answer\"]" in parser
     assert "TryCreateAiGeneratedKnowledgeCandidate(" in parser
-    assert "TextSimilarity(evidenceCandidate.Question, question) < 0.25" in generated
-    assert "TextSimilarity(evidenceCandidate.Answer, answer) < 0.25" in generated
+    assert "TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45" in generated
+    assert "TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45" in generated
+    assert "HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
+    assert "HasUnverifiedKnowledgeAnchors(sourceQuestion + \" \" + sourceAnswer, candidateAnswer)" in generated
+    assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
+    assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
+    assert "private static bool HasKnowledgePolarityMismatch(" in generated
+    assert "private static bool HasUnverifiedKnowledgeAnchors(" in generated
+    assert "|| !appearsInSource" in generated
     assert "ai_generated_answer_introduced_unverified_numeric_fact" in generated
     assert "ai_generated_answer_exceeds_human_evidence_scope" in generated
     assert "evidenceCandidate.Question = question;" in generated
@@ -224,3 +232,29 @@ def test_structured_json_recovery_accepts_full_corpus_decisions_and_ai_candidate
 
     assert 'obj["decisions"] != null' in parser
     assert 'obj["candidates"] != null' in parser
+
+def test_ai_normalization_cannot_flip_human_answer_polarity_or_invent_known_product_anchors():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert 'var negative = @"不支持|不兼容|不适配|不可以|不能|无法|不可用' in generated
+    assert 'var positive = @"支持|兼容|适配|可以|能用|可用|允许|提供|包含' in generated
+    assert "sourceNegative != generatedNegative" in generated
+    assert "sourcePositive != generatedPositive" in generated
+    assert "Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙" in generated
+    assert "return Regex.Matches(generatedText ?? string.Empty, anchors" in generated
+
+
+def test_unverifiable_ai_rewrite_falls_back_to_the_exact_human_question_and_answer():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
+    assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
+    assert "var question = questionGrounded ? candidateQuestion : sourceQuestion;" in generated
+    assert "var answer = answerGrounded ? candidateAnswer : sourceAnswer;" in generated
+    assert "无法充分验证的改写自动回退至人工原文" in generated
