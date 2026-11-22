@@ -166,6 +166,20 @@ def _load_v2_cas_module(tmp_path):
     with module._cp.db() as conn:
         conn.execute("CREATE TABLE client_tokens (id INTEGER PRIMARY KEY)")
         conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+        conn.execute(
+            """
+            CREATE TABLE bot_commands(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                command_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                error TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
     module.init_db()
     return module
 
@@ -330,3 +344,38 @@ def test_v2_record_schema_rejects_malformed_typed_fields(tmp_path, field, value)
 
     assert caught.value.status_code == 400
     assert module._state(1)["revision"] == 0
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("direct_threshold", float("nan")),
+        ("direct_threshold", float("inf")),
+        ("direct_threshold", float("-inf")),
+        ("min_confidence", float("nan")),
+        ("min_confidence", float("inf")),
+        ("min_confidence", float("-inf")),
+    ],
+)
+def test_v2_runtime_settings_reject_non_finite_thresholds_without_queueing(tmp_path, field, value):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    values = {
+        "enabled": True,
+        "mode": "production",
+        "direct_threshold": 0.82,
+        "min_confidence": 0.72,
+    }
+    values[field] = value
+    payload = module.KnowledgeV2RuntimeSettingsInput(**values)
+
+    with pytest.raises(HTTPException) as caught:
+        module.web_v2_runtime_settings_save(payload, client={"id": 1})
+
+    assert caught.value.status_code == 400
+    assert "有限数值" in caught.value.detail
+    with module._cp.db() as conn:
+        queued = conn.execute("SELECT COUNT(*) FROM bot_commands").fetchone()[0]
+    assert queued == 0
