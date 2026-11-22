@@ -391,18 +391,63 @@ namespace Bot.ChromeNs
         {
             if (record == null || record.Snapshot == null) return;
             var snapshot = record.Snapshot;
+            ShopContext shop;
             if (string.IsNullOrWhiteSpace(snapshot.ShopKey))
             {
-                DeferRecord(record, TimeSpan.FromHours(1), "旧版任务无法唯一恢复ShopKey，已停止自动执行等待人工复核");
-                return;
-            }
+                // Legacy schema-2 records may have been loaded while their shop was
+                // offline or their same-nickname identity was ambiguous. Retry the
+                // resolver when the worker runs again; it succeeds only for one
+                // unambiguous registered/runtime shop and never guesses across stores.
+                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(snapshot.Seller); }
+                catch (Exception ex)
+                {
+                    DeferRecord(record, TimeSpan.FromHours(1), "旧版任务等待唯一ShopKey恢复：" + ex.Message);
+                    return;
+                }
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals(shop.SellerNick, snapshot.Seller, StringComparison.Ordinal))
+                {
+                    DeferRecord(record, TimeSpan.FromHours(1), "旧版任务无法验证唯一卖家身份，继续等待人工复核");
+                    return;
+                }
 
-            ShopContext shop;
-            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey); }
-            catch (Exception ex)
+                var legacyKey = record.Key;
+                var resolvedKey = BuildKey(shop.ShopKey, snapshot.Seller, snapshot.OrderId);
+                var collision = false;
+                lock (Sync)
+                {
+                    var live = FindLiveRecordLocked(legacyKey);
+                    if (live == null || !ReferenceEquals(live, record)) return;
+                    collision = _state.Pending.Any(x => x != null && !ReferenceEquals(x, live)
+                        && string.Equals(x.Key, resolvedKey, StringComparison.Ordinal));
+                    if (!collision)
+                    {
+                        live.Snapshot.ShopKey = shop.ShopKey;
+                        live.Key = resolvedKey;
+                        if (!SaveStateLocked())
+                        {
+                            live.Snapshot.ShopKey = string.Empty;
+                            live.Key = legacyKey;
+                            return;
+                        }
+                    }
+                }
+                if (collision)
+                {
+                    DeferRecord(record, TimeSpan.FromHours(1), "恢复ShopKey后发现同订单任务冲突，保留队列等待人工复核");
+                    return;
+                }
+                Log.Info("旧版自动发货任务已在唯一店铺身份恢复后重新归属；后续仍须通过只读订单预检和原有防重屏障: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey));
+            }
+            else
             {
-                DeferRecord(record, RetryDelay, "无法恢复任务ShopKey：" + ex.Message);
-                return;
+                try { shop = ShopContextLocator.ResolveRuntimeByShopKey(snapshot.ShopKey); }
+                catch (Exception ex)
+                {
+                    DeferRecord(record, RetryDelay, "无法恢复任务ShopKey：" + ex.Message);
+                    return;
+                }
             }
             if (shop == null || !string.Equals(shop.SellerNick, snapshot.Seller, StringComparison.Ordinal))
             {
