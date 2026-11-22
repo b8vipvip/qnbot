@@ -2437,6 +2437,10 @@ namespace Bot.ChromeNs
                 x => Knowledge.KnowledgeAiService.NormalizeQuestion(x.Question),
                 StringComparer.Ordinal)
                 .ToList();
+            var reusedAnswerIds = new HashSet<string>(parsed
+                .GroupBy(x => x.EvidenceMessageIds[1], StringComparer.Ordinal)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key), StringComparer.Ordinal);
             foreach (var group in unique)
             {
                 if (string.IsNullOrWhiteSpace(group.Key) || group.Count() != 1)
@@ -2444,12 +2448,19 @@ namespace Bot.ChromeNs
                     result.EvidenceRejected += group.Count();
                     continue;
                 }
+                var candidate = group.First();
+                if (candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count != 2
+                    || reusedAnswerIds.Contains(candidate.EvidenceMessageIds[1]))
+                {
+                    result.EvidenceRejected++;
+                    continue;
+                }
                 if (result.Candidates.Count >= MaxVerifiedNewKnowledgeCandidates)
                 {
                     result.EvidenceRejected++;
                     continue;
                 }
-                result.Candidates.Add(group.First());
+                result.Candidates.Add(candidate);
             }
             return true;
         }
