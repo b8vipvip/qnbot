@@ -2570,7 +2570,8 @@ namespace Bot.ChromeNs
                 && !KnowledgeEngineV2Semantics.IsContextDependent(candidateQuestion)
                 && !KnowledgeEngineV2Semantics.IsHighRisk(candidateQuestion)
                 && !ContainsHighRisk(candidateQuestion)
-                && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45;
+                && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45
+                && !HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion);
             var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
             var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
