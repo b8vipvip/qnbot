@@ -2581,7 +2581,7 @@ namespace Bot.ChromeNs
                 && !KnowledgeEngineV2Semantics.IsHighRisk(candidateAnswer)
                 && !ContainsHighRisk(candidateAnswer)
                 && !Regex.IsMatch(candidateAnswer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www.|(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.|(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
                     RegexOptions.IgnoreCase)
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45
                 && !HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)
