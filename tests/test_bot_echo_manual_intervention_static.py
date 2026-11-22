@@ -58,9 +58,6 @@ def test_runtime_monitor_rejects_foreign_seller_target_before_alias_or_manual_re
 
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in observe
     assert "DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)" in observe
-    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in observe
-    assert "shop.HasStableSellerId" in observe
-    assert "sellerEndpointTargetId" in observe
-    assert "loginTargetId" in observe
+    assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in observe
+    assert observe.index("DirectOrderIdentityResolver.IsMessageFromShop(message, shop)") < observe.index("BuyerIdentityAliasService.ObserveMessage")
     assert observe.index("if (fromIsSeller == toIsSeller) continue;") < observe.index("BuyerIdentityAliasService.ObserveMessage")
-    assert observe.index("if (shop.HasStableSellerId)") < observe.index("BuyerIdentityAliasService.ObserveMessage")
