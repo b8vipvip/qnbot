@@ -1438,12 +1438,12 @@ namespace Bot.ChromeNs
                 // Fingerprint every persisted V2 row (including deletion tombstones) so
                 // concurrent deletes invalidate stale analysis. AI batches include disabled
                 // and candidate rows for audit, but never feed deleted facts back as knowledge.
-                var records = KnowledgeEngineV2Repository.LoadAll(session.Seller)
+                var allRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)
                     .Where(x => x != null)
                     .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
                     .ToList();
-                result.SourceFingerprint = ComputeKnowledgeCorpusFingerprint(records);
-                records = records
+                result.SourceFingerprint = ComputeKnowledgeCorpusFingerprint(allRecords);
+                var records = allRecords
                     .Where(x => !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 result.RecordCount = records.Count;
