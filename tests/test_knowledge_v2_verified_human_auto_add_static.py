@@ -86,7 +86,7 @@ def test_no_human_review_gate_for_safe_faq_auto_add_and_eight_candidates_can_pub
     assert "private const int MaxVerifiedNewKnowledgePerSession = 8;" in service
     assert "store_workflow_requires_human_review" not in evidence
     assert "RequiresWorkflowReview(policyCandidate)" not in evidence
-    assert "KnowledgeV2Repository.TryCreateVerifiedSessionKnowledge(" in apply
+    assert "KnowledgeEngineV2Repository.TryCreateVerifiedSessionKnowledge(" in apply
     assert "ApplyAiGeneratedKnowledgeContent(" in service
     assert "Status = \"active\"" in read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
 
@@ -100,6 +100,7 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
 
     assert "IEnumerable<string> aliases" in method
     assert "IEnumerable<string> keywords" in method
+    assert "normalizedKeywords" in method
     assert "var normalizedKeywords" in method
     assert "Concat(normalizedKeywords)" in method
     assert "ResolveShopRequired(seller)" in method
