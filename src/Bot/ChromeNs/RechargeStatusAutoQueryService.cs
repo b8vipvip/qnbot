@@ -13,6 +13,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,8 +40,9 @@ namespace Bot.ChromeNs
             public string Note;
         }
 
-        private static readonly ConcurrentDictionary<QN, byte> Attached =
-            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, GateEntry> HandledMessages =
             new ConcurrentDictionary<string, GateEntry>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> HumanNotifyDedup =
@@ -91,8 +93,14 @@ namespace Bot.ChromeNs
                 Cleanup();
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
-                    if (qn == null || !Attached.TryAdd(qn, 0)) continue;
-                    qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                    if (qn == null) continue;
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                        Attached.Add(qn, new object());
+                    }
                     Log.Info("充值结果自动查询已绑定: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
