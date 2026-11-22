@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 import bot_client_shop_binding as binding
 import bot_web_console as core
+import knowledge_v2_sync as v2sync
 
 
 class FakeControlPlane:
@@ -312,3 +313,90 @@ def test_force_rebind_fails_closed_when_existing_state_table_has_no_client_id(tm
 
     assert row["shop_key"] == "shop_a"
     assert row["seller"] == "seller-a"
+
+
+def setup_v2_revision_cp(tmp_path):
+    cp = FakeControlPlane(tmp_path / "knowledge-v2-revision.db")
+    with cp.db() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE client_tokens(id INTEGER PRIMARY KEY);
+            INSERT INTO client_tokens(id) VALUES(1);
+            """
+        )
+    v2sync._cp = cp
+    v2sync.bot_web_console = core
+    v2sync.init_db()
+    return cp
+
+
+def v2_record(answer):
+    return {
+        "Id": "same-id",
+        "Type": "general",
+        "Title": "same question",
+        "Intent": "general",
+        "Subject": "device",
+        "Predicate": "compatibility",
+        "Entities": [],
+        "Aliases": [],
+        "Answer": answer,
+        "ShortAnswer": "",
+        "Conditions": [],
+        "Exclusions": [],
+        "RequiredContext": [],
+        "ProductIds": [],
+        "RiskLevel": "normal",
+        "SourceType": "web_manual",
+        "SourceId": "",
+        "Authority": 0.92,
+        "Confidence": 0.92,
+        "Enabled": True,
+        "Status": "active",
+    }
+
+
+def test_knowledge_v2_web_put_rejects_stale_editor_revision(tmp_path):
+    cp = setup_v2_revision_cp(tmp_path)
+    first = v2sync._save(1, [v2_record("Windows answer")], "windows", expected_revision=0)
+    assert first["revision"] == 1
+
+    with pytest.raises(HTTPException) as caught:
+        v2sync.web_put(
+            v2sync.KnowledgeV2WebInput(
+                records=[v2_record("stale web answer")],
+                expected_revision=0,
+            ),
+            client={"id": 1},
+        )
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "revision_conflict"
+    assert caught.value.detail["current_revision"] == 1
+    assert v2sync._state(1)["records"][0]["Answer"] == "Windows answer"
+
+    updated = v2sync.web_put(
+        v2sync.KnowledgeV2WebInput(
+            records=[v2_record("fresh web answer")],
+            expected_revision=1,
+        ),
+        client={"id": 1},
+    )
+    assert updated["revision"] == 2
+    assert updated["records"][0]["Answer"] == "fresh web answer"
+
+
+def test_knowledge_v2_stale_windows_revision_cannot_overwrite_web_edit(tmp_path):
+    setup_v2_revision_cp(tmp_path)
+    v2sync._save(1, [v2_record("Windows answer")], "windows", expected_revision=0)
+    v2sync._save(
+        1,
+        [v2_record("web answer")],
+        "web",
+        expected_revision=1,
+        raise_on_conflict=True,
+    )
+
+    stale = v2sync._save(1, [v2_record("stale Windows answer")], "windows", expected_revision=1)
+    assert stale["revision"] == 2
+    assert stale["records"][0]["Answer"] == "web answer"
+    assert v2sync._state(1)["records"][0]["Answer"] == "web answer"
