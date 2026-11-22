@@ -772,8 +772,14 @@ namespace Bot.Knowledge
                 };
                 if (delete)
                 {
-                    state.Db.SaveOneRecord(rollback);
-                    state.Db.Delete(row);
+                    var tombstone = JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                        JsonConvert.SerializeObject(current));
+                    tombstone.Enabled = false;
+                    tombstone.Status = "deleted";
+                    tombstone.UpdatedAt = DateTime.Now;
+                    // Keep a syncable, disabled tombstone instead of physically
+                    // removing the row. Other devices can now observe the rollback.
+                    state.Db.SaveRecordsInTransaction(new List<object> { ToRow(tombstone), rollback });
                 }
                 else state.Db.SaveRecordsInTransaction(new List<object> { ToRow(restore), rollback });
             }
@@ -1123,10 +1129,14 @@ namespace Bot.Knowledge
                 var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
                 if (row == null) return false;
                 var deleted = FromRow(row);
-                // Persist the suppression tombstone before deleting the live row.
-                // If the process exits between these operations, the remaining live
-                // record still blocks auto-add; after deletion, this revision prevents
-                // the same human evidence or exact question from recreating it.
+                var tombstone = JsonConvert.DeserializeObject<KnowledgeV2Record>(
+                    JsonConvert.SerializeObject(deleted));
+                tombstone.Enabled = false;
+                tombstone.Status = "deleted";
+                tombstone.UpdatedAt = DateTime.Now;
+                // The disabled tombstone travels with the normal Knowledge V2
+                // snapshot, so a second device can honor the same delete decision.
+                // Keep the prior snapshot in the immutable revision ledger for audit.
                 var revision = new KnowledgeV2ManualEditRevisionRow
                 {
                     Id = Guid.NewGuid().ToString("N"),
@@ -1134,11 +1144,10 @@ namespace Bot.Knowledge
                     MessageRecordId = "knowledge-center-delete",
                     Action = "delete",
                     PreviousJson = JsonConvert.SerializeObject(deleted),
-                    CurrentJson = string.Empty,
+                    CurrentJson = JsonConvert.SerializeObject(tombstone),
                     CreatedAtTicks = DateTime.Now.Ticks
                 };
-                state.Db.SaveOneRecord(revision);
-                state.Db.Delete(row);
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });
             }
             MirrorDeleteToLegacy(shop, id);
             KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
