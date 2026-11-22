@@ -30,7 +30,7 @@ namespace Bot.Knowledge
             @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|账号|登录|绑定|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex AutoLearningPersonalData = new Regex(
-            @"(?<!\\d)1[3-9]\\d{9}(?!\\d)|(?<!\\d)\\d{17}[0-9Xx](?!\\d)|(?<!\\d)\\d{16,19}(?!\\d)",
+            @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static List<KnowledgeV2Record> LoadAll(string seller)
@@ -462,7 +462,7 @@ namespace Bot.Knowledge
             if (KnowledgeEngineV2Semantics.IsHighRisk(value)
                 || AutoLearningNonReusableFact.IsMatch(value)
                 || AutoLearningPersonalData.IsMatch(value)
-                || Regex.IsMatch(value, @"https?://|www\\.", RegexOptions.IgnoreCase))
+                || Regex.IsMatch(value, @"https?://|www\.", RegexOptions.IgnoreCase))
                 return false;
             return true;
         }
@@ -470,9 +470,9 @@ namespace Bot.Knowledge
         private static string BuildHumanEvidenceSourceId(
             string shopKey, string sessionId, string questionMessageId, string answerMessageId)
         {
-            var canonical = (shopKey ?? string.Empty) + "\\n"
-                + (sessionId ?? string.Empty) + "\\n"
-                + (questionMessageId ?? string.Empty) + "\\n"
+            var canonical = (shopKey ?? string.Empty) + "\n"
+                + (sessionId ?? string.Empty) + "\n"
+                + (questionMessageId ?? string.Empty) + "\n"
                 + (answerMessageId ?? string.Empty);
             using (var sha = SHA256.Create())
             {
