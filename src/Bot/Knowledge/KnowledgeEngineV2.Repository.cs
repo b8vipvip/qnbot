@@ -337,7 +337,7 @@ namespace Bot.Knowledge
                     result = exactMatches.Any(x =>
                         string.Equals((x.Answer ?? string.Empty).Trim(), answer, StringComparison.Ordinal))
                         ? "现有Knowledge V2已经覆盖该问法，不重复新增。"
-                        : "现有Knowledge V2存在同题不同答案，自动新增已拒绝并保留冲突供人工审核。";
+                        : "现有Knowledge V2存在同题不同答案，自动新增已拒绝，未覆盖生产知识。";
                     return false;
                 }
 
@@ -465,7 +465,7 @@ namespace Bot.Knowledge
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
-                seller, "session_human_evidence_auto_add", "knowledge", record.Id,
+                seller, "session_ai_auto_add", "knowledge", record.Id,
                 questionMessageId + "," + answerMessageId, record.Title,
                 "no_existing_knowledge",
                 KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
@@ -473,7 +473,7 @@ namespace Bot.Knowledge
                     + confidence.ToString("0.00") + "; source=" + sourceId
                     + "; 已保存可回滚修订历史。",
                 "success", out auditError);
-            result = "已根据真人问答证据自动新增Knowledge V2，并刷新检索索引（知识ID：" + record.Id + "）。";
+            result = "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
             return true;
         }
 
