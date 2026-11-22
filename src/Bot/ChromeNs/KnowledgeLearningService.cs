@@ -448,9 +448,25 @@ namespace Bot.ChromeNs
                         || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
                         throw new InvalidOperationException("人工答案学习拒绝使用不匹配的ShopKey/Seller身份");
                     scope = ShopSettingsScope.Enter(shop);
-                    await CompareManualAnswerAsync(
-                        question, botAnswer, manualAnswer, seller, buyer,
-                        buyerMessageId, humanMessageId);
+                    Exception lastComparisonError = null;
+                    for (var attempt = 0; attempt < 3; attempt++)
+                    {
+                        try
+                        {
+                            await CompareManualAnswerAsync(
+                                question, botAnswer, manualAnswer, seller, buyer,
+                                buyerMessageId, humanMessageId);
+                            lastComparisonError = null;
+                            break;
+                        }
+                        catch (Exception retryableError)
+                        {
+                            lastComparisonError = retryableError;
+                            if (attempt < 2)
+                                await Task.Delay(TimeSpan.FromSeconds(attempt + 1));
+                        }
+                    }
+                    if (lastComparisonError != null) throw lastComparisonError;
                 }
                 catch (OperationCanceledException)
                 {
@@ -458,9 +474,11 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
+                    DateTime ignoredComparison;
+                    ManualComparisons.TryRemove(comparisonKey, out ignoredComparison);
                     MessageProcessingTraceService.RecordLearningComparison(
-                        seller, buyer, "failed", "人工答案对比学习失败：" + Short(ex.Message, 500), true);
-                    Log.Info("人工答案对比学习失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message);
+                        seller, buyer, "failed", "人工答案对比学习失败（3次尝试后）： " + Short(ex.Message, 500), true);
+                    Log.Info("人工答案对比学习失败（3次尝试后）: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message);
                 }
                 finally
                 {
@@ -534,27 +552,11 @@ namespace Bot.ChromeNs
             var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
                 messages, 700, 0.03, 25, CancellationToken.None));
             if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
-            {
-                MessageProcessingTraceService.RecordLearningComparison(
-                    seller,
-                    buyer,
-                    "skipped",
-                    "AI对比未得到可靠结构化结果，本次不修改知识。",
-                    true);
-                return;
-            }
+                throw new InvalidOperationException("AI对比上游未返回可靠结构化结果，等待自动重试。");
 
             JObject parsed;
             if (!TryParseObject(result.Answer, out parsed))
-            {
-                MessageProcessingTraceService.RecordLearningComparison(
-                    seller,
-                    buyer,
-                    "skipped",
-                    "AI对比结果不是可恢复的结构化JSON，本次不修改知识。",
-                    true);
-                return;
-            }
+                throw new InvalidOperationException("AI对比结果不是可恢复的结构化JSON，等待自动重试。");
             bool shouldLearn;
             if (!bool.TryParse(Convert.ToString(parsed["should_learn"]), out shouldLearn)) shouldLearn = false;
             var action = Convert.ToString(parsed["action"]).Trim().ToLowerInvariant();
@@ -593,6 +595,8 @@ namespace Bot.ChromeNs
             var sourceMessageIds = buyerMessageId + "|" + humanMessageId;
             var saved = KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(
                 seller, question, manualAnswer, sourceMessageIds, out saveMessage, out savedKnowledgeId);
+            if (!saved && (saveMessage ?? string.Empty).StartsWith("人工直答保存失败：", StringComparison.Ordinal))
+                throw new InvalidOperationException(saveMessage);
             MessageProcessingTraceService.RecordLearningComparison(
                 seller,
                 buyer,
