@@ -113,6 +113,18 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "evidenceCandidate.Category = category;" in generated
 
 
+def test_ai_generated_alias_validation_uses_the_existing_knowledge_semantics_type():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+
+    assert "KnowledgeEngineV2Semantics.Compact(sourceQuestion)" in generated
+    assert "KnowledgeEngineV2Semantics.Compact(question)" in generated
+    assert "KnowledgeEngineV2Semantics.TextSimilarity(question, sourceQuestion)" in generated
+    assert "KnowledgeV2Semantics." not in generated
+
+
 def test_no_human_review_gate_for_safe_faq_auto_add_and_eight_candidates_can_publish():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     evidence = service[

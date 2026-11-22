@@ -2624,10 +2624,10 @@ namespace Bot.ChromeNs
             // AI has normalized the title. Otherwise the source question itself
             // could fail exact lookup even though it is the evidence for this row.
             if (!string.Equals(
-                    KnowledgeV2Semantics.Compact(sourceQuestion),
-                    KnowledgeV2Semantics.Compact(question),
+                    KnowledgeEngineV2Semantics.Compact(sourceQuestion),
+                    KnowledgeEngineV2Semantics.Compact(question),
                     StringComparison.Ordinal)
-                && KnowledgeV2Semantics.TextSimilarity(question, sourceQuestion) >= 0.45)
+                && KnowledgeEngineV2Semantics.TextSimilarity(question, sourceQuestion) >= 0.45)
                 aliases.Add(sourceQuestion);
 
             foreach (var alias in generatedAliases ?? Enumerable.Empty<string>())
