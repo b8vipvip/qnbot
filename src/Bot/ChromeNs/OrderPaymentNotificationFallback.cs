@@ -10,6 +10,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -425,7 +426,8 @@ namespace Bot.ChromeNs
         }
 
         private static readonly object Sync = new object();
-        private static readonly HashSet<QN> Attached = new HashSet<QN>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static Timer _timer;
@@ -471,11 +473,12 @@ namespace Bot.ChromeNs
             {
                 lock (Sync)
                 {
-                    if (Attached.Contains(qn)) continue;
-                    Attached.Add(qn);
+                    object marker;
+                    if (Attached.TryGetValue(qn, out marker)) continue;
+                    qn.EvMessageNotity += OnMessageNotify;
+                    OrderAutomationCoordinator.Attach(qn);
+                    Attached.Add(qn, new object());
                 }
-                qn.EvMessageNotity += OnMessageNotify;
-                OrderAutomationCoordinator.Attach(qn);
                 Log.Info("付款通知兼容解析已绑定: seller="
                     + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
             }
