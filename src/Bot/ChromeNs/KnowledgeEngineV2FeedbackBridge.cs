@@ -16,8 +16,9 @@ namespace Bot.ChromeNs
 {
     internal static class KnowledgeEngineV2FeedbackBridge
     {
-        private static readonly ConcurrentDictionary<int, bool> Attached =
-            new ConcurrentDictionary<int, bool>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Seen =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly DateTime StartedAt = DateTime.Now;
@@ -42,10 +43,14 @@ namespace Bot.ChromeNs
                 foreach (var qn in qns)
                 {
                     if (qn == null) continue;
-                    var key = RuntimeHelpers.GetHashCode(qn);
-                    if (!Attached.TryAdd(key, true)) continue;
-                    var captured = qn;
-                    captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        var captured = qn;
+                        captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                        Attached.Add(qn, new object());
+                    }
                     var seller = captured.Seller == null ? string.Empty : (captured.Seller.Nick ?? string.Empty).Trim();
                     if (!string.IsNullOrWhiteSpace(seller))
                     {
