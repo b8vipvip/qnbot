@@ -1041,3 +1041,23 @@ def test_knowledge_policy_fuzzy_search_uses_weak_manager_identity_not_hash_codes
     assert "FuzzySearchAttached.Add(manager, new object())" in source
     assert "RuntimeHelpers.GetHashCode(manager)" not in source
     assert "FuzzySearchAttached.TryRemove(instanceKey" not in source
+
+
+def test_manual_reply_optimization_distinguishes_empty_bot_history_from_storage_failure():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    load = history[
+        history.index("public static bool TryLoadRecent("):
+        history.index("public static List<BotConversationHistoryEntity> LoadRange(")
+    ]
+    window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    bridge = window[
+        window.index("private static bool MatchesRecentBotAnswer("):
+        window.index("private static bool HasAiMarker(")
+    ]
+
+    assert "out List<BotConversationHistoryEntity> records" in load
+    assert "return true;" in load
+    assert "return false;" in load
+    assert "BotConversationHistoryStore.TryLoadRecent(shopKey, seller, buyer, 30, out recent)" in bridge
+    assert "return true; // Unknown history is not proof that this was a human-authored reply." in bridge
+    assert "catch { return true; }" in bridge
