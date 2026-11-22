@@ -111,6 +111,9 @@ def test_new_knowledge_addition_is_shop_scoped_fingerprint_guarded_idempotent_an
     assert "MirrorOneToLegacy(shop, record)" in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
     assert "session_human_evidence_auto_add" in method
+    assert "AutoLearningPersonalData.IsMatch(value)" in repository
+    assert "API密钥|远程控制|下载并运行|执行命令" in repository
+    assert "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}" in repository
 
 
 def test_new_auto_learned_source_is_normalized_as_production_approved_human_evidence():
