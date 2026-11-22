@@ -27,6 +27,10 @@ def test_server_exposes_client_isolated_v2_bridge():
     assert "Depends(bot_web_console._web_client)" in s
     assert "bot_web_console._runtime_client(request)" in s
     assert "_MAX_RECORDS = 5000" in s and "4 * 1024 * 1024" in s
+    assert "seen_ids=set()" in s
+    assert "record ID 不允许重复" in s
+    assert "math.isfinite(number)" in s
+    assert "标题和答案必须是非空文本" in s
     for secret in ("api_key","authorization","cookie","password"):
         assert ('"'+secret+'"') not in s.lower()
 
@@ -237,3 +241,65 @@ def test_stale_windows_v2_sync_returns_newer_web_revision_without_overwrite(tmp_
     assert stale["revision"] == 2
     assert stale["records"][0]["Answer"] == "web answer"
     assert module._state(1)["records"][0]["Answer"] == "web answer"
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Authority", float("nan")),
+        ("Authority", float("inf")),
+        ("Authority", float("-inf")),
+        ("Confidence", float("nan")),
+        ("Confidence", float("inf")),
+        ("Confidence", float("-inf")),
+        ("Authority", 1.01),
+        ("Confidence", -0.01),
+    ],
+)
+def test_v2_record_numeric_metadata_must_be_finite_and_bounded(tmp_path, field, value):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    item = _v2_cas_record("answer")
+    item[field] = value
+
+    with pytest.raises(HTTPException) as caught:
+        module._save(1, [item], "windows", expected_revision=0)
+
+    assert caught.value.status_code == 400
+    assert field in caught.value.detail
+    assert module._state(1)["revision"] == 0
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_v2_record_ids_must_be_unique_within_a_cloud_snapshot(tmp_path):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    first = _v2_cas_record("first answer")
+    second = _v2_cas_record("second answer")
+    second["Id"] = first["Id"]
+
+    with pytest.raises(HTTPException) as caught:
+        module._save(1, [first, second], "windows", expected_revision=0)
+
+    assert caught.value.status_code == 400
+    assert "记录 ID 不允许重复" in caught.value.detail
+    assert module._state(1)["revision"] == 0
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_v2_record_title_and_answer_must_be_text(tmp_path):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    item = _v2_cas_record("answer")
+    item["Title"] = {"unexpected": "object"}
+
+    with pytest.raises(HTTPException) as caught:
+        module._save(1, [item], "windows", expected_revision=0)
+
+    assert caught.value.status_code == 400
+    assert "标题和答案必须是非空文本" in caught.value.detail
+    assert module._state(1)["revision"] == 0
