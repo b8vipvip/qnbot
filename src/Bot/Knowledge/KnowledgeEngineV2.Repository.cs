@@ -303,6 +303,7 @@ namespace Bot.Knowledge
                 shop.ShopKey, sessionId, questionMessageId, answerMessageId);
             var now = DateTime.Now;
             KnowledgeV2Record record = null;
+            var recoveredExisting = false;
             lock (state.Sync)
             {
                 var currentRecords = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
@@ -324,10 +325,24 @@ namespace Bot.Knowledge
                 {
                     savedKnowledgeId = priorEvidence.Id;
                     updatedCorpusFingerprint = currentFingerprint;
-                    result = "该买家问题与人工回复证据已经处理过，幂等跳过重复新增。";
-                    return false;
-                }
+                    if (!priorEvidence.Enabled
+                        || !string.Equals(priorEvidence.Status, "active", StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(priorEvidence.Title, question, StringComparison.Ordinal)
+                        || !string.Equals(priorEvidence.Answer, answer, StringComparison.Ordinal)
+                        || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(priorEvidence.SourceType))
+                    {
+                        result = "该证据此前已处理，但对应知识已被停用、回滚或内容发生变化；为尊重现有状态，自动发布不会重新启用或覆盖。";
+                        return false;
+                    }
 
+                    // A previous attempt may have committed SQLite and then failed
+                    // while refreshing the legacy mirror or immutable retrieval index.
+                    // Idempotent retries must repair those downstream projections.
+                    record = priorEvidence;
+                    recoveredExisting = true;
+                }
+                else
+                {
                 var questionVariants = new[] { question }.Concat(normalizedAliases)
                     .Select(KnowledgeEngineV2Semantics.Compact)
                     .Where(x => x.Length > 0)
@@ -468,21 +483,28 @@ namespace Bot.Knowledge
                     .ToList();
                 updatedCorpusFingerprint = ComputeRepositoryCorpusFingerprint(afterRecords);
                 savedKnowledgeId = record.Id;
+                }
             }
 
             MirrorOneToLegacy(shop, record);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             string auditError;
             KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
-                seller, "session_ai_auto_add", "knowledge", record.Id,
+                seller, recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add",
+                "knowledge", record.Id,
                 questionMessageId + "," + answerMessageId, record.Title,
-                "no_existing_knowledge",
+                recoveredExisting ? "idempotent_existing_source" : "no_existing_knowledge",
                 KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
-                "AI根据完整会话中的真实买家问题与非Bot人工客服回复自动整理并直接发布；confidence="
-                    + confidence.ToString("0.00") + "; source=" + sourceId
-                    + "; 已保存可回滚修订历史。",
+                recoveredExisting
+                    ? "此前已提交的AI自动新增记录通过证据幂等键恢复镜像与检索索引；confidence="
+                        + confidence.ToString("0.00") + "; source=" + sourceId
+                    : "AI根据完整会话中的真实买家问题与非Bot人工客服回复自动整理并直接发布；confidence="
+                        + confidence.ToString("0.00") + "; source=" + sourceId
+                        + "; 已保存可回滚修订历史。",
                 "success", out auditError);
-            result = "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
+            result = recoveredExisting
+                ? "该知识此前已持久化，已幂等恢复旧库镜像和Knowledge V2检索索引（知识ID：" + record.Id + "）。"
+                : "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
             return true;
         }
 
