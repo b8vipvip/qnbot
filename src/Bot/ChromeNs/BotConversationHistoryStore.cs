@@ -606,21 +606,34 @@ namespace Bot.ChromeNs
         public static List<BotConversationHistoryEntity> LoadRecent(
             string shopKey, string seller, string buyer, int maxCount = DefaultLoadCount)
         {
-            Initialize();
-            FlushNow();
-            EnsureSchema();
+            List<BotConversationHistoryEntity> records;
+            return TryLoadRecent(shopKey, seller, buyer, maxCount, out records)
+                ? records : new List<BotConversationHistoryEntity>();
+        }
 
-            shopKey = (shopKey ?? string.Empty).Trim();
-            seller = (seller ?? string.Empty).Trim();
-            buyer = (buyer ?? string.Empty).Trim();
-            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
-                return new List<BotConversationHistoryEntity>();
-            BackfillLegacyShopRows(shopKey, seller);
-
-            var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? DefaultLoadCount : maxCount));
-            var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
+        // Callers making safety decisions must distinguish a genuinely empty history
+        // from a failed database read. Returning an empty list on both outcomes can
+        // misclassify a delayed Bot echo as a human reply and feed it into learning.
+        public static bool TryLoadRecent(
+            string shopKey, string seller, string buyer, int maxCount,
+            out List<BotConversationHistoryEntity> records)
+        {
+            records = new List<BotConversationHistoryEntity>();
             try
             {
+                Initialize();
+                FlushNow();
+                EnsureSchema();
+
+                shopKey = (shopKey ?? string.Empty).Trim();
+                seller = (seller ?? string.Empty).Trim();
+                buyer = (buyer ?? string.Empty).Trim();
+                if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
+                    return false;
+                BackfillLegacyShopRows(shopKey, seller);
+
+                var take = Math.Max(1, Math.Min(MaxRecentLoadCount, maxCount <= 0 ? DefaultLoadCount : maxCount));
+                var cutoffTicks = DateTime.Now.AddDays(-RetentionDays).Ticks;
                 lock (DbSync)
                 {
                     var rows = DbHelper.Db.Select(
@@ -630,18 +643,20 @@ namespace Bot.ChromeNs
                         seller,
                         buyer,
                         cutoffTicks);
-                    return (rows ?? new List<object>())
+                    records = (rows ?? new List<object>())
                         .OfType<BotConversationHistoryEntity>()
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
                         .OrderBy(x => x.CreatedAtTicks)
                         .ThenBy(x => x.UpdatedAtTicks)
                         .ToList();
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("读取Bot问答历史失败：" + ex.Message, 10);
-                return new List<BotConversationHistoryEntity>();
+                records = new List<BotConversationHistoryEntity>();
+                return false;
             }
         }
 
