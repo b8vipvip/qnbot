@@ -352,7 +352,7 @@ namespace Bot.Knowledge
                     .Where(x => x.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                if (HasExplicitlyDeletedKnowledge(state, sourceId, questionVariants))
+                if (HasExplicitlyRemovedKnowledge(state, sourceId, questionVariants))
                 {
                     updatedCorpusFingerprint = currentFingerprint;
                     result = "该知识此前已被人工删除；自动学习尊重删除操作，不会根据相同证据或问法重新创建。";
@@ -536,7 +536,7 @@ namespace Bot.Knowledge
                     || !KnowledgeV2AuthorityPolicy.IsCandidate(record));
         }
 
-        private static bool HasExplicitlyDeletedKnowledge(
+        private static bool HasExplicitlyRemovedKnowledge(
             RepositoryState state,
             string sourceId,
             IEnumerable<string> questionVariants)
@@ -547,7 +547,10 @@ namespace Bot.Knowledge
                     .Where(x => !string.IsNullOrWhiteSpace(x)),
                 StringComparer.Ordinal);
             foreach (var revision in state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
-                .Where(x => x != null && string.Equals(x.Action, "delete", StringComparison.OrdinalIgnoreCase))
+                .Where(x => x != null
+                    && (string.Equals(x.Action, "delete", StringComparison.OrdinalIgnoreCase)
+                        || (string.Equals(x.Action, "buyer_direct_rollback", StringComparison.OrdinalIgnoreCase)
+                            && string.IsNullOrWhiteSpace(x.CurrentJson))))
                 .OrderByDescending(x => x.CreatedAtTicks))
             {
                 KnowledgeV2Record deleted;
