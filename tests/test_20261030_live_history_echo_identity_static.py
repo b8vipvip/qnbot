@@ -109,8 +109,8 @@ def test_timeline_and_image_cache_resolve_canonical_seller_endpoint_before_buyer
             source.index("private static", source.index("private static string GetBuyerNick") + 1)
         ]
         assert "ResolveRuntimeByShopKey(shopKey)" in seller
-        assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, shop.SellerNick)" in seller
-        assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, current.SellerNick)" in seller
+        assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in seller
+        assert "DirectOrderIdentityResolver.IsMessageFromShop(message, current)" in seller
         assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in buyer
         assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in buyer
         assert "if (fromIsSeller == toIsSeller) return string.Empty;" in buyer
