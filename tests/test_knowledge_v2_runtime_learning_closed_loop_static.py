@@ -172,3 +172,21 @@ def test_manual_takeover_direct_answer_is_atomic_reversible_and_respects_operato
     assert "MessageRecordId = (sourceMessageId ?? string.Empty).Trim()" in method
     assert "SaveRecordsInTransaction(new List<object> { ToRow(record), revision });" in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);" in method
+
+
+def test_manual_takeover_learning_retries_transient_ai_and_repository_failures():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    queue = learning.split("private static void QueueManualAnswerComparison(", 1)[1].split(
+        "private static async Task CompareManualAnswerAsync(", 1
+    )[0]
+    compare = learning.split("private static async Task CompareManualAnswerAsync(", 1)[1].split(
+        "private static bool ContainsUnsafeManualLearning(", 1
+    )[0]
+
+    assert "for (var attempt = 0; attempt < 3; attempt++)" in queue
+    assert "Task.Delay(TimeSpan.FromSeconds(attempt + 1))" in queue
+    assert "ManualComparisons.TryRemove(comparisonKey, out ignoredComparison);" in queue
+    assert "3次尝试后" in queue
+    assert "AI对比上游未返回可靠结构化结果，等待自动重试。" in compare
+    assert "AI对比结果不是可恢复的结构化JSON，等待自动重试。" in compare
+    assert "saveMessage ?? string.Empty).StartsWith(\"人工直答保存失败：\"" in compare
