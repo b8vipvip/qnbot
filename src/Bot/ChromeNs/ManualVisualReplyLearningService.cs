@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -42,8 +43,9 @@ namespace Bot.ChromeNs
             public DateTime LastReplyAt;
         }
 
-        private static readonly ConcurrentDictionary<int, bool> Attached =
-            new ConcurrentDictionary<int, bool>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, PendingReply> Pending =
             new ConcurrentDictionary<string, PendingReply>(StringComparer.Ordinal);
         private static Timer _attachTimer;
@@ -68,10 +70,14 @@ namespace Bot.ChromeNs
                 foreach (var qn in qns)
                 {
                     if (qn == null) continue;
-                    var key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(qn);
-                    if (!Attached.TryAdd(key, true)) continue;
-                    var captured = qn;
-                    captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        var captured = qn;
+                        captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                        Attached.Add(qn, new object());
+                    }
                 }
                 CleanupPending();
             }
