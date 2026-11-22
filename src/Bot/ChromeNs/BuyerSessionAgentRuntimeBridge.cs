@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Bot.ChromeNs
@@ -38,7 +39,8 @@ namespace Bot.ChromeNs
 
         private static readonly Lazy<BuyerSessionAgent> AgentHolder =
             new Lazy<BuyerSessionAgent>(() => new BuyerSessionAgent());
-        private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Attached = new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, WatchedSession> WatchedSessions =
             new ConcurrentDictionary<string, WatchedSession>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations =
@@ -249,49 +251,53 @@ namespace Bot.ChromeNs
 
             foreach (var qn in qns)
             {
-                if (qn == null || !Attached.TryAdd(qn, 0)) continue;
+                if (qn == null) continue;
                 try
                 {
-                    qn.EvRecieveNewMessage += (sender, e) =>
+                    lock (AttachSync)
                     {
-                        if (e != null) ObservePayload(qn, e.Message, "foreground");
-                    };
-                    qn.EvShopRobotReceriveNewMessage += (sender, e) =>
-                    {
-                        if (e == null || e.Seller == null || e.Buyer == null) return;
-                        string nonBuyerReason;
-                        if (NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        qn.EvRecieveNewMessage += (sender, e) =>
                         {
-                            Log.Info("BuyerSessionAgent忽略非买家后台通知: reason=" + nonBuyerReason);
-                            return;
-                        }
-                        var shopKey = ResolveShopKey(qn);
-                        if (shopKey.Length == 0)
+                            if (e != null) ObservePayload(qn, e.Message, "foreground");
+                        };
+                        qn.EvShopRobotReceriveNewMessage += (sender, e) =>
                         {
-                            Log.ErrorWithMaxCount("BuyerSessionAgent后台通知缺少唯一ShopKey，已跳过以避免跨店状态污染。", 20);
-                            return;
-                        }
-                        WatchSession(shopKey, e.Seller.Nick, e.Buyer.Nick);
-                        var now = DateTime.Now;
-                        Agent.RecordEvent(
-                            e.Seller.Nick,
-                            e.Buyer.Nick,
-                            BuyerSessionEventKind.BuyerSystem,
-                            string.Empty,
-                            0,
-                            now,
-                            now,
-                            "background:new_message_signal",
-                            false,
-                            shopKey);
-                    };
+                            if (e == null || e.Seller == null || e.Buyer == null) return;
+                            string nonBuyerReason;
+                            if (NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+                            {
+                                Log.Info("BuyerSessionAgent忽略非买家后台通知: reason=" + nonBuyerReason);
+                                return;
+                            }
+                            var shopKey = ResolveShopKey(qn);
+                            if (shopKey.Length == 0)
+                            {
+                                Log.ErrorWithMaxCount("BuyerSessionAgent后台通知缺少唯一ShopKey，已跳过以避免跨店状态污染。", 20);
+                                return;
+                            }
+                            WatchSession(shopKey, e.Seller.Nick, e.Buyer.Nick);
+                            var now = DateTime.Now;
+                            Agent.RecordEvent(
+                                e.Seller.Nick,
+                                e.Buyer.Nick,
+                                BuyerSessionEventKind.BuyerSystem,
+                                string.Empty,
+                                0,
+                                now,
+                                now,
+                                "background:new_message_signal",
+                                false,
+                                shopKey);
+                        };
+                        Attached.Add(qn, new object());
+                    }
                     Log.Info("BuyerSessionAgent已挂载客服实例原始消息流: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
                 catch (Exception ex)
                 {
-                    byte ignored;
-                    Attached.TryRemove(qn, out ignored);
                     Log.ErrorWithMaxCount("BuyerSessionAgent挂载消息流失败: " + ex.Message, 10);
                 }
             }
