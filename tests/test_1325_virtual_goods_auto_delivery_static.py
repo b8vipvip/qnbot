@@ -264,7 +264,7 @@ def test_auto_delivery_queue_cursor_and_confirmation_ledger_are_shopkey_isolated
     assert "ShopContextLocator.FindConnectedQnByShopKey(snapshot.ShopKey)" in runtime
     assert "runtimeShop.ShopKey, snapshot.ShopKey" in runtime
     assert "loaded.Schema = 2;" in runtime
-    assert "旧版任务无法唯一恢复ShopKey" in runtime
+    assert "ResolveRuntimeBySellerNick(snapshot.Seller)" in runtime and "旧版任务等待唯一ShopKey恢复" in runtime
 
     assert "GetCursorLocked(string shopKey, string seller)" in seed
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in seed
@@ -476,7 +476,7 @@ def test_auto_delivery_queue_retains_read_only_barrier_until_ledger_resolution_i
 
     assert "public static bool MarkResolved(" in resolve
     assert "if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;" in resolve
-    assert "if (record == null) return false;" in resolve
+    assert "if (records.Count == 0) return false;" in resolve
     assert "if (!SaveLocked())" in resolve
     assert "return true;" in resolve
     assert "TryResolveConfirmationIntent(item, \"manual_review_required\")" in cleanup
