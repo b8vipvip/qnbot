@@ -562,6 +562,9 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             if (session == null || string.IsNullOrWhiteSpace(session.SessionID) || shopKey.Length == 0) return false;
             var sessionId = session.SessionID.Trim();
+            // A page already committed to retirement is not a promotion candidate.
+            // Avoid spending a CDP identity probe on a lease that cannot be granted.
+            if (_standbyLoggedSessions.ContainsKey(sessionId)) return false;
             if (expectedIdentityProbeGeneration.HasValue
                 && !IsCurrentShopIdentityProbe(sessionId, expectedIdentityProbeGeneration.Value))
                 return false;
