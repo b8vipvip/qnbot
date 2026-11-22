@@ -96,6 +96,7 @@ def test_new_knowledge_addition_is_shop_scoped_fingerprint_guarded_idempotent_an
 
     assert "ResolveShopRequired(seller)" in method
     assert "shop.ShopKey, expectedShopKey" in method
+    assert "if (!KnowledgeEngineV2Service.IsEnabled(seller))" in method
     assert "lock (state.Sync)" in method
     assert "ComputeRepositoryCorpusFingerprint(currentRecords)" in method
     assert "currentFingerprint, expectedCorpusFingerprint" in method
