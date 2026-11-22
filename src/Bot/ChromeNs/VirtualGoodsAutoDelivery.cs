@@ -545,7 +545,7 @@ namespace Bot.ChromeNs
                         }
                         if (!ReloadStateForMutationLocked(false)) return;
                         var live = FindLiveRecordLocked(legacyKey);
-                        if (live == null || live.Snapshot == null) return;
+                        if (!IsSameWorkerClaim(live, record) || live.Snapshot == null) return;
                         record = live;
                         collision = _state.Pending.Any(x => x != null && !ReferenceEquals(x, live)
                             && string.Equals(x.Key, resolvedKey, StringComparison.Ordinal));
@@ -658,7 +658,6 @@ namespace Bot.ChromeNs
                             var live = FindLiveRecordLocked(record.Key);
                             if (!IsSameWorkerClaim(live, record)) return;
                             live.ConfirmationUncertainCount++;
-                            live.WorkerClaimId = null;
                             if (live.ConfirmationUncertainCount >= 5)
                             {
                                 live.NextAttemptAt = DateTime.Now.AddHours(1);
@@ -667,6 +666,7 @@ namespace Bot.ChromeNs
                             }
                             else
                             {
+                                live.WorkerClaimId = null;
                                 live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
                                 Log.Info("自动发货确认后状态暂未确定，进入只读复核等待: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", uncertain=" + live.ConfirmationUncertainCount + "/5, next=" + live.NextAttemptAt.ToString("HH:mm:ss") + ", reason=" + result.Reason + ", repeatConfirm=false");
                             }
