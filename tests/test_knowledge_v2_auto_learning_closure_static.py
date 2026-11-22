@@ -37,11 +37,17 @@ def test_session_corpus_correction_is_exact_id_revision_guarded_and_rollbackable
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, corrected)" in method
 
 
-def test_verified_auto_learning_source_is_production_approved():
+def test_ai_auto_learned_source_is_production_approved_without_claiming_human_confirmation():
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
-    assert 'source.IndexOf("human_evidence_auto_reviewed", StringComparison.OrdinalIgnoreCase) >= 0' in bridge
-    assert 'source.IndexOf("human_evidence_auto_learned", StringComparison.OrdinalIgnoreCase) >= 0' in bridge
-    assert "if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;" in bridge
+    explicit = bridge.split(
+        "public static bool IsExplicitHumanConfirmationSource", 1
+    )[1].split("public static bool IsAutoPublishedHumanEvidenceSource", 1)[0]
+    assert 'source.IndexOf("human_evidence_auto_reviewed", StringComparison.OrdinalIgnoreCase) >= 0' in explicit
+    assert "human_evidence_auto_learned" not in explicit
+    assert "public static bool IsAutoPublishedHumanEvidenceSource" in bridge
+    assert "ai_auto_learned_human_evidence" in bridge
+    assert "if (IsTrustedProductionSource(record.SourceType)) return false;" in bridge
+    assert "ApplyAutoPublished(record);" in bridge
 
 
 def test_manual_edit_carries_buyer_question_alias_and_retrieval_uses_strict_similarity_gates():
