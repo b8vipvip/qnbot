@@ -2572,7 +2572,8 @@ namespace Bot.ChromeNs
                 && !ContainsHighRisk(candidateQuestion)
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45
                 && !HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)
-                && !HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion);
+                && !HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)
+                && !HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion);
             var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
             var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
@@ -2628,6 +2629,7 @@ namespace Bot.ChromeNs
                     || KnowledgeEngineV2Semantics.IsHighRisk(value)
                     || ContainsHighRisk(value)
                     || HasUnverifiedKnowledgeAnchors(sourceText, value)
+                    || HasDifferentKnowledgeNumbers(sourceText, value)
                     || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
                     || KnowledgeEngineV2Semantics.TextSimilarity(question, value) < 0.45
                     || aliases.Any(x => string.Equals(
@@ -2677,6 +2679,17 @@ namespace Bot.ChromeNs
                 ? "AI知识整理通过来源、实体、数字和回答极性校验，准备直接发布到正式Knowledge V2。"
                 : "AI答案改写未达到充分证据门槛，已自动采用人工原始回复，准备直接发布到正式Knowledge V2。";
             return true;
+        }
+
+        private static bool HasDifferentKnowledgeNumbers(string sourceText, string generatedText)
+        {
+            var sourceNumbers = new HashSet<string>(
+                Regex.Matches(sourceText ?? string.Empty, @"\d+(?:\.\d+)?")
+                    .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+            var generatedNumbers = new HashSet<string>(
+                Regex.Matches(generatedText ?? string.Empty, @"\d+(?:\.\d+)?")
+                    .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+            return !sourceNumbers.SetEquals(generatedNumbers);
         }
 
         private static bool HasKnowledgePolarityMismatch(string sourceAnswer, string generatedAnswer)
