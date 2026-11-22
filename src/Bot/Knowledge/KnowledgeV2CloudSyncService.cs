@@ -153,7 +153,28 @@ namespace Bot.Knowledge
                         var records=root["records"]==null?null:root["records"].ToObject<List<KnowledgeV2Record>>();
 
                         if(cloudRevision<state.Revision)
-                            throw new InvalidOperationException("Knowledge V2 云端 revision 回退，已拒绝覆盖本地版本。");
+                        {
+                            // A confirmed token rebind or server-side state reset can
+                            // legitimately create a fresh cloud revision namespace while
+                            // this shop's local corpus remains intact. Back up the full local
+                            // corpus, reset only the local sync checkpoint, then let the next
+                            // poll re-negotiate from revision 0. If the server still has data,
+                            // runtime_sync returns it and the normal merge path preserves both
+                            // local-only facts and cloud facts as disabled conflict candidates.
+                            var rollbackBackup=Backup(shop,local,cloudRevision);
+                            PersistState(shop,state,0,string.Empty);
+                            lock(state.SyncRoot)
+                            {
+                                state.LastCloudRecordCount=records==null?0:records.Count;
+                                state.LastConverged=false;
+                                state.LastStatus="cloud_revision_reset_reconcile";
+                            }
+                            Log.Info("Knowledge V2 检测到云端 revision 命名空间重置，已备份本地语料并重置同步检查点；下一轮将重新协商而非覆盖: shopRef="
+                                +MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey)
+                                +", local_revision="+(state.Revision)+", cloud_revision="+cloudRevision
+                                +", backup="+Path.GetFileName(rollbackBackup));
+                            return;
+                        }
                         if(cloudRevision>state.Revision)
                         {
                             if(records==null)
