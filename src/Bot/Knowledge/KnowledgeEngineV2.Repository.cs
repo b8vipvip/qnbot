@@ -355,7 +355,7 @@ namespace Bot.Knowledge
                 if (HasExplicitlyRemovedKnowledge(state, sourceId, questionVariants))
                 {
                     updatedCorpusFingerprint = currentFingerprint;
-                    result = "该知识此前已被人工删除；自动学习尊重删除操作，不会根据相同证据或问法重新创建。";
+                    result = "该知识此前已被人工删除，或删除历史存在无法验证的记录；为尊重操作并防止复活，自动学习拒绝重新创建。";
                     return false;
                 }
 
@@ -508,7 +508,7 @@ namespace Bot.Knowledge
             MirrorOneToLegacy(shop, record);
             KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
             string auditError;
-            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
+            if (!KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                 seller, recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add",
                 "knowledge", record.Id,
                 questionMessageId + "," + answerMessageId, record.Title,
@@ -520,7 +520,9 @@ namespace Bot.Knowledge
                     : "AI根据完整会话中的真实买家问题与非Bot人工客服回复自动整理并直接发布；confidence="
                         + confidence.ToString("0.00") + "; source=" + sourceId
                         + "; 已保存可回滚修订历史。",
-                "success", out auditError);
+                "success", out auditError))
+                throw new InvalidOperationException(
+                    "Knowledge V2自动新增已持久化，但治理审计尚未确认；等待幂等恢复重试：" + Clean(auditError, 240));
             result = recoveredExisting
                 ? "该知识此前已持久化，已幂等恢复旧库镜像和Knowledge V2检索索引（知识ID：" + record.Id + "）。"
                 : "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
@@ -560,9 +562,12 @@ namespace Bot.Knowledge
                 }
                 catch
                 {
-                    continue;
+                    // A corrupt deletion ledger cannot prove that this question was
+                    // never explicitly removed. Fail closed instead of resurrecting
+                    // operator-deleted production knowledge.
+                    return true;
                 }
-                if (deleted == null) continue;
+                if (deleted == null) return true;
                 if (!string.IsNullOrWhiteSpace(sourceId)
                     && string.Equals(deleted.SourceId, sourceId, StringComparison.Ordinal))
                     return true;
