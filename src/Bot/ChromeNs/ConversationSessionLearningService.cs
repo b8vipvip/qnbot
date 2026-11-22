@@ -94,15 +94,19 @@ namespace Bot.ChromeNs
         public const int MaxSuggestionsPerSession = 8;
         private const int KnowledgeCorpusBatchSize = 18;
         private const int KnowledgeCorpusPromptVersion = 3;
+        private const int KnowledgeCorpusNewCandidatePromptVersion = 1;
         private const int MaxKnowledgeCorpusCandidates = 24;
+        private const int MaxVerifiedNewKnowledgeCandidates = 8;
+        private const int MaxVerifiedNewKnowledgePerSession = 3;
         private const int KnowledgeCorpusTimeoutSeconds = 120;
         private const int KnowledgeCorpusCircuitFailureThreshold = 3;
         private static readonly TimeSpan KnowledgeCorpusCircuitCooldown = TimeSpan.FromMinutes(5);
         // Broad session-level AI suggestions remain review-only because they do not
-        // carry per-message source IDs. Exact-ID corpus corrections backed by verified
-        // human correction messages have a separate, narrow automatic write gate.
+        // carry exact source-message pairs. Verified corrections and new FAQ additions
+        // have separate gates backed by actual buyer + non-Bot human seller messages.
         private const bool EnableAutomaticWrites = false;
         private const bool EnableVerifiedCorpusCorrectionWrites = true;
+        private const bool EnableVerifiedCorpusNewKnowledgeWrites = true;
         public const int ReportRetentionDays = 90;
         public const int MaxReports = 1000;
 
@@ -168,6 +172,13 @@ namespace Bot.ChromeNs
             public string AfterFingerprint = string.Empty;
             public string Error = string.Empty;
             public readonly List<Suggestion> Candidates = new List<Suggestion>();
+            public readonly List<Suggestion> NewCandidates = new List<Suggestion>();
+            public bool NewCandidateAnalysisComplete;
+            public string NewCandidateError = string.Empty;
+            public int NewCandidateEvidenceRejected;
+            public string NewCandidateModel = string.Empty;
+            public string NewCandidateProtocol = string.Empty;
+            public string NewCandidateEndpoint = string.Empty;
             public readonly HashSet<string> Models = new HashSet<string>(StringComparer.Ordinal);
             public readonly HashSet<string> Protocols = new HashSet<string>(StringComparer.Ordinal);
             public readonly HashSet<string> Endpoints = new HashSet<string>(StringComparer.Ordinal);
