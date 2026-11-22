@@ -1074,10 +1074,12 @@ namespace Bot.ChromeNs
             var values = new HashSet<string>(variants.Select(Normalize).Where(x => x.Length > 0), StringComparer.Ordinal);
             try
             {
-                return BotConversationHistoryStore.LoadRecent(shopKey, seller, buyer, 30)
-                    .Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer))));
+                List<BotConversationHistoryEntity> recent;
+                if (!BotConversationHistoryStore.TryLoadRecent(shopKey, seller, buyer, 30, out recent))
+                    return true; // Unknown history is not proof that this was a human-authored reply.
+                return recent.Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer))));
             }
-            catch { return false; }
+            catch { return true; }
         }
 
         private static bool HasAiMarker(string value)
