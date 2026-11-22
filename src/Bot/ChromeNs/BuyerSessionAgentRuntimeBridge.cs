@@ -323,7 +323,7 @@ namespace Bot.ChromeNs
             var to = Normalize(message.toid == null ? string.Empty : message.toid.nick);
             if (seller.Length == 0 || from.Length == 0 || to.Length == 0) return;
 
-            var sellerMessage = string.Equals(from, seller, StringComparison.Ordinal);
+            var sellerMessage = DirectOrderIdentityResolver.IdentityEquals(from, seller);
             if (!IsCurrentSellerIdentity(qn, message, sellerMessage))
             {
                 Log.ErrorWithMaxCount("BuyerSessionAgent拒绝与当前千牛店铺身份不匹配的原始消息。", 20);
@@ -337,13 +337,30 @@ namespace Bot.ChromeNs
                 return;
             }
             var buyer = sellerMessage ? to : from;
-            if (buyer.Length == 0 || string.Equals(buyer, seller, StringComparison.Ordinal)) return;
+            if (buyer.Length == 0 || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
             var shopKey = ResolveShopKey(qn);
             if (shopKey.Length == 0)
             {
                 Log.ErrorWithMaxCount("BuyerSessionAgent原始消息缺少唯一ShopKey，已跳过以避免跨店generation污染。", 20);
                 return;
             }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("BuyerSessionAgent无法恢复消息来源ShopKey，已跳过原始消息: " + ex.Message, 20);
+                return;
+            }
+            if (shop == null || !DirectOrderIdentityResolver.IdentityEquals(seller, shop.SellerNick))
+                return;
+            seller = (shop.SellerNick ?? string.Empty).Trim();
+            using (ShopSettingsScope.Enter(shop))
+            {
+                BuyerIdentityAliasService.ObserveMessage(seller, message);
+                var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+                if (!string.IsNullOrWhiteSpace(canonicalBuyer)) buyer = canonicalBuyer;
+            }
+            if (buyer.Length == 0 || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
             WatchSession(shopKey, seller, buyer);
 
             var display = IncomingMessageSafety.GetDisplayText(message, text);
@@ -416,13 +433,13 @@ namespace Bot.ChromeNs
             var endpointNick = sellerMessage
                 ? (message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim())
                 : (message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim());
-            if (!string.Equals(endpointNick, expectedNick, StringComparison.Ordinal))
+            if (!DirectOrderIdentityResolver.IdentityEquals(endpointNick, expectedNick))
                 return false;
 
             var loginNick = message.loginid == null ? string.Empty
                 : (message.loginid.nick ?? string.Empty).Trim();
             if (loginNick.Length > 0
-                && !string.Equals(loginNick, expectedNick, StringComparison.Ordinal))
+                && !DirectOrderIdentityResolver.IdentityEquals(loginNick, expectedNick))
                 return false;
 
             var expectedTargetId = (qn.Seller.TargetId ?? string.Empty).Trim();
