@@ -955,3 +955,20 @@ def test_runtime_observers_use_weak_qn_identity_and_do_not_retain_retired_sessio
         assert "RuntimeHelpers.GetHashCode(qn)" not in source
         assert "ConcurrentDictionary<int, bool> Attached" not in source
         assert "HashSet<QN> Attached" not in source
+
+
+def test_learning_timeline_archives_buyer_turns_with_canonical_shop_and_alias_identity():
+    bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
+    observe = bridge[
+        bridge.index("private static void ObserveMessage"):
+        bridge.index("private static void InjectLearnedStyle")
+    ]
+
+    assert "var seller = (shop.SellerNick ?? string.Empty).Trim();" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in observe
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in observe
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in observe
+    assert "var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);" in observe
+    assert "var isBuyer = fromIsBuyer && toIsSeller;" in observe
+    assert "if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))" in observe
