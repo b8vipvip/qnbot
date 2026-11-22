@@ -135,6 +135,10 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "currentFingerprint, expectedCorpusFingerprint" in method
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
+    assert "var exactMatches = currentRecords" in method
+    assert "var exactMatches = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
+    assert "var similar = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
+    assert "Old dry-run candidates are not production answers" in method
     assert "exactMatches.All(x =>" in method
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
