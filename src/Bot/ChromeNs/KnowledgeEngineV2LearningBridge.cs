@@ -255,6 +255,9 @@ namespace Bot.Knowledge
             if (!string.Equals((record.SourceType ?? string.Empty).Trim(), expectedSource, StringComparison.OrdinalIgnoreCase))
                 return false;
             if (record.Enabled != entry.Enabled) return false;
+            // Disabled records are intentionally outside production, regardless of
+            // their provenance-derived authority/status fields.
+            if (!record.Enabled) return true;
 
             if (IsExplicitHumanConfirmationSource(expectedSource))
             {
@@ -330,7 +333,10 @@ namespace Bot.Knowledge
 
         private static void ApplyAutoPublished(KnowledgeV2Record record)
         {
-            if (record == null) return;
+            if (record == null || !record.Enabled
+                || string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                return;
             record.Status = "active";
             if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
                 || string.IsNullOrWhiteSpace(record.Type))
@@ -342,6 +348,10 @@ namespace Bot.Knowledge
 
         private static void ApplyHumanConfirmed(KnowledgeV2Record record)
         {
+            if (record == null || !record.Enabled
+                || string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                return;
             record.Status = "active";
             if (string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
                 || string.IsNullOrWhiteSpace(record.Type))
