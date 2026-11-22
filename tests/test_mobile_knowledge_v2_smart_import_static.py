@@ -38,3 +38,29 @@ def test_mobile_submits_confirms_and_polls_v2_smart_import():
     assert "confirm(" in s
     assert "AI 正在整理原生 V2 结构" in s
     assert "await loadKnowledgeV2(false)" in s
+
+
+def test_smart_import_and_repository_normalize_non_finite_confidence_values():
+    importer = read(ROOT / "src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
+    repository = read(ROOT / "src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    number = importer[
+        importer.index("private static double Number("):
+        importer.index("private static List<string> Clean(")
+    ]
+    normalize = repository[
+        repository.index("private static void NormalizeForSave"):
+        repository.index("private static List<string> NormalizeList")
+    ]
+    clamp = repository[
+        repository.index("private static double Clamp"):
+        repository.index("    }", repository.index("private static double Clamp")) + 5
+    ]
+
+    assert "double.IsNaN(value)" in number
+    assert "double.IsInfinity(value)" in number
+    assert "double.IsNaN(record.Authority)" in normalize
+    assert "double.IsInfinity(record.Authority)" in normalize
+    assert "double.IsNaN(record.Confidence)" in normalize
+    assert "double.IsInfinity(record.Confidence)" in normalize
+    assert "double.IsNaN(value)" in clamp
+    assert "double.IsInfinity(value)" in clamp
