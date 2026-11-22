@@ -1394,9 +1394,7 @@ namespace Bot.ChromeNs
                 try
                 {
                     var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                    if (shop == null || string.IsNullOrWhiteSpace(shop.SellerNick)
-                        || (loginNick.Length > 0
-                            && !DirectOrderIdentityResolver.IdentityEquals(loginNick, shop.SellerNick)))
+                    if (shop == null || !DirectOrderIdentityResolver.IsMessageFromShop(message, shop))
                         return string.Empty;
                     return shop.SellerNick.Trim();
                 }
@@ -1405,12 +1403,18 @@ namespace Bot.ChromeNs
             var current = ShopSettingsScope.Current;
             if (current != null && !string.IsNullOrWhiteSpace(current.SellerNick))
             {
-                if (loginNick.Length > 0
-                    && !DirectOrderIdentityResolver.IdentityEquals(loginNick, current.SellerNick))
+                if (!DirectOrderIdentityResolver.IsMessageFromShop(message, current))
                     return string.Empty;
                 return current.SellerNick.Trim();
             }
-            if (loginNick.Length > 0) return loginNick;
+            if (loginNick.Length > 0)
+            {
+                var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(
+                    message.fromid == null ? string.Empty : message.fromid.nick, loginNick);
+                var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(
+                    message.toid == null ? string.Empty : message.toid.nick, loginNick);
+                return fromIsSeller == toIsSeller ? string.Empty : loginNick;
+            }
             return message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
         }
 
