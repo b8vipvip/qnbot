@@ -73,7 +73,7 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
+                var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
                     if (qn == null) continue;
@@ -391,7 +391,7 @@ namespace Bot.ChromeNs
                                 .DefaultIfEmpty(0L).Max()
                             + ", pendingCancelledAi=" + BuyerStreamingReplyPipeline.UnfinishedAnswerTasksAfterCancel
                             + ", cancelledAiTasksTotal=" + BuyerStreamingReplyPipeline.AnswerTasksOutlivedCancellation
-                            + ", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Length
+                            + ", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Count
                             + ", activeWs=" + (snapshot == null ? 0 : snapshot.WebSocketSessionCount)
                             + ", timelineStates=" + ConversationContextStore.CachedTimelineCount
                             + ", workingMemory=" + Bot.Knowledge.KnowledgeEngineV2Service.CachedWorkingMemoryCount
