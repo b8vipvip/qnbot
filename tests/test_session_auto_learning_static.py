@@ -791,13 +791,15 @@ def test_learning_ingress_dedup_claim_waits_for_verified_shop_seller_and_buyer()
     ]
 
     assert observe.index("if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;") < observe.index(
-        "if (string.IsNullOrWhiteSpace(seller)) return;"
+        "var seller = (shop.SellerNick ?? string.Empty).Trim();"
     )
+    assert "if (seller.Length == 0" in observe
     assert "var shop = ShopSettingsScope.Current;" in observe
     assert "shop = ShopContextLocator.ResolveRuntimeBySeller(qn);" in observe
     assert observe.index("if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;") < observe.index(
-        "if (string.IsNullOrWhiteSpace(seller)) return;"
+        "var seller = (shop.SellerNick ?? string.Empty).Trim();"
     )
+    assert "if (seller.Length == 0" in observe
     assert "if (fromIsSeller == toIsSeller) return;" in observe
     assert "var buyer = fromIsSeller ? to : from;" in observe
     assert observe.index("if (string.IsNullOrWhiteSpace(buyer)" ) < observe.index("Seen.TryAdd(")
