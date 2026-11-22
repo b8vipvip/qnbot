@@ -2587,7 +2587,7 @@ namespace Bot.ChromeNs
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45
                 && !HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)
                 && !HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)
-                && !HasUnverifiedKnowledgeAnchors(sourceQuestion + " " + sourceAnswer, candidateAnswer)
+                && !HasUnverifiedKnowledgeAnchors(sourceAnswer, candidateAnswer)
                 && !HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)
                 && candidateAnswer.Length <= Math.Max(64, sourceAnswer.Length + 24);
             if (answerGrounded)
