@@ -85,3 +85,21 @@ def test_real_buyer_product_links_remain_supported_after_source_guard():
     assert "ConversationContextStore.IsProductLink(message, messageText)" in safety
     assert "RegisterProductLinkReply" in safety
     assert "https?://" in context
+
+
+def test_qn_ingress_and_shared_non_buyer_guard_normalize_canonical_seller_identity():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    buyer = qn[qn.index("private bool IsBuyerMessage"):qn.index("private bool IsCurrentSellerEndpoint")]
+    endpoint = qn[qn.index("private bool IsCurrentSellerEndpoint"):qn.index("public void SetActiveConversationByNick")]
+    guard = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
+    non_buyer = guard[
+        guard.index("internal static class NonBuyerConversationGuard"):
+        guard.index("internal static class IncomingMessageSafety")
+    ]
+
+    assert "DirectOrderIdentityResolver.IdentityEquals(m.fromid.nick, _seller.Nick)" in buyer
+    assert "DirectOrderIdentityResolver.IdentityEquals(m.toid.nick, _seller.Nick)" in buyer
+    assert "DirectOrderIdentityResolver.IdentityEquals(endpointNick, sellerNick)" in endpoint
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, sellerNick)" in endpoint
+    assert "DirectOrderIdentityResolver.IdentityEquals(sellerNick, fromNick)" in non_buyer
+    assert "DirectOrderIdentityResolver.IdentityEquals(sellerNick, candidateNick)" in non_buyer
