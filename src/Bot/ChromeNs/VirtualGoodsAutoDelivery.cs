@@ -62,6 +62,10 @@ namespace Bot.ChromeNs
             public int Attempts { get; set; }
             public int ConfirmationUncertainCount { get; set; }
             public DateTime? ConfirmationIntentAt { get; set; }
+            // Durable ownership token for the current worker. A stale process must
+            // never defer/remove a row or consume confirmation rights after a new
+            // process has reclaimed the expired lease.
+            public string WorkerClaimId { get; set; }
         }
 
         private sealed class StateDocument
@@ -319,14 +323,18 @@ namespace Bot.ChromeNs
             if (enabled || preservedForVerification > 0) ScheduleWorker();
         }
 
-        public static bool TryPersistConfirmationIntent(string shopKey, string seller, string orderId)
+        public static bool TryPersistConfirmationIntent(string shopKey, string seller, string orderId, string workerClaimId)
         {
             Initialize();
             if (_stateLoadFailed) return false;
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             orderId = (orderId ?? string.Empty).Trim();
-            if (shopKey.Length == 0 || seller.Length == 0 || !AutoDeliveryConfirmationLedger.IsSafeOrderId(orderId)) return false;
+            workerClaimId = (workerClaimId ?? string.Empty).Trim();
+            Guid claimGuid;
+            if (shopKey.Length == 0 || seller.Length == 0
+                || !Guid.TryParseExact(workerClaimId, "N", out claimGuid)
+                || !AutoDeliveryConfirmationLedger.IsSafeOrderId(orderId)) return false;
             var key = BuildKey(shopKey, seller, orderId);
             lock (Sync)
             {
@@ -341,7 +349,9 @@ namespace Bot.ChromeNs
                     }
                     if (!ReloadStateForMutationLocked(false)) return false;
                     var live = FindLiveRecordLocked(key);
-                    if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue) return false;
+                    if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue
+                        || !string.Equals(live.WorkerClaimId ?? string.Empty, workerClaimId, StringComparison.Ordinal)
+                        || live.NextAttemptAt <= DateTime.Now) return false;
                     bool existingIntent;
                     if (!AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent))
                     {
@@ -351,7 +361,7 @@ namespace Bot.ChromeNs
                     if (existingIntent)
                     {
                         live.ConfirmationIntentAt = DateTime.Now;
-                        live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
+                        live.NextAttemptAt = DateTime.Now.Add(WorkerClaimLease);
                         SaveStateLocked();
                         return false;
                     }
@@ -370,13 +380,13 @@ namespace Bot.ChromeNs
                             && racedIntent)
                         {
                             live.ConfirmationIntentAt = now;
-                            live.NextAttemptAt = now.Add(UncertainRetryDelay);
+                            live.NextAttemptAt = now.Add(WorkerClaimLease);
                             SaveStateLocked();
                         }
                         return false;
                     }
                     live.ConfirmationIntentAt = now;
-                    live.NextAttemptAt = now.Add(UncertainRetryDelay);
+                    live.NextAttemptAt = now.Add(WorkerClaimLease);
                     if (!SaveStateLocked())
                     {
                         Log.Error("自动发货队列防重标记持久化失败；长期账本已保留，拒绝确认发货: seller=" + seller + ", orderId=" + orderId);
@@ -386,6 +396,55 @@ namespace Bot.ChromeNs
                     return true;
                 }
             }
+        }
+
+        private static bool IsSameWorkerClaim(PendingRecord live, PendingRecord claimed)
+        {
+            return live != null && claimed != null
+                && !string.IsNullOrWhiteSpace(claimed.WorkerClaimId)
+                && string.Equals(live.WorkerClaimId ?? string.Empty, claimed.WorkerClaimId, StringComparison.Ordinal);
+        }
+
+        public static bool RenewWorkerClaim(string shopKey, string seller, string orderId, string workerClaimId)
+        {
+            Initialize();
+            if (_stateLoadFailed) return false;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            orderId = (orderId ?? string.Empty).Trim();
+            workerClaimId = (workerClaimId ?? string.Empty).Trim();
+            Guid claimGuid;
+            if (shopKey.Length == 0 || seller.Length == 0
+                || !Guid.TryParseExact(workerClaimId, "N", out claimGuid)
+                || !AutoDeliveryConfirmationLedger.IsSafeOrderId(orderId)) return false;
+
+            lock (Sync)
+            {
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
+                {
+                    if (lease == null || !lease.Acquired)
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货续租无法取得跨进程队列锁；停止确认流程。", 10);
+                        return false;
+                    }
+                    if (!ReloadStateForMutationLocked(false)) return false;
+                    var live = FindLiveRecordLocked(BuildKey(shopKey, seller, orderId));
+                    var now = DateTime.Now;
+                    if (live == null || !string.Equals(live.WorkerClaimId ?? string.Empty, workerClaimId, StringComparison.Ordinal)
+                        || live.NextAttemptAt <= now) return false;
+                    live.NextAttemptAt = now.Add(WorkerClaimLease);
+                    return SaveStateLocked();
+                }
+            }
+        }
+
+        private static bool IsWorkerClaimCurrent(PendingRecord record)
+        {
+            return record != null && record.Snapshot != null
+                && RenewWorkerClaim(record.Snapshot.ShopKey, record.Snapshot.Seller,
+                    record.Snapshot.OrderId, record.WorkerClaimId);
         }
 
         private static void ScheduleWorker()
@@ -426,6 +485,7 @@ namespace Bot.ChromeNs
                             // The claim is written under the same cross-process mutex as the
                             // read. A second Bot process reloads this deadline and cannot claim
                             // the same row while the first process is working.
+                            record.WorkerClaimId = Guid.NewGuid().ToString("N");
                             record.NextAttemptAt = now.Add(WorkerClaimLease);
                             record.Attempts++;
                             if (!SaveStateLocked()) return;
@@ -547,7 +607,8 @@ namespace Bot.ChromeNs
                         RemoveRecord(record, "功能已关闭且尚未消耗确认权限");
                         return;
                     }
-                    result = await qn.TryExecuteVirtualGoodsAutoDeliveryAsync(snapshot, verificationOnly).ConfigureAwait(false);
+                    result = await qn.TryExecuteVirtualGoodsAutoDeliveryAsync(
+                        snapshot, verificationOnly, record.WorkerClaimId).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -555,6 +616,12 @@ namespace Bot.ChromeNs
                 result = verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核异常：" + ex.Message) : AutoDeliveryAttemptResult.Deferred("执行异常：" + ex.Message);
             }
             if (result == null) result = verificationOnly ? AutoDeliveryAttemptResult.Uncertain("只读复核未返回结果") : AutoDeliveryAttemptResult.Deferred("未返回执行结果");
+            if (!IsWorkerClaimCurrent(record))
+            {
+                Log.Info("自动发货工作任务租约已转移；忽略旧工作进程结果，保留新持有者的任务状态: seller="
+                    + snapshot.Seller + ", orderId=" + snapshot.OrderId);
+                return;
+            }
 
             switch (result.Outcome)
             {
@@ -589,8 +656,9 @@ namespace Bot.ChromeNs
                             }
                             if (!ReloadStateForMutationLocked(false)) return;
                             var live = FindLiveRecordLocked(record.Key);
-                            if (live == null) return;
+                            if (!IsSameWorkerClaim(live, record)) return;
                             live.ConfirmationUncertainCount++;
+                            live.WorkerClaimId = null;
                             if (live.ConfirmationUncertainCount >= 5)
                             {
                                 live.NextAttemptAt = DateTime.Now.AddHours(1);
@@ -664,7 +732,10 @@ namespace Bot.ChromeNs
                         && string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(), (record.Snapshot.ShopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
                         && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
                     {
+                        var ownsClaim = IsSameWorkerClaim(live, record);
+                        if (!string.IsNullOrWhiteSpace(live.WorkerClaimId) && !ownsClaim) continue;
                         if (live.NextAttemptAt < next) live.NextAttemptAt = next;
+                        if (ownsClaim) live.WorkerClaimId = null;
                         deferred++;
                     }
                     if (!SaveStateLocked()) return;
@@ -692,9 +763,10 @@ namespace Bot.ChromeNs
                     }
                     if (!ReloadStateForMutationLocked(false)) return;
                     var live = FindLiveRecordLocked(record.Key);
-                    if (live == null) return;
+                    if (!IsSameWorkerClaim(live, record)) return;
+                    live.WorkerClaimId = null;
                     live.NextAttemptAt = DateTime.Now.Add(delay);
-                    SaveStateLocked();
+                    if (!SaveStateLocked()) return;
                 }
             }
             if (record.Attempts == 1 || record.Attempts % 8 == 0) Log.Info("虚拟商品自动发货暂缓: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", reason=" + (reason ?? string.Empty));
@@ -716,7 +788,8 @@ namespace Bot.ChromeNs
                     }
                     if (!ReloadStateForMutationLocked(false)) return;
                     var live = FindLiveRecordLocked(record.Key);
-                    if (live != null) _state.Pending.Remove(live);
+                    if (!IsSameWorkerClaim(live, record)) return;
+                    _state.Pending.Remove(live);
                     if (!SaveStateLocked()) return;
                 }
             }
@@ -991,9 +1064,13 @@ namespace Bot.ChromeNs
             [JsonProperty("clicked")] public bool Clicked { get; set; }
         }
 
-        internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync(OrderSnapshot snapshot, bool verificationOnly)
+        internal async Task<AutoDeliveryAttemptResult> TryExecuteVirtualGoodsAutoDeliveryAsync(
+            OrderSnapshot snapshot, bool verificationOnly, string workerClaimId)
         {
             if (snapshot == null || !AutoDeliveryConfirmationLedger.IsSafeOrderId(snapshot.OrderId)) return AutoDeliveryAttemptResult.Terminal("订单号不是16-24位纯数字安全格式");
+            if (!AutoDeliveryCoordinator.RenewWorkerClaim(
+                snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId))
+                return AutoDeliveryAttemptResult.Deferred("自动发货工作任务租约已失效，拒绝继续执行");
             var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0 || !DirectOrderIdentityResolver.IdentityEquals(seller, snapshot.Seller))
                 return verificationOnly
@@ -1161,8 +1238,16 @@ namespace Bot.ChromeNs
                     if (selected == null || !selected.Found || !selected.NoLogistics || !selected.Confirm || !selected.Selected) return AutoDeliveryAttemptResult.Uncertain("已点击“无需物流”，但未读取到其选中状态；不会点击确认发货");
 
                     if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Deferred("持久化确认意图前来源CDP会话已变化");
-                    if (!AutoDeliveryCoordinator.TryPersistConfirmationIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId)) return AutoDeliveryAttemptResult.Uncertain("确认发货权限已被长期防重账本消费或无法安全持久化；不会点击确认发货");
+                    if (!AutoDeliveryCoordinator.TryPersistConfirmationIntent(
+                        snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId))
+                        return AutoDeliveryAttemptResult.Uncertain("确认发货权限已被长期防重账本消费、工作租约已失效或无法安全持久化；不会点击确认发货");
                     if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("确认意图已持久化，但来源CDP会话发生变化；保持只读复核且不再次确认");
+                    // The durable claim is renewed after the long preflight and immediately
+                    // before the irreversible modal action. If another process reclaimed
+                    // the task, this worker must not click even though the ledger intent exists.
+                    if (!AutoDeliveryCoordinator.RenewWorkerClaim(
+                        snapshot.ShopKey, snapshot.Seller, snapshot.OrderId, workerClaimId))
+                        return AutoDeliveryAttemptResult.Uncertain("确认意图已持久化，但工作租约已转移；禁止点击确认并转入只读复核");
                     var confirm = await ReadModalStateAsync(sourceClient, "confirm").ConfigureAwait(false);
                     if (!sourceSessionCurrent()) return AutoDeliveryAttemptResult.Uncertain("确认动作期间来源CDP会话发生变化；保持只读复核且不再次确认");
                     if (confirm == null || !confirm.Found || !confirm.NoLogistics || !confirm.Confirm || !confirm.Selected || !confirm.Clicked) return AutoDeliveryAttemptResult.Uncertain("长期防重屏障已写入，但无法在“无需物流”仍选中的条件下唯一提交确认；后续只读复核");
