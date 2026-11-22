@@ -293,7 +293,9 @@ namespace Bot.Knowledge
         public static KnowledgeV2Stats GetStats(string seller)
         {
             var snapshot = GetSnapshot(seller);
-            var all = KnowledgeEngineV2Repository.LoadAll(seller).Where(x => x != null).Select(KnowledgeV2AuthorityPolicy.NormalizeForRead).ToList();
+            var all = KnowledgeEngineV2Repository.LoadAll(seller)
+                .Where(x => x != null && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead).ToList();
             return new KnowledgeV2Stats
             {
                 Total = all.Count,

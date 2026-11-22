@@ -45,8 +45,9 @@ def test_corpus_revision_drift_or_any_failed_batch_prevents_complete_status():
         service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
     ]
 
-    assert "ComputeKnowledgeCorpusFingerprint(records)" in method
+    assert "ComputeKnowledgeCorpusFingerprint(allRecords)" in method
     assert "ComputeKnowledgeCorpusFingerprint(afterRecords)" in method
+    assert "var records = allRecords" in method
     assert "result.SourceFingerprint, result.AfterFingerprint" in method
     assert "result.BatchesCompleted == result.BatchCount" in method
     assert "&& result.FailedBatches == 0" in method
@@ -978,3 +979,16 @@ def test_only_complete_stable_high_confidence_human_corrections_auto_write_to_ex
     assert "candidate.EvidenceMessageIds.Count == 0" in apply
     assert "candidate.SourceFingerprint, sourceFingerprint" in apply
 
+def test_deleted_knowledge_tombstones_change_the_fingerprint_but_are_not_sent_back_to_ai():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static async Task<KnowledgeCorpusAnalysisResult> AnalyzeKnowledgeCorpusAsync"):
+        service.index("private static List<List<KnowledgeV2Record>> BuildKnowledgeCorpusBatches")
+    ]
+
+    assert "var allRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)" in method
+    assert "result.SourceFingerprint = ComputeKnowledgeCorpusFingerprint(allRecords);" in method
+    assert 'string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)' in method
+    assert "var records = allRecords" in method
+    assert "result.RecordCount = records.Count;" in method
+    assert "BuildKnowledgeCorpusBatches(records)" in method

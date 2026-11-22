@@ -180,3 +180,46 @@ def test_build_props_compiles_all_v2_sources():
         "KnowledgeEngineV2LearningBridge.cs",
     ]:
         assert name in props
+
+def test_knowledge_v2_disabled_and_deleted_provenance_is_never_normalized_back_to_active():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    auto = bridge.split("private static void ApplyAutoPublished(", 1)[1].split(
+        "private static void ApplyHumanConfirmed(", 1
+    )[0]
+    human = bridge.split("private static void ApplyHumanConfirmed(", 1)[1].split(
+        "\n    }\n}", 1
+    )[0]
+    sync = bridge.split("public static bool IsPersistedStateSynchronized(", 1)[1].split(
+        "public static void ApplyImportedLegacyProvenance(", 1
+    )[0]
+
+    for method in (auto, human):
+        assert "!record.Enabled" in method
+        assert 'record.Status, "disabled"' in method
+        assert 'record.Status, "deleted"' in method
+    assert "if (!record.Enabled) return true;" in sync
+
+
+def test_knowledge_center_hides_deleted_tombstones_but_keeps_disabled_records_manageable():
+    page = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    apply_filter = page.split("private void ApplyFilter()", 1)[1].split(
+        "private bool MatchesMode(", 1
+    )[0]
+    assert 'x.Status, "deleted"' in apply_filter
+    assert "Where(MatchesMode)" in apply_filter
+
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    stats = public.split("public static KnowledgeV2Stats GetStats(", 1)[1].split(
+        "public static void Invalidate(", 1
+    )[0]
+    assert 'x.Status, "deleted"' in stats
+
+
+def test_bot_reply_knowledge_mapping_only_offers_enabled_production_records():
+    page = read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")
+    rank = page.split("private static List<BotReplyKnowledgeResult> RankKnowledge(", 1)[1].split(
+        "private static", 1
+    )[0]
+    assert "x.Enabled" in rank
+    assert 'x.Status, "deleted"' in rank
+    assert "KnowledgeV2AuthorityPolicy.IsCandidate(x)" in rank
