@@ -1209,11 +1209,13 @@ namespace Bot.ChromeNs
                 var transcript = BuildCorpusTranscript(turns, cards, promptIdentifiers);
                 var allMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 var humanMessageIds = new HashSet<string>(StringComparer.Ordinal);
+                var buyerMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 var promptAllMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 var promptHumanMessageIds = new HashSet<string>(StringComparer.Ordinal);
+                var promptBuyerMessageIds = new HashSet<string>(StringComparer.Ordinal);
                 CollectEvidenceMessageIds(
-                    turns, cards, promptIdentifiers, allMessageIds, humanMessageIds,
-                    promptAllMessageIds, promptHumanMessageIds);
+                    turns, cards, promptIdentifiers, allMessageIds, humanMessageIds, buyerMessageIds,
+                    promptAllMessageIds, promptHumanMessageIds, promptBuyerMessageIds);
                 var transcriptFingerprint = ComputeKnowledgeCorpusTranscriptFingerprint(
                     transcript, styleBefore, localFirst);
                 var corpusSessionSummary = Redact(Clean(sessionSummary, 1200));
@@ -1692,8 +1694,10 @@ namespace Bot.ChromeNs
             PromptIdentifierContext promptIdentifiers,
             HashSet<string> allMessageIds,
             HashSet<string> humanMessageIds,
+            HashSet<string> buyerMessageIds,
             HashSet<string> promptAllMessageIds,
-            HashSet<string> promptHumanMessageIds)
+            HashSet<string> promptHumanMessageIds,
+            HashSet<string> promptBuyerMessageIds)
         {
             foreach (var turn in turns ?? new List<ConversationContextTurn>())
             {
@@ -1712,6 +1716,11 @@ namespace Bot.ChromeNs
                     {
                         humanMessageIds.Add(id);
                         if (promptId.Length > 0) promptHumanMessageIds.Add(promptId);
+                    }
+                    else if (turn.Role == "user")
+                    {
+                        buyerMessageIds.Add(id);
+                        if (promptId.Length > 0) promptBuyerMessageIds.Add(promptId);
                     }
                 }
             }
