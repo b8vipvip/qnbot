@@ -72,7 +72,11 @@ namespace Bot.Knowledge
             if (MessageBox.Show("校验并保存流程草稿？不会影响正在运行的接待流程。",
                 "保存草稿", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
-            try { _status.Text = ReceptionWorkflowCatalogService.SaveDraft(_seller, _editor.Text); }
+            try
+            {
+                _status.Text = ReceptionWorkflowCatalogService.SaveDraft(_seller, _editor.Text);
+                RefreshView(); // Reload the incremented revision before the next edit/save.
+            }
             catch (Exception ex) { _status.Text = "草稿未保存：" + ex.Message; }
         }
 
