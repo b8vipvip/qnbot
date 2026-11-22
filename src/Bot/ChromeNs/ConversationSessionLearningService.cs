@@ -1168,6 +1168,7 @@ namespace Bot.ChromeNs
                         verified.Question,
                         verified.Answer,
                         verified.Aliases,
+                        (verified.Keywords ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries),
                         verified.EvidenceMessageIds[0],
                         verified.EvidenceMessageIds[1],
                         verified.Confidence,
@@ -2546,7 +2547,7 @@ namespace Bot.ChromeNs
                 || KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
                 || ContainsHighRisk(question + " " + answer)
                 || Regex.IsMatch(question + " " + answer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www.",
+                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.",
                     RegexOptions.IgnoreCase))
             {
                 rejection = "ai_generated_knowledge_contains_context_or_sensitive_content";
