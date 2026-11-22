@@ -8,6 +8,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Bot.Knowledge
 {
@@ -23,6 +26,12 @@ namespace Bot.Knowledge
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ConcurrentDictionary<string, RepositoryState> States =
             new ConcurrentDictionary<string, RepositoryState>(StringComparer.Ordinal);
+        private static readonly Regex AutoLearningNonReusableFact = new Regex(
+            @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|账号|登录|绑定|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex AutoLearningPersonalData = new Regex(
+            @"(?<!\\d)1[3-9]\\d{9}(?!\\d)|(?<!\\d)\\d{17}[0-9Xx](?!\\d)|(?<!\\d)\\d{16,19}(?!\\d)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static List<KnowledgeV2Record> LoadAll(string seller)
         {
@@ -199,6 +208,292 @@ namespace Bot.Knowledge
                 BotLib.Log.ErrorWithMaxCount("Knowledge V2人工直答保存失败: "
                     + ex.GetType().Name, 10);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Adds a new production V2 fact only when a complete, source-stable session
+        /// supplied an exact buyer message and an exact non-Bot human seller reply.
+        /// The expected corpus fingerprint is checked under the same shop database
+        /// lock as the insert; the returned fingerprint chains subsequent writes.
+        /// </summary>
+        public static bool TryCreateVerifiedSessionKnowledge(
+            string seller,
+            string expectedShopKey,
+            string sessionId,
+            string question,
+            string answer,
+            string questionMessageId,
+            string answerMessageId,
+            double confidence,
+            string expectedCorpusFingerprint,
+            out string result,
+            out string savedKnowledgeId,
+            out string updatedCorpusFingerprint)
+        {
+            result = string.Empty;
+            savedKnowledgeId = string.Empty;
+            updatedCorpusFingerprint = expectedCorpusFingerprint ?? string.Empty;
+            seller = (seller ?? string.Empty).Trim();
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            question = (question ?? string.Empty).Trim();
+            answer = (answer ?? string.Empty).Trim();
+            questionMessageId = (questionMessageId ?? string.Empty).Trim();
+            answerMessageId = (answerMessageId ?? string.Empty).Trim();
+
+            if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
+                || questionMessageId.Length == 0 || answerMessageId.Length == 0
+                || string.Equals(questionMessageId, answerMessageId, StringComparison.Ordinal)
+                || question.Length < 9 || question.Length > 400
+                || answer.Length < 8 || answer.Length > 1200
+                || string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
+                || double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.95 || confidence > 1.0)
+            {
+                result = "真人问答证据、语料版本或置信度未达到自动新增门槛。";
+                return false;
+            }
+
+            if (!IsSafeAutomaticNewKnowledge(question, answer))
+            {
+                result = "问题或答案包含上下文依赖、个人数据或一次性业务事实，已转人工审核。";
+                return false;
+            }
+
+            var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
+            if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
+            {
+                result = "买家问题缺少独立业务主体，不能建立无条件自动直答。";
+                return false;
+            }
+
+            var shop = ResolveShopRequired(seller);
+            if (!string.Equals(shop.ShopKey, expectedShopKey, StringComparison.Ordinal))
+            {
+                result = "当前ShopKey与会话证据所属店铺不一致，已拒绝跨店写入。";
+                return false;
+            }
+
+            var state = GetState(shop);
+            EnsureMigrated(shop, state);
+            var sourceId = BuildHumanEvidenceSourceId(
+                shop.ShopKey, sessionId, questionMessageId, answerMessageId);
+            var now = DateTime.Now;
+            KnowledgeV2Record record = null;
+            lock (state.Sync)
+            {
+                var currentRecords = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                    .Select(FromRow)
+                    .Where(x => x != null)
+                    .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                    .ToList();
+                var currentFingerprint = ComputeRepositoryCorpusFingerprint(currentRecords);
+                if (!string.Equals(currentFingerprint, expectedCorpusFingerprint, StringComparison.Ordinal))
+                {
+                    updatedCorpusFingerprint = currentFingerprint;
+                    result = "Knowledge V2语料版本在自动新增前发生变化，候选已保留并拒绝写入。";
+                    return false;
+                }
+
+                var priorEvidence = currentRecords.FirstOrDefault(x =>
+                    string.Equals(x.SourceId, sourceId, StringComparison.Ordinal));
+                if (priorEvidence != null)
+                {
+                    savedKnowledgeId = priorEvidence.Id;
+                    updatedCorpusFingerprint = currentFingerprint;
+                    result = "该买家问题与人工回复证据已经处理过，幂等跳过重复新增。";
+                    return false;
+                }
+
+                var compactQuestion = KnowledgeEngineV2Semantics.Compact(question);
+                var exactMatches = currentRecords.Where(x =>
+                    string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compactQuestion, StringComparison.Ordinal)
+                    || (x.Aliases ?? new List<string>()).Any(alias =>
+                        string.Equals(KnowledgeEngineV2Semantics.Compact(alias), compactQuestion, StringComparison.Ordinal)))
+                    .ToList();
+                if (exactMatches.Count > 0)
+                {
+                    updatedCorpusFingerprint = currentFingerprint;
+                    result = exactMatches.Any(x =>
+                        string.Equals((x.Answer ?? string.Empty).Trim(), answer, StringComparison.Ordinal))
+                        ? "现有Knowledge V2已经覆盖该问法，不重复新增。"
+                        : "现有Knowledge V2存在同题不同答案，自动新增已拒绝并保留冲突供人工审核。";
+                    return false;
+                }
+
+                var similar = currentRecords.Any(existing =>
+                {
+                    if (existing == null) return false;
+                    var aliases = (existing.Aliases ?? new List<string>())
+                        .Concat(new[] { existing.Title })
+                        .Where(x => !string.IsNullOrWhiteSpace(x));
+                    var titleSimilarity = aliases.Select(x =>
+                        KnowledgeEngineV2Semantics.TextSimilarity(question, x)).DefaultIfEmpty(0).Max();
+                    if (titleSimilarity >= 0.92) return true;
+
+                    var intentCompatible = string.Equals(parsed.Intent, existing.Intent, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(parsed.Intent, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(existing.Intent, "general", StringComparison.OrdinalIgnoreCase);
+                    var predicateCompatible = string.Equals(parsed.Predicate, existing.Predicate, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(parsed.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(existing.Predicate, "general", StringComparison.OrdinalIgnoreCase);
+                    var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
+                        parsed.Subject, existing.Subject);
+                    return intentCompatible && predicateCompatible
+                        && (parsed.Subject ?? string.Empty).Length >= 4
+                        && (existing.Subject ?? string.Empty).Length >= 4
+                        && subjectSimilarity >= 0.90;
+                });
+                if (similar)
+                {
+                    updatedCorpusFingerprint = currentFingerprint;
+                    result = "现有知识存在高相似问法，自动新增已阻止重复事实；请人工确认是否为新场景。";
+                    return false;
+                }
+
+                record = new KnowledgeV2Record
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Type = "business_fact",
+                    Title = question,
+                    Intent = parsed.Intent,
+                    Subject = parsed.Subject,
+                    Predicate = parsed.Predicate,
+                    Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
+                    Aliases = new List<string> { question },
+                    Answer = answer,
+                    ShortAnswer = answer,
+                    Conditions = new List<string>(),
+                    Exclusions = new List<string>(),
+                    RequiredContext = new List<string>(),
+                    ProductIds = new List<string>(),
+                    RiskLevel = "normal",
+                    SourceType = "human_evidence_auto_learned",
+                    SourceId = sourceId,
+                    Authority = 0.98,
+                    Confidence = Math.Max(0.95, Math.Min(0.99, confidence)),
+                    Enabled = true,
+                    Status = "active",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    LastVerifiedAt = now
+                };
+                NormalizeForSave(record);
+
+                // A deleted tombstone is stored as the prior snapshot so the existing
+                // revision rollback action can safely disable this auto-added fact.
+                var tombstone = new KnowledgeV2Record
+                {
+                    Id = record.Id,
+                    Type = record.Type,
+                    Title = record.Title,
+                    Intent = record.Intent,
+                    Subject = record.Subject,
+                    Predicate = record.Predicate,
+                    Entities = record.Entities.ToList(),
+                    Aliases = record.Aliases.ToList(),
+                    Answer = string.Empty,
+                    ShortAnswer = string.Empty,
+                    Conditions = new List<string>(),
+                    Exclusions = new List<string>(),
+                    RequiredContext = new List<string>(),
+                    ProductIds = new List<string>(),
+                    RiskLevel = record.RiskLevel,
+                    SourceType = record.SourceType,
+                    SourceId = record.SourceId,
+                    Authority = record.Authority,
+                    Confidence = record.Confidence,
+                    Enabled = false,
+                    Status = "deleted",
+                    CreatedAt = record.CreatedAt,
+                    UpdatedAt = now,
+                    LastVerifiedAt = record.LastVerifiedAt
+                };
+                var revision = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = record.Id,
+                    MessageRecordId = "session-human-evidence:" + questionMessageId + "," + answerMessageId,
+                    Action = "apply",
+                    PreviousJson = JsonConvert.SerializeObject(tombstone),
+                    CurrentJson = JsonConvert.SerializeObject(record),
+                    CreatedAtTicks = now.Ticks
+                };
+                state.Db.SaveRecordsInTransaction(new List<object> { ToRow(record), revision });
+
+                var readback = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
+                if (readback == null
+                    || !string.Equals(readback.SourceId, sourceId, StringComparison.Ordinal)
+                    || !string.Equals(readback.Title, question, StringComparison.Ordinal)
+                    || !string.Equals(readback.Answer, answer, StringComparison.Ordinal)
+                    || !readback.Enabled
+                    || !string.Equals(readback.Status, "active", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Knowledge V2自动新增写入后回读校验失败。");
+
+                var afterRecords = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                    .Select(FromRow)
+                    .Where(x => x != null)
+                    .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                    .ToList();
+                updatedCorpusFingerprint = ComputeRepositoryCorpusFingerprint(afterRecords);
+                savedKnowledgeId = record.Id;
+            }
+
+            MirrorOneToLegacy(shop, record);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
+            string auditError;
+            KnowledgeV2GovernanceAuditService.TryAppendAction(
+                seller, "session_human_evidence_auto_add", "knowledge", record.Id,
+                questionMessageId + "," + answerMessageId, record.Title,
+                "no_existing_knowledge",
+                KnowledgeV2GovernanceAuditService.DescribeRecord(record),
+                "仅根据完整会话中的真实买家问题与非Bot人工客服回复自动新增；confidence="
+                    + confidence.ToString("0.00") + "; source=" + sourceId
+                    + "; 已保存可回滚修订历史。",
+                "success", out auditError);
+            result = "已根据真人问答证据自动新增Knowledge V2，并刷新检索索引（知识ID：" + record.Id + "）。";
+            return true;
+        }
+
+        private static bool IsSafeAutomaticNewKnowledge(string question, string answer)
+        {
+            var value = (question ?? string.Empty) + " " + (answer ?? string.Empty);
+            if (KnowledgeEngineV2Semantics.IsHighRisk(value)
+                || AutoLearningNonReusableFact.IsMatch(value)
+                || AutoLearningPersonalData.IsMatch(value)
+                || Regex.IsMatch(value, @"https?://|www\\.", RegexOptions.IgnoreCase))
+                return false;
+            return true;
+        }
+
+        private static string BuildHumanEvidenceSourceId(
+            string shopKey, string sessionId, string questionMessageId, string answerMessageId)
+        {
+            var canonical = (shopKey ?? string.Empty) + "\\n"
+                + (sessionId ?? string.Empty) + "\\n"
+                + (questionMessageId ?? string.Empty) + "\\n"
+                + (answerMessageId ?? string.Empty);
+            using (var sha = SHA256.Create())
+            {
+                var hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
+                return "human-evidence-auto-add:" + hash;
+            }
+        }
+
+        private static string ComputeRepositoryCorpusFingerprint(IEnumerable<KnowledgeV2Record> records)
+        {
+            var canonical = JsonConvert.SerializeObject(
+                (records ?? Enumerable.Empty<KnowledgeV2Record>())
+                    .Where(x => x != null)
+                    .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
+                    .ToList(),
+                Formatting.None);
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical)))
+                    .Replace("-", string.Empty).ToLowerInvariant();
             }
         }
 
