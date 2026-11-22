@@ -352,12 +352,19 @@ namespace Bot.Knowledge
                     .Where(x => x.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                // Old dry-run candidates are not production answers. They must not
-                // block a newly verified human-evidence record from becoming active.
-                // Disabled/deleted records and all non-candidate records still block
-                // automatic recreation so an intentional operator disable is respected.
+                if (HasExplicitlyDeletedKnowledge(state, sourceId, questionVariants))
+                {
+                    updatedCorpusFingerprint = currentFingerprint;
+                    result = "该知识此前已被人工删除；自动学习尊重删除操作，不会根据相同证据或问法重新创建。";
+                    return false;
+                }
+
+                // Enabled dry-run candidates are not production answers and must not
+                // block a newly verified human-evidence record. A disabled candidate,
+                // deleted tombstone, or any non-candidate record is an explicit operator
+                // decision and must block automatic recreation.
                 var exactMatches = currentRecords
-                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))
+                    .Where(BlocksVerifiedAutoAddRecreation)
                     .Where(x =>
                         questionVariants.Any(compact =>
                             string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compact, StringComparison.Ordinal)
@@ -375,7 +382,7 @@ namespace Bot.Knowledge
                 }
 
                 var similar = currentRecords
-                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))
+                    .Where(BlocksVerifiedAutoAddRecreation)
                     .Any(existing =>
                 {
                     if (existing == null) return false;
@@ -518,6 +525,50 @@ namespace Bot.Knowledge
                 ? "该知识此前已持久化，已幂等恢复旧库镜像和Knowledge V2检索索引（知识ID：" + record.Id + "）。"
                 : "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
             return true;
+        }
+
+        private static bool BlocksVerifiedAutoAddRecreation(KnowledgeV2Record record)
+        {
+            return record != null
+                && (!record.Enabled
+                    || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    || !KnowledgeV2AuthorityPolicy.IsCandidate(record));
+        }
+
+        private static bool HasExplicitlyDeletedKnowledge(
+            RepositoryState state,
+            string sourceId,
+            IEnumerable<string> questionVariants)
+        {
+            if (state == null) return false;
+            var variants = new HashSet<string>(
+                (questionVariants ?? Enumerable.Empty<string>())
+                    .Where(x => !string.IsNullOrWhiteSpace(x)),
+                StringComparer.Ordinal);
+            foreach (var revision in state.Db.ReadRecords<KnowledgeV2ManualEditRevisionRow>(null)
+                .Where(x => x != null && string.Equals(x.Action, "delete", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(x => x.CreatedAtTicks))
+            {
+                KnowledgeV2Record deleted;
+                try
+                {
+                    deleted = JsonConvert.DeserializeObject<KnowledgeV2Record>(revision.PreviousJson ?? string.Empty);
+                }
+                catch
+                {
+                    continue;
+                }
+                if (deleted == null) continue;
+                if (!string.IsNullOrWhiteSpace(sourceId)
+                    && string.Equals(deleted.SourceId, sourceId, StringComparison.Ordinal))
+                    return true;
+                var deletedVariants = new[] { deleted.Title }
+                    .Concat(deleted.Aliases ?? new List<string>())
+                    .Select(KnowledgeEngineV2Semantics.Compact)
+                    .Where(x => x.Length > 0);
+                if (deletedVariants.Any(variants.Contains)) return true;
+            }
+            return false;
         }
 
         private static bool IsSafeAutomaticNewKnowledge(string question, string answer)
@@ -1067,6 +1118,22 @@ namespace Bot.Knowledge
             {
                 var row = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == id);
                 if (row == null) return false;
+                var deleted = FromRow(row);
+                // Persist the suppression tombstone before deleting the live row.
+                // If the process exits between these operations, the remaining live
+                // record still blocks auto-add; after deletion, this revision prevents
+                // the same human evidence or exact question from recreating it.
+                var revision = new KnowledgeV2ManualEditRevisionRow
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = id,
+                    MessageRecordId = "knowledge-center-delete",
+                    Action = "delete",
+                    PreviousJson = JsonConvert.SerializeObject(deleted),
+                    CurrentJson = string.Empty,
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                state.Db.SaveOneRecord(revision);
                 state.Db.Delete(row);
             }
             MirrorDeleteToLegacy(shop, id);
