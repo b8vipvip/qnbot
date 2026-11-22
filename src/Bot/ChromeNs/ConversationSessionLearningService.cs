@@ -2553,61 +2553,81 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var question = Redact(Clean(generatedQuestion, 400));
-            var answer = StripAi(Redact(Clean(generatedAnswer, 1200)));
-            if (question.Length < 9 || question.Length > 400
-                || answer.Length < 8 || answer.Length > 1200
-                || KnowledgeEngineV2Semantics.IsContextDependent(question)
-                || KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
-                || ContainsHighRisk(question + " " + answer)
-                || Regex.IsMatch(question + " " + answer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.|(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
-                    RegexOptions.IgnoreCase))
+            // The source pair has already been verified as one live buyer message and
+            // one subsequent non-Bot human seller reply. Keep those exact texts as a
+            // safe fallback whenever AI normalization cannot be grounded strongly.
+            var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));
+            var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));
+            if (sourceQuestion.Length < 9 || sourceAnswer.Length < 8)
             {
-                rejection = "ai_generated_knowledge_contains_context_or_sensitive_content";
+                rejection = "verified_human_source_text_invalid";
                 return false;
             }
 
-            if (KnowledgeEngineV2Semantics.TextSimilarity(evidenceCandidate.Question, question) < 0.25
-                || KnowledgeEngineV2Semantics.TextSimilarity(evidenceCandidate.Answer, answer) < 0.25)
-            {
-                rejection = "ai_generated_question_or_answer_is_not_grounded_in_human_message_pair";
-                return false;
-            }
+            var candidateQuestion = Redact(Clean(generatedQuestion, 400));
+            var questionGrounded = candidateQuestion.Length >= 9
+                && candidateQuestion.Length <= 400
+                && !KnowledgeEngineV2Semantics.IsContextDependent(candidateQuestion)
+                && !KnowledgeEngineV2Semantics.IsHighRisk(candidateQuestion)
+                && !ContainsHighRisk(candidateQuestion)
+                && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45;
+            var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
-            var sourceNumbers = new HashSet<string>(
-                Regex.Matches(evidenceCandidate.Answer ?? string.Empty, @"\d+(?:\.\d+)?")
-                    .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
-            foreach (Match number in Regex.Matches(answer, @"\d+(?:\.\d+)?"))
+            var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
+            var answerGrounded = candidateAnswer.Length >= 8
+                && candidateAnswer.Length <= 1200
+                && !KnowledgeEngineV2Semantics.IsHighRisk(candidateAnswer)
+                && !ContainsHighRisk(candidateAnswer)
+                && !Regex.IsMatch(candidateAnswer,
+                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|验证码|密码|API密钥|个人信息|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www.|(?<!d)1[3-9]d{9}(?!d)|(?<!d)d{17}[0-9Xx](?!d)|(?<!d)d{16,19}(?!d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+.[A-Z]{2,}",
+                    RegexOptions.IgnoreCase)
+                && KnowledgeEngineV2Semantics.TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45
+                && !HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)
+                && !HasUnverifiedKnowledgeAnchors(sourceQuestion + " " + sourceAnswer, candidateAnswer)
+                && candidateAnswer.Length <= Math.Max(160, sourceAnswer.Length * 2);
+            if (answerGrounded)
             {
-                if (!sourceNumbers.Contains(number.Value))
+                var sourceNumbers = new HashSet<string>(
+                    Regex.Matches(sourceAnswer, @"d+(?:.d+)?")
+                        .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+                foreach (Match number in Regex.Matches(candidateAnswer, @"d+(?:.d+)?"))
                 {
-                    rejection = "ai_generated_answer_introduced_unverified_numeric_fact";
-                    return false;
+                    if (!sourceNumbers.Contains(number.Value))
+                    {
+                        answerGrounded = false;
+                        break;
+                    }
                 }
             }
-
-            if (answer.Length > Math.Max(160, (evidenceCandidate.Answer ?? string.Empty).Length * 2))
-            {
-                rejection = "ai_generated_answer_exceeds_human_evidence_scope";
-                return false;
-            }
+            // AI may reorganize a human answer, but it may not flip its yes/no meaning,
+            // introduce a new product/platform, or add facts absent from the source.
+            // When a deterministic check is inconclusive, publish the original human
+            // reply rather than losing a valid learning opportunity or trusting a guess.
+            var answer = answerGrounded ? candidateAnswer : sourceAnswer;
 
             var parsed = KnowledgeEngineV2Semantics.Parse(question, null);
             if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
             {
-                rejection = "ai_generated_question_has_no_standalone_business_subject";
+                question = sourceQuestion;
+                parsed = KnowledgeEngineV2Semantics.Parse(question, null);
+            }
+            if (parsed.ContextDependent || string.IsNullOrWhiteSpace(parsed.Subject))
+            {
+                rejection = "verified_buyer_question_has_no_standalone_business_subject";
                 return false;
             }
 
+            var sourceText = sourceQuestion + " " + sourceAnswer;
             var aliases = new List<string>();
             foreach (var alias in generatedAliases ?? Enumerable.Empty<string>())
             {
                 var value = Redact(Clean(alias, 200));
                 if (value.Length < 5 || KnowledgeEngineV2Semantics.IsContextDependent(value)
                     || KnowledgeEngineV2Semantics.IsHighRisk(value)
-                    || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
-                    || KnowledgeEngineV2Semantics.TextSimilarity(question, value) < 0.30
+                    || ContainsHighRisk(value)
+                    || HasUnverifiedKnowledgeAnchors(sourceText, value)
+                    || Regex.IsMatch(value, @"(?<!d)1[3-9]d{9}(?!d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+.[A-Z]{2,}|https?://|www.", RegexOptions.IgnoreCase)
+                    || KnowledgeEngineV2Semantics.TextSimilarity(question, value) < 0.45
                     || aliases.Any(x => string.Equals(
                         KnowledgeEngineV2Semantics.Compact(x),
                         KnowledgeEngineV2Semantics.Compact(value), StringComparison.Ordinal)))
@@ -2616,15 +2636,23 @@ namespace Bot.ChromeNs
                 if (aliases.Count >= 5) break;
             }
 
+            var sourceEntities = new HashSet<string>(
+                KnowledgeEngineV2Semantics.ExtractEntities(sourceText)
+                    .Select(KnowledgeEngineV2Semantics.Compact)
+                    .Where(x => x.Length > 0),
+                StringComparer.OrdinalIgnoreCase);
             var keywords = new List<string>();
             foreach (var keyword in (generatedKeywords ?? Enumerable.Empty<string>())
                 .Concat(parsed.Entities ?? new List<string>()))
             {
                 var value = Redact(Clean(keyword, 80));
+                var compact = KnowledgeEngineV2Semantics.Compact(value);
+                var appearsInSource = sourceText.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0
+                    || sourceEntities.Contains(compact);
                 if (value.Length < 2 || KnowledgeEngineV2Semantics.IsHighRisk(value)
-                    || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
-                    || (!question.Contains(value) && !answer.Contains(value)
-                        && KnowledgeEngineV2Semantics.TextSimilarity(value, question + " " + answer) < 0.15)
+                    || ContainsHighRisk(value)
+                    || Regex.IsMatch(value, @"(?<!d)1[3-9]d{9}(?!d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+.[A-Z]{2,}|https?://|www.", RegexOptions.IgnoreCase)
+                    || !appearsInSource
                     || keywords.Contains(value, StringComparer.OrdinalIgnoreCase))
                     continue;
                 keywords.Add(value);
@@ -2641,10 +2669,36 @@ namespace Bot.ChromeNs
             evidenceCandidate.Category = category;
             evidenceCandidate.Aliases = aliases;
             evidenceCandidate.Keywords = string.Join(",", keywords);
-            evidenceCandidate.Evidence = "AI自动整理的知识内容已通过真实买家问题与非Bot人工客服回复的来源校验。";
+            evidenceCandidate.Evidence = "AI自动整理的知识内容已通过真实买家问题与非Bot人工客服回复的来源校验；无法充分验证的改写自动回退至人工原文。";
             evidenceCandidate.Reason = Redact(Clean(evidenceCandidate.Reason, 500));
-            evidenceCandidate.ApplyMessage = "AI已生成知识并通过自动校验，准备直接发布到正式Knowledge V2。";
+            evidenceCandidate.ApplyMessage = answerGrounded
+                ? "AI知识整理通过来源、实体、数字和回答极性校验，准备直接发布到正式Knowledge V2。"
+                : "AI答案改写未达到充分证据门槛，已自动采用人工原始回复，准备直接发布到正式Knowledge V2。";
             return true;
+        }
+
+        private static bool HasKnowledgePolarityMismatch(string sourceAnswer, string generatedAnswer)
+        {
+            var negative = @"不支持|不兼容|不适配|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|无法使用";
+            var positive = @"支持|兼容|适配|可以|能用|可用|允许|提供|包含|开通|能够|可使用";
+            var sourceNegative = Regex.IsMatch(sourceAnswer ?? string.Empty, negative);
+            var generatedNegative = Regex.IsMatch(generatedAnswer ?? string.Empty, negative);
+            var sourcePositive = Regex.IsMatch(sourceAnswer ?? string.Empty, positive);
+            var generatedPositive = Regex.IsMatch(generatedAnswer ?? string.Empty, positive);
+            return sourceNegative != generatedNegative || sourcePositive != generatedPositive;
+        }
+
+        private static bool HasUnverifiedKnowledgeAnchors(string sourceText, string generatedText)
+        {
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var source = new HashSet<string>(
+                Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
+                    .Cast<Match>().Select(x => KnowledgeEngineV2Semantics.Compact(x.Value)),
+                StringComparer.OrdinalIgnoreCase);
+            return Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .Select(x => KnowledgeEngineV2Semantics.Compact(x.Value))
+                .Any(x => x.Length > 0 && !source.Contains(x));
         }
 
         private static bool TryCreateVerifiedNewKnowledgeCandidate(
