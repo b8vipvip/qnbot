@@ -224,6 +224,7 @@ namespace Bot.Knowledge
             string question,
             string answer,
             IEnumerable<string> aliases,
+            IEnumerable<string> keywords,
             string questionMessageId,
             string answerMessageId,
             double confidence,
@@ -263,6 +264,13 @@ namespace Bot.Knowledge
                 .Where(x => IsSafeAutomaticNewKnowledge(x, answer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(5)
+                .ToList();
+            var normalizedKeywords = (keywords ?? Enumerable.Empty<string>())
+                .Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length >= 2 && x.Length <= 80)
+                .Where(x => IsSafeAutomaticNewKnowledge(x, answer))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(12)
                 .ToList();
             if (!IsSafeAutomaticNewKnowledge(question, answer))
             {
@@ -379,7 +387,8 @@ namespace Bot.Knowledge
                     Intent = parsed.Intent,
                     Subject = parsed.Subject,
                     Predicate = parsed.Predicate,
-                    Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
+                    Entities = (parsed.Entities ?? new List<string>()).Concat(normalizedKeywords)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList(),
                     Aliases = new[] { question }.Concat(normalizedAliases)
                         .GroupBy(KnowledgeEngineV2Semantics.Compact, StringComparer.Ordinal)
                         .Select(x => x.First()).Take(6).ToList(),
