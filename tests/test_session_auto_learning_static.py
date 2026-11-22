@@ -524,6 +524,13 @@ def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
     assert "BuildManualTurnKey(shopKey, seller, buyer, question)" in service
     assert "ShopKey = shopKey" in service
     assert "ResolveRuntimeBySeller(qn)" in bridge
+    assert "DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)" in bridge
+    assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in bridge
+    assert bridge.index("DirectOrderIdentityResolver.IsMessageFromShop(message, shop)") < bridge.index(
+        "AiManualReplyOptimizationService.StartForManualReply("
+    )
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in bridge
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, to)" in bridge
     assert "using (ShopSettingsScope.Enter(shop))" in bridge
     assert "MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)" in bridge
     assert "StartForManualReply(\n                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey)" in bridge
