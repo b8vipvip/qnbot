@@ -2711,6 +2711,24 @@ namespace Bot.ChromeNs
             return sourceNegative != generatedNegative || sourcePositive != generatedPositive;
         }
 
+        private static string NormalizeKnowledgeAnchor(string value)
+        {
+            var compact = KnowledgeEngineV2Semantics.Compact(value).ToLowerInvariant();
+            switch (compact)
+            {
+                case "大屏":
+                case "电视机":
+                case "tv":
+                    return "电视";
+                case "android":
+                    return "安卓";
+                case "harmonyos":
+                    return "鸿蒙";
+                default:
+                    return compact;
+            }
+        }
+
         private static bool HasKnowledgeEntityPolarityMismatch(string sourceAnswer, string generatedAnswer)
         {
             var sourceText = sourceAnswer ?? string.Empty;
@@ -2722,8 +2740,8 @@ namespace Bot.ChromeNs
                 var generated = Regex.Matches(generatedText, anchors, RegexOptions.IgnoreCase)
                     .Cast<Match>()
                     .FirstOrDefault(x => string.Equals(
-                        KnowledgeEngineV2Semantics.Compact(x.Value),
-                        KnowledgeEngineV2Semantics.Compact(source.Value),
+                        NormalizeKnowledgeAnchor(x.Value),
+                        NormalizeKnowledgeAnchor(source.Value),
                         StringComparison.OrdinalIgnoreCase));
                 if (generated == null) continue;
                 var sourceStart = Math.Max(0, source.Index - 8);
@@ -2742,11 +2760,11 @@ namespace Bot.ChromeNs
             var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
             var generated = new HashSet<string>(
                 Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
-                    .Cast<Match>().Select(x => KnowledgeEngineV2Semantics.Compact(x.Value)),
+                    .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
                 StringComparer.OrdinalIgnoreCase);
             return Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                 .Cast<Match>()
-                .Select(x => KnowledgeEngineV2Semantics.Compact(x.Value))
+                .Select(x => NormalizeKnowledgeAnchor(x.Value))
                 .Any(x => x.Length > 0 && !generated.Contains(x));
         }
 
@@ -2755,11 +2773,11 @@ namespace Bot.ChromeNs
             var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
             var source = new HashSet<string>(
                 Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
-                    .Cast<Match>().Select(x => KnowledgeEngineV2Semantics.Compact(x.Value)),
+                    .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
                 StringComparer.OrdinalIgnoreCase);
             return Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                 .Cast<Match>()
-                .Select(x => KnowledgeEngineV2Semantics.Compact(x.Value))
+                .Select(x => NormalizeKnowledgeAnchor(x.Value))
                 .Any(x => x.Length > 0 && !source.Contains(x));
         }
 
