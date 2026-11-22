@@ -152,6 +152,12 @@ def test_duplicate_retirement_cannot_close_a_promoted_or_rebound_shop_session():
     assert "_duplicateShopSessions.TryGetValue(sessionId, out duplicateShopKey)" in retire
     assert "_sessionShopKeys.TryGetValue(sessionId, out mappedShopKey)" in retire
     assert "_shopSessions.TryGetValue(shopKey, out currentOwner)" in retire
-    assert "_standbyLoggedSessions.TryAdd(sessionId, true)" in retire
+    assert "_standbyLoggedSessions.TryAdd(sessionId, shopKey)" in retire
     assert "_standbyLoggedSessions.ContainsKey(sessionId)" in promote
     assert "!_standbyLoggedSessions.ContainsKey(x.Key)" in available
+
+    assert "ConcurrentDictionary<string, string> _standbyLoggedSessions" in server
+    assert "TryGetValue(sessionId, out pendingShopKey)" in retire
+    assert "string.Equals(pendingShopKey, shopKey, StringComparison.Ordinal)" in retire
+    assert "session.Send(command);" in retire
+    assert "_standbyLoggedSessions.TryRemove(sessionId, out ignoredRetirementShop);" in server
