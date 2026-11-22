@@ -103,13 +103,25 @@ namespace Bot.Knowledge
             {
                 var all = LoadAll(seller);
                 var compactQuestion = KnowledgeEngineV2Semantics.Compact(question);
-                var exact = all.Where(x => x != null && x.Enabled
-                    && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                var matchingQuestion = new Func<KnowledgeV2Record, bool>(x => x != null
                     && (string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title),
                             compactQuestion, StringComparison.Ordinal)
                         || (x.Aliases ?? new List<string>()).Any(alias =>
                             string.Equals(KnowledgeEngineV2Semantics.Compact(alias),
-                                compactQuestion, StringComparison.Ordinal)))).ToList();
+                                compactQuestion, StringComparison.Ordinal))));
+                var suppressed = all.Where(matchingQuestion)
+                    .Where(x => !x.Enabled
+                        || string.Equals(x.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (suppressed.Count > 0)
+                {
+                    result = "该问法对应的Knowledge V2知识已被人工停用或删除；自动学习尊重该决定，不会重新启用或创建重复知识。";
+                    return false;
+                }
+                var exact = all.Where(x => x != null && x.Enabled
+                    && string.Equals(x.Status, "active", StringComparison.OrdinalIgnoreCase)
+                    && matchingQuestion(x)).ToList();
                 if (exact.Count > 1)
                 {
                     result = "存在多条完全同题的启用知识，请先在知识中心消除冲突。";
@@ -161,6 +173,9 @@ namespace Bot.Knowledge
                     return false;
                 }
                 var old = record.Answer ?? string.Empty;
+                var previousJson = exact.Count == 1
+                    ? JsonConvert.SerializeObject(record)
+                    : string.Empty;
                 record.Answer = answer;
                 record.ShortAnswer = answer;
                 record.Aliases = AddPreferredAlias(record.Aliases, question, 40);
@@ -182,20 +197,62 @@ namespace Bot.Knowledge
                 record.Authority = 0.99;
                 record.Confidence = 0.99;
                 record.LastVerifiedAt = DateTime.Now;
-                Save(seller, record); // Durable write + immediate immutable snapshot update.
-                var readback = LoadAll(seller).FirstOrDefault(x => x != null && x.Id == record.Id);
-                if (readback == null || !string.Equals(readback.Answer, answer, StringComparison.Ordinal))
+                NormalizeForSave(record);
+                var shop = ResolveShopRequired(seller);
+                var state = GetState(shop);
+                EnsureMigrated(shop, state);
+                var revision = new KnowledgeV2ManualEditRevisionRow
                 {
-                    result = "知识写入后验证失败；请核实数据库和云同步。";
-                    return false;
+                    Id = Guid.NewGuid().ToString("N"),
+                    KnowledgeId = record.Id,
+                    MessageRecordId = (sourceMessageId ?? string.Empty).Trim(),
+                    Action = "apply",
+                    PreviousJson = previousJson,
+                    CurrentJson = JsonConvert.SerializeObject(record),
+                    CreatedAtTicks = DateTime.Now.Ticks
+                };
+                lock (state.Sync)
+                {
+                    if (exact.Count == 1)
+                    {
+                        var currentRow = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
+                        var currentRecord = currentRow == null ? null : FromRow(currentRow);
+                        if (currentRecord == null
+                            || !string.Equals((currentRecord.Answer ?? string.Empty).Trim(), old, StringComparison.Ordinal)
+                            || !currentRecord.Enabled
+                            || !string.Equals(currentRecord.Status, "active", StringComparison.OrdinalIgnoreCase))
+                        {
+                            result = "知识已被其他操作修改或停用；自动学习拒绝覆盖，请基于最新版本重新处理。";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        var concurrentExact = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                            .Select(FromRow).Where(matchingQuestion).ToList();
+                        if (concurrentExact.Count > 0)
+                        {
+                            result = "保存期间已有同题知识写入；为避免重复或覆盖，自动学习已拒绝本次写入。";
+                            return false;
+                        }
+                    }
+                    state.Db.SaveRecordsInTransaction(new List<object> { ToRow(record), revision });
+                    var readbackRow = state.Db.ReadOneRecord<KnowledgeV2RecordRow>(x => x.Id == record.Id);
+                    var readback = readbackRow == null ? null : FromRow(readbackRow);
+                    if (readback == null || !string.Equals(readback.Answer, answer, StringComparison.Ordinal)
+                        || !readback.Enabled
+                        || !string.Equals(readback.Status, "active", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("Knowledge V2人工直答写入后回读校验失败。");
                 }
+                MirrorOneToLegacy(shop, record);
+                KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
                 string error;
                 KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                     seller, "manual_direct_answer_add", "knowledge", record.Id,
                     sourceMessageId ?? string.Empty, question,
                     "previous_answer_length=" + old.Length,
                     KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
-                    "人工确认的直答立即生效，不需影子观察；来源消息=" + (sourceMessageId ?? ""),
+                    "真实人工客服答案已自动整理并直接写入Knowledge V2；原快照已保存，可回滚；来源消息=" + (sourceMessageId ?? ""),
                     "success", out error);
                 savedKnowledgeId = record.Id;
                 result = "直答已保存并立即刷新索引（知识ID：" + record.Id
