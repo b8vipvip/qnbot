@@ -69,6 +69,19 @@ def _validate_records(records):
         if not isinstance(item,dict):
             raise HTTPException(status_code=400,detail="Knowledge V2 记录格式无效")
         row={k:v for k,v in item.items() if k in allowed}
+        text_fields=("Type","Title","Intent","Subject","Predicate","Answer","ShortAnswer",
+            "RiskLevel","SourceType","SourceId","Status","CreatedAt","UpdatedAt","LastVerifiedAt")
+        for field in text_fields:
+            value=row.get(field)
+            if value is not None and not isinstance(value,str):
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是文本")
+        list_fields=("Entities","Aliases","Conditions","Exclusions","RequiredContext","ProductIds")
+        for field in list_fields:
+            value=row.get(field)
+            if value is not None and (not isinstance(value,list) or any(not isinstance(x,str) for x in value)):
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是文本数组")
+        if "Enabled" in row and row["Enabled"] is not None and not isinstance(row["Enabled"],bool):
+            raise HTTPException(status_code=400,detail="Knowledge V2 Enabled 必须是布尔值")
         title=row.get("Title")
         answer=row.get("Answer")
         if not isinstance(title,str) or not title.strip() or not isinstance(answer,str) or not answer.strip():
