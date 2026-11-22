@@ -130,3 +130,28 @@ def test_authoritative_shop_session_requires_live_physical_websocket():
     assert closed.index("_connectedSessions.TryRemove(session.SessionID, out _);") < closed.index(
         "ReleaseShopSession(session.SessionID);"
     )
+
+
+def test_duplicate_retirement_cannot_close_a_promoted_or_rebound_shop_session():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    retire = server[
+        server.index("private void ScheduleDuplicateSessionClose"):
+        server.index("private void EnforceDuplicateShopSessionCapLocked")
+    ]
+    promote = server[
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync"):
+        server.index("internal string GetShopKeyForSession")
+    ]
+    available = server[
+        server.index("private async Task TryPromoteAvailableStandbyAsync"):
+        server.index("private bool TryReserveStatusBindingRefresh")
+    ]
+
+    assert "lock (_sellerSessionSync)" in retire
+    assert "_connectedSessions.ContainsKey(sessionId)" in retire
+    assert "_duplicateShopSessions.TryGetValue(sessionId, out duplicateShopKey)" in retire
+    assert "_sessionShopKeys.TryGetValue(sessionId, out mappedShopKey)" in retire
+    assert "_shopSessions.TryGetValue(shopKey, out currentOwner)" in retire
+    assert "_standbyLoggedSessions.TryAdd(sessionId, true)" in retire
+    assert "_standbyLoggedSessions.ContainsKey(sessionId)" in promote
+    assert "!_standbyLoggedSessions.ContainsKey(x.Key)" in available
