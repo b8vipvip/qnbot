@@ -578,21 +578,32 @@ namespace Bot.ChromeNs
                     var stop = false;
                     lock (Sync)
                     {
-                        var live = FindLiveRecordLocked(record.Key);
-                        if (live == null) return;
-                        live.ConfirmationUncertainCount++;
-                        if (live.ConfirmationUncertainCount >= 5)
+                        var path = StatePath();
+                        using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                         {
-                            live.NextAttemptAt = DateTime.Now.AddHours(1);
-                            stop = true;
-                            Log.Error("自动发货确认结果连续不确定，准备转人工复核；在账本终态持久化前保留只读队列屏障: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", reason=" + result.Reason);
+                            if (lease == null || !lease.Acquired)
+                            {
+                                _stateLoadFailed = true;
+                                Log.ErrorWithMaxCount("自动发货不确定结果无法取得跨进程队列锁；保留长期确认屏障并暂停队列。", 10);
+                                return;
+                            }
+                            if (!ReloadStateForMutationLocked(false)) return;
+                            var live = FindLiveRecordLocked(record.Key);
+                            if (live == null) return;
+                            live.ConfirmationUncertainCount++;
+                            if (live.ConfirmationUncertainCount >= 5)
+                            {
+                                live.NextAttemptAt = DateTime.Now.AddHours(1);
+                                stop = true;
+                                Log.Error("自动发货确认结果连续不确定，准备转人工复核；在账本终态持久化前保留只读队列屏障: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", reason=" + result.Reason);
+                            }
+                            else
+                            {
+                                live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
+                                Log.Info("自动发货确认后状态暂未确定，进入只读复核等待: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", uncertain=" + live.ConfirmationUncertainCount + "/5, next=" + live.NextAttemptAt.ToString("HH:mm:ss") + ", reason=" + result.Reason + ", repeatConfirm=false");
+                            }
+                            if (!SaveStateLocked()) return;
                         }
-                        else
-                        {
-                            live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
-                            Log.Info("自动发货确认后状态暂未确定，进入只读复核等待: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", uncertain=" + live.ConfirmationUncertainCount + "/5, next=" + live.NextAttemptAt.ToString("HH:mm:ss") + ", reason=" + result.Reason + ", repeatConfirm=false");
-                        }
-                        SaveStateLocked();
                     }
                     if (stop)
                     {
@@ -638,15 +649,26 @@ namespace Bot.ChromeNs
             var deferred = 0;
             lock (Sync)
             {
-                foreach (var live in _state.Pending.Where(x => x != null && x.Snapshot != null
-                    && !x.ConfirmationIntentAt.HasValue
-                    && string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(), (record.Snapshot.ShopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
-                    && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
-                    if (live.NextAttemptAt < next) live.NextAttemptAt = next;
-                    deferred++;
+                    if (lease == null || !lease.Acquired)
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货批量退避无法取得跨进程队列锁；暂停队列写入。", 10);
+                        return;
+                    }
+                    if (!ReloadStateForMutationLocked(false)) return;
+                    foreach (var live in _state.Pending.Where(x => x != null && x.Snapshot != null
+                        && !x.ConfirmationIntentAt.HasValue
+                        && string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(), (record.Snapshot.ShopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
+                        && string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(), seller, StringComparison.Ordinal)))
+                    {
+                        if (live.NextAttemptAt < next) live.NextAttemptAt = next;
+                        deferred++;
+                    }
+                    if (!SaveStateLocked()) return;
                 }
-                SaveStateLocked();
             }
             if (record.Attempts == 1 || record.Attempts % 8 == 0)
             {
