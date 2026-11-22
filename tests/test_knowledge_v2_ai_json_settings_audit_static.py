@@ -110,3 +110,18 @@ def test_one_line_knowledge_ai_rejects_non_finite_confidence_metadata():
     ]
     assert "!double.IsNaN(value)" in number
     assert "!double.IsInfinity(value)" in number
+
+
+def test_knowledge_and_reply_score_clamps_reject_non_finite_values():
+    for path in (
+        "src/Bot/ChromeNs/KnowledgePolicyProfileService.cs",
+        "src/Bot/ChromeNs/SmartReplyRouterService.cs",
+        "src/Bot/ChromeNs/KnowledgeMemoryEngine.cs",
+        "src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs",
+        "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs",
+        "src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs",
+    ):
+        source = read(path)
+        clamp = source[source.index("private static double Clamp"):]
+        assert "double.IsNaN(value)" in clamp
+        assert "double.IsInfinity(value)" in clamp
