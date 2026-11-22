@@ -210,6 +210,27 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - Real two-device synchronization and concurrent edit testing are still required to verify deployed API behavior and actual Windows client convergence.
 - Real 150+ message full-corpus learning/restart recovery, multi-shop A/B/A, WS/CDP long-running stability, human takeover races, real test-order delivery recovery and Reception Agent trusted approval/publish/rollback remain open under Issue #366. CI and release packaging are not runtime acceptance.
 
+## 4.7 2026-11-22 continued reliability and cloud consistency review
+
+### Knowledge V2 data integrity
+- **Full semantic conflict comparison**: cloud/local records sharing an ID are now compared across subject, predicate, aliases, entities, conditions, exclusions, required context, product IDs, short answer, risk, source provenance, authority and confidence, in addition to title/answer/status/type/intent/enabled. A semantic difference becomes a disabled review candidate instead of being silently discarded.
+- When semantic content matches, monotonic counters are merged by max and CreatedAt/UpdatedAt/LastVerifiedAt metadata is reconciled without creating unnecessary conflict candidates.
+- **Cloud revision namespace reset recovery**: if a token rebind or server-side state reset causes cloud revision to fall behind the local checkpoint, the client first backs up the complete local corpus, resets only the local sync checkpoint, and re-enters revision negotiation. Existing cloud records are merged on the next poll; local-only facts are preserved as disabled conflict candidates. It no longer retries forever on a permanent revision rollback.
+- **Non-finite score protection**: API runtime settings reject NaN/Infinity; record Authority/Confidence must be finite and within [0,1]; record IDs must be unique; text/list/boolean/date fields are type-checked before persistence. Smart Import, one-line AI import, repository normalization, confidence policy, feedback and reply-score clamps reject or normalize non-finite values.
+- Web Knowledge V2 PUT still uses expected_revision CAS (HTTP 409 on stale edits). The API runtime sync route is covered by the existing global shop-binding middleware installed in bootstrap; a separate missing ShopKey-binding defect was not present.
+
+### Validation and release
+- Current master: e13701b6711646f0090d36224f772413c062ddc6.
+- API CI exact-SHA Fast Gate: **1808 passed / 38 skipped**; Windows Static Gate success; Full Gate / Build Package: **151 passed**; the added Knowledge V2 bridge integration regression suite: **30 passed**.
+- Latest stable Windows x64 release: **bot-v1.1.2869**, source bce2fbdd0b257b1d098886cf64bb36d45fdce3fd, build run 45004427073; package SHA-256: 7302cbc9f9aa18a8d84c2244ebb5dabfbaae0e0d56ae32974564b14d9929373a. The source is a descendant of the earlier cloud-reset fix commit 075000816cd62e286a2288463efff1a1574ea577 and includes the Windows-side fixes through the verified build.
+- The latest API schema/finite-validation changes and the new Full Gate integration-test step are on master; they are **not part of the Windows ZIP** and require deployment of the API control-plane service. No new Windows product-code changes were made after the bot-v1.1.2869 source.
+- The full release list was compared by commit ancestry: bot-v1.1.2869 is four commits ahead of bot-v1.1.2865, not a source rollback.
+
+### Remaining runtime boundary
+- Issue #366 remains open. CI/build success does not prove real Qianniu behavior.
+- Still requires real 150+ message/full-corpus learning and restart recovery, two-device convergence/concurrent edits, multi-shop A→B→A and WS/CDP long-run stability, human takeover/withdrawal/retry races, real test-order delivery recovery, and Reception Agent trusted approval/authorization/publish/rollback.
+- Reception workflow catalog remains deliberately draft-only until a trusted approver identity and auditable authorization source exist. Do not enable publish/rollback by treating a UI click as approval.
+
 ## 5. Validation and release rules / 验收与发布规则
 
 1. 源码修复必须有回归测试；Windows 专属脚本必须通过 Windows PowerShell 5.1 parser。
