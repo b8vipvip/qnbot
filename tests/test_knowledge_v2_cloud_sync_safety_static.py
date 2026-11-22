@@ -226,3 +226,21 @@ def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_me
     for field in ("UseCount", "AcceptedCount", "CorrectionCount", "WithdrawCount"):
         assert f"target.{field}=Math.Max" in metadata
     assert "target.LastVerifiedAt=source.LastVerifiedAt" in metadata
+
+
+def test_cloud_revision_reset_backs_up_local_corpus_and_restarts_safe_reconciliation():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    sync = service[
+        service.index("private static async Task SyncOnce"):
+        service.index("private static State LoadState")
+    ]
+    rollback = sync[
+        sync.index("if(cloudRevision<state.Revision)"):
+        sync.index("if(cloudRevision>state.Revision)")
+    ]
+
+    assert "Backup(shop,local,cloudRevision)" in rollback
+    assert "PersistState(shop,state,0,string.Empty)" in rollback
+    assert 'state.LastStatus="cloud_revision_reset_reconcile"' in rollback
+    assert "return;" in rollback
+    assert "re-negotiate" in rollback or "重新协商" in rollback
