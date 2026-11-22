@@ -635,3 +635,57 @@ def test_legacy_delivery_queue_retries_unique_shop_recovery_after_restart():
     # Migrated legacy barriers remain present after resolution, so at-most-once protection survives.
     assert "KeepUntil" in resolve
     assert "Resolution" in resolve
+
+
+def test_auto_delivery_queue_claims_and_every_mutation_are_cross_process_serialized():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    lock_call = 'CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000)'
+
+    blocks = [
+        runtime[runtime.index("public static void Initialize"):runtime.index("public static bool IsOperational")],
+        runtime[runtime.index("public static bool Enqueue"):runtime.index("public static void ReconfigureSeller")],
+        runtime[runtime.index("public static void ReconfigureSeller"):runtime.index("public static bool TryPersistConfirmationIntent")],
+        runtime[runtime.index("public static bool TryPersistConfirmationIntent"):runtime.index("private static void ScheduleWorker")],
+        runtime[runtime.index("private static async Task RunWorkerAsync"):runtime.index("private static async Task ProcessRecordAsync")],
+        runtime[runtime.index("private static void DeferSellerNavigationRecords"):runtime.index("private static void DeferRecord")],
+        runtime[runtime.index("private static void DeferRecord"):runtime.index("private static void RemoveRecord")],
+        runtime[runtime.index("private static void RemoveRecord"):runtime.index("private static bool HasConfirmationIntent")],
+    ]
+    for block in blocks:
+        assert lock_call in block
+        assert "ReloadStateForMutationLocked(" in block
+
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    uncertain = process[
+        process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"):
+        process.index("default:", process.index("case AutoDeliveryAttemptOutcome.ConfirmationUncertain:"))
+    ]
+    legacy = process[
+        process.index("var legacyKey = record.Key;"):
+        process.index("if (collision)", process.index("var legacyKey = record.Key;"))
+    ]
+    assert lock_call in uncertain and "ReloadStateForMutationLocked(false)" in uncertain
+    assert lock_call in legacy and "ReloadStateForMutationLocked(false)" in legacy
+
+    helper = runtime[
+        runtime.index("private static bool ReloadStateForMutationLocked"):
+        runtime.index("private static StateDocument LoadState")
+    ]
+    assert "if (_stateLoadFailed) return false;" in helper
+    assert "if (!allowMissing)" in helper
+    assert "拒绝以空队列覆盖原任务状态" in helper
+    assert "_state = loaded;" in helper
+
+    assert "WorkerClaimLease = TimeSpan.FromMinutes(5)" in runtime
+    worker = runtime[
+        runtime.index("private static async Task RunWorkerAsync"):
+        runtime.index("private static async Task ProcessRecordAsync")
+    ]
+    claim = worker.index("record.NextAttemptAt = now.Add(WorkerClaimLease);")
+    persist = worker.index("if (!SaveStateLocked()) return;", claim)
+    execute = worker.index("await ProcessRecordAsync(record).ConfigureAwait(false);", persist)
+    assert claim < persist < execute
+    assert "暂停执行以避免重复领取任务" in worker
