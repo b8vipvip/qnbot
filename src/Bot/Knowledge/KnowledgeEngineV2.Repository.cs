@@ -118,7 +118,7 @@ namespace Bot.Knowledge
                 var record = exact.Count == 1 ? exact[0] : new KnowledgeV2Record
                 {
                     Id = Guid.NewGuid().ToString("N"),
-                    Type = "business_fact",
+                    Type = knowledgeType,
                     Title = question,
                     CreatedAt = DateTime.Now,
                     SourceId = "reviewed-" + Guid.NewGuid().ToString("N")
@@ -223,6 +223,7 @@ namespace Bot.Knowledge
             string sessionId,
             string question,
             string answer,
+            string category,
             IEnumerable<string> aliases,
             IEnumerable<string> keywords,
             string questionMessageId,
@@ -257,6 +258,9 @@ namespace Bot.Knowledge
                 return false;
             }
 
+            var normalizedCategory = (category ?? string.Empty).Trim().ToLowerInvariant();
+            var knowledgeType = normalizedCategory == "product_feature" ? "product_knowledge"
+                : (normalizedCategory == "usage_guide" ? "procedure" : "business_fact");
             var normalizedAliases = (aliases ?? Enumerable.Empty<string>())
                 .Select(x => (x ?? string.Empty).Trim())
                 .Where(x => x.Length >= 5 && x.Length <= 200)
