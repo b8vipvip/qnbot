@@ -81,7 +81,9 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
     assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
     assert "HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion)" in generated
-    assert "HasDifferentKnowledgeNumbers(sourceText, value)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, candidateQuestion)" in generated
+    assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in generated
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in generated
     assert "private static bool HasDifferentKnowledgeNumbers(" in generated
     assert "sourceNumbers.Any(x => !generatedNumbers.Contains(x))" in generated
     assert "generatedNumbers.Any(x => !sourceNumbers.Contains(x))" in generated
