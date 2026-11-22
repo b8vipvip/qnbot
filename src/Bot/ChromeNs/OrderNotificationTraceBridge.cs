@@ -8,6 +8,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Bot.ChromeNs
@@ -26,7 +27,8 @@ namespace Bot.ChromeNs
             public string Value;
         }
 
-        private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Attached = new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static Timer _timer;
@@ -68,8 +70,14 @@ namespace Bot.ChromeNs
             {
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
-                    if (qn == null || !Attached.TryAdd(qn, 0)) continue;
-                    qn.EvMessageNotity += OnMessageNotify;
+                    if (qn == null) continue;
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        qn.EvMessageNotity += OnMessageNotify;
+                        Attached.Add(qn, new object());
+                    }
                 }
             }
             catch (Exception ex)
