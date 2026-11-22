@@ -429,6 +429,7 @@ namespace Bot.Knowledge
 
         private static double Clamp(double value)
         {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return 0;
             return Math.Max(0, Math.Min(1, value));
         }
     }
