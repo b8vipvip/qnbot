@@ -484,7 +484,8 @@ def test_bot_mirror_and_history_restore_follow_active_shopkey_not_stale_qn():
     assert "var current = QN.CurQN;" not in resolver
     assert "var qn = ResolveMessageMirrorQn();" in restore
     assert "var current = ResolveMessageMirrorQn();" in restore
-    assert "ActiveShopSessionRegistry.IsActive(current)" in reshow
+    assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(current)" in reshow
+    assert "ActiveShopSessionRegistry.IsActive(current)" not in reshow
 
 def test_desk_lookup_never_falls_back_across_explicit_shop_scope():
     desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
@@ -534,7 +535,7 @@ def test_manual_reply_ai_optimization_records_are_shop_scoped_end_to_end():
     )
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in bridge
     assert "BuyerIdentityAliasService.ResolveInternalNick(seller, to)" in bridge
-    assert "OrderSnapshot.TryGetMessageTime(message, out manualAt)" in bridge
+    assert "OrderCardParser.TryGetMessageTime(message, out manualAt)" in bridge
     assert "seller, buyer, variants[0], manualAt, shop.ShopKey" in bridge
     assert "using (ShopSettingsScope.Enter(shop))" in bridge
     assert "MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)" in bridge

@@ -1049,7 +1049,7 @@ namespace Bot.ChromeNs
                         if (variants.Count == 0 || variants.Any(HasAiMarker)
                             || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
                         DateTime manualAt;
-                        if (!OrderSnapshot.TryGetMessageTime(message, out manualAt))
+                        if (!OrderCardParser.TryGetMessageTime(message, out manualAt))
                             manualAt = DateTime.Now;
                         AiManualReplyOptimizationService.StartForManualReply(
                             seller, buyer, variants[0], manualAt, shop.ShopKey);

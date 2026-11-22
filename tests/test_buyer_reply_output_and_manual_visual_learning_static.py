@@ -99,7 +99,32 @@ def test_manual_visual_learning_accepts_canonical_seller_echo_with_stable_shop_i
 
     assert "ShopSettingsScope.Current" in method
     assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in method
-    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in method
-    assert "shop.HasStableSellerId" in method
+    assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in method
+
+    # Seller login nickname and stable target-ID checks live in the shared
+    # authoritative identity helper, not duplicated in this event adapter.
+    identity = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    is_message_from_shop = identity[
+        identity.index("public static bool IsMessageFromShop"):
+        identity.index("private static bool Candidate")
+    ]
+    assert "IdentityEquals(loginNick, seller)" in is_message_from_shop
+    assert "shop.HasStableSellerId" in is_message_from_shop
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in method
     assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in method
+
+def test_recent_visual_context_initializes_out_values_when_shop_resolution_fails():
+    source = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    account = source.split(
+        "public static bool TryGetRecentKugouAccountEvidence(\n            string seller", 1
+    )[1].split(
+        "public static bool TryGetRecentKugouAccountEvidence(\n            string shopKey", 1
+    )[0]
+    order_photo = source.split(
+        "public static bool TrySatisfyOrderPhotoRequirement(\n            string seller", 1
+    )[1].split(
+        "public static bool TrySatisfyOrderPhotoRequirement(\n            string shopKey", 1
+    )[0]
+
+    assert account.index("evidence = null;") < account.index("ResolveShop")
+    assert order_photo.index("evidence = string.Empty;") < order_photo.index("ResolveShop")

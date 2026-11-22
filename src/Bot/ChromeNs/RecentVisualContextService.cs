@@ -100,6 +100,7 @@ namespace Bot.ChromeNs
             string buyer,
             out KugouAccountEvidence evidence)
         {
+            evidence = null;
             var shop = ResolveShop(string.Empty, seller);
             return shop != null && TryGetRecentKugouAccountEvidence(shop.ShopKey, seller, buyer, out evidence);
         }
@@ -160,6 +161,7 @@ namespace Bot.ChromeNs
             DateTime orderEventTime,
             out string evidence)
         {
+            evidence = string.Empty;
             var shop = ResolveShop(string.Empty, seller);
             return shop != null && TrySatisfyOrderPhotoRequirement(
                 shop.ShopKey, seller, buyer, guidanceText, orderEventTime, out evidence);
