@@ -1107,7 +1107,7 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
+                var sessions = QN.GetRuntimeSafetySnapshot();
                 var now = DateTime.UtcNow;
                 foreach (var qn in sessions)
                 {
