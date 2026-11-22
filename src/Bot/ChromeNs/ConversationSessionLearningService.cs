@@ -1251,7 +1251,7 @@ namespace Bot.ChromeNs
                 || !string.Equals(candidate.SourceFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal)
                 || candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count != 2
                 || double.IsNaN(candidate.Confidence) || double.IsInfinity(candidate.Confidence)
-                || candidate.Confidence < 0.95 || candidate.Confidence > 1.0)
+                || candidate.Confidence < 0.90 || candidate.Confidence > 1.0)
             {
                 rejection = "candidate_metadata_or_confidence_invalid";
                 return false;
