@@ -30,6 +30,9 @@ def test_server_exposes_client_isolated_v2_bridge():
     assert "seen_ids=set()" in s
     assert "记录 ID 不允许重复" in s
     assert "math.isfinite(number)" in s
+    assert "list_fields=(\"Entities\",\"Aliases\",\"Conditions\",\"Exclusions\",\"RequiredContext\",\"ProductIds\")" in s
+    assert "any(not isinstance(x,str) for x in value)" in s
+    assert "Enabled 必须是布尔值" in s
     assert "标题和答案必须是非空文本" in s
     for secret in ("api_key","authorization","cookie","password"):
         assert ('"'+secret+'"') not in s.lower()
@@ -302,4 +305,28 @@ def test_v2_record_title_and_answer_must_be_text(tmp_path):
 
     assert caught.value.status_code == 400
     assert "标题和答案必须是非空文本" in caught.value.detail
+    assert module._state(1)["revision"] == 0
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Entities", {"not": "an array"}),
+        ("Aliases", ["valid", 7]),
+        ("Enabled", "false"),
+        ("CreatedAt", 12345),
+    ],
+)
+def test_v2_record_schema_rejects_malformed_typed_fields(tmp_path, field, value):
+    from fastapi import HTTPException
+
+    module = _load_v2_cas_module(tmp_path)
+    item = _v2_cas_record("answer")
+    item[field] = value
+
+    with pytest.raises(HTTPException) as caught:
+        module._save(1, [item], "windows", expected_revision=0)
+
+    assert caught.value.status_code == 400
     assert module._state(1)["revision"] == 0
