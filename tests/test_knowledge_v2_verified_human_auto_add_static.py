@@ -431,8 +431,19 @@ def test_auto_published_human_evidence_answers_strongly_similar_questions_withou
         "private static bool IsSafeStandaloneLocalDirect(", 1
     )[0]
 
+    production = public.split("var productionMatches =", 1)[1].split(
+        "// Operator-reviewed", 1
+    )[0]
+    eligibility = public.split("private static bool IsEligibleProductionMatch(", 1)[1].split(
+        "private static bool IsStrongManualReviewedSimilarMatch(", 1
+    )[0]
+
+    assert "Where(x => IsEligibleProductionMatch(x, query))" in production
+    assert "IsApprovedProductionMatch(match)" in eligibility
+    assert "IsAutoPublishedHumanEvidenceSource(match.Record.SourceType)" in eligibility
+    assert "exactAlias || IsStrongAutoPublishedHumanEvidenceSimilarMatch(match, query)" in eligibility
     assert "IsStrongAutoPublishedHumanEvidenceSimilarMatch(x, query)" in selection
-    assert '"ai_auto_learned_human_evidence"' in helper
+    assert "IsAutoPublishedHumanEvidenceSource(match.Record.SourceType)" in helper
     assert "match.Score < 0.82" in helper
     assert "match.AliasScore < 0.80" in helper
     assert "match.PredicateScore < 0.99" in helper
