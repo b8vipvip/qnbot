@@ -995,7 +995,10 @@ def test_long_lived_runtime_bridges_use_weak_qn_subscription_keys_and_sweep_reti
     ):
         source = read(path)
         assert "ConditionalWeakTable<QN, object>" in source
-        assert "ConcurrentDictionary<QN, byte>" not in source
+        assert "ConcurrentDictionary<QN, byte> Attached" not in source
+        assert "ConcurrentDictionary<QN, byte> Subscribed" not in source
+        assert "ConcurrentDictionary<QN, byte> Qns" not in source
+        assert "ConcurrentDictionary<QN, byte> ForegroundSubscribed" not in source
         assert "TryGetValue(qn, out marker)" in source
         assert "Add(qn, new object())" in source
 
