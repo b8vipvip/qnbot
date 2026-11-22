@@ -47,7 +47,7 @@ def test_live_and_history_messages_resolve_buyer_aliases_within_shop_scope():
     assert "ShopSettingsScope.Enter(shop)" in seller_echo
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message);" in seller_echo
     assert "BuyerIdentityAliasService.AreEquivalent(seller, to, buyer)" in seller_echo
-    assert "string.Equals(from, seller, StringComparison.Ordinal)" in seller_echo
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in seller_echo
 
     # Remote history uses the same alias-aware role classification as live messages.
     assert "BuyerIdentityAliasService.ObserveMessage(seller, message);" in record
@@ -94,3 +94,29 @@ def test_native_dedup_diagnostics_do_not_log_buyer_or_reply_text():
     assert "StableHash(messageKey).ToString(CultureInfo.InvariantCulture)" in store
     assert "role=" in store
     assert "clientId alone may identify a transport client" in store
+
+
+def test_timeline_and_image_cache_resolve_canonical_seller_endpoint_before_buyer():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    vision = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    for source in (context, vision):
+        seller = source[
+            source.index("private static string GetSellerNick"):
+            source.index("private static string GetBuyerNick")
+        ]
+        buyer = source[
+            source.index("private static string GetBuyerNick"):
+            source.index("private static", source.index("private static string GetBuyerNick") + 1)
+        ]
+        assert "ResolveRuntimeByShopKey(shopKey)" in seller
+        assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, shop.SellerNick)" in seller
+        assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, current.SellerNick)" in seller
+        assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in buyer
+        assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in buyer
+        assert "if (fromIsSeller == toIsSeller) return string.Empty;" in buyer
+    seller_echo = context[
+        context.index("internal static bool RecordObservedSellerMessage"):
+        context.index("public static bool IsPlatformSystemTip")
+    ]
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in seller_echo
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in seller_echo
