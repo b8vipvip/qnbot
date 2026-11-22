@@ -149,6 +149,8 @@ def test_manual_takeover_auto_learning_requires_native_buyer_and_human_message_i
     assert "answerTurn.NativeAliases" in resolver
     assert "questionMatches.Count != 1 || answerMatches.Count != 1" in resolver
     assert "SendDeliveryWatchdog.IsKnownBotAnswer" in resolver
+    assert "var humanReplyTurns = turns.Skip(questionIndex + 1)" in resolver
+    assert "humanReplyTurns.Count != 1 || !ReferenceEquals(humanReplyTurns[0], answerTurn)" in resolver
     assert "buyerMessageId.Length == 0 || humanMessageId.Length == 0" in resolver
     assert "buyerMessageId + \"|\" + humanMessageId" in compare
     assert "string.Empty, out saveMessage" not in compare
