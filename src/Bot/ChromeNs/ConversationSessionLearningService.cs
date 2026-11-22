@@ -516,13 +516,18 @@ namespace Bot.ChromeNs
                 var cards = coverage.Value<int?>("botCards") ?? 0;
                 var cardsComplete = coverage.Value<bool?>("botCardsComplete") == true;
                 var corpusComplete = coverage.Value<bool?>("knowledgeCorpusComplete") == true;
+                var newCandidateComplete = coverage.Value<bool?>("knowledgeCorpusNewCandidateAnalysisComplete") == true;
+                var newCandidates = coverage.Value<int?>("knowledgeCorpusNewCandidates") ?? 0;
+                var newApplied = coverage.Value<int?>("knowledgeCorpusNewCandidateApplied") ?? 0;
                 var mode = Convert.ToString(coverage["writeMode"]);
                 return "历史" + (complete ? "完整" : "不完整")
                     + " / 分页" + pages
                     + " / 消息" + turns
                     + " / Bot卡片" + cards + (cardsComplete ? "完整" : "辅助/未证全")
                     + " / V2全库" + (corpusComplete ? "完整" : "未覆盖")
-                    + " / " + (mode == "dry_run" ? "dry-run" : "自动");
+                    + " / 新知识" + (newCandidateComplete ? "提取完成" : "未完成")
+                    + " " + newApplied + "/" + newCandidates
+                    + " / " + (mode == "dry_run" ? "dry-run" : "真人证据自动写入");
             }
             catch
             {
