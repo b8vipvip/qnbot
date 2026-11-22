@@ -1164,7 +1164,10 @@ namespace Bot.ChromeNs
                         skipped++;
                         if (!string.Equals(nextFingerprint, expectedCurrentFingerprint, StringComparison.Ordinal))
                         {
-                            expectedCurrentFingerprint = nextFingerprint;
+                            // A fingerprint mismatch means another writer changed the
+                            // corpus. Do not let the correction path treat that external
+                            // version as our own expected post-add snapshot.
+                            expectedCurrentFingerprint = string.Empty;
                             foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                             {
                                 if (remaining == null) continue;
@@ -1180,13 +1183,19 @@ namespace Bot.ChromeNs
                     candidate.Applied = false;
                     candidate.ApplyMessage = "真人证据自动新增异常，候选已保留：" + Clean(ex.Message, 240);
                     skipped++;
-                    try
+                    // The database may have committed before a downstream index/audit
+                    // failure. Treat the post-write version as unknown and block subsequent
+                    // correction writes in this session; the source-ID idempotency key makes
+                    // a later retry safe.
+                    expectedCurrentFingerprint = string.Empty;
+                    foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                     {
-                        expectedCurrentFingerprint = ComputeKnowledgeCorpusFingerprint(
-                            KnowledgeEngineV2Repository.LoadAll(session.Seller));
+                        if (remaining == null) continue;
+                        remaining.ApplyMessage = "前一条新增结果未能确认，剩余候选保留供人工审核";
+                        skipped++;
                     }
-                    catch { }
                     Log.ErrorWithMaxCount("Knowledge V2真人证据自动新增失败: " + ex.GetType().Name, 10);
+                    break;
                 }
             }
             foreach (var omitted in analysis.NewCandidates.Skip(MaxVerifiedNewKnowledgePerSession))
@@ -3270,10 +3279,11 @@ namespace Bot.ChromeNs
                     ["reason"] = x.Reason,
                     ["applied"] = x.Applied,
                     ["apply_message"] = x.ApplyMessage,
-                    ["kind"] = !string.IsNullOrWhiteSpace(x.KnowledgeId) ? "knowledge_corpus_revision_candidate"
-                        : (string.Equals(x.Action, "add", StringComparison.OrdinalIgnoreCase)
-                            && !string.IsNullOrWhiteSpace(x.SourceFingerprint)
-                            ? "knowledge_corpus_new_knowledge_candidate" : "session_suggestion"),
+                    ["kind"] = string.Equals(x.Action, "add", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(x.SourceFingerprint)
+                        ? "knowledge_corpus_new_knowledge_candidate"
+                        : (!string.IsNullOrWhiteSpace(x.KnowledgeId)
+                            ? "knowledge_corpus_revision_candidate" : "session_suggestion"),
                     ["knowledge_id"] = x.KnowledgeId ?? string.Empty,
                     ["source_fingerprint"] = x.SourceFingerprint ?? string.Empty,
                     ["corpus_batch_index"] = x.CorpusBatchIndex,
