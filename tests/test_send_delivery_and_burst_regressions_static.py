@@ -138,7 +138,9 @@ def test_manual_answer_comparison_only_upgrades_safe_high_confidence_knowledge()
     assert "confidence < 0.95" in source
     assert "ContainsUnsafeManualLearning" in source
     assert "KnowledgeEngineV2Repository.TrySaveReviewedDirectAnswer(" in source
-    assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey)" in source
+    assert "TryResolveManualEvidenceMessageIds(" in source
+    assert "QueueManualAnswerComparison(" in source
+    assert "buyerMessageId, humanMessageId" in source
     assert "seller, question, manualAnswer" in source
     assert "should_learn" in source
     assert "人工答案优先级高于Bot，但不能因为措辞不同就修改知识" in source
