@@ -2571,7 +2571,8 @@ namespace Bot.ChromeNs
                 && !KnowledgeEngineV2Semantics.IsHighRisk(candidateQuestion)
                 && !ContainsHighRisk(candidateQuestion)
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45
-                && !HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion);
+                && !HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)
+                && !HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion);
             var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
             var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
@@ -2584,21 +2585,21 @@ namespace Bot.ChromeNs
                     RegexOptions.IgnoreCase)
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45
                 && !HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)
+                && !HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)
                 && !HasUnverifiedKnowledgeAnchors(sourceQuestion + " " + sourceAnswer, candidateAnswer)
+                && !HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)
                 && candidateAnswer.Length <= Math.Max(160, sourceAnswer.Length * 2);
             if (answerGrounded)
             {
                 var sourceNumbers = new HashSet<string>(
                     Regex.Matches(sourceAnswer, @"\d+(?:\.\d+)?")
                         .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
-                foreach (Match number in Regex.Matches(candidateAnswer, @"\d+(?:\.\d+)?"))
-                {
-                    if (!sourceNumbers.Contains(number.Value))
-                    {
-                        answerGrounded = false;
-                        break;
-                    }
-                }
+                var generatedNumbers = new HashSet<string>(
+                    Regex.Matches(candidateAnswer, @"\d+(?:\.\d+)?")
+                        .Cast<Match>().Select(x => x.Value), StringComparer.Ordinal);
+                if (sourceNumbers.Any(x => !generatedNumbers.Contains(x))
+                    || generatedNumbers.Any(x => !sourceNumbers.Contains(x)))
+                    answerGrounded = false;
             }
             // AI may reorganize a human answer, but it may not flip its yes/no meaning,
             // introduce a new product/platform, or add facts absent from the source.
@@ -2687,6 +2688,45 @@ namespace Bot.ChromeNs
             var sourcePositive = Regex.IsMatch(sourceAnswer ?? string.Empty, positive);
             var generatedPositive = Regex.IsMatch(generatedAnswer ?? string.Empty, positive);
             return sourceNegative != generatedNegative || sourcePositive != generatedPositive;
+        }
+
+        private static bool HasKnowledgeEntityPolarityMismatch(string sourceAnswer, string generatedAnswer)
+        {
+            var sourceText = sourceAnswer ?? string.Empty;
+            var generatedText = generatedAnswer ?? string.Empty;
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var negative = @"不支持|不兼容|不适配|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含";
+            foreach (Match source in Regex.Matches(sourceText, anchors, RegexOptions.IgnoreCase))
+            {
+                var generated = Regex.Matches(generatedText, anchors, RegexOptions.IgnoreCase)
+                    .Cast<Match>()
+                    .FirstOrDefault(x => string.Equals(
+                        KnowledgeEngineV2Semantics.Compact(x.Value),
+                        KnowledgeEngineV2Semantics.Compact(source.Value),
+                        StringComparison.OrdinalIgnoreCase));
+                if (generated == null) continue;
+                var sourceStart = Math.Max(0, source.Index - 8);
+                var sourceEnd = Math.Min(sourceText.Length, source.Index + source.Length + 8);
+                var generatedStart = Math.Max(0, generated.Index - 8);
+                var generatedEnd = Math.Min(generatedText.Length, generated.Index + generated.Length + 8);
+                var sourceNegative = Regex.IsMatch(sourceText.Substring(sourceStart, sourceEnd - sourceStart), negative);
+                var generatedNegative = Regex.IsMatch(generatedText.Substring(generatedStart, generatedEnd - generatedStart), negative);
+                if (sourceNegative != generatedNegative) return true;
+            }
+            return false;
+        }
+
+        private static bool HasMissingKnowledgeAnchors(string sourceText, string generatedText)
+        {
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var generated = new HashSet<string>(
+                Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
+                    .Cast<Match>().Select(x => KnowledgeEngineV2Semantics.Compact(x.Value)),
+                StringComparer.OrdinalIgnoreCase);
+            return Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .Select(x => KnowledgeEngineV2Semantics.Compact(x.Value))
+                .Any(x => x.Length > 0 && !generated.Contains(x));
         }
 
         private static bool HasUnverifiedKnowledgeAnchors(string sourceText, string generatedText)
