@@ -9,9 +9,9 @@ Last updated / 最后更新：2026-11-22
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：bot-v1.1.2821
-- Release target：ad8575dc5dc37d45c9fa10d019a64ba5c8529551
-- x64 package SHA-256：33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd
+- Latest stable client：bot-v1.1.2832
+- Release target：a3d27378bbae032317d54ede848f9b316d769534
+- x64 package SHA-256：0b8dc64a614c7678549098e8d7417a4c7ac1dc3d0e447a2185663b920d3c76a7
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -186,6 +186,29 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - Exact-head Windows x64 release build: success, including PowerShell 5.1 checks, lifecycle regression tests, MSBuild x64, complete package assembly and verification. Run ID: 44998075683.
 - GPTAuto Observer/Executor runs succeeded. Stable release: bot-v1.1.2821, target ad8575dc5dc37d45c9fa10d019a64ba5c8529551; x64 package SHA-256: 33b5ba7557af5d422c1534746f92c741400dbab4689588977d705ff471333ddd. Release tag: bot-v1.1.2821.
 - This verifies source, tests, Windows build and release packaging only. Real Windows/千牛 validation remains open: 150+ messages and full-corpus resume, cross-device sync, multi-shop identity switching, manual takeover/automatic reply races, live test-order delivery recovery, long-running WS/CDP stability and Reception Agent authorization/publish/rollback. Issue #366 remains open until these runtime gates have evidence.
+
+
+## 4.6 2026-11-22 additional reliability fixes and Knowledge V2 cloud CAS
+
+### Windows client fixes included in stable release bot-v1.1.2832
+- **Bot Web sync acknowledgement race**: pending command-result snapshots are taken under a per-shop lock; writes and acknowledgement use the same lock; a successful sync removes only the exact result object that was sent. A duplicate/newer result with the same command ID can no longer be deleted by an older in-flight acknowledgement.
+- **Legacy auto-delivery recovery**: a queue record loaded without ShopKey is no longer permanently stranded just because the shop was offline or ambiguous during startup. Each retry attempts the unique seller-to-shop resolver; only an exact, unambiguous ShopContext can rebind the record. The queue key and ShopKey are atomically persisted before any order preflight. Same-order collisions remain deferred.
+- **Legacy confirmation ledger**: completion resolves both current ShopKey and legacy seller/order barrier records, but does not delete the durable at-most-once barrier.
+- **Auto-reply final gate**: if recent conversation history or the typed human-takeover event stream cannot be read, the final relevance check now suppresses sending rather than fail-open allowing a potentially stale or duplicate reply.
+- **WS/CDP standby retirement race**: duplicate retirement is serialized with shop-session promotion; retirement revalidates connected state, exact duplicate ShopKey mapping and non-authoritative ownership; retiring standby sessions cannot be promoted while a retire command is pending. This prevents a stale duplicate-close command from closing a page after it has become the authoritative session.
+- Windows x64 build exact source a3d27378bbae032317d54ede848f9b316d769534 succeeded; Release bot-v1.1.2832 published. Package SHA-256: 0b8dc64a614c7678549098e8d7417a4c7ac1dc3d0e447a2185663b920d3c76a7. Build run ID: 45000146254.
+
+### Knowledge V2 web/cloud consistency fix on current master
+- The web editor previously performed unconditional whole-corpus writes. Two devices editing from the same stale snapshot could silently overwrite one another.
+- Web PUT now requires `expected_revision`; the service performs an atomic SQLite revision compare-and-swap and returns HTTP 409 with the current revision on conflict.
+- The web client remembers the loaded revision, submits it with every edit, refreshes the latest cloud records on conflict and leaves the editor open so the user can reapply the change. The UI also retains the actual revision while filtering the list.
+- Updated the static asset cache version to v11 so browsers do not continue using the old no-CAS editor.
+- This web/API fix is on master and is **not part of the Windows x64 ZIP**; it requires the API control-plane service/static assets to be deployed.
+- Current master API CI on d1a6885f28fb210421ca968a529a519c6ea8c499: Fast Gate **1803 passed / 16 skipped**, Windows Static Gate success, Full Gate / Build Package success (**143 passed**). GPTAuto Observer success.
+
+### Remaining runtime boundary
+- Real two-device synchronization and concurrent edit testing are still required to verify deployed API behavior and actual Windows client convergence.
+- Real 150+ message full-corpus learning/restart recovery, multi-shop A/B/A, WS/CDP long-running stability, human takeover races, real test-order delivery recovery and Reception Agent trusted approval/publish/rollback remain open under Issue #366. CI and release packaging are not runtime acceptance.
 
 ## 5. Validation and release rules / 验收与发布规则
 
