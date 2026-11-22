@@ -239,7 +239,36 @@ namespace Bot.AssistWindow.Widget.Robot
                 var qn = ResolveMessageMirrorQn();
                 if (qn == null)
                 {
-                    RenderEmptyMessageMirror();
+                    // A failed read-only identity probe is not proof that the buyer
+                    // conversation ended. Preserve the last good timeline only when
+                    // the raw candidate still proves the exact same ShopKey/seller/
+                    // buyer. A real buyer or shop switch must clear the old messages.
+                    var candidate = _preQN;
+                    if (candidate == null || candidate.Seller == null || candidate.Buyer == null)
+                        candidate = QN.CurQN;
+                    var preserveCurrentTimeline = false;
+                    if (candidate != null && candidate.Seller != null && candidate.Buyer != null
+                        && !string.IsNullOrWhiteSpace(_messageMirrorShopKey)
+                        && _messageMirrorRenderedTurns != null
+                        && _messageMirrorRenderedTurns.Count > 0)
+                    {
+                        try
+                        {
+                            var candidateSeller = (candidate.Seller.Nick ?? string.Empty).Trim();
+                            var candidateBuyer = (candidate.Buyer.Nick ?? string.Empty).Trim();
+                            var candidateShopKey = ShopIdentityResolver.Resolve(candidate.Seller).ShopKey;
+                            preserveCurrentTimeline =
+                                string.Equals(candidateShopKey, _messageMirrorShopKey, StringComparison.Ordinal)
+                                && string.Equals(candidateSeller, _messageMirrorSeller, StringComparison.Ordinal)
+                                && BuyerIdentityAliasService.AreEquivalent(
+                                    candidateSeller, candidateBuyer, _messageMirrorBuyer);
+                        }
+                        catch
+                        {
+                            preserveCurrentTimeline = false;
+                        }
+                    }
+                    if (!preserveCurrentTimeline) RenderEmptyMessageMirror();
                     return;
                 }
 

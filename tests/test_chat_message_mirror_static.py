@@ -228,3 +228,15 @@ def test_read_only_bot_panel_identity_checks_do_not_require_qianniu_foreground()
     assert "ActiveShopSessionRegistry.IsCurrentSessionForReadOnlyUi(qn)" in sync_ui
     assert "IsBoundToDeskForReadOnlyUi(desk, seller, shopKey)" in sync_ui
     assert "ActiveShopSessionRegistry.IsActive(qn)" not in sync_ui
+
+def test_message_mirror_preserves_last_good_timeline_only_for_same_identity_probe_failure():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    refresh = mirror.split("private void RefreshMessageMirror(bool force)", 1)[1].split(
+        "private static bool SameDisplayedTurn", 1
+    )[0]
+    assert "if (qn == null)" in refresh
+    assert "ShopIdentityResolver.Resolve(candidate.Seller).ShopKey" in refresh
+    assert "string.Equals(candidateSeller, _messageMirrorSeller, StringComparison.Ordinal)" in refresh
+    assert "BuyerIdentityAliasService.AreEquivalent(" in refresh
+    assert "if (!preserveCurrentTimeline) RenderEmptyMessageMirror();" in refresh
+    assert refresh.index("preserveCurrentTimeline") < refresh.index("RenderEmptyMessageMirror")
