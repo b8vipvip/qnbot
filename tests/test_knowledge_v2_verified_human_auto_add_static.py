@@ -23,6 +23,7 @@ def test_ai_generates_complete_knowledge_content_and_requests_direct_production_
     assert '\\"aliases\\":[\\"同义问法\\"],\\"keywords\\"' in prompt
     assert "只返回消息ID" not in prompt
     assert "不得补充推测、承诺、未验证规格或外部常识" in prompt
+    assert "如果答案被拆分为多条客服消息" in prompt
 
 
 def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message_ids():
@@ -49,6 +50,9 @@ def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message
     assert "questionTurn.Withdrawn || answerTurn.Withdrawn" in evidence
     assert "TimeSpan.FromMinutes(30)" in evidence
     assert "another_buyer_message_interrupted_the_evidence_pair" in evidence
+    assert "humanReplyTurns.Count != 1" in evidence
+    assert "ReferenceEquals(humanReplyTurns[0], answerTurn)" in evidence
+    assert "human_reply_is_split_across_multiple_messages" in evidence
 
 
 def test_ai_generated_question_answer_are_automatically_checked_against_source_evidence():
