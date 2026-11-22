@@ -1435,14 +1435,18 @@ namespace Bot.ChromeNs
             try
             {
                 // The caller holds the exact ShopSettingsScope resolved from session.ShopKey.
-                // LoadAll is intentionally unpaged: the fingerprint and batches cover every
-                // persisted V2 row, including disabled and candidate rows.
-                var records = KnowledgeEngineV2Repository.LoadAll(session.Seller)
+                // Fingerprint every persisted V2 row (including deletion tombstones) so
+                // concurrent deletes invalidate stale analysis. AI batches include disabled
+                // and candidate rows for audit, but never feed deleted facts back as knowledge.
+                var allRecords = KnowledgeEngineV2Repository.LoadAll(session.Seller)
                     .Where(x => x != null)
                     .OrderBy(x => x.Id ?? string.Empty, StringComparer.Ordinal)
                     .ToList();
+                result.SourceFingerprint = ComputeKnowledgeCorpusFingerprint(allRecords);
+                var records = allRecords
+                    .Where(x => !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
                 result.RecordCount = records.Count;
-                result.SourceFingerprint = ComputeKnowledgeCorpusFingerprint(records);
                 var batches = BuildKnowledgeCorpusBatches(records);
                 result.BatchCount = batches.Count;
 
