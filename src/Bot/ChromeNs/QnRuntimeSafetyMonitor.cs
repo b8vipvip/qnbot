@@ -427,9 +427,9 @@ namespace Bot.ChromeNs
 
                     if (!fromIsSeller)
                     {
-                        var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, from);
-                        if (!string.IsNullOrWhiteSpace(buyer))
-                            RecordBuyerSourceSort(seller, buyer, message, shopKey);
+                        var incomingBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, from);
+                        if (!string.IsNullOrWhiteSpace(incomingBuyer))
+                            RecordBuyerSourceSort(seller, incomingBuyer, message, shopKey);
                         continue;
                     }
 
