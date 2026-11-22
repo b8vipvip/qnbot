@@ -274,6 +274,11 @@ namespace Bot.Knowledge
                 result = "当前ShopKey与会话证据所属店铺不一致，已拒绝跨店写入。";
                 return false;
             }
+            if (!KnowledgeEngineV2Service.IsEnabled(seller))
+            {
+                result = "当前店铺未启用Knowledge V2，真人证据候选保留在学习报告中，未写入生产知识库。";
+                return false;
+            }
 
             var state = GetState(shop);
             EnsureMigrated(shop, state);
