@@ -1048,8 +1048,11 @@ namespace Bot.ChromeNs
                         var variants = ExtractTexts(message);
                         if (variants.Count == 0 || variants.Any(HasAiMarker)
                             || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
+                        DateTime manualAt;
+                        if (!OrderEventHub.TryGetMessageTime(message, out manualAt))
+                            manualAt = DateTime.Now;
                         AiManualReplyOptimizationService.StartForManualReply(
-                            seller, buyer, variants[0], DateTime.Now, shop.ShopKey);
+                            seller, buyer, variants[0], manualAt, shop.ShopKey);
                     }
                 }
             }
