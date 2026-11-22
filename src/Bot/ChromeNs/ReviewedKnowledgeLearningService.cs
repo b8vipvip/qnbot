@@ -26,6 +26,16 @@ namespace Bot.ChromeNs
             sourceType = string.IsNullOrWhiteSpace(sourceType) ? "人工接待复盘" : sourceType.Trim();
             evidenceType = (evidenceType ?? string.Empty).Trim().ToLowerInvariant();
 
+            if (double.IsNaN(confidence) || double.IsInfinity(confidence)
+                || confidence < 0.0 || confidence > 1.0)
+            {
+                return new KnowledgeLearningResult
+                {
+                    Success = false,
+                    Message = "置信度不是有效的0到1有限数值，未写入知识库"
+                };
+            }
+
             if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer))
             {
                 return new KnowledgeLearningResult
