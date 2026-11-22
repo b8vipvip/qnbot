@@ -1059,6 +1059,7 @@ def test_manual_reply_optimization_distinguishes_empty_bot_history_from_storage_
     assert "out List<BotConversationHistoryEntity> records" in load
     assert "return true;" in load
     assert "return false;" in load
+    assert "where (ShopKey is null or ShopKey = '') and Seller = ? and Buyer = ?" in load
     assert "BotConversationHistoryStore.TryLoadRecent(shopKey, seller, buyer, 30, out recent)" in bridge
     assert "return true; // Unknown history is not proof that this was a human-authored reply." in bridge
     assert "catch { return true; }" in bridge
