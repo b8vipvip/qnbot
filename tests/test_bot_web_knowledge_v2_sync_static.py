@@ -28,7 +28,8 @@ def test_first_runtime_report_seeds_state_and_stale_runtime_cannot_overwrite_web
     assert 'current["revision"] > payload.revision' in s
     assert 'return _save(client_id,payload.records,"windows",expected_revision=0)' in s
     assert 'return _save(client_id,payload.records,"windows",expected_revision=payload.revision)' in s
-    assert 'return _save(int(client["id"]), payload.records, "web")' in s
+    assert 'expected_revision=payload.expected_revision' in s
+    assert 'raise_on_conflict=True' in s
 
 def test_windows_bridge_reuses_shop_repository_and_existing_cloud_credentials():
     s=read(WINDOWS)
@@ -77,3 +78,34 @@ def test_runtime_sync_save_uses_atomic_revision_compare_and_swap():
     assert 'expected_revision=payload.revision' in runtime
     assert runtime.index('current["revision"] > payload.revision') < runtime.index('expected_revision=payload.revision')
     assert 'return current' in save
+
+
+def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
+    server = read(SERVER)
+    js = read(ROOT / "services/api-control-plane/static/bot-web-v2.js")
+    html = read(ROOT / "services/api-control-plane/static/bot-web.html")
+    model = server[
+        server.index("class KnowledgeV2WebInput"):
+        server.index("class KnowledgeV2SmartImportInput")
+    ]
+    save = server[
+        server.index("def _save("):
+        server.index('@router.get("/api/bot-web/knowledge-v2")')
+    ]
+    web_put = server[
+        server.index('@router.put("/api/bot-web/knowledge-v2")'):
+        server.index('@router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")')
+    ]
+
+    assert "expected_revision: int" in model
+    assert "raise_on_conflict=False" in save
+    assert "raise_on_conflict" in save
+    assert "status_code=409" in save
+    assert '"code": "revision_conflict"' in save
+    assert "expected_revision=payload.expected_revision" in web_put
+    assert "raise_on_conflict=True" in web_put
+    assert "knowledgeV2Revision:0" in js
+    assert "expected_revision:state.knowledgeV2Revision" in js
+    assert "err.status===409" in js
+    assert "await loadKnowledgeV2(false)" in js
+    assert 'bot-web-v2.js?v=11' in html
