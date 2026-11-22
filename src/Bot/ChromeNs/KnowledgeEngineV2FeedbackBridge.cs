@@ -51,7 +51,10 @@ namespace Bot.ChromeNs
                         captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
                         Attached.Add(qn, new object());
                     }
-                    var seller = captured.Seller == null ? string.Empty : (captured.Seller.Nick ?? string.Empty).Trim();
+                    // Keep the warm-up identity read outside the lock but use the
+                    // current loop item; the event closure's local is intentionally
+                    // scoped to subscription setup only.
+                    var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
                     if (!string.IsNullOrWhiteSpace(seller))
                     {
                         var capturedSeller = seller;
