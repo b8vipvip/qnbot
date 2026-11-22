@@ -9,6 +9,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
@@ -37,7 +38,8 @@ namespace Bot.ChromeNs
             public bool Visible { get; set; }
         }
 
-        private static readonly ConcurrentDictionary<QN, byte> Subscribed = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Subscribed = new ConditionalWeakTable<QN, object>();
+        private static readonly object SubscriptionSync = new object();
         private static Timer _timer;
         private static int _started;
         private static int _probeRunning;
@@ -76,7 +78,15 @@ namespace Bot.ChromeNs
                 var snapshot = QN.GetRuntimeSafetySnapshot().Where(x => x != null).ToList();
                 foreach (var qn in snapshot)
                 {
-                    if (Subscribed.TryAdd(qn, 0)) Subscribe(qn);
+                    lock (SubscriptionSync)
+                    {
+                        object marker;
+                        if (!Subscribed.TryGetValue(qn, out marker))
+                        {
+                            Subscribe(qn);
+                            Subscribed.Add(qn, new object());
+                        }
+                    }
                     var seller = Seller(qn);
                     var shopKey = ShopKey(qn);
                     var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
