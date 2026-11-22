@@ -3259,7 +3259,10 @@ namespace Bot.ChromeNs
                     ["reason"] = x.Reason,
                     ["applied"] = x.Applied,
                     ["apply_message"] = x.ApplyMessage,
-                    ["kind"] = string.IsNullOrWhiteSpace(x.KnowledgeId) ? "session_suggestion" : "knowledge_corpus_revision_candidate",
+                    ["kind"] = !string.IsNullOrWhiteSpace(x.KnowledgeId) ? "knowledge_corpus_revision_candidate"
+                        : (string.Equals(x.Action, "add", StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrWhiteSpace(x.SourceFingerprint)
+                            ? "knowledge_corpus_new_knowledge_candidate" : "session_suggestion"),
                     ["knowledge_id"] = x.KnowledgeId ?? string.Empty,
                     ["source_fingerprint"] = x.SourceFingerprint ?? string.Empty,
                     ["corpus_batch_index"] = x.CorpusBatchIndex,
@@ -3904,7 +3907,8 @@ namespace Bot.ChromeNs
             var obj = token as JObject;
             if (obj != null)
             {
-                if (obj["summary"] != null || obj["suggestions"] != null || obj["reply_style_profile"] != null)
+                if (obj["summary"] != null || obj["suggestions"] != null || obj["reply_style_profile"] != null
+                    || obj["decisions"] != null || obj["candidates"] != null)
                 {
                     result = obj;
                     return true;
