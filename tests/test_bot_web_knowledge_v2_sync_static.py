@@ -28,7 +28,7 @@ def test_server_exposes_client_isolated_v2_bridge():
     assert "bot_web_console._runtime_client(request)" in s
     assert "_MAX_RECORDS = 5000" in s and "4 * 1024 * 1024" in s
     assert "seen_ids=set()" in s
-    assert "record ID 不允许重复" in s
+    assert "记录 ID 不允许重复" in s
     assert "math.isfinite(number)" in s
     assert "标题和答案必须是非空文本" in s
     for secret in ("api_key","authorization","cookie","password"):
