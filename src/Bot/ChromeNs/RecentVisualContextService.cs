@@ -1,6 +1,7 @@
 using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
+using Bot.ShopScope;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,7 +64,15 @@ namespace Bot.ChromeNs
 
         public static string BuildPromptAddon(string seller, string buyer, string currentQuestion)
         {
-            var items = LoadRecent(seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
+            var shop = ResolveShop(string.Empty, seller);
+            return shop == null ? string.Empty : BuildPromptAddon(shop.ShopKey, seller, buyer, currentQuestion);
+        }
+
+        public static string BuildPromptAddon(string shopKey, string seller, string buyer, string currentQuestion)
+        {
+            var shop = ResolveShop(shopKey, seller);
+            if (shop == null) return string.Empty;
+            var items = LoadRecent(shop.ShopKey, seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .Take(MaxPromptObservations)
                 .OrderBy(x => SafeTime(x.ObservedAtTicks))
@@ -91,8 +100,21 @@ namespace Bot.ChromeNs
             string buyer,
             out KugouAccountEvidence evidence)
         {
+            var shop = ResolveShop(string.Empty, seller);
+            return shop != null && TryGetRecentKugouAccountEvidence(shop.ShopKey, seller, buyer, out evidence);
+        }
+
+        public static bool TryGetRecentKugouAccountEvidence(
+            string shopKey,
+            string seller,
+            string buyer,
+            out KugouAccountEvidence evidence)
+        {
             evidence = null;
+            var shop = ResolveShop(shopKey, seller);
+            if (shop == null) return false;
             var items = LoadRecent(
+                    shop.ShopKey,
                     seller,
                     buyer,
                     DateTime.Now.AddMinutes(-PromptWindowMinutes),
@@ -138,8 +160,22 @@ namespace Bot.ChromeNs
             DateTime orderEventTime,
             out string evidence)
         {
+            var shop = ResolveShop(string.Empty, seller);
+            return shop != null && TrySatisfyOrderPhotoRequirement(
+                shop.ShopKey, seller, buyer, guidanceText, orderEventTime, out evidence);
+        }
+
+        public static bool TrySatisfyOrderPhotoRequirement(
+            string shopKey,
+            string seller,
+            string buyer,
+            string guidanceText,
+            DateTime orderEventTime,
+            out string evidence)
+        {
             evidence = string.Empty;
-            if (!LooksLikeKugouPhotoGuidance(guidanceText)) return false;
+            var shop = ResolveShop(shopKey, seller);
+            if (shop == null || !LooksLikeKugouPhotoGuidance(guidanceText)) return false;
 
             var anchor = orderEventTime == DateTime.MinValue ? DateTime.Now : orderEventTime;
             if (anchor > DateTime.Now.AddMinutes(5) || anchor < DateTime.Now.AddDays(-7)) anchor = DateTime.Now;
@@ -147,7 +183,7 @@ namespace Bot.ChromeNs
             var until = anchor.AddMinutes(5);
 
             string humanEvidence;
-            if (TryFindHumanOfficialKugouConfirmation(seller, buyer, since, until, out humanEvidence))
+            if (TryFindHumanOfficialKugouConfirmation(shop.ShopKey, seller, buyer, since, until, out humanEvidence))
             {
                 evidence = humanEvidence;
                 return true;
@@ -155,7 +191,7 @@ namespace Bot.ChromeNs
 
             // This is deliberately a read-only, non-blocking cache lookup. It never starts a
             // second vision request and never serializes order handling behind a slow AI task.
-            var items = LoadRecent(seller, buyer, since, until, 20)
+            var items = LoadRecent(shop.ShopKey, seller, buyer, since, until, 20)
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .ToList();
             foreach (var item in items)
@@ -212,6 +248,7 @@ namespace Bot.ChromeNs
         }
 
         private static bool TryFindHumanOfficialKugouConfirmation(
+            string shopKey,
             string seller,
             string buyer,
             DateTime since,
@@ -221,6 +258,10 @@ namespace Bot.ChromeNs
             evidence = string.Empty;
             try
             {
+                var shop = ResolveShop(shopKey, seller);
+                if (shop == null) return false;
+                using (ShopSettingsScope.Enter(shop))
+                {
                 var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24)
                     .Where(x => x != null && !x.Withdrawn)
                     .Where(x => x.Timestamp == DateTime.MinValue || (x.Timestamp >= since && x.Timestamp <= until))
@@ -254,6 +295,11 @@ namespace Bot.ChromeNs
             catch
             {
                 return false;
+                }
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -266,22 +312,28 @@ namespace Bot.ChromeNs
         }
 
         private static List<VisualKnowledgeObservationEntity> LoadRecent(
+            string shopKey,
             string seller,
             string buyer,
             DateTime since,
             DateTime until,
             int limit)
         {
+            shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
-            if (seller.Length == 0 || buyer.Length == 0) return new List<VisualKnowledgeObservationEntity>();
+            var shop = ResolveShop(shopKey, seller);
+            if (shop == null || buyer.Length == 0) return new List<VisualKnowledgeObservationEntity>();
 
             try
             {
+                using (ShopSettingsScope.Enter(shop))
+                {
                 var raw = (DbHelper.Db.Select(
                     typeof(VisualKnowledgeObservationEntity),
-                    "where Seller = ? and ObservedAtTicks >= ? and ObservedAtTicks <= ? order by ObservedAtTicks desc limit "
+                    "where ShopKey = ? and Seller = ? and ObservedAtTicks >= ? and ObservedAtTicks <= ? order by ObservedAtTicks desc limit "
                         + Math.Max(1, Math.Min(50, limit)),
+                    shop.ShopKey,
                     seller,
                     since.Ticks,
                     until.Ticks) ?? new List<object>())
@@ -290,12 +342,44 @@ namespace Bot.ChromeNs
                     .ToList();
 
                 return raw.Where(x => SameBuyer(seller, x.Buyer, buyer)).ToList();
+                }
             }
             catch
             {
                 // The table is created lazily by VisualKnowledgeLearningService. Before the first
                 // successful vision analysis there is simply no visual context to contribute.
                 return new List<VisualKnowledgeObservationEntity>();
+            }
+        }
+
+        private static ShopContext ResolveShop(string shopKey, string seller)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return null;
+            try
+            {
+                ShopContext shop;
+                if (shopKey.Length > 0)
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                else
+                {
+                    var current = ShopSettingsScope.Current;
+                    shop = current != null
+                        && string.Equals(current.SellerNick, seller, StringComparison.Ordinal)
+                        ? current
+                        : ShopContextLocator.ResolveRuntimeBySellerNick(seller);
+                }
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                    || (shopKey.Length > 0 && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)))
+                    return null;
+                return shop;
+            }
+            catch
+            {
+                // A duplicate seller nickname without an explicit ShopKey is ambiguous.
+                return null;
             }
         }
 
