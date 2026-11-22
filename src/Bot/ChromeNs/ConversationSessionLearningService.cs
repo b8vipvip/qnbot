@@ -352,8 +352,12 @@ namespace Bot.ChromeNs
 
             var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
             var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
-            var isBuyer = from == buyer && to == seller;
-            var isSeller = from == seller && to == buyer;
+            var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);
+            var toIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, to, buyer);
+            var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
+            var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
+            var isBuyer = fromIsBuyer && toIsSeller;
+            var isSeller = fromIsSeller && toIsBuyer;
             var isWithdrawal = ConversationContextStore.IsWithdrawalNotice(message, messageText);
             if (!isBuyer && !isSeller && !isWithdrawal) return;
 
