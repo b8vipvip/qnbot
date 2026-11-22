@@ -993,6 +993,8 @@ namespace Bot.ChromeNs
                 report.Summary = summary
                     + (corpusComplete
                         ? "（Knowledge V2全库已完成分批对照；真人证据自动新增=" + newKnowledgeApplied
+                            + "条；新增候选跳过=" + newKnowledgeSkipped
+                            + "条；证据拒绝=" + corpusAnalysis.NewCandidateEvidenceRejected
                             + "条；真人纠正自动修订=" + corpusApplied
                             + "条；通用AI建议仍待人工审核）"
                         : "（Knowledge V2全库对照未完成或源版本发生变化；本轮禁止自动写入生产知识库）");
