@@ -493,6 +493,6 @@ namespace Bot.Knowledge
             try { return ticks <= 0 ? DateTime.MinValue : new DateTime(ticks); }
             catch { return DateTime.MinValue; }
         }
-        private static double Clamp(double value) { return Math.Max(0, Math.Min(1, value)); }
+        private static double Clamp(double value) { return double.IsNaN(value) || double.IsInfinity(value) ? 0 : Math.Max(0, Math.Min(1, value)); }
     }
 }
