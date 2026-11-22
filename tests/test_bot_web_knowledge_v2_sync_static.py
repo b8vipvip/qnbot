@@ -318,7 +318,7 @@ def test_v2_record_title_and_answer_must_be_text(tmp_path):
         module._save(1, [item], "windows", expected_revision=0)
 
     assert caught.value.status_code == 400
-    assert "标题和答案必须是非空文本" in caught.value.detail
+    assert "Title 必须是文本" in caught.value.detail
     assert module._state(1)["revision"] == 0
 
 
