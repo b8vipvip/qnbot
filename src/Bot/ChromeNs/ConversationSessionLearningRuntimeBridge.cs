@@ -221,21 +221,8 @@ namespace Bot.ChromeNs
             if (fromIsSeller == toIsSeller) return;
             var buyer = fromIsSeller ? to : from;
             if (string.IsNullOrWhiteSpace(buyer)
-                || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) return;
-            if (shop.HasStableSellerId)
-            {
-                var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
-                var sellerEndpointTargetId = fromIsSeller
-                    ? (message.fromid == null ? string.Empty : (message.fromid.targetId ?? string.Empty).Trim())
-                    : (message.toid == null ? string.Empty : (message.toid.targetId ?? string.Empty).Trim());
-                var loginTargetId = message.loginid == null ? string.Empty
-                    : (message.loginid.targetId ?? string.Empty).Trim();
-                if ((sellerEndpointTargetId.Length > 0
-                        && !string.Equals(sellerEndpointTargetId, expectedTargetId, StringComparison.Ordinal))
-                    || (loginTargetId.Length > 0
-                        && !string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal)))
-                    return;
-            }
+                || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)
+                || !DirectOrderIdentityResolver.IsMessageFromShop(message, shop)) return;
 
             BuyerIdentityAliasService.ObserveMessage(seller, message);
             var canonicalBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
