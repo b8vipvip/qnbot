@@ -793,10 +793,14 @@ def test_learning_ingress_dedup_claim_waits_for_verified_shop_seller_and_buyer()
     assert observe.index("if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;") < observe.index(
         "if (string.IsNullOrWhiteSpace(seller)) return;"
     )
-    assert observe.index("if (string.IsNullOrWhiteSpace(seller)) return;") < observe.index(
-        "if (string.IsNullOrWhiteSpace(buyer)) return;"
+    assert "var shop = ShopSettingsScope.Current;" in observe
+    assert "shop = ShopContextLocator.ResolveRuntimeBySeller(qn);" in observe
+    assert observe.index("if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) return;") < observe.index(
+        "if (string.IsNullOrWhiteSpace(seller)) return;"
     )
-    assert observe.index("if (string.IsNullOrWhiteSpace(buyer)) return;") < observe.index("Seen.TryAdd(")
+    assert "if (fromIsSeller == toIsSeller) return;" in observe
+    assert "var buyer = fromIsSeller ? to : from;" in observe
+    assert observe.index("if (string.IsNullOrWhiteSpace(buyer)" ) < observe.index("Seen.TryAdd(")
     assert observe.index("Seen.TryAdd(") < observe.index("BuyerMessageArchiveService.Observe(")
     assert "standby CDP page may deliver the same payload" in observe
 
