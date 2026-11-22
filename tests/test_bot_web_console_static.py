@@ -239,3 +239,28 @@ def test_rejected_runtime_tokens_are_diagnosed_without_logging_the_secret():
     assert "logger.warning(.*token)" not in rejected
     assert "logger.warning(.*Authorization)" not in rejected
 
+
+
+def test_bot_web_sync_acknowledges_only_the_exact_command_result_snapshot():
+    sync = read(WINDOWS)
+    state = sync[sync.index("private sealed class ShopWebState"):sync.index("// The sync timer runs every second")]
+    flush = sync[
+        sync.index("private static async Task SyncOnceAsync"):
+        sync.index("private static JObject BuildStatus")
+    ]
+    commands = sync[
+        sync.index("private static async Task ApplyCommandsAsync"):
+        sync.index("private static JObject Result")
+    ]
+    ack = sync[
+        sync.index("private static void AcknowledgeCommandResults"):
+        sync.index("private static bool WasProcessed")
+    ]
+
+    assert "PendingCommandResultsSync" in state
+    assert "lock (state.PendingCommandResultsSync)" in flush
+    assert "AcknowledgeCommandResults(state, resultSnapshot);" in flush
+    assert "SetPendingCommandResult(state, id," in commands
+    assert "state.PendingCommandResults[id] = Result(" not in commands
+    assert "ReferenceEquals(current, pair.Value)" in ack
+    assert "state.PendingCommandResults.TryRemove(pair.Key, out ignored);" in ack
