@@ -208,8 +208,11 @@ def test_seller_echo_runtime_monitor_and_learning_are_shopkey_scoped():
     learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     mirror = read("src/Bot/ChromeNs/ConversationContextStore.cs")
 
-    assert "ResolveRuntimeBySeller(qn).ShopKey" in monitor
-    assert "ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey))" in monitor
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in monitor
+    assert "var shopKey = shop.ShopKey;" in monitor
+    assert "ShopSettingsScope.Enter(shop)" in monitor
+    assert "var incomingBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, from);" in monitor
+    assert "RecordBuyerSourceSort(seller, incomingBuyer, message, shopKey);" in monitor
     assert "TryConfirmBotDelivery(seller, buyer, texts, shopKey)" in monitor
     assert "BuyerOrderKey(seller, buyer, shopKey)" in monitor
     assert "return shopKey + \"#\" + seller.ToLowerInvariant()" in monitor
