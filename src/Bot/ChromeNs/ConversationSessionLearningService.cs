@@ -1004,6 +1004,10 @@ namespace Bot.ChromeNs
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
                     allSuggestions, analysis["workflow_proposals"] as JArray, session.Seller);
                 var finalCoverage = ParseCoverage(report.InputCoverageJson);
+                finalCoverage["writeMode"] = "ai_auto_publish_new_knowledge_and_verified_updates";
+                finalCoverage["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
+                    ? "ai_auto_publish_verified_human_evidence" : "dry_run";
+                finalCoverage["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run";
                 finalCoverage["knowledgeCorpusNewCandidateApplied"] = newKnowledgeApplied;
                 finalCoverage["knowledgeCorpusNewCandidateSkipped"] = newKnowledgeSkipped;
                 finalCoverage["knowledgeCorpusNewCandidateAnalysisComplete"] = corpusAnalysis.NewCandidateAnalysisComplete;
