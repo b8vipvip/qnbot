@@ -2734,21 +2734,24 @@ namespace Bot.ChromeNs
         {
             var source = sourceAnswer ?? string.Empty;
             var generated = generatedAnswer ?? string.Empty;
-            var qualifierGroups = new[]
+            // Keep every explicit qualifier stable. Synonyms may conservatively fall
+            // back to the human reply; silently changing a condition, time scope,
+            // membership, price model, or device requirement is never acceptable.
+            var qualifiers = new[]
             {
-                new[] { "仅限", "只限", "仅支持", "只支持", "只能", "仅可", "只可", "只有", "除非", "除外", "不包括" },
-                new[] { "必须", "需要", "需先", "先", "才可以", "才能", "才可", "前提" },
-                new[] { "不支持", "未支持", "尚不支持", "不允许", "不适用", "不能", "无法", "不可", "禁止" },
-                new[] { "免费", "收费", "付费", "订阅", "会员", "非会员", "开通会员", "试用" },
-                new[] { "登录", "绑定", "认证", "实名", "账号" },
-                new[] { "工作日", "周末", "每天", "每周", "每月", "每年", "有效期", "期限", "永久", "临时" },
-                new[] { "安卓", "Android", "iOS", "苹果", "iPhone", "iPad", "Windows", "macOS", "Linux", "电视端", "手机端", "平板端", "电脑端", "车机" },
-                new[] { "地区", "国家", "网络", "WiFi", "版本", "系统" }
+                "仅限", "只限", "仅支持", "只支持", "只能", "仅可", "只可", "只有",
+                "除非", "除外", "不包括", "必须", "需要", "需先", "先", "才可以", "才能", "才可", "前提",
+                "不支持", "未支持", "尚不支持", "不允许", "不适用", "不适合", "不推荐", "不建议",
+                "不符合", "非会员", "免费", "收费", "付费", "订阅", "会员", "开通会员", "试用",
+                "登录", "绑定", "认证", "实名", "账号",
+                "工作日", "周末", "每天", "每日", "每周", "按周", "每月", "按月",
+                "每年", "按年", "有效期", "期限", "永久", "临时",
+                "地区", "国家", "网络", "WiFi", "版本", "系统"
             };
-            foreach (var group in qualifierGroups)
+            foreach (var qualifier in qualifiers)
             {
-                var sourceHas = group.Any(x => source.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
-                var generatedHas = group.Any(x => generated.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+                var sourceHas = source.IndexOf(qualifier, StringComparison.OrdinalIgnoreCase) >= 0;
+                var generatedHas = generated.IndexOf(qualifier, StringComparison.OrdinalIgnoreCase) >= 0;
                 if (sourceHas != generatedHas) return true;
             }
             return false;
