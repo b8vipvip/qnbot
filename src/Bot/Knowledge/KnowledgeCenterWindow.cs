@@ -1022,16 +1022,29 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || string.IsNullOrWhiteSpace(shop.SellerNick)) return;
+                var seller = shop.SellerNick.Trim();
+                var qnSeller = (qn.Seller.Nick ?? string.Empty).Trim();
+                if (!DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)) return;
                 using (ShopSettingsScope.Enter(shop))
                 {
                     var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                     if (response == null || response.result == null) return;
-                    var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                    foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
+                    foreach (var message in response.result.Where(x => x != null))
                     {
-                        if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
-                        var buyer = (message.toid.nick ?? string.Empty).Trim();
-                        if (buyer.Length == 0) continue;
+                        // Only a native seller-authored event from this exact shop may
+                        // become human-reply evidence for automatic knowledge comparison.
+                        if (!DirectOrderIdentityResolver.IsMessageFromShop(message, shop)) continue;
+                        var from = (message.fromid.nick ?? string.Empty).Trim();
+                        var to = (message.toid.nick ?? string.Empty).Trim();
+                        if (!DirectOrderIdentityResolver.IdentityEquals(from, seller)
+                            || DirectOrderIdentityResolver.IdentityEquals(to, seller)) continue;
+                        BuyerIdentityAliasService.ObserveMessage(seller, message);
+                        var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, to);
+                        if (string.IsNullOrWhiteSpace(buyer)) buyer = to;
+                        if (string.IsNullOrWhiteSpace(buyer)
+                            || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) continue;
                         var variants = ExtractTexts(message);
                         if (variants.Count == 0 || variants.Any(HasAiMarker)
                             || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
