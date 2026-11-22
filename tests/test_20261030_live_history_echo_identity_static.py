@@ -120,3 +120,31 @@ def test_timeline_and_image_cache_resolve_canonical_seller_endpoint_before_buyer
     ]
     assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in seller_echo
     assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in seller_echo
+
+
+def test_shop_scoped_timeline_and_vision_require_matching_native_seller_target_id():
+    resolver = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    helper = resolver[
+        resolver.index("public static bool IsMessageFromShop"):
+        resolver.index("private static bool Candidate")
+    ]
+    assert "IdentityEquals(message.fromid.nick, seller)" in helper
+    assert "IdentityEquals(message.toid.nick, seller)" in helper
+    assert "if (fromIsSeller == toIsSeller) return false;" in helper
+    assert "IdentityEquals(loginNick, seller)" in helper
+    assert "shop.HasStableSellerId" in helper
+    assert "message.fromid.targetId" in helper
+    assert "message.toid.targetId" in helper
+    assert "message.loginid.targetId" in helper
+
+    for path in (
+        "src/Bot/ChromeNs/ConversationContextStore.cs",
+        "src/Bot/ChromeNs/VisionImageCacheService.cs",
+    ):
+        source = read(path)
+        seller = source[
+            source.index("private static string GetSellerNick"):
+            source.index("private static string GetBuyerNick")
+        ]
+        assert "DirectOrderIdentityResolver.IsMessageFromShop(message, shop)" in seller
+        assert "fromIsSeller == toIsSeller ? string.Empty : loginNick" in seller
