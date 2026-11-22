@@ -86,6 +86,7 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
     assert "HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion)" in generated
     assert "HasKnowledgeQualifierMismatch(sourceQuestion, candidateQuestion)" in generated
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, value)" in generated
     assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in generated
     assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in generated
     assert "private static bool HasDifferentKnowledgeNumbers(" in generated
@@ -359,3 +360,17 @@ def test_operator_delete_is_persisted_as_a_suppression_tombstone_for_future_auto
     assert "deleted.Title" in suppression
     assert "deleted.Aliases" in suppression
     assert "deletedVariants.Any(variants.Contains)" in suppression
+
+def test_generated_search_aliases_cannot_drop_platform_or_product_entities_from_buyer_question():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    generated = service.split("private static bool ApplyAiGeneratedKnowledgeContent(", 1)[1].split(
+        "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
+    )[0]
+    alias_validation = generated.split("foreach (var alias in generatedAliases", 1)[1].split(
+        "var sourceEntities =", 1
+    )[0]
+
+    assert "HasUnverifiedKnowledgeAnchors(sourceText, value)" in alias_validation
+    assert "HasMissingKnowledgeAnchors(sourceQuestion, value)" in alias_validation
+    assert "HasDifferentKnowledgeNumbers(sourceQuestion, value)" in alias_validation
+    assert "HasKnowledgeQualifierMismatch(sourceQuestion, value)" in alias_validation
