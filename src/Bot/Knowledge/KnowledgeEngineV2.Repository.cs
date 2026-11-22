@@ -223,6 +223,7 @@ namespace Bot.Knowledge
             string sessionId,
             string question,
             string answer,
+            IEnumerable<string> aliases,
             string questionMessageId,
             string answerMessageId,
             double confidence,
@@ -249,15 +250,23 @@ namespace Bot.Knowledge
                 || answer.Length < 8 || answer.Length > 1200
                 || string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
                 || double.IsNaN(confidence) || double.IsInfinity(confidence)
-                || confidence < 0.95 || confidence > 1.0)
+                || confidence < 0.90 || confidence > 1.0)
             {
                 result = "真人问答证据、语料版本或置信度未达到自动新增门槛。";
                 return false;
             }
 
+            var normalizedAliases = (aliases ?? Enumerable.Empty<string>())
+                .Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length >= 5 && x.Length <= 200)
+                .Where(x => !KnowledgeV2Semantics.IsContextDependent(x))
+                .Where(x => IsSafeAutomaticNewKnowledge(x, answer))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .ToList();
             if (!IsSafeAutomaticNewKnowledge(question, answer))
             {
-                result = "问题或答案包含上下文依赖、个人数据或一次性业务事实，已转人工审核。";
+                result = "问题或答案未通过自动安全校验，未发布到生产知识库。";
                 return false;
             }
 
@@ -276,7 +285,7 @@ namespace Bot.Knowledge
             }
             if (!KnowledgeEngineV2Service.IsEnabled(seller))
             {
-                result = "当前店铺未启用Knowledge V2，真人证据候选保留在学习报告中，未写入生产知识库。";
+                result = "当前店铺未启用Knowledge V2，自动发布已停止；启用V2后可由后续学习任务直接发布。";
                 return false;
             }
 
@@ -311,11 +320,16 @@ namespace Bot.Knowledge
                     return false;
                 }
 
-                var compactQuestion = KnowledgeEngineV2Semantics.Compact(question);
+                var questionVariants = new[] { question }.Concat(normalizedAliases)
+                    .Select(KnowledgeEngineV2Semantics.Compact)
+                    .Where(x => x.Length > 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
                 var exactMatches = currentRecords.Where(x =>
-                    string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compactQuestion, StringComparison.Ordinal)
-                    || (x.Aliases ?? new List<string>()).Any(alias =>
-                        string.Equals(KnowledgeEngineV2Semantics.Compact(alias), compactQuestion, StringComparison.Ordinal)))
+                    questionVariants.Any(compact =>
+                        string.Equals(KnowledgeEngineV2Semantics.Compact(x.Title), compact, StringComparison.Ordinal)
+                        || (x.Aliases ?? new List<string>()).Any(alias =>
+                            string.Equals(KnowledgeEngineV2Semantics.Compact(alias), compact, StringComparison.Ordinal))))
                     .ToList();
                 if (exactMatches.Count > 0)
                 {
@@ -330,11 +344,13 @@ namespace Bot.Knowledge
                 var similar = currentRecords.Any(existing =>
                 {
                     if (existing == null) return false;
-                    var aliases = (existing.Aliases ?? new List<string>())
+                    var existingAliases = (existing.Aliases ?? new List<string>())
                         .Concat(new[] { existing.Title })
                         .Where(x => !string.IsNullOrWhiteSpace(x));
-                    var titleSimilarity = aliases.Select(x =>
-                        KnowledgeEngineV2Semantics.TextSimilarity(question, x)).DefaultIfEmpty(0).Max();
+                    var titleSimilarity = questionVariants
+                        .SelectMany(variant => existingAliases.Select(x =>
+                            KnowledgeEngineV2Semantics.TextSimilarity(variant, x)))
+                        .DefaultIfEmpty(0).Max();
                     if (titleSimilarity >= 0.92) return true;
 
                     var intentCompatible = string.Equals(parsed.Intent, existing.Intent, StringComparison.OrdinalIgnoreCase);
@@ -351,7 +367,7 @@ namespace Bot.Knowledge
                 if (similar)
                 {
                     updatedCorpusFingerprint = currentFingerprint;
-                    result = "现有知识存在高相似问法，自动新增已阻止重复事实；请人工确认是否为新场景。";
+                    result = "现有知识存在高相似问法，自动新增已阻止重复事实，未覆盖生产知识。";
                     return false;
                 }
 
@@ -364,7 +380,9 @@ namespace Bot.Knowledge
                     Subject = parsed.Subject,
                     Predicate = parsed.Predicate,
                     Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
-                    Aliases = new List<string> { question },
+                    Aliases = new[] { question }.Concat(normalizedAliases)
+                        .GroupBy(KnowledgeV2Semantics.Compact, StringComparer.Ordinal)
+                        .Select(x => x.First()).Take(6).ToList(),
                     Answer = answer,
                     ShortAnswer = answer,
                     Conditions = new List<string>(),
@@ -372,7 +390,7 @@ namespace Bot.Knowledge
                     RequiredContext = new List<string>(),
                     ProductIds = new List<string>(),
                     RiskLevel = "normal",
-                    SourceType = "human_evidence_auto_learned",
+                    SourceType = "ai_auto_learned_human_evidence",
                     SourceId = sourceId,
                     Authority = 0.98,
                     Confidence = Math.Max(0.95, Math.Min(0.99, confidence)),
@@ -451,7 +469,7 @@ namespace Bot.Knowledge
                 questionMessageId + "," + answerMessageId, record.Title,
                 "no_existing_knowledge",
                 KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
-                "仅根据完整会话中的真实买家问题与非Bot人工客服回复自动新增；confidence="
+                "AI根据完整会话中的真实买家问题与非Bot人工客服回复自动整理并直接发布；confidence="
                     + confidence.ToString("0.00") + "; source=" + sourceId
                     + "; 已保存可回滚修订历史。",
                 "success", out auditError);
