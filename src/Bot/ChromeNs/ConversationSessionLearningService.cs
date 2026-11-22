@@ -901,6 +901,10 @@ namespace Bot.ChromeNs
                 var skipped = 0;
                 var corpusApplied = 0;
                 var corpusSkipped = 0;
+                var newKnowledgeApplied = 0;
+                var newKnowledgeSkipped = 0;
+                var expectedCurrentFingerprint = corpusAnalysis == null
+                    ? string.Empty : corpusAnalysis.SourceFingerprint;
                 // Reuse the same resolved ShopKey for analysis and knowledge writes.
                 // No alternate or ambient-shop fallback is allowed in an idle timer.
                 using (ShopSettingsScope.Enter(shop))
@@ -935,7 +939,7 @@ namespace Bot.ChromeNs
                         }
                         if (!EnableAutomaticWrites)
                         {
-                            suggestion.ApplyMessage = "默认dry-run：完整Knowledge V2语料覆盖、原子更新/回滚与Windows灰度验收尚未完成，未写入生产知识库";
+                            suggestion.ApplyMessage = "通用会话AI建议仍为dry-run；只有独立验证的真人问答新增/修订路径可以自动写入";
                             skipped++;
                             continue;
                         }
@@ -948,33 +952,54 @@ namespace Bot.ChromeNs
                         if (suggestion.Applied) applied++; else skipped++;
                     }
 
+                    if (EnableVerifiedCorpusNewKnowledgeWrites)
+                        newKnowledgeApplied = ApplyVerifiedCorpusNewKnowledge(
+                            session, corpusAnalysis, turns, cards,
+                            ref expectedCurrentFingerprint, out newKnowledgeSkipped);
+
                     if (EnableVerifiedCorpusCorrectionWrites)
-                        corpusApplied = ApplyVerifiedCorpusCorrections(session, corpusAnalysis, out corpusSkipped);
+                        corpusApplied = ApplyVerifiedCorpusCorrections(
+                            session, corpusAnalysis, expectedCurrentFingerprint, out corpusSkipped);
                 }
 
                 report = LoadReport(session.EntityId) ?? report ?? NewReport(session);
-                var allSuggestions = suggestions.Concat(corpusAnalysis.Candidates).ToList();
+                var allSuggestions = suggestions
+                    .Concat(corpusAnalysis.Candidates)
+                    .Concat(corpusAnalysis.NewCandidates)
+                    .ToList();
                 report.Status = !corpusComplete
-                    ? "V2全库覆盖不完整，自动修订已禁止"
-                    : (corpusApplied > 0
-                        ? "学习完成（已自动应用" + corpusApplied + "条真人纠正；通用候选待审核）"
-                        : "学习完成（全库分析完成；无符合自动应用门槛的真人纠正）");
+                    ? "V2全库覆盖不完整，自动新增与修订均已禁止"
+                    : (!corpusAnalysis.NewCandidateAnalysisComplete
+                        ? "Knowledge V2新增知识提取未完成，等待补偿重试"
+                        : (newKnowledgeApplied > 0 || corpusApplied > 0
+                            ? "学习完成（自动新增" + newKnowledgeApplied + "条真人证据知识；自动修订" + corpusApplied + "条真人纠正）"
+                            : "学习完成（未发现达到真人证据自动新增/修订门槛的知识）"));
                 report.Summary = summary
                     + (corpusComplete
-                        ? "（Knowledge V2全库已完成分批对照；自动应用真人纠正=" + corpusApplied
-                            + "条；未关联可靠消息ID的通用建议仍待人工审核）"
+                        ? "（Knowledge V2全库已完成分批对照；真人证据自动新增=" + newKnowledgeApplied
+                            + "条；真人纠正自动修订=" + corpusApplied
+                            + "条；通用AI建议仍待人工审核）"
                         : "（Knowledge V2全库对照未完成或源版本发生变化；本轮禁止自动写入生产知识库）");
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
                     allSuggestions, analysis["workflow_proposals"] as JArray, session.Seller);
-                report.InputCoverageJson = report.InputCoverageJson ?? string.Empty;
-                report.AppliedCount = applied + corpusApplied;
-                report.SkippedCount = skipped + corpusSkipped
-                    + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted;
-                report.Error = corpusComplete ? string.Empty
-                    : "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500);
-                var retryCorpus = !corpusComplete && session.LearningRetryCount < 3;
+                var finalCoverage = ParseCoverage(report.InputCoverageJson);
+                finalCoverage["knowledgeCorpusNewCandidateApplied"] = newKnowledgeApplied;
+                finalCoverage["knowledgeCorpusNewCandidateSkipped"] = newKnowledgeSkipped;
+                finalCoverage["knowledgeCorpusNewCandidateAnalysisComplete"] = corpusAnalysis.NewCandidateAnalysisComplete;
+                report.InputCoverageJson = finalCoverage.ToString(Formatting.None);
+                report.AppliedCount = applied + corpusApplied + newKnowledgeApplied;
+                report.SkippedCount = skipped + corpusSkipped + newKnowledgeSkipped
+                    + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted
+                    + corpusAnalysis.NewCandidateEvidenceRejected;
+                report.Error = !corpusComplete
+                    ? "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500)
+                    : (!corpusAnalysis.NewCandidateAnalysisComplete
+                        ? "knowledge_corpus_new_candidate_incomplete:" + Clean(corpusAnalysis.NewCandidateError, 500)
+                        : string.Empty);
+                var retryCorpus = (!corpusComplete || !corpusAnalysis.NewCandidateAnalysisComplete)
+                    && session.LearningRetryCount < 3;
                 if (retryCorpus)
                 {
                     session.LearningRetryCount++;
@@ -996,7 +1021,7 @@ namespace Bot.ChromeNs
                 NotifyChanged();
                 if (retryCorpus)
                 {
-                    Requeue(session, "等待Knowledge V2全库补偿重试");
+                    Requeue(session, "等待Knowledge V2全库或新增知识分析补偿重试");
                     return;
                 }
                 Log.Info("接待自动学习完成: seller=" + session.Seller + ", buyer=" + session.Buyer
@@ -1066,9 +1091,176 @@ namespace Bot.ChromeNs
             return lastActivity.AddMinutes(InactivityMinutes);
         }
 
+        private static int ApplyVerifiedCorpusNewKnowledge(
+            ActiveSession session,
+            KnowledgeCorpusAnalysisResult analysis,
+            List<ConversationContextTurn> turns,
+            List<BotConversationHistoryEntity> cards,
+            ref string expectedCurrentFingerprint,
+            out int skipped)
+        {
+            skipped = 0;
+            if (!EnableVerifiedCorpusNewKnowledgeWrites || session == null || analysis == null
+                || !analysis.Complete
+                || !analysis.NewCandidateAnalysisComplete
+                || !string.Equals(analysis.SourceFingerprint, analysis.AfterFingerprint, StringComparison.Ordinal))
+            {
+                if (analysis != null)
+                {
+                    foreach (var candidate in analysis.NewCandidates)
+                    {
+                        if (candidate == null) continue;
+                        candidate.ApplyMessage = "全库覆盖或新知识证据提取未完成，禁止自动新增";
+                        skipped++;
+                    }
+                }
+                return 0;
+            }
+
+            var applied = 0;
+            foreach (var candidate in analysis.NewCandidates.Take(MaxVerifiedNewKnowledgePerSession))
+            {
+                Suggestion verified;
+                string rejection;
+                if (!CanAutoApplyVerifiedNewKnowledge(
+                    candidate, session, analysis, turns, cards, out verified, out rejection))
+                {
+                    if (candidate != null)
+                        candidate.ApplyMessage = "真人问答新增门禁拒绝：" + rejection;
+                    skipped++;
+                    continue;
+                }
+
+                try
+                {
+                    string applyMessage;
+                    string savedKnowledgeId;
+                    string nextFingerprint;
+                    var success = KnowledgeV2Repository.TryCreateVerifiedSessionKnowledge(
+                        session.Seller,
+                        session.ShopKey,
+                        session.EntityId,
+                        verified.Question,
+                        verified.Answer,
+                        verified.EvidenceMessageIds[0],
+                        verified.EvidenceMessageIds[1],
+                        verified.Confidence,
+                        expectedCurrentFingerprint,
+                        out applyMessage,
+                        out savedKnowledgeId,
+                        out nextFingerprint);
+                    candidate.Applied = success;
+                    candidate.KnowledgeId = savedKnowledgeId ?? string.Empty;
+                    candidate.ApplyMessage = applyMessage;
+                    if (success)
+                    {
+                        applied++;
+                        expectedCurrentFingerprint = nextFingerprint;
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (!string.Equals(nextFingerprint, expectedCurrentFingerprint, StringComparison.Ordinal))
+                        {
+                            expectedCurrentFingerprint = nextFingerprint;
+                            foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
+                            {
+                                if (remaining == null) continue;
+                                remaining.ApplyMessage = "语料版本在上一条新增后发生变化，剩余候选保留供人工审核";
+                                skipped++;
+                            }
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    candidate.Applied = false;
+                    candidate.ApplyMessage = "真人证据自动新增异常，候选已保留：" + Clean(ex.Message, 240);
+                    skipped++;
+                    try
+                    {
+                        expectedCurrentFingerprint = ComputeKnowledgeCorpusFingerprint(
+                            KnowledgeEngineV2Repository.LoadAll(session.Seller));
+                    }
+                    catch { }
+                    Log.ErrorWithMaxCount("Knowledge V2真人证据自动新增失败: " + ex.GetType().Name, 10);
+                }
+            }
+            foreach (var omitted in analysis.NewCandidates.Skip(MaxVerifiedNewKnowledgePerSession))
+            {
+                if (omitted == null) continue;
+                omitted.ApplyMessage = "单个会话最多自动新增" + MaxVerifiedNewKnowledgePerSession + "条；其余候选保留供人工审核";
+                skipped++;
+            }
+            return applied;
+        }
+
+        private static bool CanAutoApplyVerifiedNewKnowledge(
+            Suggestion candidate,
+            ActiveSession session,
+            KnowledgeCorpusAnalysisResult analysis,
+            List<ConversationContextTurn> turns,
+            List<BotConversationHistoryEntity> cards,
+            out Suggestion verified,
+            out string rejection)
+        {
+            verified = null;
+            rejection = string.Empty;
+            if (candidate == null || session == null || analysis == null
+                || !string.Equals(candidate.Action, "add", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(candidate.KnowledgeId)
+                || !string.Equals(candidate.EvidenceType, "manual_reply", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(candidate.SourceFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal)
+                || candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count != 2
+                || double.IsNaN(candidate.Confidence) || double.IsInfinity(candidate.Confidence)
+                || candidate.Confidence < 0.95 || candidate.Confidence > 1.0)
+            {
+                rejection = "candidate_metadata_or_confidence_invalid";
+                return false;
+            }
+
+            if (!TryCreateVerifiedNewKnowledgeCandidate(
+                session.Seller,
+                candidate.EvidenceMessageIds[0],
+                candidate.EvidenceMessageIds[1],
+                candidate.Confidence,
+                candidate.Reason,
+                analysis.SourceFingerprint,
+                turns,
+                cards,
+                new HashSet<string>((turns ?? new List<ConversationContextTurn>())
+                    .Where(x => x != null && x.Role == "user" && !x.Withdrawn)
+                    .SelectMany(GetTurnMessageIds), StringComparer.Ordinal),
+                new HashSet<string>((turns ?? new List<ConversationContextTurn>())
+                    .Where(x => x != null && x.Role == "assistant" && !x.Withdrawn && !IsBotTurn(x, cards))
+                    .SelectMany(GetTurnMessageIds), StringComparer.Ordinal),
+                out verified,
+                out rejection))
+                return false;
+
+            if (!string.Equals(candidate.Question, verified.Question, StringComparison.Ordinal)
+                || !string.Equals(candidate.Answer, verified.Answer, StringComparison.Ordinal))
+            {
+                rejection = "candidate_text_does_not_match_source_messages";
+                verified = null;
+                return false;
+            }
+            return true;
+        }
+
+        private static IEnumerable<string> GetTurnMessageIds(ConversationContextTurn turn)
+        {
+            if (turn == null) yield break;
+            if (!string.IsNullOrWhiteSpace(turn.MessageKey)) yield return turn.MessageKey.Trim();
+            foreach (var alias in turn.NativeAliases ?? new string[0])
+                if (!string.IsNullOrWhiteSpace(alias)) yield return alias.Trim();
+        }
+
         private static int ApplyVerifiedCorpusCorrections(
             ActiveSession session,
             KnowledgeCorpusAnalysisResult analysis,
+            string expectedCurrentFingerprint,
             out int skipped)
         {
             skipped = 0;
@@ -1100,7 +1292,9 @@ namespace Bot.ChromeNs
                 }
                 return 0;
             }
-            if (!string.Equals(currentFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal))
+            if (!string.Equals(currentFingerprint,
+                string.IsNullOrWhiteSpace(expectedCurrentFingerprint) ? analysis.SourceFingerprint : expectedCurrentFingerprint,
+                StringComparison.Ordinal))
             {
                 foreach (var candidate in analysis.Candidates)
                 {
