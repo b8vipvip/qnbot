@@ -88,3 +88,18 @@ def test_startup_and_legacy_build_include_new_services():
     assert "ManualVisualReplyLearningService.Initialize();" in app
     assert "BuyerReplyOutputGuard.cs" in targets
     assert "ManualVisualReplyLearningService.cs" in targets
+
+
+def test_manual_visual_learning_accepts_canonical_seller_echo_with_stable_shop_identity():
+    source = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+    method = source[
+        source.index("private static void ObserveSellerReplyScoped"):
+        source.index("private static string ExtractMessageText")
+    ]
+
+    assert "ShopSettingsScope.Current" in method
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in method
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in method
+    assert "shop.HasStableSellerId" in method
+    assert "BuyerIdentityAliasService.ObserveMessage(seller, message)" in method
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, buyer)" in method
