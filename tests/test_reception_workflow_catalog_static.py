@@ -56,9 +56,10 @@ def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
         s.index("public static string SaveDraft"):
         s.index("public static string RestoreLatestDraft")
     ]
-    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff")' in save
-    assert 'Guid.NewGuid().ToString("N")' in save
-    assert 'File.Copy(path, path + ".backup."' in save
+    helper = s[s.index("private static string CreateBackupPath"):s.index("public static string GetDraftJson")]
+    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfffffff")' in helper
+    assert 'Guid.NewGuid().ToString("N")' in helper
+    assert "File.Copy(path, CreateBackupPath(path), false)" in save
 
 
 
@@ -100,3 +101,51 @@ def test_status_document_distinguishes_draft_catalog_from_missing_approval_publi
     assert "active-version pointer" in status
     assert "atomic rollback" in status
     assert "must remain draft-only" in status
+
+
+def test_workflow_draft_save_uses_shop_scoped_revision_compare_and_swap():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    read = service[
+        service.index("private static long ReadCurrentRevision"):
+        service.index("private static string CreateBackupPath")
+    ]
+    save = service[
+        service.index("public static string SaveDraft"):
+        service.index("public static string RestoreLatestDraft")
+    ]
+    restore = service[
+        service.index("public static string RestoreLatestDraft"):
+        service.index("\\n    }\\n}")
+    ]
+    page = source("src/Bot/Knowledge/KnowledgeV2WorkflowDraftPage.cs")
+
+    assert '["draft_revision"] = 0' in service
+    assert '["draft_revision"] = draftRevision' in service
+    assert "expectedRevision = data.Value<long>(\"draft_revision\")" in save
+    assert "currentRevision = ReadCurrentRevision(path)" in save
+    assert "if (expectedRevision != currentRevision)" in save
+    assert "本次修改未覆盖任何数据" in save
+    assert 'data["draft_revision"] = currentRevision + 1' in save
+    assert "CrossProcessAtomicStateFile.Acquire(path, \"ReceptionWorkflowDraft\", 3000)" in save
+    assert "Validate(contents).Value<long>(\"draft_revision\")" in read
+    assert 'restored["draft_revision"] = currentRevision + 1' in restore
+    assert "修订版本已递增" in restore
+    assert "RefreshView();" in page[page.index("private void Save()"):page.index("private void Restore()")]
+
+
+def test_workflow_catalog_rejects_duplicate_product_and_sku_ids_and_oversized_drafts():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    validation = service[
+        service.index("private static JObject Validate"):
+        service.index("private static bool ValidKey")
+    ]
+    keys = service[
+        service.index("private static void CheckKeys"):
+        service.index("private static long ReadCurrentRevision")
+    ]
+
+    assert "json.Length > 1024 * 1024" in validation
+    assert "draftRevision < 0" in validation
+    assert "var unique = new HashSet<string>(StringComparer.Ordinal)" in keys
+    assert "if (!unique.Add(Convert.ToString(id)))" in keys
+    assert "不允许重复标识" in keys
