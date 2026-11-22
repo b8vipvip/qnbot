@@ -337,15 +337,13 @@ namespace Bot.Knowledge
                         KnowledgeEngineV2Semantics.TextSimilarity(question, x)).DefaultIfEmpty(0).Max();
                     if (titleSimilarity >= 0.92) return true;
 
-                    var intentCompatible = string.Equals(parsed.Intent, existing.Intent, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(parsed.Intent, "general", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(existing.Intent, "general", StringComparison.OrdinalIgnoreCase);
-                    var predicateCompatible = string.Equals(parsed.Predicate, existing.Predicate, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(parsed.Predicate, "general", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(existing.Predicate, "general", StringComparison.OrdinalIgnoreCase);
+                    var intentCompatible = string.Equals(parsed.Intent, existing.Intent, StringComparison.OrdinalIgnoreCase);
+                    var predicateStrong = !string.Equals(parsed.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(existing.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(parsed.Predicate, existing.Predicate, StringComparison.OrdinalIgnoreCase);
                     var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
                         parsed.Subject, existing.Subject);
-                    return intentCompatible && predicateCompatible
+                    return intentCompatible && predicateStrong
                         && (parsed.Subject ?? string.Empty).Length >= 4
                         && (existing.Subject ?? string.Empty).Length >= 4
                         && subjectSimilarity >= 0.90;
