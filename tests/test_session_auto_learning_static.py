@@ -977,3 +977,54 @@ def test_learning_timeline_archives_buyer_turns_with_canonical_shop_and_alias_id
     assert "var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);" in observe
     assert "var isBuyer = fromIsBuyer && toIsSeller;" in observe
     assert "if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))" in observe
+
+
+def test_long_lived_runtime_bridges_use_weak_qn_subscription_keys_and_sweep_retired_state():
+    for path in (
+        "src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs",
+        "src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs",
+        "src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs",
+        "src/Bot/ChromeNs/OrderNotificationTraceBridge.cs",
+        "src/Bot/ChromeNs/RechargeStatusAutoQueryService.cs",
+        "src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs",
+        "src/Bot/Options/LegacyAboutUpdateRedirect.cs",
+        "src/Bot/ChromeNs/ReturningBuyerFirstReplyBridge.Bootstrap.cs",
+        "src/Bot/ShopScope/ShopScopedRuntimeBridge.cs",
+        "src/Bot/Knowledge/KnowledgeCenterWindow.cs",
+        "src/Bot/Options/OrderPlacedReplyDelaySettings.cs",
+    ):
+        source = read(path)
+        assert "ConditionalWeakTable<QN, object>" in source
+        assert "ConcurrentDictionary<QN, byte>" not in source
+        assert "TryGetValue(qn, out marker)" in source
+        assert "Add(qn, new object())" in source
+
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    assert "ConditionalWeakTable<QN, object> Subscribed" in monitor
+    assert "ConditionalWeakTable<QN, object> VersionGuardLogged" in monitor
+    assert "ConcurrentDictionary<QN, byte> Subscribed" not in monitor
+    assert "CleanupRetiredQnState(sessions)" in monitor
+    assert "NextConversationProbeAt.TryRemove(qn, out ignored)" in monitor
+    assert "ConsecutiveProbeFailures.TryRemove(qn, out ignored)" in monitor
+
+    for path in (
+        "src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs",
+        "src/Bot/Knowledge/KnowledgeCenterWindow.cs",
+    ):
+        source = read(path)
+        assert "CleanupRetiredQnState(sessions)" in source
+    business = read("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
+    assert "NextHistoryProbeAt.TryRemove(qn, out ignored)" in business
+    assert "NextHookRepairAt.TryRemove(qn, out ignored)" in business
+    ingress = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    assert "NextProbeAt.TryRemove(qn, out ignored)" in ingress
+    assert "NextPanelProbeAt.TryRemove(qn, out ignored)" in ingress
+
+
+def test_knowledge_policy_fuzzy_search_uses_weak_manager_identity_not_hash_codes():
+    source = read("src/Bot/Knowledge/KnowledgePolicyProfileUi.cs")
+    assert "ConditionalWeakTable<KnowledgeManagerControl, object> FuzzySearchAttached" in source
+    assert "FuzzySearchAttached.TryGetValue(manager, out marker)" in source
+    assert "FuzzySearchAttached.Add(manager, new object())" in source
+    assert "RuntimeHelpers.GetHashCode(manager)" not in source
+    assert "FuzzySearchAttached.TryRemove(instanceKey" not in source
