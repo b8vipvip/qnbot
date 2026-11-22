@@ -121,7 +121,7 @@ namespace Bot.Knowledge
 
             var rankSw = Stopwatch.StartNew();
             var rankedMatches = candidates.Select(i => Score(seller, snapshot.Records[i], query)).Where(x => x != null && x.Score >= 0.30).OrderByDescending(x => x.Score).ThenByDescending(x => x.ConfidenceScore).ToList();
-            var productionMatches = rankedMatches.Where(IsApprovedProductionMatch).Take(5).ToList();
+            var productionMatches = rankedMatches.Where(x => IsEligibleProductionMatch(x, query)).Take(5).ToList();
             // Operator-reviewed direct replies take precedence at the exact question
             // boundary; confidence observations never delay an explicit manual save.
             // Other semantically similar questions continue through normal safety ranking.
@@ -191,6 +191,25 @@ namespace Bot.Knowledge
             return decision;
         }
 
+        private static bool IsEligibleProductionMatch(KnowledgeV2Match match, KnowledgeV2Query query)
+        {
+            if (!IsApprovedProductionMatch(match)) return false;
+            if (match == null || match.Record == null
+                || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(match.Record.SourceType))
+                return true;
+
+            // Auto-published FAQ facts may answer an exact saved title/alias or a
+            // rigorously validated semantic paraphrase. Do not let the generic
+            // production fallback bypass the stronger human-evidence retrieval gate.
+            var exactAlias = (match.Record.Aliases ?? new List<string>())
+                .Concat(new[] { match.Record.Title })
+                .Any(alias => string.Equals(
+                    KnowledgeEngineV2Semantics.Compact(alias),
+                    query == null ? string.Empty : query.Normalized,
+                    StringComparison.Ordinal));
+            return exactAlias || IsStrongAutoPublishedHumanEvidenceSimilarMatch(match, query);
+        }
+
         private static bool IsStrongManualReviewedSimilarMatch(
             KnowledgeV2Match match,
             KnowledgeV2Query query)
@@ -221,8 +240,7 @@ namespace Bot.Knowledge
             if (match == null || match.Record == null || query == null
                 || query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason))
                 return false;
-            if (!string.Equals((match.Record.SourceType ?? string.Empty).Trim(),
-                    "ai_auto_learned_human_evidence", StringComparison.OrdinalIgnoreCase))
+            if (!KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(match.Record.SourceType))
                 return false;
             // The answer is backed by an exact live buyer message and a subsequent
             // non-Bot human reply. Permit a carefully bounded semantic match without
