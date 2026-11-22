@@ -66,6 +66,7 @@ namespace Bot.ChromeNs
                 new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
             public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
                 new ConcurrentDictionary<long, JObject>();
+            public readonly object PendingCommandResultsSync = new object();
             public readonly object ProcessedSync = new object();
             public readonly HashSet<long> ProcessedCommands = new HashSet<long>();
             public volatile bool RemotePause;
@@ -589,7 +590,9 @@ namespace Bot.ChromeNs
                         ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
                         : new List<WebMessage>();
                 }
-                var resultSnapshot = state.PendingCommandResults.ToArray();
+                KeyValuePair<long, JObject>[] resultSnapshot;
+                lock (state.PendingCommandResultsSync)
+                    resultSnapshot = state.PendingCommandResults.ToArray();
                 var payload = new JObject
                 {
                     ["shop_key"] = state.Shop.ShopKey,
@@ -651,11 +654,7 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                foreach (var pair in resultSnapshot)
-                {
-                    JObject ignored;
-                    state.PendingCommandResults.TryRemove(pair.Key, out ignored);
-                }
+                AcknowledgeCommandResults(state, resultSnapshot);
             }
         }
 
@@ -834,7 +833,7 @@ namespace Bot.ChromeNs
                 if (id < 1) continue;
                 if (WasProcessed(state, id))
                 {
-                    state.PendingCommandResults[id] = Result(id, true, string.Empty, new JObject { ["duplicate"] = true });
+                    SetPendingCommandResult(state, id, Result(id, true, string.Empty, new JObject { ["duplicate"] = true }));
                     continue;
                 }
                 var type = Convert.ToString(command["type"]);
@@ -858,12 +857,12 @@ namespace Bot.ChromeNs
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
                     MarkProcessed(state, id);
-                    state.PendingCommandResults[id] = Result(id, true, string.Empty, result);
+                    SetPendingCommandResult(state, id, Result(id, true, string.Empty, result));
                 }
                 catch (Exception ex)
                 {
                     MarkProcessed(state, id);
-                    state.PendingCommandResults[id] = Result(id, false, Safe(ex.Message, 600), new JObject());
+                    SetPendingCommandResult(state, id, Result(id, false, Safe(ex.Message, 600), new JObject()));
                 }
             }
         }
@@ -1004,6 +1003,35 @@ namespace Bot.ChromeNs
                 ["error"] = error ?? string.Empty,
                 ["result"] = result ?? new JObject()
             };
+        }
+
+        private static void SetPendingCommandResult(ShopWebState state, long id, JObject result)
+        {
+            if (state == null || id < 1 || result == null) return;
+            lock (state.PendingCommandResultsSync)
+                state.PendingCommandResults[id] = result;
+        }
+
+        private static void AcknowledgeCommandResults(
+            ShopWebState state, IEnumerable<KeyValuePair<long, JObject>> acknowledged)
+        {
+            if (state == null || acknowledged == null) return;
+            lock (state.PendingCommandResultsSync)
+            {
+                foreach (var pair in acknowledged)
+                {
+                    JObject current;
+                    // A command with the same ID may have produced a newer result while
+                    // this HTTP round-trip was in flight. Only acknowledge the exact
+                    // immutable result object that was included in the successful request.
+                    if (state.PendingCommandResults.TryGetValue(pair.Key, out current)
+                        && ReferenceEquals(current, pair.Value))
+                    {
+                        JObject ignored;
+                        state.PendingCommandResults.TryRemove(pair.Key, out ignored);
+                    }
+                }
+            }
         }
 
         private static bool WasProcessed(ShopWebState state, long id)
