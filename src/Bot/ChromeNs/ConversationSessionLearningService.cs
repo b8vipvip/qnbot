@@ -1009,7 +1009,9 @@ namespace Bot.ChromeNs
                     retryCoverage["historyRetryCount"] = session.HistoryRetryCount;
                     retryCoverage["learningRetryCount"] = session.LearningRetryCount;
                     report.InputCoverageJson = retryCoverage.ToString(Formatting.None);
-                    report.Status = "V2全库覆盖不完整，等待补偿重试(" + session.LearningRetryCount + "/3)";
+                    report.Status = !corpusComplete
+                        ? "V2全库覆盖不完整，等待补偿重试(" + session.LearningRetryCount + "/3)"
+                        : "Knowledge V2新增知识提取未完成，等待补偿重试(" + session.LearningRetryCount + "/3)";
                     report.CompletedAtTicks = 0;
                 }
                 else
@@ -1726,6 +1728,15 @@ namespace Bot.ChromeNs
                             }
                             result.NewCandidates.Add(restored);
                         }
+                        result.NewCandidateAnalysisComplete = true;
+                        result.NewCandidateModel = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateModel"]);
+                        result.NewCandidateProtocol = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateProtocol"]);
+                        result.NewCandidateEndpoint = Convert.ToString(priorCoverage["knowledgeCorpusNewCandidateEndpoint"]);
+                    }
+                    else if (promptBuyerMessageIds.Count == 0 || promptHumanMessageIds.Count == 0)
+                    {
+                        // No eligible buyer + human message pair exists in this session;
+                        // this is a completed empty extraction, not an AI failure.
                         result.NewCandidateAnalysisComplete = true;
                     }
                     else
