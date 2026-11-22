@@ -83,7 +83,7 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "private static bool HasUnverifiedKnowledgeAnchors(" in generated
     assert "|| !appearsInSource" in generated
     assert r'Regex.Matches(sourceAnswer, @"\d+(?:\.\d+)?")' in generated
-    assert "candidateAnswer.Length <= Math.Max(160, sourceAnswer.Length * 2)" in generated
+    assert "candidateAnswer.Length <= Math.Max(64, sourceAnswer.Length + 24)" in generated
     assert "var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));" in generated
     assert "var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));" in generated
     assert "evidenceCandidate.Question = question;" in generated
@@ -248,8 +248,8 @@ def test_ai_normalization_cannot_flip_human_answer_polarity_or_invent_known_prod
         "private static bool TryCreateVerifiedNewKnowledgeCandidate(", 1
     )[0]
 
-    assert 'var negative = @"不支持|不兼容|不适配|不可以|不能|无法|不可用' in generated
-    assert 'var positive = @"支持|兼容|适配|可以|能用|可用|允许|提供|包含' in generated
+    assert 'var negative = @"不支持|不兼容|不适配|不适用|不可以|不能|无法|不可用' in generated
+    assert 'var positive = @"支持|兼容|适配|适用|可以|能用|可用|允许|提供|包含' in generated
     assert "sourceNegative != generatedNegative" in generated
     assert "sourcePositive != generatedPositive" in generated
     assert "Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙" in generated
