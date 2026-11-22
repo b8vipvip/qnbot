@@ -2675,9 +2675,13 @@ namespace Bot.ChromeNs
             evidenceCandidate.Keywords = string.Join(",", keywords);
             evidenceCandidate.Evidence = "AI自动整理的知识内容已通过真实买家问题与非Bot人工客服回复的来源校验；无法充分验证的改写自动回退至人工原文。";
             evidenceCandidate.Reason = Redact(Clean(evidenceCandidate.Reason, 500));
-            evidenceCandidate.ApplyMessage = answerGrounded
-                ? "AI知识整理通过来源、实体、数字和回答极性校验，准备直接发布到正式Knowledge V2。"
-                : "AI答案改写未达到充分证据门槛，已自动采用人工原始回复，准备直接发布到正式Knowledge V2。";
+            evidenceCandidate.ApplyMessage = questionGrounded && answerGrounded
+                ? "AI问题与答案整理均通过来源、实体、数字和极性校验，准备直接发布到正式Knowledge V2。"
+                : (!questionGrounded && !answerGrounded
+                    ? "AI问题与答案改写未达到充分证据门槛，已自动回退到买家问题和人工原始回复，准备直接发布。"
+                    : (!questionGrounded
+                        ? "AI问法改写未达到充分证据门槛，已自动采用买家原始问题；答案通过校验，准备直接发布。"
+                        : "AI答案改写未达到充分证据门槛，已自动采用人工原始回复；问法通过校验，准备直接发布。"));
             return true;
         }
 
