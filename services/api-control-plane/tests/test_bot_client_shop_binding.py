@@ -322,6 +322,16 @@ def setup_v2_revision_cp(tmp_path):
             """
             CREATE TABLE client_tokens(id INTEGER PRIMARY KEY);
             INSERT INTO client_tokens(id) VALUES(1);
+            CREATE TABLE bot_commands(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                command_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                error TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
     v2sync._cp = cp
@@ -400,3 +410,35 @@ def test_knowledge_v2_stale_windows_revision_cannot_overwrite_web_edit(tmp_path)
     assert stale["revision"] == 2
     assert stale["records"][0]["Answer"] == "web answer"
     assert v2sync._state(1)["records"][0]["Answer"] == "web answer"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("direct_threshold", float("nan")),
+        ("direct_threshold", float("inf")),
+        ("direct_threshold", float("-inf")),
+        ("min_confidence", float("nan")),
+        ("min_confidence", float("inf")),
+        ("min_confidence", float("-inf")),
+    ],
+)
+def test_knowledge_v2_runtime_settings_reject_non_finite_thresholds(tmp_path, field, value):
+    setup_v2_revision_cp(tmp_path)
+    values = {
+        "enabled": True,
+        "mode": "production",
+        "direct_threshold": 0.82,
+        "min_confidence": 0.72,
+    }
+    values[field] = value
+    payload = v2sync.KnowledgeV2RuntimeSettingsInput(**values)
+
+    with pytest.raises(HTTPException) as caught:
+        v2sync.web_v2_runtime_settings_save(payload, client={"id": 1})
+
+    assert caught.value.status_code == 400
+    assert "有限数值" in caught.value.detail
+    with v2sync._cp.db() as conn:
+        queued = conn.execute("SELECT COUNT(*) FROM bot_commands").fetchone()[0]
+    assert queued == 0
