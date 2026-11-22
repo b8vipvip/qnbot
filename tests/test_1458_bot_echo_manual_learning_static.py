@@ -18,7 +18,7 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
 
     guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)"
     manual_source = 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")'
-    comparison = "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey)"
+    comparison = "QueueManualAnswerComparison("
 
     assert guard in method
     assert "ShopSettingsScope.Enter(shop)" in method
@@ -68,7 +68,9 @@ def test_real_human_reply_path_remains_available_after_bot_echo_guard():
     guard_end = method.index("manualAnswer = sellerEcho;")
     human_tail = method[guard_end:]
     assert 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")' in human_tail
-    assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey)" in human_tail
+    assert "TryResolveManualEvidenceMessageIds(" in human_tail
+    assert "QueueManualAnswerComparison(" in human_tail
+    assert "buyerMessageId, humanMessageId" in human_tail
     assert "检测到本店客服人工接管，已阻止当前Bot发送" in human_tail
     assert "SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);" in human_tail
     assert "out bool bypassed" in method
@@ -92,4 +94,6 @@ def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bo
     assert "catch (Exception learningError)" in method
     assert "if (!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho))" in method
     assert "if (!sameAsCandidate)" in method
-    assert "QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer, shopKey);" in method
+    assert "TryResolveManualEvidenceMessageIds(" in method
+    assert "QueueManualAnswerComparison(" in method
+    assert "if (!sameAsCandidate)" in method
