@@ -308,7 +308,11 @@ namespace Bot.Knowledge
                 var id=(local.Id??string.Empty).Trim();
                 if(id.Length>0 && cloudById.TryGetValue(id,out cloud))
                 {
-                    if(SameRecordContent(cloud,local)) continue;
+                    if(SameRecordContent(cloud,local))
+                    {
+                        MergeRecordMetadata(cloud,local);
+                        continue;
+                    }
                     AddCandidate(merged,mergedIds,local,id);
                     continue;
                 }
@@ -353,15 +357,49 @@ namespace Bot.Knowledge
             records.Add(item);
         }
 
+        private static bool SameList(IEnumerable<string> left,IEnumerable<string> right)
+        {
+            return (left??Enumerable.Empty<string>()).SequenceEqual(
+                right??Enumerable.Empty<string>(),StringComparer.Ordinal);
+        }
+
         private static bool SameRecordContent(KnowledgeV2Record left,KnowledgeV2Record right)
         {
             if(left==null||right==null) return false;
             return string.Equals(left.Title??string.Empty,right.Title??string.Empty,StringComparison.Ordinal)
                 && string.Equals(left.Answer??string.Empty,right.Answer??string.Empty,StringComparison.Ordinal)
+                && string.Equals(left.ShortAnswer??string.Empty,right.ShortAnswer??string.Empty,StringComparison.Ordinal)
+                && string.Equals(left.Subject??string.Empty,right.Subject??string.Empty,StringComparison.Ordinal)
+                && string.Equals(left.Predicate??string.Empty,right.Predicate??string.Empty,StringComparison.Ordinal)
+                && SameList(left.Entities,right.Entities)
+                && SameList(left.Aliases,right.Aliases)
+                && SameList(left.Conditions,right.Conditions)
+                && SameList(left.Exclusions,right.Exclusions)
+                && SameList(left.RequiredContext,right.RequiredContext)
+                && SameList(left.ProductIds,right.ProductIds)
+                && string.Equals(left.RiskLevel??string.Empty,right.RiskLevel??string.Empty,StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.SourceType??string.Empty,right.SourceType??string.Empty,StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.SourceId??string.Empty,right.SourceId??string.Empty,StringComparison.Ordinal)
+                && left.Authority.Equals(right.Authority)
+                && left.Confidence.Equals(right.Confidence)
                 && left.Enabled==right.Enabled
                 && string.Equals(left.Status??string.Empty,right.Status??string.Empty,StringComparison.OrdinalIgnoreCase)
                 && string.Equals(left.Type??string.Empty,right.Type??string.Empty,StringComparison.OrdinalIgnoreCase)
                 && string.Equals(left.Intent??string.Empty,right.Intent??string.Empty,StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void MergeRecordMetadata(KnowledgeV2Record target,KnowledgeV2Record source)
+        {
+            if(target==null||source==null) return;
+            target.UseCount=Math.Max(Math.Max(0,target.UseCount),Math.Max(0,source.UseCount));
+            target.AcceptedCount=Math.Max(Math.Max(0,target.AcceptedCount),Math.Max(0,source.AcceptedCount));
+            target.CorrectionCount=Math.Max(Math.Max(0,target.CorrectionCount),Math.Max(0,source.CorrectionCount));
+            target.WithdrawCount=Math.Max(Math.Max(0,target.WithdrawCount),Math.Max(0,source.WithdrawCount));
+            if(target.CreatedAt==DateTime.MinValue
+                || (source.CreatedAt!=DateTime.MinValue && source.CreatedAt<target.CreatedAt))
+                target.CreatedAt=source.CreatedAt;
+            if(source.UpdatedAt>target.UpdatedAt) target.UpdatedAt=source.UpdatedAt;
+            if(source.LastVerifiedAt>target.LastVerifiedAt) target.LastVerifiedAt=source.LastVerifiedAt;
         }
 
         private static KnowledgeV2Record CloneRecord(KnowledgeV2Record record)
