@@ -352,7 +352,7 @@ namespace Bot.Knowledge
             var array = obj == null ? null : obj[name] as JArray; if (array == null) return new List<string>();
             return array.Select(x => (x == null ? string.Empty : x.ToString()).Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(48).ToList();
         }
-        private static double Number(JObject obj, string name, double fallback) { double value; return double.TryParse(Text(obj, name), out value) ? Clamp(value) : fallback; }
-        private static double Clamp(double value) { return Math.Max(0, Math.Min(1, value)); }
+        private static double Number(JObject obj, string name, double fallback) { double value; return double.TryParse(Text(obj, name), out value) && !double.IsNaN(value) && !double.IsInfinity(value) ? Clamp(value) : fallback; }
+        private static double Clamp(double value) { return double.IsNaN(value) || double.IsInfinity(value) ? 0 : Math.Max(0, Math.Min(1, value)); }
     }
 }
