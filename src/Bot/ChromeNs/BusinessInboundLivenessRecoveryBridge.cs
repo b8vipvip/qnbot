@@ -39,6 +39,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<QN, DateTime>();
         private static readonly ConcurrentDictionary<QN, byte> Running =
             new ConcurrentDictionary<QN, byte>();
+        private static readonly TimeSpan QnStateSweepInterval = TimeSpan.FromMinutes(1);
+        private static long _lastQnStateSweepUtcTicks;
 
         private static Timer _timer;
         private static int _initialized;
@@ -60,13 +62,12 @@ namespace Bot.ChromeNs
         {
             try
             {
-                foreach (var qn in QN.GetRuntimeSafetySnapshot())
+                var sessions = QN.GetRuntimeSafetySnapshot() ?? new QN[0];
+                foreach (var qn in sessions)
                 {
                     if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.Seller == null
                         || string.IsNullOrWhiteSpace(qn.Seller.Nick))
-                    {
                         continue;
-                    }
 
                     var now = DateTime.UtcNow;
                     DateTime nextHistory;
@@ -84,13 +85,9 @@ namespace Bot.ChromeNs
                         try
                         {
                             if (hookDue)
-                            {
                                 await qn.RepairBusinessInboundHookAsync().ConfigureAwait(false);
-                            }
                             if (historyDue)
-                            {
                                 await qn.ProbeActiveConversationForMissedInboundAsync().ConfigureAwait(false);
-                            }
                         }
                         catch (Exception ex)
                         {
@@ -103,12 +100,35 @@ namespace Bot.ChromeNs
                         }
                     });
                 }
+                CleanupRetiredQnState(sessions);
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("业务入站存活恢复调度失败: " + ex.Message, 20);
             }
         }
+
+        private static void CleanupRetiredQnState(QN[] sessions)
+        {
+            var now = DateTime.UtcNow;
+            var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
+            if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
+            if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
+            var alive = new HashSet<QN>((sessions ?? new QN[0]).Where(x => x != null));
+            foreach (var qn in NextHistoryProbeAt.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                DateTime ignored;
+                NextHistoryProbeAt.TryRemove(qn, out ignored);
+            }
+            foreach (var qn in NextHookRepairAt.Keys)
+            {
+                if (alive.Contains(qn)) continue;
+                DateTime ignored;
+                NextHookRepairAt.TryRemove(qn, out ignored);
+            }
+        }
+
     }
 
     public partial class QN
