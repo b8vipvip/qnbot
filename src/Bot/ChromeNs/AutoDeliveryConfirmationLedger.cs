@@ -234,15 +234,21 @@ namespace Bot.ChromeNs
                     // A missing/unreadable ledger is not proof that the at-most-once
                     // barrier was durably resolved. Keep the queue's read-only task.
                     if (!lease.Acquired || !ReloadStateForMutationLocked()) return false;
-                    var record = _state.Records.FirstOrDefault(x => x != null
-                        && string.Equals(x.Key, key, StringComparison.Ordinal));
-                    if (record == null) return false;
-                    record.Resolution = string.IsNullOrWhiteSpace(resolution)
-                        ? "resolved"
-                        : resolution.Trim();
-                    record.ResolvedAt = DateTime.Now;
-                    var keepUntil = DateTime.Now.Add(Retention);
-                    if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
+                    var legacyKey = BuildLegacyKey(seller, orderId);
+                    var records = _state.Records.Where(x => x != null
+                        && (string.Equals(x.Key, key, StringComparison.Ordinal)
+                            || string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))
+                        .ToList();
+                    if (records.Count == 0) return false;
+                    foreach (var record in records)
+                    {
+                        record.Resolution = string.IsNullOrWhiteSpace(resolution)
+                            ? "resolved"
+                            : resolution.Trim();
+                        record.ResolvedAt = DateTime.Now;
+                        var keepUntil = DateTime.Now.Add(Retention);
+                        if (record.KeepUntil < keepUntil) record.KeepUntil = keepUntil;
+                    }
                     if (!SaveLocked())
                     {
                         _failClosed = true;
