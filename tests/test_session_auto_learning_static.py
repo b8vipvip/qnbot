@@ -42,6 +42,9 @@ def test_reviewed_knowledge_prefers_strong_human_corrections():
     assert 'evidenceType == "withdrawn_bot_then_manual"' in source
     assert "existingLooksCurated" in source
     assert "confidence < 0.95" in source
+    assert "double.IsNaN(confidence)" in source
+    assert "double.IsInfinity(confidence)" in source
+    assert "confidence > 1.0" in source
     assert "existing.AiGenerated = false" in source
     assert 'SourceType = sourceType' in source
 
