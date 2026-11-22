@@ -2763,7 +2763,7 @@ namespace Bot.ChromeNs
         {
             var sourceText = sourceAnswer ?? string.Empty;
             var generatedText = generatedAnswer ?? string.Empty;
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|非会员|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
             foreach (Match source in Regex.Matches(sourceText, anchors, RegexOptions.IgnoreCase))
             {
@@ -2787,7 +2787,7 @@ namespace Bot.ChromeNs
 
         private static bool HasMissingKnowledgeAnchors(string sourceText, string generatedText)
         {
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var generated = new HashSet<string>(
                 Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                     .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
@@ -2800,7 +2800,7 @@ namespace Bot.ChromeNs
 
         private static bool HasUnverifiedKnowledgeAnchors(string sourceText, string generatedText)
         {
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
+            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var source = new HashSet<string>(
                 Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                     .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
