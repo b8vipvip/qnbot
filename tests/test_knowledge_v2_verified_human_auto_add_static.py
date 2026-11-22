@@ -168,8 +168,8 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
     assert "var exactMatches = currentRecords" in method
-    assert "var exactMatches = currentRecords\\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
-    assert "var similar = currentRecords\\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "var exactMatches = currentRecords\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "var similar = currentRecords\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
     assert "HasExplicitlyDeletedKnowledge(state, sourceId, questionVariants)" in method
     assert "Enabled dry-run candidates are not production answers" in method
     assert "disabled candidate" in method
