@@ -563,14 +563,14 @@ namespace Bot.ChromeNs
         private bool IsBuyerMessage(QNChatMessage m)
         {
             return m != null && m.fromid != null && m.toid != null && _seller != null
-                && !string.Equals(m.fromid.nick, _seller.Nick, StringComparison.Ordinal)
+                && !DirectOrderIdentityResolver.IdentityEquals(m.fromid.nick, _seller.Nick)
                 && IsCurrentSellerEndpoint(m, false);
         }
 
         private bool IsSellerMessage(QNChatMessage m)
         {
             return m != null && m.fromid != null && m.toid != null && _seller != null
-                && !string.Equals(m.toid.nick, _seller.Nick, StringComparison.Ordinal)
+                && !DirectOrderIdentityResolver.IdentityEquals(m.toid.nick, _seller.Nick)
                 && IsCurrentSellerEndpoint(m, true);
         }
 
@@ -583,12 +583,12 @@ namespace Bot.ChromeNs
             var endpointNick = sellerIsFrom
                 ? (message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim())
                 : (message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim());
-            if (!string.Equals(endpointNick, sellerNick, StringComparison.Ordinal))
+            if (!DirectOrderIdentityResolver.IdentityEquals(endpointNick, sellerNick))
                 return false;
 
             var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
             if (loginNick.Length > 0
-                && !string.Equals(loginNick, sellerNick, StringComparison.Ordinal))
+                && !DirectOrderIdentityResolver.IdentityEquals(loginNick, sellerNick))
                 return false;
 
             // Nicknames are not unique across logged-in Qianniu accounts. When the
