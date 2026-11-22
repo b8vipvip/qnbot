@@ -1167,6 +1167,7 @@ namespace Bot.ChromeNs
                         session.EntityId,
                         verified.Question,
                         verified.Answer,
+                        verified.Aliases,
                         verified.EvidenceMessageIds[0],
                         verified.EvidenceMessageIds[1],
                         verified.Confidence,
@@ -1275,10 +1276,12 @@ namespace Bot.ChromeNs
                 out rejection))
                 return false;
 
-            if (!string.Equals(candidate.Question, verified.Question, StringComparison.Ordinal)
-                || !string.Equals(candidate.Answer, verified.Answer, StringComparison.Ordinal))
+            if (!ApplyAiGeneratedKnowledgeContent(
+                verified, candidate.Question, candidate.Answer,
+                candidate.Aliases, (candidate.Keywords ?? string.Empty)
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries),
+                out rejection))
             {
-                rejection = "candidate_text_does_not_match_source_messages";
                 verified = null;
                 return false;
             }
@@ -1757,7 +1760,15 @@ namespace Bot.ChromeNs
                                 buyerMessageIds,
                                 humanMessageIds,
                                 out restored,
-                                out rejection))
+                                out rejection)
+                                || !ApplyAiGeneratedKnowledgeContent(
+                                    restored,
+                                    savedCandidate.Question,
+                                    savedCandidate.Answer,
+                                    savedCandidate.Aliases,
+                                    (savedCandidate.Keywords ?? string.Empty)
+                                        .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries),
+                                    out rejection))
                             {
                                 result.NewCandidateEvidenceRejected++;
                                 continue;
@@ -3294,6 +3305,10 @@ namespace Bot.ChromeNs
                     OldAnswer = StripAi(Redact(Clean(Convert.ToString(item["old_answer"]), 1200))),
                     Category = Clean(Convert.ToString(item["category"]), 80),
                     Keywords = keywords,
+                    Aliases = item["aliases"] is JArray
+                        ? ((JArray)item["aliases"]).Select(x => Redact(Clean(Convert.ToString(x), 200)))
+                            .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToList()
+                        : new List<string>(),
                     EvidenceType = Clean(Convert.ToString(item["evidence_type"]), 80).ToLowerInvariant(),
                     Evidence = Redact(Clean(Convert.ToString(item["evidence"]), 1200)),
                     Reason = Redact(Clean(Convert.ToString(item["reason"]), 1200)),
@@ -3459,6 +3474,7 @@ namespace Bot.ChromeNs
                     ["old_answer"] = x.OldAnswer,
                     ["category"] = x.Category,
                     ["keywords"] = x.Keywords,
+                    ["aliases"] = JArray.FromObject(x.Aliases ?? new List<string>()),
                     ["confidence"] = x.Confidence,
                     ["evidence_type"] = x.EvidenceType,
                     ["evidence"] = x.Evidence,
