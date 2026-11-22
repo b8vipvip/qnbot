@@ -404,13 +404,15 @@ namespace Bot.ChromeNs
             {
                 var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (response == null || response.result == null) return;
-                var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-                if (seller.Length == 0) return;
-                string shopKey;
-                try { shopKey = ShopContextLocator.ResolveRuntimeBySeller(qn).ShopKey; }
+                ShopContext shop;
+                try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
                 catch { return; }
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || string.IsNullOrWhiteSpace(shop.SellerNick)) return;
+                var seller = shop.SellerNick.Trim();
+                var shopKey = shop.ShopKey;
 
-                using (ShopSettingsScope.Enter(ShopContextLocator.ResolveRuntimeByShopKey(shopKey)))
+                using (ShopSettingsScope.Enter(shop))
                 {
                 foreach (var message in response.result.Where(x => x != null))
                 {
@@ -419,18 +421,21 @@ namespace Bot.ChromeNs
 
                     var from = (message.fromid.nick ?? string.Empty).Trim();
                     var to = (message.toid.nick ?? string.Empty).Trim();
+                    var fromIsSeller = DirectOrderIdentityResolver.IdentityEquals(from, seller);
+                    var toIsSeller = DirectOrderIdentityResolver.IdentityEquals(to, seller);
+                    if (fromIsSeller == toIsSeller) continue;
 
-                    if (!string.Equals(from, seller, StringComparison.Ordinal))
+                    if (!fromIsSeller)
                     {
-                        if (string.Equals(to, seller, StringComparison.Ordinal) && from.Length > 0)
-                        {
-                            RecordBuyerSourceSort(seller, from, message, shopKey);
-                        }
+                        var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, from);
+                        if (!string.IsNullOrWhiteSpace(buyer))
+                            RecordBuyerSourceSort(seller, buyer, message, shopKey);
                         continue;
                     }
 
-                    var buyer = to;
-                    if (buyer.Length == 0) continue;
+                    var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, to);
+                    if (string.IsNullOrWhiteSpace(buyer)
+                        || DirectOrderIdentityResolver.IdentityEquals(buyer, seller)) continue;
 
                     var texts = ExtractMessageTextCandidates(message);
                     if (texts.Length == 0) continue;
