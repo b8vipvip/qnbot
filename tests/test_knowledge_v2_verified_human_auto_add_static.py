@@ -69,6 +69,9 @@ def test_ai_generated_question_answer_are_automatically_checked_against_source_e
     assert "TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45" in generated
     assert "HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)" in generated
     assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
+    assert "NormalizeKnowledgeAnchor(source.Value)" in generated
+    assert 'case "大屏":' in generated
+    assert 'case "android":' in generated
     assert "HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
     assert "HasUnverifiedKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
     assert "HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)" in generated
