@@ -117,7 +117,7 @@ def test_workflow_draft_save_uses_shop_scoped_revision_compare_and_swap():
     ]
     restore = service[
         service.index("public static string RestoreLatestDraft"):
-        service.index("\\n    }\\n}")
+        service.index("\n    }\n}")
     ]
     page = source("src/Bot/Knowledge/KnowledgeV2WorkflowDraftPage.cs")
 
