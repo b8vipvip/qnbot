@@ -150,7 +150,7 @@ def test_order_signal_cleanup_uses_compare_and_remove_for_replaced_entries():
         "internal static class OrderPaymentNotificationFallback"
     )
     cleanup = between(coordinator, "private static void Cleanup()", "private static string Normalize")
-    probe = between(coordinator, "private static void ScheduleCorrelatedProbe", "private static bool TryActivateTargetIfSafeAsync")
+    probe = between(coordinator, "private static void ScheduleCorrelatedProbe", "private static async Task<bool> TryActivateTargetIfSafeAsync(")
 
     assert "ICollection<KeyValuePair<string, GenericWake>>" in cleanup
     assert "exactWakes.Remove(pair);" in cleanup
