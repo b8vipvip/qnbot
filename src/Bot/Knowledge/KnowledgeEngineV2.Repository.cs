@@ -259,7 +259,7 @@ namespace Bot.Knowledge
             var normalizedAliases = (aliases ?? Enumerable.Empty<string>())
                 .Select(x => (x ?? string.Empty).Trim())
                 .Where(x => x.Length >= 5 && x.Length <= 200)
-                .Where(x => !KnowledgeV2Semantics.IsContextDependent(x))
+                .Where(x => !KnowledgeEngineV2Semantics.IsContextDependent(x))
                 .Where(x => IsSafeAutomaticNewKnowledge(x, answer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(5)
@@ -381,7 +381,7 @@ namespace Bot.Knowledge
                     Predicate = parsed.Predicate,
                     Entities = parsed.Entities == null ? new List<string>() : parsed.Entities.ToList(),
                     Aliases = new[] { question }.Concat(normalizedAliases)
-                        .GroupBy(KnowledgeV2Semantics.Compact, StringComparer.Ordinal)
+                        .GroupBy(KnowledgeEngineV2Semantics.Compact, StringComparer.Ordinal)
                         .Select(x => x.First()).Take(6).ToList(),
                     Answer = answer,
                     ShortAnswer = answer,
