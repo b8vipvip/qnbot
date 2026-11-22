@@ -1,6 +1,7 @@
 using BotLib;
 using System;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Bot
@@ -18,7 +19,8 @@ namespace Bot.ChromeNs
     {
         internal const int ReturningBuyerIdleMinutes = 10;
         internal const int ExistingSessionResetMinutes = 30;
-        private static readonly ConcurrentDictionary<QN, byte> Qns = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Qns = new ConditionalWeakTable<QN, object>();
+        private static readonly object QnAttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static Timer _timer;
         private static int _initialized;
@@ -41,8 +43,14 @@ namespace Bot.ChromeNs
             {
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
-                    if (qn == null || !Qns.TryAdd(qn, 1)) continue;
-                    qn.EvRecieveNewMessage += OnMessage;
+                    if (qn == null) continue;
+                    lock (QnAttachSync)
+                    {
+                        object marker;
+                        if (Qns.TryGetValue(qn, out marker)) continue;
+                        qn.EvRecieveNewMessage += OnMessage;
+                        Qns.Add(qn, new object());
+                    }
                 }
                 var cutoff = DateTime.Now.AddMinutes(-ReturningBuyerIdleMinutes);
                 foreach (var x in Reservations)
