@@ -649,6 +649,30 @@ namespace Bot.ChromeNs
             return ah.Length >= 4 && ah == bh;
         }
 
+        public static bool IsMessageFromShop(QNChatMessage message, ShopContext shop)
+        {
+            if (message == null || message.fromid == null || message.toid == null
+                || shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || string.IsNullOrWhiteSpace(shop.SellerNick)) return false;
+            var seller = shop.SellerNick.Trim();
+            var fromIsSeller = IdentityEquals(message.fromid.nick, seller);
+            var toIsSeller = IdentityEquals(message.toid.nick, seller);
+            if (fromIsSeller == toIsSeller) return false;
+
+            var loginNick = message.loginid == null ? string.Empty : (message.loginid.nick ?? string.Empty).Trim();
+            if (loginNick.Length > 0 && !IdentityEquals(loginNick, seller)) return false;
+            if (!shop.HasStableSellerId) return true;
+
+            var expectedTargetId = (shop.SellerId ?? string.Empty).Trim();
+            var endpointTargetId = fromIsSeller
+                ? (message.fromid.targetId ?? string.Empty).Trim()
+                : (message.toid.targetId ?? string.Empty).Trim();
+            var loginTargetId = message.loginid == null ? string.Empty
+                : (message.loginid.targetId ?? string.Empty).Trim();
+            return (endpointTargetId.Length == 0 || string.Equals(endpointTargetId, expectedTargetId, StringComparison.Ordinal))
+                && (loginTargetId.Length == 0 || string.Equals(loginTargetId, expectedTargetId, StringComparison.Ordinal));
+        }
+
         private static bool Candidate(string value, string seller)
         {
             value = (value ?? string.Empty).Trim();
