@@ -170,6 +170,7 @@ namespace Bot.ChromeNs
                             VisualKnowledgeMatch learned;
                             if (!string.IsNullOrWhiteSpace(result.VisualSummary)
                                 && VisualKnowledgeLearningService.TryFindMatch(
+                                    task.ShopKey,
                                     task.SellerNick,
                                     result.VisualQuestion,
                                     result.VisualSummary,
@@ -189,6 +190,7 @@ namespace Bot.ChromeNs
                                 task.SellerNick, task.BuyerNick, task.MessageKey,
                                 result.VisualSummary, result.LocalOcrConfidence, false);
                             VisualKnowledgeLearningService.RecordVisionAnalysis(
+                                task.ShopKey,
                                 task.SellerNick,
                                 task.BuyerNick,
                                 task.Message,
