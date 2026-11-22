@@ -18,8 +18,9 @@ namespace Bot.Knowledge
 {
     internal static class KnowledgePolicyProfileUi
     {
-        private static readonly ConcurrentDictionary<int, bool> FuzzySearchAttached =
-            new ConcurrentDictionary<int, bool>();
+        private static readonly ConditionalWeakTable<KnowledgeManagerControl, object> FuzzySearchAttached =
+            new ConditionalWeakTable<KnowledgeManagerControl, object>();
+        private static readonly object FuzzySearchAttachSync = new object();
         private static int _initialized;
 
         public static void Initialize()
@@ -67,58 +68,62 @@ namespace Bot.Knowledge
 
         private static void AttachManagerFuzzySearch(KnowledgeManagerControl manager)
         {
-            var instanceKey = RuntimeHelpers.GetHashCode(manager);
-            if (!FuzzySearchAttached.TryAdd(instanceKey, true)) return;
-            try
+            lock (FuzzySearchAttachSync)
             {
-                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-                var type = typeof(KnowledgeManagerControl);
-                var searchField = type.GetField("_search", flags);
-                var categoryField = type.GetField("_cat", flags);
-                var allField = type.GetField("_all", flags);
-                var viewField = type.GetField("_view", flags);
-                var countField = type.GetField("_count", flags);
-                var search = searchField == null ? null : searchField.GetValue(manager) as TextBox;
-                var category = categoryField == null ? null : categoryField.GetValue(manager) as ComboBox;
-                if (search == null || category == null || allField == null || viewField == null) return;
-
-                search.ToolTip = "可搜索问题、答案、关键词和来源；原问题被AI改写后，也会按关键业务词进行智能匹配。";
-                Action apply = () =>
+                object marker;
+                if (FuzzySearchAttached.TryGetValue(manager, out marker)) return;
+                try
                 {
-                    var query = (search.Text ?? string.Empty).Trim();
-                    if (query.Length == 0) return;
-                    var all = allField.GetValue(manager) as List<KnowledgeBaseEntry>;
-                    var view = viewField.GetValue(manager) as ObservableCollection<KnowledgeBaseEntry>;
-                    if (all == null || view == null) return;
-                    var selectedCategory = category.SelectedItem as string ?? "全部分类";
-                    var matches = all
-                        .Where(x => x != null
-                            && (selectedCategory == "全部分类"
-                                || string.Equals(x.Category ?? string.Empty, selectedCategory, StringComparison.Ordinal))
-                            && ManagerMatches(x, query))
-                        .ToList();
-                    view.Clear();
-                    foreach (var item in matches) view.Add(item);
-                    var count = countField == null ? null : countField.GetValue(manager) as TextBlock;
-                    if (count != null)
-                    {
-                        count.Text = "共 " + all.Count + " 条知识，当前显示 " + view.Count
-                            + " 条（已启用原问题/同义关键词智能搜索）";
-                    }
-                };
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    var type = typeof(KnowledgeManagerControl);
+                    var searchField = type.GetField("_search", flags);
+                    var categoryField = type.GetField("_cat", flags);
+                    var allField = type.GetField("_all", flags);
+                    var viewField = type.GetField("_view", flags);
+                    var countField = type.GetField("_count", flags);
+                    var search = searchField == null ? null : searchField.GetValue(manager) as TextBox;
+                    var category = categoryField == null ? null : categoryField.GetValue(manager) as ComboBox;
+                    if (search == null || category == null || allField == null || viewField == null) return;
 
-                search.TextChanged += (s, e) => apply();
-                category.SelectionChanged += (s, e) => apply();
-                var top = FindFirst<WrapPanel>(manager);
-                var searchButton = top == null
-                    ? null
-                    : top.Children.OfType<Button>()
-                        .FirstOrDefault(x => string.Equals(Convert.ToString(x.Content), "搜索", StringComparison.Ordinal));
-                if (searchButton != null) searchButton.Click += (s, e) => apply();
-            }
-            catch
-            {
-                FuzzySearchAttached.TryRemove(instanceKey, out _);
+                    search.ToolTip = "可搜索问题、答案、关键词和来源；原问题被AI改写后，也会按关键业务词进行智能匹配。";
+                    Action apply = () =>
+                    {
+                        var query = (search.Text ?? string.Empty).Trim();
+                        if (query.Length == 0) return;
+                        var all = allField.GetValue(manager) as List<KnowledgeBaseEntry>;
+                        var view = viewField.GetValue(manager) as ObservableCollection<KnowledgeBaseEntry>;
+                        if (all == null || view == null) return;
+                        var selectedCategory = category.SelectedItem as string ?? "全部分类";
+                        var matches = all
+                            .Where(x => x != null
+                                && (selectedCategory == "全部分类"
+                                    || string.Equals(x.Category ?? string.Empty, selectedCategory, StringComparison.Ordinal))
+                                && ManagerMatches(x, query))
+                            .ToList();
+                        view.Clear();
+                        foreach (var item in matches) view.Add(item);
+                        var count = countField == null ? null : countField.GetValue(manager) as TextBlock;
+                        if (count != null)
+                        {
+                            count.Text = "共 " + all.Count + " 条知识，当前显示 " + view.Count
+                                + " 条（已启用原问题/同义关键词智能搜索）";
+                        }
+                    };
+
+                    search.TextChanged += (sender, args) => apply();
+                    category.SelectionChanged += (sender, args) => apply();
+                    var top = FindFirst<WrapPanel>(manager);
+                    var searchButton = top == null
+                        ? null
+                        : top.Children.OfType<Button>()
+                            .FirstOrDefault(x => string.Equals(Convert.ToString(x.Content), "搜索", StringComparison.Ordinal));
+                    if (searchButton != null) searchButton.Click += (sender, args) => apply();
+                    FuzzySearchAttached.Add(manager, new object());
+                }
+                catch
+                {
+                    FuzzySearchAttached.Remove(manager);
+                }
             }
         }
 
