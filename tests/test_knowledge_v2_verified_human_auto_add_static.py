@@ -422,3 +422,22 @@ def test_auto_add_does_not_report_success_when_governance_audit_write_fails():
     assert "throw new InvalidOperationException(" in method
     assert "等待幂等恢复重试" in method
     assert 'recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add"' in method
+
+
+def test_auto_published_human_evidence_answers_strongly_similar_questions_without_manual_review():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    selection = public.split("var manualSimilar =", 1)[1].split("var best =", 1)[0]
+    helper = public.split("private static bool IsStrongAutoPublishedHumanEvidenceSimilarMatch(", 1)[1].split(
+        "private static bool IsSafeStandaloneLocalDirect(", 1
+    )[0]
+
+    assert "IsStrongAutoPublishedHumanEvidenceSimilarMatch(x, query)" in selection
+    assert '"ai_auto_learned_human_evidence"' in helper
+    assert "match.Score < 0.82" in helper
+    assert "match.AliasScore < 0.80" in helper
+    assert "match.PredicateScore < 0.99" in helper
+    assert "match.IntentScore < 0.99" in helper
+    assert "match.ConfidenceScore < 0.90" in helper
+    assert "query.ContextDependent" in helper
+    assert "KnowledgeEngineV2Semantics.IsHighRisk(query.Original)" in helper
+    assert "match.EntityScore >= 0.66 || subjectSimilarity >= 0.82" in helper
