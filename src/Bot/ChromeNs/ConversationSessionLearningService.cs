@@ -2586,6 +2586,7 @@ namespace Bot.ChromeNs
                     RegexOptions.IgnoreCase)
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceAnswer, candidateAnswer) >= 0.45
                 && !HasKnowledgePolarityMismatch(sourceAnswer, candidateAnswer)
+                && !HasKnowledgeQualifierMismatch(sourceAnswer, candidateAnswer)
                 && !HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)
                 && !HasUnverifiedKnowledgeAnchors(sourceAnswer, candidateAnswer)
                 && !HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)
@@ -2702,7 +2703,7 @@ namespace Bot.ChromeNs
 
         private static bool HasKnowledgePolarityMismatch(string sourceAnswer, string generatedAnswer)
         {
-            var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
+            var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|非会员|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
             var positive = @"支持|兼容|适配|适用|适合|推荐|建议|符合|可以|能用|可用|允许|提供|包含|开通|能够|可使用|可登录|可安装";
             var sourceNegative = Regex.IsMatch(sourceAnswer ?? string.Empty, negative);
             var generatedNegative = Regex.IsMatch(generatedAnswer ?? string.Empty, negative);
@@ -2729,12 +2730,36 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool HasKnowledgeQualifierMismatch(string sourceAnswer, string generatedAnswer)
+        {
+            var source = sourceAnswer ?? string.Empty;
+            var generated = generatedAnswer ?? string.Empty;
+            var qualifierGroups = new[]
+            {
+                new[] { "仅限", "只限", "仅支持", "只支持", "只能", "仅可", "只可", "只有", "除非", "除外", "不包括" },
+                new[] { "必须", "需要", "需先", "先", "才可以", "才能", "才可", "前提" },
+                new[] { "不支持", "未支持", "尚不支持", "不允许", "不适用", "不能", "无法", "不可", "禁止" },
+                new[] { "免费", "收费", "付费", "订阅", "会员", "非会员", "开通会员", "试用" },
+                new[] { "登录", "绑定", "认证", "实名", "账号" },
+                new[] { "工作日", "周末", "每天", "每周", "每月", "每年", "有效期", "期限", "永久", "临时" },
+                new[] { "安卓", "Android", "iOS", "苹果", "iPhone", "iPad", "Windows", "macOS", "Linux", "电视端", "手机端", "平板端", "电脑端", "车机" },
+                new[] { "地区", "国家", "网络", "WiFi", "版本", "系统" }
+            };
+            foreach (var group in qualifierGroups)
+            {
+                var sourceHas = group.Any(x => source.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+                var generatedHas = group.Any(x => generated.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (sourceHas != generatedHas) return true;
+            }
+            return false;
+        }
+
         private static bool HasKnowledgeEntityPolarityMismatch(string sourceAnswer, string generatedAnswer)
         {
             var sourceText = sourceAnswer ?? string.Empty;
             var generatedText = generatedAnswer ?? string.Empty;
             var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|支付宝|微信";
-            var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
+            var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|非会员|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
             foreach (Match source in Regex.Matches(sourceText, anchors, RegexOptions.IgnoreCase))
             {
                 var generated = Regex.Matches(generatedText, anchors, RegexOptions.IgnoreCase)
