@@ -127,7 +127,7 @@ def test_serialized_full_corpus_candidates_include_id_fingerprint_and_message_pr
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     serializer = service[
         service.index("private static string SerializeSuggestions"):
-        service.index("private static string Normalize")
+        service.index("private static string Normalize(")
     ]
 
     assert '["knowledge_id"] = x.KnowledgeId ?? string.Empty' in serializer
