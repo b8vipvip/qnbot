@@ -2870,6 +2870,24 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            // MessageKey may be a deterministic fallback composed from text/time.
+            // Production learning requires at least one original Qianniu-native ID
+            // on each side and persists that native alias, never the fallback key.
+            var nativeQuestionId = (questionTurn.NativeAliases ?? new string[0])
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            var nativeAnswerId = (answerTurn.NativeAliases ?? new string[0])
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            if (string.IsNullOrWhiteSpace(nativeQuestionId)
+                || string.IsNullOrWhiteSpace(nativeAnswerId)
+                || !buyerMessageIds.Contains(nativeQuestionId)
+                || !humanMessageIds.Contains(nativeAnswerId))
+            {
+                rejection = "original_native_message_id_missing";
+                return false;
+            }
+            questionMessageId = nativeQuestionId;
+            answerMessageId = nativeAnswerId;
+
             if (questionTurn.Timestamp == DateTime.MinValue
                 || answerTurn.Timestamp == DateTime.MinValue)
             {
