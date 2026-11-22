@@ -2573,7 +2573,8 @@ namespace Bot.ChromeNs
                 && KnowledgeEngineV2Semantics.TextSimilarity(sourceQuestion, candidateQuestion) >= 0.45
                 && !HasUnverifiedKnowledgeAnchors(sourceQuestion, candidateQuestion)
                 && !HasMissingKnowledgeAnchors(sourceQuestion, candidateQuestion)
-                && !HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion);
+                && !HasDifferentKnowledgeNumbers(sourceQuestion, candidateQuestion)
+                && !HasKnowledgeQualifierMismatch(sourceQuestion, candidateQuestion);
             var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
             var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
@@ -2626,7 +2627,8 @@ namespace Bot.ChromeNs
                     || KnowledgeEngineV2Semantics.IsHighRisk(value)
                     || ContainsHighRisk(value)
                     || HasUnverifiedKnowledgeAnchors(sourceText, value)
-                    || HasDifferentKnowledgeNumbers(sourceText, value)
+                    || HasDifferentKnowledgeNumbers(sourceQuestion, value)
+                    || HasKnowledgeQualifierMismatch(sourceQuestion, value)
                     || Regex.IsMatch(value, @"(?<!\d)1[3-9]\d{9}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?://|www\.", RegexOptions.IgnoreCase)
                     || KnowledgeEngineV2Semantics.TextSimilarity(question, value) < 0.45
                     || aliases.Any(x => string.Equals(
