@@ -88,3 +88,19 @@ def test_buyer_alias_storage_is_scoped_to_a_verified_shopkey_and_rejects_ambiguo
     assert "catch (AmbiguousShopIdentityException) { return string.Empty; }" in scope
     assert 'return "legacy-" + seller.ToLowerInvariant();' in scope
     assert "private static string Key(string shopKey, string seller, string alias)" in source
+
+
+def test_runtime_safety_monitor_tracks_buyer_and_seller_turns_by_canonical_identity():
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    observe = monitor[
+        monitor.index("private static void Qn_EvRecieveNewMessage"):
+        monitor.index("private static void RecordBuyerSourceSort")
+    ]
+
+    assert "ResolveRuntimeBySeller(qn)" in observe
+    assert "using (ShopSettingsScope.Enter(shop))" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(from, seller)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in observe
+    assert "if (fromIsSeller == toIsSeller) continue;" in observe
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, from)" in observe
+    assert "BuyerIdentityAliasService.ResolveInternalNick(seller, to)" in observe
