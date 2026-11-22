@@ -78,6 +78,10 @@ namespace Bot.ChromeNs
 
         private static readonly object Sync = new object();
         private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(15);
+        // Durable claim lease prevents another Bot process from taking the same queue row
+        // while the first process is still doing network/UI preflight. A crashed owner
+        // becomes eligible again after this bounded lease.
+        private static readonly TimeSpan WorkerClaimLease = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SilentPreflightRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan ConversationNavigationRetryDelay = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan UncertainRetryDelay = TimeSpan.FromMinutes(2);
@@ -98,20 +102,29 @@ namespace Bot.ChromeNs
                 _initialized = 1;
                 AutoDeliveryConfirmationLedger.Initialize();
 
-                bool loadedSuccessfully;
-                _state = LoadState(out loadedSuccessfully);
-                if (!loadedSuccessfully)
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
-                    _stateLoadFailed = true;
-                    Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，禁止以空队列覆盖旧任务。", 10);
-                    return;
-                }
-                CleanupExpiredLocked(DateTime.Now);
-                if (!SaveStateLocked())
-                {
-                    _stateLoadFailed = true;
-                    Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，避免使用未持久化状态。", 10);
-                    return;
+                    if (lease == null || !lease.Acquired)
+                    {
+                        _state = new StateDocument();
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；暂停自动发货并保留原任务文件。", 10);
+                        return;
+                    }
+                    if (!ReloadStateForMutationLocked(true))
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，禁止以空队列覆盖旧任务。", 10);
+                        return;
+                    }
+                    CleanupExpiredLocked(DateTime.Now);
+                    if (!SaveStateLocked())
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，避免使用未持久化状态。", 10);
+                        return;
+                    }
                 }
                 _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
             }
@@ -175,48 +188,59 @@ namespace Bot.ChromeNs
             var key = BuildKey(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId);
             lock (Sync)
             {
-                if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId))
-                    return AutoDeliveryConfirmationLedger.IsOperational();
-                var existing = _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (existing == null)
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
-                    var legacyKey = BuildLegacyKey(snapshot.Seller, snapshot.OrderId);
-                    if (_state.Pending.Any(x => x != null && string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))
+                    if (lease == null || !lease.Acquired)
                     {
-                        Log.ErrorWithMaxCount("自动发货发现旧版未归属ShopKey的同订单任务，保留旧任务并阻止新店铺重复入队: seller="
-                            + snapshot.Seller + ", orderId=" + snapshot.OrderId, 20);
-                        return true;
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货入队无法取得跨进程队列锁；暂停队列写入且不推进事件游标。", 10);
+                        return false;
                     }
-                }
-                if (existing == null)
-                {
-                    existing = new PendingRecord
+                    if (!ReloadStateForMutationLocked(false)) return false;
+                    if (AutoDeliveryConfirmationLedger.HasIntent(snapshot.ShopKey, snapshot.Seller, snapshot.OrderId))
+                        return AutoDeliveryConfirmationLedger.IsOperational();
+                    var existing = _state.Pending.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    if (existing == null)
                     {
-                        Key = key,
-                        Snapshot = CloneSnapshot(snapshot),
-                        EnqueuedAt = now,
-                        DueAt = due,
-                        NextAttemptAt = due,
-                        ExpiresAt = now.Add(MaxPendingAge),
-                        Attempts = 0,
-                        ConfirmationUncertainCount = 0,
-                        ConfirmationIntentAt = null
-                    };
-                    _state.Pending.Add(existing);
-                    Log.Info("虚拟商品自动发货任务已入队: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", delayMinutes=" + cfg.DelayMinutes + ", due=" + due.ToString("yyyy-MM-dd HH:mm:ss"));
+                        var legacyKey = BuildLegacyKey(snapshot.Seller, snapshot.OrderId);
+                        if (_state.Pending.Any(x => x != null && string.Equals(x.Key, legacyKey, StringComparison.Ordinal)))
+                        {
+                            Log.ErrorWithMaxCount("自动发货发现旧版未归属ShopKey的同订单任务，保留旧任务并阻止新店铺重复入队: seller="
+                                + snapshot.Seller + ", orderId=" + snapshot.OrderId, 20);
+                            return true;
+                        }
+                    }
+                    if (existing == null)
+                    {
+                        existing = new PendingRecord
+                        {
+                            Key = key,
+                            Snapshot = CloneSnapshot(snapshot),
+                            EnqueuedAt = now,
+                            DueAt = due,
+                            NextAttemptAt = due,
+                            ExpiresAt = now.Add(MaxPendingAge),
+                            Attempts = 0,
+                            ConfirmationUncertainCount = 0,
+                            ConfirmationIntentAt = null
+                        };
+                        _state.Pending.Add(existing);
+                        Log.Info("虚拟商品自动发货任务已入队: seller=" + snapshot.Seller + ", buyer=" + snapshot.Buyer + ", orderId=" + snapshot.OrderId + ", delayMinutes=" + cfg.DelayMinutes + ", due=" + due.ToString("yyyy-MM-dd HH:mm:ss"));
+                    }
+                    else
+                    {
+                        MergeSnapshot(existing.Snapshot, snapshot);
+                        var refreshedAnchor = ResolveAnchor(existing.Snapshot, now);
+                        existing.DueAt = refreshedAnchor.AddMinutes(cfg.DelayMinutes);
+                        if (existing.DueAt < now) existing.DueAt = now;
+                        if (!existing.ConfirmationIntentAt.HasValue && existing.NextAttemptAt < existing.DueAt) existing.NextAttemptAt = existing.DueAt;
+                        existing.ExpiresAt = now.Add(MaxPendingAge);
+                        Log.Info("虚拟商品自动发货任务已用新订单状态刷新: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", due=" + existing.DueAt.ToString("yyyy-MM-dd HH:mm:ss") + ", confirmationIntent=" + existing.ConfirmationIntentAt.HasValue);
+                    }
+                    CleanupExpiredLocked(now);
+                    if (!SaveStateLocked()) return false;
                 }
-                else
-                {
-                    MergeSnapshot(existing.Snapshot, snapshot);
-                    var refreshedAnchor = ResolveAnchor(existing.Snapshot, now);
-                    existing.DueAt = refreshedAnchor.AddMinutes(cfg.DelayMinutes);
-                    if (existing.DueAt < now) existing.DueAt = now;
-                    if (!existing.ConfirmationIntentAt.HasValue && existing.NextAttemptAt < existing.DueAt) existing.NextAttemptAt = existing.DueAt;
-                    existing.ExpiresAt = now.Add(MaxPendingAge);
-                    Log.Info("虚拟商品自动发货任务已用新订单状态刷新: seller=" + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", due=" + existing.DueAt.ToString("yyyy-MM-dd HH:mm:ss") + ", confirmationIntent=" + existing.ConfirmationIntentAt.HasValue);
-                }
-                CleanupExpiredLocked(now);
-                if (!SaveStateLocked()) return false;
             }
             ScheduleWorker();
             return true;
@@ -244,42 +268,53 @@ namespace Bot.ChromeNs
             var preservedForVerification = 0;
             lock (Sync)
             {
-                if (!enabled)
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
-                    var scoped = _state.Pending.Where(x => x != null && x.Snapshot != null
-                        && string.Equals(x.Snapshot.ShopKey ?? string.Empty, shopKey, StringComparison.Ordinal)
-                        && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)).ToList();
-                    var removed = 0;
-                    foreach (var record in scoped)
+                    if (lease == null || !lease.Acquired)
                     {
-                        if (HasConfirmationIntent(record))
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货重配置无法取得跨进程队列锁；暂停队列写入。", 10);
+                        return;
+                    }
+                    if (!ReloadStateForMutationLocked(false)) return;
+                    if (!enabled)
+                    {
+                        var scoped = _state.Pending.Where(x => x != null && x.Snapshot != null
+                            && string.Equals(x.Snapshot.ShopKey ?? string.Empty, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)).ToList();
+                        var removed = 0;
+                        foreach (var record in scoped)
                         {
-                            if (!record.ConfirmationIntentAt.HasValue)
-                                record.ConfirmationIntentAt = now;
-                            record.NextAttemptAt = now;
-                            preservedForVerification++;
-                            continue;
+                            if (HasConfirmationIntent(record))
+                            {
+                                if (!record.ConfirmationIntentAt.HasValue)
+                                    record.ConfirmationIntentAt = now;
+                                record.NextAttemptAt = now;
+                                preservedForVerification++;
+                                continue;
+                            }
+                            _state.Pending.Remove(record);
+                            removed++;
                         }
-                        _state.Pending.Remove(record);
-                        removed++;
+                        if (removed > 0 || preservedForVerification > 0)
+                            Log.Info("关闭自动发货后已取消未执行任务，并保留已消耗确认权限的任务进行只读复核: seller="
+                                + seller + ", cancelled=" + removed + ", verificationOnly=" + preservedForVerification);
                     }
-                    if (removed > 0 || preservedForVerification > 0)
-                        Log.Info("关闭自动发货后已取消未执行任务，并保留已消耗确认权限的任务进行只读复核: seller="
-                            + seller + ", cancelled=" + removed + ", verificationOnly=" + preservedForVerification);
-                }
-                else
-                {
-                    foreach (var record in _state.Pending.Where(x => x != null && x.Snapshot != null
-                        && string.Equals(x.Snapshot.ShopKey ?? string.Empty, shopKey, StringComparison.Ordinal)
-                        && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)))
+                    else
                     {
-                        var anchor = ResolveAnchor(record.Snapshot, now);
-                        record.DueAt = anchor.AddMinutes(delayMinutes);
-                        if (record.DueAt < now) record.DueAt = now;
-                        if (!record.ConfirmationIntentAt.HasValue) record.NextAttemptAt = record.DueAt;
+                        foreach (var record in _state.Pending.Where(x => x != null && x.Snapshot != null
+                            && string.Equals(x.Snapshot.ShopKey ?? string.Empty, shopKey, StringComparison.Ordinal)
+                            && string.Equals(x.Snapshot.Seller ?? string.Empty, seller, StringComparison.Ordinal)))
+                        {
+                            var anchor = ResolveAnchor(record.Snapshot, now);
+                            record.DueAt = anchor.AddMinutes(delayMinutes);
+                            if (record.DueAt < now) record.DueAt = now;
+                            if (!record.ConfirmationIntentAt.HasValue) record.NextAttemptAt = record.DueAt;
+                        }
                     }
+                    if (!SaveStateLocked()) return;
                 }
-                SaveStateLocked();
             }
             if (enabled || preservedForVerification > 0) ScheduleWorker();
         }
@@ -295,50 +330,61 @@ namespace Bot.ChromeNs
             var key = BuildKey(shopKey, seller, orderId);
             lock (Sync)
             {
-                var live = FindLiveRecordLocked(key);
-                if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue) return false;
-                bool existingIntent;
-                if (!AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent))
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
-                    Log.Error("自动发货无法读取该订单的长期确认账本状态；拒绝消费确认权限: seller=" + seller + ", orderId=" + orderId);
-                    return false;
-                }
-                if (existingIntent)
-                {
-                    live.ConfirmationIntentAt = DateTime.Now;
-                    live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
-                    SaveStateLocked();
-                    return false;
-                }
-                // A readable but full ledger blocks new confirmation admission. Do not
-                // manufacture a per-order ConfirmationIntentAt flag when no intent exists.
-                if (!AutoDeliveryConfirmationLedger.IsOperational())
-                {
-                    Log.Error("自动发货长期确认账本不可接纳新意图；保持队列待复核且不伪造订单确认屏障: seller=" + seller + ", orderId=" + orderId);
-                    return false;
-                }
-                var now = DateTime.Now;
-                if (!AutoDeliveryConfirmationLedger.TryRecordIntent(shopKey, seller, orderId, now))
-                {
-                    bool racedIntent;
-                    if (AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out racedIntent)
-                        && racedIntent)
+                    if (lease == null || !lease.Acquired)
                     {
-                        live.ConfirmationIntentAt = now;
-                        live.NextAttemptAt = now.Add(UncertainRetryDelay);
-                        SaveStateLocked();
+                        _stateLoadFailed = true;
+                        Log.Error("自动发货无法取得跨进程队列锁，拒绝消费确认权限: seller=" + seller + ", orderId=" + orderId);
+                        return false;
                     }
-                    return false;
+                    if (!ReloadStateForMutationLocked(false)) return false;
+                    var live = FindLiveRecordLocked(key);
+                    if (live == null || live.Snapshot == null || live.ConfirmationIntentAt.HasValue) return false;
+                    bool existingIntent;
+                    if (!AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out existingIntent))
+                    {
+                        Log.Error("自动发货无法读取该订单的长期确认账本状态；拒绝消费确认权限: seller=" + seller + ", orderId=" + orderId);
+                        return false;
+                    }
+                    if (existingIntent)
+                    {
+                        live.ConfirmationIntentAt = DateTime.Now;
+                        live.NextAttemptAt = DateTime.Now.Add(UncertainRetryDelay);
+                        SaveStateLocked();
+                        return false;
+                    }
+                    // A readable but full ledger blocks new confirmation admission. Do not
+                    // manufacture a per-order ConfirmationIntentAt flag when no intent exists.
+                    if (!AutoDeliveryConfirmationLedger.IsOperational())
+                    {
+                        Log.Error("自动发货长期确认账本不可接纳新意图；保持队列待复核且不伪造订单确认屏障: seller=" + seller + ", orderId=" + orderId);
+                        return false;
+                    }
+                    var now = DateTime.Now;
+                    if (!AutoDeliveryConfirmationLedger.TryRecordIntent(shopKey, seller, orderId, now))
+                    {
+                        bool racedIntent;
+                        if (AutoDeliveryConfirmationLedger.TryGetIntent(shopKey, seller, orderId, out racedIntent)
+                            && racedIntent)
+                        {
+                            live.ConfirmationIntentAt = now;
+                            live.NextAttemptAt = now.Add(UncertainRetryDelay);
+                            SaveStateLocked();
+                        }
+                        return false;
+                    }
+                    live.ConfirmationIntentAt = now;
+                    live.NextAttemptAt = now.Add(UncertainRetryDelay);
+                    if (!SaveStateLocked())
+                    {
+                        Log.Error("自动发货队列防重标记持久化失败；长期账本已保留，拒绝确认发货: seller=" + seller + ", orderId=" + orderId);
+                        return false;
+                    }
+                    Log.Info("自动发货确认动作长期防重屏障已写入: seller=" + seller + ", orderId=" + orderId + ", at=" + now.ToString("yyyy-MM-dd HH:mm:ss.fff") + ", repeatConfirm=false");
+                    return true;
                 }
-                live.ConfirmationIntentAt = now;
-                live.NextAttemptAt = now.Add(UncertainRetryDelay);
-                if (!SaveStateLocked())
-                {
-                    Log.Error("自动发货队列防重标记持久化失败；长期账本已保留，拒绝确认发货: seller=" + seller + ", orderId=" + orderId);
-                    return false;
-                }
-                Log.Info("自动发货确认动作长期防重屏障已写入: seller=" + seller + ", orderId=" + orderId + ", at=" + now.ToString("yyyy-MM-dd HH:mm:ss.fff") + ", repeatConfirm=false");
-                return true;
             }
         }
 
@@ -360,18 +406,30 @@ namespace Bot.ChromeNs
                     var now = DateTime.Now;
                     lock (Sync)
                     {
-                        CleanupExpiredLocked(now);
-                        record = _state.Pending.Where(x => x != null && x.Snapshot != null && x.NextAttemptAt <= now).OrderBy(x => x.NextAttemptAt).FirstOrDefault();
-                        if (record == null)
+                        var path = StatePath();
+                        using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                         {
-                            SaveStateLocked();
-                            return;
+                            if (lease == null || !lease.Acquired)
+                            {
+                                _stateLoadFailed = true;
+                                Log.ErrorWithMaxCount("自动发货工作线程无法取得跨进程队列锁；暂停执行以避免重复领取任务。", 10);
+                                return;
+                            }
+                            if (!ReloadStateForMutationLocked(false)) return;
+                            CleanupExpiredLocked(now);
+                            record = _state.Pending.Where(x => x != null && x.Snapshot != null && x.NextAttemptAt <= now).OrderBy(x => x.NextAttemptAt).FirstOrDefault();
+                            if (record == null)
+                            {
+                                if (!SaveStateLocked()) return;
+                                return;
+                            }
+                            // The claim is written under the same cross-process mutex as the
+                            // read. A second Bot process reloads this deadline and cannot claim
+                            // the same row while the first process is working.
+                            record.NextAttemptAt = now.Add(WorkerClaimLease);
+                            record.Attempts++;
+                            if (!SaveStateLocked()) return;
                         }
-                        record.NextAttemptAt = now.Add(RetryDelay);
-                        record.Attempts++;
-                        // Never begin an order operation if the queue's recovery checkpoint
-                        // could not be durably written before handing work to the executor.
-                        if (!SaveStateLocked()) return;
                     }
                     await ProcessRecordAsync(record).ConfigureAwait(false);
                     await Task.Delay(100).ConfigureAwait(false);
@@ -416,19 +474,31 @@ namespace Bot.ChromeNs
                 var collision = false;
                 lock (Sync)
                 {
-                    var live = FindLiveRecordLocked(legacyKey);
-                    if (live == null || !ReferenceEquals(live, record)) return;
-                    collision = _state.Pending.Any(x => x != null && !ReferenceEquals(x, live)
-                        && string.Equals(x.Key, resolvedKey, StringComparison.Ordinal));
-                    if (!collision)
+                    var path = StatePath();
+                    using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                     {
-                        live.Snapshot.ShopKey = shop.ShopKey;
-                        live.Key = resolvedKey;
-                        if (!SaveStateLocked())
+                        if (lease == null || !lease.Acquired)
                         {
-                            live.Snapshot.ShopKey = string.Empty;
-                            live.Key = legacyKey;
+                            _stateLoadFailed = true;
+                            Log.ErrorWithMaxCount("旧版自动发货任务归属恢复无法取得跨进程队列锁；暂停队列执行。", 10);
                             return;
+                        }
+                        if (!ReloadStateForMutationLocked(false)) return;
+                        var live = FindLiveRecordLocked(legacyKey);
+                        if (live == null || live.Snapshot == null) return;
+                        record = live;
+                        collision = _state.Pending.Any(x => x != null && !ReferenceEquals(x, live)
+                            && string.Equals(x.Key, resolvedKey, StringComparison.Ordinal));
+                        if (!collision)
+                        {
+                            live.Snapshot.ShopKey = shop.ShopKey;
+                            live.Key = resolvedKey;
+                            if (!SaveStateLocked())
+                            {
+                                live.Snapshot.ShopKey = string.Empty;
+                                live.Key = legacyKey;
+                                return;
+                            }
                         }
                     }
                 }
@@ -589,21 +659,44 @@ namespace Bot.ChromeNs
             if (record == null) return;
             lock (Sync)
             {
-                var live = FindLiveRecordLocked(record.Key);
-                if (live == null) return;
-                live.NextAttemptAt = DateTime.Now.Add(delay);
-                SaveStateLocked();
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
+                {
+                    if (lease == null || !lease.Acquired)
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货暂缓任务无法取得跨进程队列锁；暂停后续自动执行。", 10);
+                        return;
+                    }
+                    if (!ReloadStateForMutationLocked(false)) return;
+                    var live = FindLiveRecordLocked(record.Key);
+                    if (live == null) return;
+                    live.NextAttemptAt = DateTime.Now.Add(delay);
+                    SaveStateLocked();
+                }
             }
             if (record.Attempts == 1 || record.Attempts % 8 == 0) Log.Info("虚拟商品自动发货暂缓: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", reason=" + (reason ?? string.Empty));
         }
 
         private static void RemoveRecord(PendingRecord record, string reason)
         {
+            if (record == null || record.Snapshot == null) return;
             lock (Sync)
             {
-                var live = FindLiveRecordLocked(record.Key);
-                if (live != null) _state.Pending.Remove(live);
-                SaveStateLocked();
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
+                {
+                    if (lease == null || !lease.Acquired)
+                    {
+                        _stateLoadFailed = true;
+                        Log.ErrorWithMaxCount("自动发货结束任务无法取得跨进程队列锁；保留任务和长期防重屏障。", 10);
+                        return;
+                    }
+                    if (!ReloadStateForMutationLocked(false)) return;
+                    var live = FindLiveRecordLocked(record.Key);
+                    if (live != null) _state.Pending.Remove(live);
+                    if (!SaveStateLocked()) return;
+                }
             }
             Log.Info("虚拟商品自动发货任务结束: seller=" + record.Snapshot.Seller + ", buyer=" + record.Snapshot.Buyer + ", orderId=" + record.Snapshot.OrderId + ", detail=" + (reason ?? string.Empty) + ", longLedgerPreserved=" + AutoDeliveryConfirmationLedger.HasIntent(record.Snapshot.ShopKey, record.Snapshot.Seller, record.Snapshot.OrderId));
         }
@@ -703,6 +796,34 @@ namespace Bot.ChromeNs
             var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QianniuAiBot", "data");
             Directory.CreateDirectory(root);
             return Path.Combine(root, "virtual-goods-auto-delivery-queue.json");
+        }
+
+        private static bool ReloadStateForMutationLocked(bool allowMissing)
+        {
+            if (_stateLoadFailed) return false;
+            var path = StatePath();
+            if (!File.Exists(path))
+            {
+                if (!allowMissing)
+                {
+                    _stateLoadFailed = true;
+                    Log.ErrorWithMaxCount("自动发货任务队列在运行期间丢失；拒绝以空队列覆盖原任务状态。", 10);
+                    return false;
+                }
+                _state = new StateDocument();
+                return true;
+            }
+
+            bool loadedSuccessfully;
+            var loaded = LoadState(out loadedSuccessfully);
+            if (!loadedSuccessfully || loaded == null || loaded.Pending == null || !File.Exists(path))
+            {
+                _stateLoadFailed = true;
+                Log.ErrorWithMaxCount("自动发货任务队列跨进程重新读取失败；暂停队列操作并保留原状态文件。", 10);
+                return false;
+            }
+            _state = loaded;
+            return true;
         }
 
         private static StateDocument LoadState(out bool loadedSuccessfully)
