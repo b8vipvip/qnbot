@@ -103,7 +103,7 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan KnowledgeCorpusCircuitCooldown = TimeSpan.FromMinutes(5);
         // Broad session-level AI suggestions remain review-only because they do not
         // carry exact source-message pairs. Verified corrections and new FAQ additions
-        // have separate gates backed by actual buyer + non-Bot human seller messages.
+        // use an AI-authored, directly published FAQ path backed by exact buyer + non-Bot human seller messages.
         private const bool EnableAutomaticWrites = false;
         private const bool EnableVerifiedCorpusCorrectionWrites = true;
         private const bool EnableVerifiedCorpusNewKnowledgeWrites = true;
@@ -731,8 +731,8 @@ namespace Bot.ChromeNs
                     ["knowledgeCorpusFailedBatches"] = 0,
                     ["knowledgeCorpusError"] = string.Empty,
                     ["writeMode"] = EnableVerifiedCorpusNewKnowledgeWrites || EnableVerifiedCorpusCorrectionWrites
-                        ? "verified_human_evidence_add_and_update" : "dry_run",
-                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "verified_human_evidence_add" : "dry_run",
+                        ? "ai_auto_publish_new_knowledge_and_verified_updates" : "dry_run",
+                    ["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites ? "ai_auto_publish" : "dry_run",
                     ["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run",
                     ["windowStart"] = from.ToString("o"),
                     ["windowEnd"] = endAt.ToString("o")
@@ -989,11 +989,11 @@ namespace Bot.ChromeNs
                         : (newKnowledgeRetryNeeded
                             ? "Knowledge V2新增知识写入结果未确认，等待补偿重试"
                             : (newKnowledgeApplied > 0 || corpusApplied > 0
-                                ? "学习完成（自动新增" + newKnowledgeApplied + "条真人证据知识；自动修订" + corpusApplied + "条真人纠正）"
-                                : "学习完成（未发现达到真人证据自动新增/修订门槛的知识）")));
+                                ? "学习完成（AI自动新增" + newKnowledgeApplied + "条知识；自动修订" + corpusApplied + "条真人纠正）"
+                                : "学习完成（未发现达到AI自动新增/自动修订门槛的知识）")));
                 report.Summary = summary
                     + (corpusComplete
-                        ? "（Knowledge V2全库已完成分批对照；真人证据自动新增=" + newKnowledgeApplied
+                        ? "（Knowledge V2全库已完成分批对照；AI自动新增=" + newKnowledgeApplied
                             + "条；新增候选跳过=" + newKnowledgeSkipped
                             + "条；证据拒绝=" + corpusAnalysis.NewCandidateEvidenceRejected
                             + "条；真人纠正自动修订=" + corpusApplied
@@ -1151,7 +1151,7 @@ namespace Bot.ChromeNs
                     candidate, session, analysis, turns, cards, out verified, out rejection))
                 {
                     if (candidate != null)
-                        candidate.ApplyMessage = "真人问答新增门禁拒绝：" + rejection;
+                        candidate.ApplyMessage = "AI知识自动发布门禁拒绝：" + rejection;
                     skipped++;
                     continue;
                 }
@@ -1196,7 +1196,7 @@ namespace Bot.ChromeNs
                             foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                             {
                                 if (remaining == null) continue;
-                                remaining.ApplyMessage = "语料版本在上一条新增后发生变化，剩余候选保留供人工审核";
+                                remaining.ApplyMessage = "语料版本在上一条新增后发生变化，剩余候选等待下一轮自动重试";
                                 skipped++;
                             }
                             break;
@@ -1206,7 +1206,7 @@ namespace Bot.ChromeNs
                 catch (Exception ex)
                 {
                     candidate.Applied = false;
-                    candidate.ApplyMessage = "真人证据自动新增异常，候选已保留：" + Clean(ex.Message, 240);
+                    candidate.ApplyMessage = "AI知识自动发布结果未确认，候选已保留并等待自动恢复：" + Clean(ex.Message, 240);
                     skipped++;
                     // The database may have committed before a downstream index/audit
                     // failure. Treat the post-write version as unknown and block subsequent
@@ -1217,17 +1217,17 @@ namespace Bot.ChromeNs
                     foreach (var remaining in analysis.NewCandidates.SkipWhile(x => !ReferenceEquals(x, candidate)).Skip(1))
                     {
                         if (remaining == null) continue;
-                        remaining.ApplyMessage = "前一条新增结果未能确认，剩余候选保留供人工审核";
+                        remaining.ApplyMessage = "前一条新增结果未能确认，剩余候选等待下一轮自动重试";
                         skipped++;
                     }
-                    Log.ErrorWithMaxCount("Knowledge V2真人证据自动新增失败: " + ex.GetType().Name, 10);
+                    Log.ErrorWithMaxCount("Knowledge V2 AI自动新增失败: " + ex.GetType().Name, 10);
                     break;
                 }
             }
             foreach (var omitted in analysis.NewCandidates.Skip(MaxVerifiedNewKnowledgePerSession))
             {
                 if (omitted == null) continue;
-                omitted.ApplyMessage = "单个会话最多自动新增" + MaxVerifiedNewKnowledgePerSession + "条；其余候选保留供人工审核";
+                omitted.ApplyMessage = "单个会话自动发布上限为" + MaxVerifiedNewKnowledgePerSession + "条；其余候选等待下一轮自动处理";
                 skipped++;
             }
             return applied;
@@ -2273,7 +2273,7 @@ namespace Bot.ChromeNs
                 try
                 {
                     raw = await Task.Run(() => MyOpenAI.CallStructuredChat(
-                        messages, 2400, 0.05, KnowledgeCorpusTimeoutSeconds, CancellationToken.None));
+                        messages, 4000, 0.05, KnowledgeCorpusTimeoutSeconds, CancellationToken.None));
                 }
                 catch (OperationCanceledException ex)
                 {
