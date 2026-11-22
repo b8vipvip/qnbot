@@ -337,6 +337,7 @@ def test_operator_disabled_candidates_block_automatic_recreation_but_enabled_dry
 
     assert "record != null" in helper
     assert "!record.Enabled" in helper
+    assert 'record.Status, "disabled"' in helper
     assert 'record.Status, "deleted"' in helper
     assert "!KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
 
