@@ -236,7 +236,6 @@ namespace Bot.ChromeNs
                 && !Seen.TryAdd(scopedMessageKey, DateTime.Now)) return;
 
             var fromIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, from, buyer);
-            var toIsBuyer = BuyerIdentityAliasService.AreEquivalent(seller, to, buyer);
             var isBuyer = fromIsBuyer && toIsSeller;
             if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))
             {
