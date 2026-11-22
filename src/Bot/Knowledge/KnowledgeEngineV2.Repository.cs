@@ -578,8 +578,12 @@ namespace Bot.Knowledge
                         + confidence.ToString("0.00") + "; source=" + sourceId
                         + "; 已保存可回滚修订历史。",
                 "success", out auditError))
+            {
+                var auditFailure = (auditError ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+                if (auditFailure.Length > 240) auditFailure = auditFailure.Substring(0, 240);
                 throw new InvalidOperationException(
-                    "Knowledge V2自动新增已持久化，但治理审计尚未确认；等待幂等恢复重试：" + Clean(auditError, 240));
+                    "Knowledge V2自动新增已持久化，但治理审计尚未确认；等待幂等恢复重试：" + auditFailure);
+            }
             result = recoveredExisting
                 ? "该知识此前已持久化，已幂等恢复旧库镜像和Knowledge V2检索索引（知识ID：" + record.Id + "）。"
                 : "AI已根据真人问答证据自动新增并发布Knowledge V2，已刷新检索索引（知识ID：" + record.Id + "）。";
