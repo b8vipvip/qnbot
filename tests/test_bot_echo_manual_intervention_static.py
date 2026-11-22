@@ -47,3 +47,20 @@ def test_seller_echo_checks_original_text_and_summary_before_human_observation()
     assert "message.summary" in source
     assert "Distinct(StringComparer.Ordinal)" in source
     assert "foreach (var candidate in texts)" in source
+
+
+def test_runtime_monitor_rejects_foreign_seller_target_before_alias_or_manual_reply_learning():
+    source = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    observe = source[
+        source.index("private static void Qn_EvRecieveNewMessage"):
+        source.index("private static void RecordBuyerSourceSort")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(qnSeller, seller)" in observe
+    assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, seller)" in observe
+    assert "shop.HasStableSellerId" in observe
+    assert "sellerEndpointTargetId" in observe
+    assert "loginTargetId" in observe
+    assert observe.index("if (fromIsSeller == toIsSeller) continue;") < observe.index("BuyerIdentityAliasService.ObserveMessage")
+    assert observe.index("if (shop.HasStableSellerId)") < observe.index("BuyerIdentityAliasService.ObserveMessage")
