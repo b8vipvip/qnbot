@@ -19,6 +19,7 @@ def test_ai_generates_complete_knowledge_content_and_requests_direct_production_
     assert "aliases" in prompt and "keywords" in prompt
     assert "AI必须主动整理" in prompt
     assert "不经过人工审批或灰度发布" in prompt
+    assert '\\"aliases\\":[\\"同义问法\\"],\\"keywords\\"' in prompt
     assert "只返回消息ID" not in prompt
     assert "不得补充推测、承诺、未验证规格或外部常识" in prompt
 
@@ -122,6 +123,9 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "MirrorOneToLegacy(shop, record)" in method
     assert "KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)" in method
     assert "session_ai_auto_add" in method
+    assert "recoveredExisting = true;" in method
+    assert 'seller, recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add"' in method
+    assert "自动发布不会重新启用或覆盖" in method
     assert "AutoLearningPersonalData.IsMatch(value)" in repository
     assert "API密钥|远程控制|下载并运行|执行命令" in repository
 
