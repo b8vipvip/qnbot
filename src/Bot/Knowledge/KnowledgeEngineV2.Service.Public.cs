@@ -138,7 +138,8 @@ namespace Bot.Knowledge
             var manualExact = manualExactConflict ? null : manualExactMatches.FirstOrDefault();
             var manualSimilar = manualExact == null && !manualExactConflict
                 ? productionMatches
-                    .Where(x => IsStrongManualReviewedSimilarMatch(x, query))
+                    .Where(x => IsStrongManualReviewedSimilarMatch(x, query)
+                        || IsStrongAutoPublishedHumanEvidenceSimilarMatch(x, query))
                     .OrderByDescending(x => x.AliasScore)
                     .FirstOrDefault()
                 : null;
@@ -203,6 +204,32 @@ namespace Bot.Knowledge
             if (match.Score < 0.82 || match.AliasScore < 0.80
                 || match.PredicateScore < 0.99 || match.IntentScore < 0.99
                 || match.ConfidenceScore < 0.94)
+                return false;
+            if (KnowledgeEngineV2Semantics.IsHighRisk(query.Original)
+                || KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer))
+                return false;
+
+            var subjectSimilarity = KnowledgeEngineV2Semantics.TextSimilarity(
+                query.Subject ?? string.Empty, match.Record.Subject ?? string.Empty);
+            return match.EntityScore >= 0.66 || subjectSimilarity >= 0.82;
+        }
+
+        private static bool IsStrongAutoPublishedHumanEvidenceSimilarMatch(
+            KnowledgeV2Match match,
+            KnowledgeV2Query query)
+        {
+            if (match == null || match.Record == null || query == null
+                || query.ContextDependent || !string.IsNullOrWhiteSpace(query.WorkingMemoryReason))
+                return false;
+            if (!string.Equals((match.Record.SourceType ?? string.Empty).Trim(),
+                    "ai_auto_learned_human_evidence", StringComparison.OrdinalIgnoreCase))
+                return false;
+            // The answer is backed by an exact live buyer message and a subsequent
+            // non-Bot human reply. Permit a carefully bounded semantic match without
+            // pretending the AI confidence score alone is proof.
+            if (match.Score < 0.82 || match.AliasScore < 0.80
+                || match.PredicateScore < 0.99 || match.IntentScore < 0.99
+                || match.ConfidenceScore < 0.90)
                 return false;
             if (KnowledgeEngineV2Semantics.IsHighRisk(query.Original)
                 || KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer))
