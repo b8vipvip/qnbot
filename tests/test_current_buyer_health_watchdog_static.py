@@ -76,6 +76,8 @@ def test_runtime_session_snapshot_consumers_match_the_list_contract():
     ):
         source = text(path)
         assert "GetRuntimeSafetySnapshot() ?? new QN[0]" not in source
+        assert "CleanupRetiredQnState(IEnumerable<QN> sessions)" in source
+        assert "sessions ?? Enumerable.Empty<QN>()" in source
 
     monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
     assert '", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Count' in monitor
