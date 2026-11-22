@@ -12,6 +12,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -40,7 +41,8 @@ namespace Bot.ChromeNs
         }
 
         private static readonly object Sync = new object();
-        private static readonly HashSet<QN> Attached = new HashSet<QN>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
         private static readonly ConcurrentDictionary<string, DateTime> RawReservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, long> VisiblePanelScanVersions =
@@ -118,13 +120,14 @@ namespace Bot.ChromeNs
             {
                 lock (Sync)
                 {
-                    if (Attached.Contains(qn)) continue;
-                    Attached.Add(qn);
+                    object marker;
+                    if (Attached.TryGetValue(qn, out marker)) continue;
+                    qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                    qn.EvMessageNotity += OnMessageCenterNotify;
+                    qn.EvShopRobotReceriveNewMessage += OnShopRobotNewMessage;
+                    qn.EvBuyerSwitched += OnBuyerSwitched;
+                    Attached.Add(qn, new object());
                 }
-                qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                qn.EvMessageNotity += OnMessageCenterNotify;
-                qn.EvShopRobotReceriveNewMessage += OnShopRobotNewMessage;
-                qn.EvBuyerSwitched += OnBuyerSwitched;
                 Log.Info("直接下单系统事件桥接已绑定: seller="
                     + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
             }
