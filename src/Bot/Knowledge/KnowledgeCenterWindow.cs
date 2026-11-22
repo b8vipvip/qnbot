@@ -1049,7 +1049,7 @@ namespace Bot.ChromeNs
                         if (variants.Count == 0 || variants.Any(HasAiMarker)
                             || MatchesRecentBotAnswer(shop.ShopKey, seller, buyer, variants)) continue;
                         DateTime manualAt;
-                        if (!OrderEventHub.TryGetMessageTime(message, out manualAt))
+                        if (!OrderSnapshot.TryGetMessageTime(message, out manualAt))
                             manualAt = DateTime.Now;
                         AiManualReplyOptimizationService.StartForManualReply(
                             seller, buyer, variants[0], manualAt, shop.ShopKey);
@@ -1145,13 +1145,13 @@ namespace Bot.ChromeNs
             catch (Exception ex) { Log.ErrorWithMaxCount("业务入站主动核对调度失败：" + ex.Message, 10); }
         }
 
-        private static void CleanupRetiredQnState(QN[] sessions)
+        private static void CleanupRetiredQnState(IEnumerable<QN> sessions)
         {
             var now = DateTime.UtcNow;
             var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
             if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
             if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
-            var alive = new HashSet<QN>((sessions ?? new QN[0]).Where(x => x != null));
+            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>()).Where(x => x != null));
             foreach (var qn in NextProbeAt.Keys)
             {
                 if (alive.Contains(qn)) continue;
