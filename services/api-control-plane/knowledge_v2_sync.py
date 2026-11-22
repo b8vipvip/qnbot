@@ -64,12 +64,40 @@ def _validate_records(records):
         raise HTTPException(status_code=413, detail="Knowledge V2 数据超过 4MB")
     allowed={"Id","Type","Title","Intent","Subject","Predicate","Entities","Aliases","Answer","ShortAnswer","Conditions","Exclusions","RequiredContext","ProductIds","RiskLevel","SourceType","SourceId","Authority","Confidence","UseCount","AcceptedCount","CorrectionCount","WithdrawCount","Enabled","Status","CreatedAt","UpdatedAt","LastVerifiedAt"}
     clean=[]
+    seen_ids=set()
     for item in records:
         if not isinstance(item,dict):
             raise HTTPException(status_code=400,detail="Knowledge V2 记录格式无效")
         row={k:v for k,v in item.items() if k in allowed}
-        if not str(row.get("Title") or "").strip() or not str(row.get("Answer") or "").strip():
-            raise HTTPException(status_code=400,detail="Knowledge V2 标题和答案不能为空")
+        title=row.get("Title")
+        answer=row.get("Answer")
+        if not isinstance(title,str) or not title.strip() or not isinstance(answer,str) or not answer.strip():
+            raise HTTPException(status_code=400,detail="Knowledge V2 标题和答案必须是非空文本")
+        if "Id" in row and row["Id"] is not None:
+            record_id=row["Id"]
+            if not isinstance(record_id,str) or not record_id.strip() or len(record_id)>160:
+                raise HTTPException(status_code=400,detail="Knowledge V2 记录 ID 无效")
+            record_id=record_id.strip()
+            if record_id in seen_ids:
+                raise HTTPException(status_code=400,detail="Knowledge V2 记录 ID 不允许重复")
+            seen_ids.add(record_id)
+            row["Id"]=record_id
+        for field in ("Authority","Confidence"):
+            value=row.get(field)
+            if value is None:
+                continue
+            if isinstance(value,bool) or not isinstance(value,(int,float)):
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是 0 到 1 之间的有限数值")
+            number=float(value)
+            if not math.isfinite(number) or number<0 or number>1:
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是 0 到 1 之间的有限数值")
+            row[field]=number
+        for field in ("UseCount","AcceptedCount","CorrectionCount","WithdrawCount"):
+            value=row.get(field)
+            if value is None:
+                continue
+            if isinstance(value,bool) or not isinstance(value,int) or value<0 or value>2147483647:
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是非负整数")
         clean.append(row)
     return clean
 
