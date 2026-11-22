@@ -190,7 +190,7 @@ def test_delete_tombstones_remain_in_cloud_snapshots_and_are_accepted_by_runtime
 
     assert "tombstone.Enabled = false;" in delete
     assert 'tombstone.Status = "deleted";' in delete
-    assert "tombstone.Answer" not in delete or "tombstone.Answer =" not in delete
+    assert "tombstone.Answer =" not in delete
     assert "SaveRecordsInTransaction(new List<object> { ToRow(tombstone), revision });" in delete
     assert "var local=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);" in sync
     assert 'payload["records"]=JArray.FromObject(local);' in sync
