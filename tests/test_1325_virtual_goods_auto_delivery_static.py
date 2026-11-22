@@ -165,15 +165,16 @@ def test_auto_delivery_sources_are_included_in_normal_and_wpf_temp_builds():
 
 def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pending_tasks():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool Enqueue")]
-    loader = runtime[runtime.index("private static StateDocument LoadState"):runtime.index("private static bool SaveStateLocked")]
+    initialize = runtime[runtime.index("public static void Initialize"):runtime.index("public static bool IsOperational")]
+    loader = runtime[runtime.index("private static bool ReloadStateForMutationLocked"):runtime.index("private static bool SaveStateLocked")]
 
     assert "private static volatile bool _stateLoadFailed;" in runtime
-    assert "LoadState(out loadedSuccessfully)" in initialize
-    assert "if (!loadedSuccessfully)" in initialize
+    assert "ReloadStateForMutationLocked(true)" in initialize
+    assert "if (!ReloadStateForMutationLocked(true))" in initialize
     assert "if (!SaveStateLocked())" in initialize
-    assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
+    assert initialize.index("if (!ReloadStateForMutationLocked(true))") < initialize.index("new Timer(")
     assert "保留原状态文件并暂停自动发货" in initialize
+    assert "LoadState(out loadedSuccessfully)" in loader
     assert "private static StateDocument LoadState(out bool loadedSuccessfully)" in loader
     assert "(loaded.Schema != 1 && loaded.Schema != 2) || loaded.Pending == null" in loader
     assert "loadedSuccessfully = false;" in loader
@@ -192,7 +193,7 @@ def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_
         assert "if (_initialized != 0) return;" in initializer
         assert "Interlocked.Exchange(ref _initialized" not in initializer
         assert initializer.index("if (_initialized != 0) return;") < initializer.index("_initialized = 1;")
-    assert runtime_init.index("_state = LoadState(out loadedSuccessfully);") < runtime_init.index("new Timer(")
+    assert runtime_init.index("ReloadStateForMutationLocked(true)") < runtime_init.index("new Timer(")
     assert seed_init.index("_cursors = LoadCursors(out loadedSuccessfully);") < seed_init.index("new Timer(")
 
 
@@ -397,14 +398,13 @@ def test_auto_delivery_worker_never_executes_without_a_durable_queue_checkpoint(
         runtime.index("private static OrderSnapshot CloneSnapshot")
     ]
 
-    reserve = worker.index("record.NextAttemptAt = now.Add(RetryDelay);")
+    reserve = worker.index("record.NextAttemptAt = now.Add(WorkerClaimLease);")
     persist = worker.index("if (!SaveStateLocked()) return;", reserve)
     execute = worker.index("await ProcessRecordAsync(record).ConfigureAwait(false);", persist)
     assert reserve < persist < execute
     assert "if (_stateLoadFailed) return;" in worker
     assert "_stateLoadFailed = true;" in save
     assert "已暂停自动发货" in save
-
 
 
 def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwrites_source():
@@ -414,21 +414,19 @@ def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwr
         runtime.index("public static bool IsOperational()")
     ]
     loader = runtime[
-        runtime.index("private static StateDocument LoadState"):
+        runtime.index("private static bool ReloadStateForMutationLocked"):
         runtime.index("private static bool SaveStateLocked")
     ]
 
-    assert "LoadState(out loadedSuccessfully)" in initialize
-    assert "if (!loadedSuccessfully)" in initialize
+    assert "ReloadStateForMutationLocked(true)" in initialize
     assert "_stateLoadFailed = true;" in initialize
-    failed_branch = initialize[initialize.index("if (!loadedSuccessfully)"):]
+    failed_branch = initialize[initialize.index("if (!ReloadStateForMutationLocked(true))"):]
     return_index = failed_branch.index("return;")
     assert return_index < failed_branch.index("CleanupExpiredLocked")
     assert return_index < failed_branch.index("_timer = new Timer(")
-    assert "拒绝重置或覆盖现有任务文件" in loader
-    assert "保留原文件" in loader
+    assert "LoadState(out loadedSuccessfully)" in loader
+    assert "拒绝以空队列覆盖原任务状态" in loader
     assert "loadedSuccessfully = true;" not in loader[loader.index("catch (Exception ex)"):]
-
 
 
 def test_uncertain_auto_delivery_outcome_restarts_as_read_only_verification_never_second_confirm():
