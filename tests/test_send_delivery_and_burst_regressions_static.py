@@ -282,3 +282,19 @@ def test_manual_takeover_bypass_is_consumed_once_and_shared_across_final_send_ch
     assert "if (bypassed) manualBypassConsumed = true;" in open_send
     assert "if (manualBypassConsumed) return false;" in open_send
     assert "out bypassed" in helper
+
+
+def test_final_reply_relevance_gate_fails_closed_when_timeline_or_event_read_fails():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    method = source[
+        source.index("public static bool ShouldSend("):
+        source.index("internal static class ShopScopedReplyCircuitBreaker")
+    ]
+    catch = method[method.index("catch (Exception)"):]
+
+    assert "ConversationContextStore.GetRecentTurns" in method
+    assert "new BuyerSessionAgent().GetSnapshot" in method
+    assert "发送前无法确认会话相关性或人工接管状态，已阻止自动回复" in catch
+    assert "Log.ErrorWithMaxCount" in catch
+    assert "return false;" in catch
+    assert "return true;" not in catch
