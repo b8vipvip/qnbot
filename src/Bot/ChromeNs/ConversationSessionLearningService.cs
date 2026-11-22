@@ -2188,10 +2188,10 @@ namespace Bot.ChromeNs
                 || ContainsHighRisk(question + " " + answer)
                 || KnowledgeV2Semantics.IsHighRisk(question + " " + answer)
                 || Regex.IsMatch(question + " " + answer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|今天|明天|现在|目前|当前|本周|本月|临时|一次性|https?://|www\\.",
+                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|今天|明天|现在|目前|当前|本周|本月|临时|一次性|https?://|www\.",
                     RegexOptions.IgnoreCase)
                 || Regex.IsMatch(question + " " + answer,
-                    @"(?<!\\d)1[3-9]\\d{9}(?!\\d)|(?<!\\d)\\d{17}[0-9Xx](?!\\d)|(?<!\\d)\\d{16,19}(?!\\d)"))
+                    @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)"))
             {
                 rejection = "question_or_answer_not_safe_for_reusable_knowledge";
                 return false;
