@@ -386,6 +386,13 @@ namespace Bot.ChromeNs
             if (turns.Skip(questionIndex + 1).Take(answerIndex - questionIndex - 1)
                 .Any(x => x.Role == "user"))
                 return false;
+            var humanReplyTurns = turns.Skip(questionIndex + 1)
+                .Take(answerIndex - questionIndex)
+                .Where(x => x.Role == "assistant"
+                    && !SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, x.Text, shopKey))
+                .ToList();
+            if (humanReplyTurns.Count != 1 || !ReferenceEquals(humanReplyTurns[0], answerTurn))
+                return false;
 
             // The native aliases are the actual Qianniu message IDs; a synthesized
             // text/timestamp key is not sufficient provenance for automatic writes.
