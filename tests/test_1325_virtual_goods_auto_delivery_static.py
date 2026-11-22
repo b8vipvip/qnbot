@@ -609,3 +609,29 @@ def test_read_only_delivery_recovery_never_rebinds_or_focuses_another_shop():
     assert "if (!MultiShopRuntimeSessionCoordinator.EnsureShopBinding(runtimeShop))" in execute
     assert "静默预检确认订单仍未发货，但确认权限此前已消费" in execute
     assert "保持只读，不切换前台买家且绝不再次确认发货" in execute
+
+
+def test_legacy_delivery_queue_retries_unique_shop_recovery_after_restart():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    process = runtime[
+        runtime.index("private static async Task ProcessRecordAsync"):
+        runtime.index("private static bool IsSilentPreflightReason")
+    ]
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    resolve = ledger[
+        ledger.index("public static bool MarkResolved"):
+        ledger.index("private static bool MigratePendingConfirmationIntentsLocked")
+    ]
+
+    assert "ResolveRuntimeBySellerNick(snapshot.Seller)" in process
+    assert "string.Equals(shop.SellerNick, snapshot.Seller, StringComparison.Ordinal)" in process
+    assert "var resolvedKey = BuildKey(shop.ShopKey, snapshot.Seller, snapshot.OrderId);" in process
+    assert "live.Snapshot.ShopKey = shop.ShopKey;" in process
+    assert "if (!SaveStateLocked())" in process
+    assert "collision" in process
+    assert "BuildLegacyKey(seller, orderId)" in resolve
+    assert "string.Equals(x.Key, legacyKey, StringComparison.Ordinal)" in resolve
+    assert "foreach (var record in records)" in resolve
+    # Migrated legacy barriers remain present after resolution, so at-most-once protection survives.
+    assert "KeepUntil" in resolve
+    assert "Resolution" in resolve
