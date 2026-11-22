@@ -167,9 +167,16 @@ def test_repository_directly_publishes_ai_knowledge_with_aliases_and_reversible_
     assert "priorEvidence != null" in method
     assert "questionVariants.Any(compact" in method
     assert "var exactMatches = currentRecords" in method
-    assert "var exactMatches = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
-    assert "var similar = currentRecords\n                    .Where(x => !KnowledgeV2AuthorityPolicy.IsCandidate(x))" in method
-    assert "Old dry-run candidates are not production answers" in method
+    assert "var exactMatches = currentRecords\\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "var similar = currentRecords\\n                    .Where(BlocksVerifiedAutoAddRecreation)" in method
+    assert "HasExplicitlyDeletedKnowledge(state, sourceId, questionVariants)" in method
+    assert "Enabled dry-run candidates are not production answers" in method
+    assert "disabled candidate" in method
+    assert "private static bool BlocksVerifiedAutoAddRecreation(" in repository
+    assert "!record.Enabled" in repository
+    assert "private static bool HasExplicitlyDeletedKnowledge(" in repository
+    assert "deleted.SourceId, sourceId" in repository
+    assert "deletedVariants.Any(variants.Contains)" in repository
     assert "exactMatches.All(x =>" in method
     assert "if (similar)" in method
     assert "Aliases = new[] { question }.Concat(normalizedAliases)" in method
@@ -321,3 +328,33 @@ def test_ai_answer_grounding_checks_all_source_numbers_and_entity_polarity():
     assert "sourcePositive != generatedPositive" in generated
     assert "HasKnowledgeEntityPolarityMismatch(sourceAnswer, candidateAnswer)" in generated
     assert "HasMissingKnowledgeAnchors(sourceAnswer, candidateAnswer)" in generated
+
+def test_operator_disabled_candidates_block_automatic_recreation_but_enabled_dry_run_candidates_do_not():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    helper = repository.split("private static bool BlocksVerifiedAutoAddRecreation(", 1)[1].split(
+        "private static bool HasExplicitlyDeletedKnowledge(", 1
+    )[0]
+
+    assert "record != null" in helper
+    assert "!record.Enabled" in helper
+    assert 'record.Status, "deleted"' in helper
+    assert "!KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
+
+
+def test_operator_delete_is_persisted_as_a_suppression_tombstone_for_future_auto_learning():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    delete = repository.split("public static bool Delete(", 1)[1].split(
+        "public static void ReplaceAll(", 1
+    )[0]
+    suppression = repository.split("private static bool HasExplicitlyDeletedKnowledge(", 1)[1].split(
+        "private static bool IsSafeAutomaticNewKnowledge(", 1
+    )[0]
+
+    assert 'Action = "delete"' in delete
+    assert "PreviousJson = JsonConvert.SerializeObject(deleted)" in delete
+    assert delete.index("state.Db.SaveOneRecord(revision);") < delete.index("state.Db.Delete(row);")
+    assert 'x.Action, "delete"' in suppression
+    assert "deleted.SourceId, sourceId" in suppression
+    assert "deleted.Title" in suppression
+    assert "deleted.Aliases" in suppression
+    assert "deletedVariants.Any(variants.Contains)" in suppression
