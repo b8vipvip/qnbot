@@ -13,6 +13,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -215,8 +216,9 @@ namespace Bot.ChromeNs
             public string Value;
         }
 
-        private static readonly ConcurrentDictionary<QN, byte> Attached =
-            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConditionalWeakTable<QN, object> Attached =
+            new ConditionalWeakTable<QN, object>();
+        private static readonly object AttachSync = new object();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
@@ -323,11 +325,17 @@ namespace Bot.ChromeNs
             {
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
-                    if (qn == null || !Attached.TryAdd(qn, 0)) continue;
-                    // 此桥接在 App 构造阶段早于旧订单桥接初始化，并以更短轮询间隔绑定。
-                    // 同一原始事件会先由这里发布完整快照，旧桥接随后会被 OrderEventHub 去重。
-                    qn.EvMessageNotity += OnMessageNotify;
-                    qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                    if (qn == null) continue;
+                    lock (AttachSync)
+                    {
+                        object marker;
+                        if (Attached.TryGetValue(qn, out marker)) continue;
+                        // 此桥接在 App 构造阶段早于旧订单桥接初始化，并以更短轮询间隔绑定。
+                        // 同一原始事件会先由这里发布完整快照，旧桥接随后会被 OrderEventHub 去重。
+                        qn.EvMessageNotity += OnMessageNotify;
+                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                        Attached.Add(qn, new object());
+                    }
                     Log.Info("订单完整字段桥接已绑定: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
