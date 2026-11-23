@@ -36,9 +36,29 @@ namespace Bot.ChromeNs
                 "vision_observation", "manual_correction", "verified_account_snapshot"
             }, StringComparer.Ordinal);
 
-        private static string ShopDirectoryForSeller(string seller)
+        private static ShopContext ResolveShopContext(string seller, string shopKey)
         {
-            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0)
+                throw new InvalidOperationException("ShopKey为空，拒绝读取或发布接待流程");
+
+            // The caller supplies the exact shop identity captured by the Knowledge Center
+            // or message event. Never resolve a multi-shop seller nickname as the primary key.
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            var resolvedSeller = (shop == null ? string.Empty : shop.SellerNick ?? string.Empty).Trim();
+            if (shop == null
+                || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !shop.HasStableSellerId
+                || (seller.Length > 0 && resolvedSeller.Length > 0
+                    && !string.Equals(resolvedSeller, seller, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Seller/ShopKey 不匹配或店铺身份不稳定，拒绝读取或发布接待流程");
+            return shop;
+        }
+
+        private static string ShopDirectoryForShop(ShopContext shop)
+        {
             if (shop == null
                 || string.IsNullOrWhiteSpace(shop.ShopKey)
                 || !shop.HasStableSellerId)
@@ -52,19 +72,19 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string PathForShop(string seller)
+        private static string PathForShop(ShopContext shop)
         {
-            return Path.Combine(ShopDirectoryForSeller(seller), CatalogFileName);
+            return Path.Combine(ShopDirectoryForShop(shop), CatalogFileName);
         }
 
-        private static string LegacyPathForShop(string seller)
+        private static string LegacyPathForShop(ShopContext shop)
         {
-            return Path.Combine(ShopDirectoryForSeller(seller), LegacyFileName);
+            return Path.Combine(ShopDirectoryForShop(shop), LegacyFileName);
         }
 
-        private static string HistoryDirectoryForShop(string seller)
+        private static string HistoryDirectoryForShop(ShopContext shop)
         {
-            return Path.Combine(ShopDirectoryForSeller(seller), HistoryDirectoryName);
+            return Path.Combine(ShopDirectoryForShop(shop), HistoryDirectoryName);
         }
 
         private static JObject Default()
@@ -272,12 +292,12 @@ namespace Bot.ChromeNs
             return Path.Combine(directory, "revision-" + revision.ToString("D10", CultureInfo.InvariantCulture) + ".json");
         }
 
-        private static void SaveHistorySnapshot(string seller, JObject catalog)
+        private static void SaveHistorySnapshot(ShopContext shop, JObject catalog)
         {
             var revision = catalog.Value<long>("catalog_revision");
             if (revision <= 0) return;
 
-            var directory = HistoryDirectoryForShop(seller);
+            var directory = HistoryDirectoryForShop(shop);
             if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
             var path = HistoryPath(directory, revision);
             if (!IsMissing(path)) return;
@@ -326,12 +346,12 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void EnsureLegacyDraftMigrated(string seller)
+        private static void EnsureLegacyDraftMigrated(ShopContext shop)
         {
-            var path = PathForShop(seller);
+            var path = PathForShop(shop);
             if (!IsMissing(path)) return;
 
-            var legacyPath = LegacyPathForShop(seller);
+            var legacyPath = LegacyPathForShop(shop);
             if (IsMissing(legacyPath)) return;
 
             var directory = Path.GetDirectoryName(path);
@@ -361,16 +381,17 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static string GetActiveJson(string seller)
+        public static string GetActiveJson(string seller, string shopKey)
         {
-            EnsureLegacyDraftMigrated(seller);
-            return ReadCatalog(PathForShop(seller)).ToString(Formatting.Indented);
+            var shop = ResolveShopContext(seller, shopKey);
+            EnsureLegacyDraftMigrated(shop);
+            return ReadCatalog(PathForShop(shop)).ToString(Formatting.Indented);
         }
 
-        public static string GetActiveFlowJson(string seller, string flowId)
+        public static string GetActiveFlowJson(string seller, string flowId, string shopKey)
         {
             if (!ValidKey(flowId)) return string.Empty;
-            var catalog = JObject.Parse(GetActiveJson(seller));
+            var catalog = JObject.Parse(GetActiveJson(seller, shopKey));
             var flows = catalog["flows"] as JArray;
             var flow = flows == null
                 ? null
@@ -383,13 +404,14 @@ namespace Bot.ChromeNs
         /// Validates and publishes in one transaction. No administrator identity,
         /// approval token, manual activation or gray-rollout state is required.
         /// </summary>
-        public static string Publish(string seller, string json)
+        public static string Publish(string seller, string json, string shopKey)
         {
             var candidate = Validate(json);
             var expectedRevision = candidate.Value<long>("catalog_revision");
-            EnsureLegacyDraftMigrated(seller);
+            var shop = ResolveShopContext(seller, shopKey);
+            EnsureLegacyDraftMigrated(shop);
 
-            var path = PathForShop(seller);
+            var path = PathForShop(shop);
             var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
@@ -405,7 +427,7 @@ namespace Bot.ChromeNs
                 if (currentRevision == long.MaxValue)
                     throw new InvalidOperationException("接待流程目录修订版本已达到上限，拒绝发布");
 
-                SaveHistorySnapshot(seller, current);
+                SaveHistorySnapshot(shop, current);
                 BumpFlowVersions(candidate, current);
                 var nextRevision = currentRevision + 1;
                 candidate["catalog_revision"] = nextRevision;
@@ -423,10 +445,11 @@ namespace Bot.ChromeNs
         /// Rolls back to the previous valid published snapshot as a new monotonic version.
         /// The rollback itself is immediate and does not require administrator approval.
         /// </summary>
-        public static string RollbackToPreviousPublished(string seller)
+        public static string RollbackToPreviousPublished(string seller, string shopKey)
         {
-            EnsureLegacyDraftMigrated(seller);
-            var path = PathForShop(seller);
+            var shop = ResolveShopContext(seller, shopKey);
+            EnsureLegacyDraftMigrated(shop);
+            var path = PathForShop(shop);
             var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
@@ -444,7 +467,7 @@ namespace Bot.ChromeNs
                 if (currentRevision == long.MaxValue)
                     throw new InvalidOperationException("接待流程目录修订版本已达到上限，拒绝回滚");
 
-                var historyDirectory = HistoryDirectoryForShop(seller);
+                var historyDirectory = HistoryDirectoryForShop(shop);
                 if (!Directory.Exists(historyDirectory))
                     throw new FileNotFoundException("没有可回滚的历史发布版本");
 
@@ -491,7 +514,7 @@ namespace Bot.ChromeNs
                 if (restored == null)
                     throw new InvalidDataException("没有找到有效的上一发布版本；当前生效版本未修改");
 
-                SaveHistorySnapshot(seller, current);
+                SaveHistorySnapshot(shop, current);
                 BumpFlowVersions(restored, current);
                 restoredRevision = currentRevision + 1;
                 restored["catalog_revision"] = restoredRevision;

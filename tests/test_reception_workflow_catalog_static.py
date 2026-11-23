@@ -11,16 +11,27 @@ def source(path):
 def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
     scope = service[
-        service.index("private static string ShopDirectoryForSeller"):
-        service.index("private static JObject Default")
+        service.index("private static ShopContext ResolveShopContext"):
+        service.index("private static string PathForShop")
     ]
 
     assert 'qnbot.reception-workflows.v2' in service
     assert 'reception-workflow-catalog.json' in service
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in scope
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in scope
+    assert "string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)" in scope
+    assert "resolvedSeller.Length > 0" in scope
+    assert "string.Equals(resolvedSeller, seller, StringComparison.OrdinalIgnoreCase)" in scope
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in scope
     assert "!shop.HasStableSellerId" in scope
     assert "ShopSettingsScope.Enter(shop)" in scope
+    assert "private static string PathForShop(ShopContext shop)" in service
+    assert "private static string LegacyPathForShop(ShopContext shop)" in service
+    assert "private static string HistoryDirectoryForShop(ShopContext shop)" in service
+    assert "private static void EnsureLegacyDraftMigrated(ShopContext shop)" in service
+    assert "private static void SaveHistorySnapshot(ShopContext shop, JObject catalog)" in service
+    assert "KugouReceptionPolicy.ResolveShopForSeller" not in service
+    assert "public static string GetActiveJson(string seller, string shopKey)" in service
+    assert "public static string GetActiveFlowJson(string seller, string flowId, string shopKey)" in service
 
 
 def test_legacy_drafts_migrate_to_active_catalog_without_admin_approval():
@@ -45,7 +56,7 @@ def test_validated_agent_publish_is_immediate_and_has_no_admin_approval_gate():
         service.index("public static string RollbackToPreviousPublished")
     ]
 
-    assert "public static string Publish(string seller, string json)" in publish
+    assert "public static string Publish(string seller, string json, string shopKey)" in publish
     assert "var candidate = Validate(json)" in publish
     assert 'candidate["publication_mode"] = "autonomous"' in publish
     assert 'candidate["published_revision"] = nextRevision' in publish
@@ -80,7 +91,7 @@ def test_publish_uses_shop_scoped_cas_and_monotonic_flow_versions():
     assert 'CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowPublish", 3000)' in publish
     assert "expectedRevision != currentRevision" in publish
     assert "currentRevision == long.MaxValue" in publish
-    assert "SaveHistorySnapshot(seller, current)" in publish
+    assert "SaveHistorySnapshot(shop, current)" in publish
     assert "BumpFlowVersions(candidate, current)" in publish
     assert 'candidate["catalog_revision"] = nextRevision' in publish
     assert "WriteCatalog(path, candidate)" in publish
@@ -93,11 +104,11 @@ def test_rollback_restores_previous_valid_published_snapshot_as_new_revision():
         service.rindex("\n    }\n}")
     ]
 
-    assert "public static string RollbackToPreviousPublished(string seller)" in rollback
+    assert "public static string RollbackToPreviousPublished(string seller, string shopKey)" in rollback
     assert '"revision-*.json"' in rollback
     assert "OrderByDescending(item => item.Revision)" in rollback
     assert "Validate(contents)" in rollback
-    assert "SaveHistorySnapshot(seller, current)" in rollback
+    assert "SaveHistorySnapshot(shop, current)" in rollback
     assert "BumpFlowVersions(restored, current)" in rollback
     assert 'restored["catalog_revision"] = restoredRevision' in rollback
     assert 'restored["publication_mode"] = "autonomous-rollback"' in rollback
@@ -117,7 +128,7 @@ def test_history_snapshots_are_immutable_and_keep_revision_identity():
     ]
 
     assert '"revision-" + revision.ToString("D10"' in history_path
-    assert "HistoryDirectoryForShop(seller)" in history
+    assert "HistoryDirectoryForShop(shop)" in history
     assert "if (!IsMissing(path)) return;" in history
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in history
 
@@ -127,13 +138,15 @@ def test_reception_agent_ui_exposes_direct_publish_and_rollback():
     navigation = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     build = source("src/Directory.Build.targets")
 
+    assert "KnowledgeV2WorkflowDraftPage(string seller, string shopKey)" in page
+    assert "private readonly string _shopKey;" in page
     assert 'Text = "Reception Agent 接待流程"' in page
     assert 'Content = "校验并立即发布"' in page
     assert 'Content = "回滚上一发布版本"' in page
-    assert "ReceptionWorkflowCatalogService.GetActiveJson(_seller)" in page
-    assert "ReceptionWorkflowCatalogService.Publish(_seller, _editor.Text)" in page
-    assert "ReceptionWorkflowCatalogService.RollbackToPreviousPublished(_seller)" in page
-    assert 'Nav("Reception Agent 接待流程"' in navigation
+    assert "ReceptionWorkflowCatalogService.GetActiveJson(_seller, _shopKey)" in page
+    assert "ReceptionWorkflowCatalogService.Publish(_seller, _editor.Text, _shopKey)" in page
+    assert "ReceptionWorkflowCatalogService.RollbackToPreviousPublished(_seller, _shopKey)" in page
+    assert 'Nav("Reception Agent 接待流程", () => new KnowledgeV2WorkflowDraftPage(_seller, _shopKey))' in navigation
     assert "ReceptionWorkflowCatalogService.cs" in build
     assert "KnowledgeV2WorkflowDraftPage.cs" in build
 

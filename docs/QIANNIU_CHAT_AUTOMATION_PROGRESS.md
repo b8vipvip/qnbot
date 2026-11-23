@@ -9,9 +9,9 @@ Last updated / 最后更新：2026-11-23
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：bot-v1.1.3111
-- Release target：3718607df7a01ee776c0aadceb63f331004c9aef
-- x64 package SHA-256：c51887a1699dc5a861cfd522e21eb1a9d605c51f87278cf86d82da2182359b4
+- Latest stable client：bot-v1.1.3117
+- Release target：ac17e76dae53d3318c208139efd46f8e7249b987
+- x64 package SHA-256：3c82b949a0d6896ad0b4445a0a36d7f2aab9f3c209f4269c4285327967855cf7
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -83,7 +83,7 @@ Last updated / 最后更新：2026-11-23
 ### P1 — General reception workflow Agent
 关联原 Issue：原 Issue #346。
 
-- Reception Agent 流程目录正在改为 ShopKey 隔离的 v2 active catalog；通过结构校验后由 Agent 直接发布，无需管理员审批或强制灰度。
+- Reception Agent 已改为 ShopKey 隔离的 v2 active catalog（PR #442 已合并）；通过结构校验后由 Agent 直接发布，无需管理员审批或强制灰度。
 - 发布事务具备目录 revision CAS、单调 flow_version、不可变历史快照、自动回滚和旧 draft v1 文件迁移。
 - 流程动作限制为等待、补充证据、转人工、只读查询和受现有发送门控约束的回复意图；目录不能授予付款、充值、退款、账号修改或实际履约权限。
 - 完整通用状态机执行器尚未接入全部消息/OCR/订单/账号证据源；active catalog 可发布不等于所有流程转移已在真实千牛环境执行验收。
@@ -229,17 +229,17 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 ### Remaining runtime boundary
 - Issue #366 remains open. CI/build success does not prove real Qianniu behavior.
 - Still requires real 150+ message/full-corpus learning and restart recovery, two-device convergence/concurrent edits, multi-shop A→B→A and WS/CDP long-run stability, human takeover/withdrawal/retry races, and real test-order delivery recovery.
-- Reception Agent autonomous publication and rollback are being implemented without administrator approval; the remaining boundary is the runtime state-machine/evidence adapter and real Windows/Qianniu acceptance, not an administrator approval identity.
+- Reception Agent autonomous publication and rollback are merged in PR #442 and included in bot-v1.1.3117; the remaining boundary is the runtime state-machine/evidence adapter and real Windows/Qianniu acceptance, not an administrator approval identity.
 
 ## 4.8 2026-11-23 Reception Agent autonomous publication policy
 
-- Branch `feat/reception-agent-autopublish` changes the generic workflow catalog from draft-only to a versioned active catalog.
+- PR #442 merged the versioned active catalog into master at `ac17e76dae53d3318c208139efd46f8e7249b987`; the implementation is included in stable client `bot-v1.1.3117`.
 - A schema-valid publish immediately updates the active version; no administrator approval identity, approval token, or mandatory gray rollout is required.
 - The publish operation uses ShopKey-scoped storage, cross-process locking, revision CAS, monotonic per-flow versions, immutable published-history snapshots, and a rollback that creates a new revision.
 - Existing v1 draft files are migrated to active v2 only after validation; the original file is retained.
+- Follow-up PR #443 fixes a multi-shop race by requiring the exact ShopKey from the Knowledge Center/event, verifying seller↔ShopKey identity, and reusing one resolved ShopContext for active catalog, legacy migration, history snapshots and rollback paths; it is under exact-SHA CI/Windows build validation.
 - Catalog actions remain constrained. Workflow publication does not grant payment, recharge, refund, account mutation, or fulfillment authority. Reply intents still pass through the existing canonical send pipeline.
 - The runtime adapter that consumes the active catalog for every generic stage/evidence transition is not yet complete. Do not describe the workflow engine as fully live until that adapter and real Qianniu acceptance are complete.
-- This is a source branch under CI review, not yet a master merge or a new Windows release.
 
 ## 5. Validation and release rules / 验收与发布规则
 

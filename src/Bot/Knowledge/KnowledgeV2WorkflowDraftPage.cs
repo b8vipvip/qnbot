@@ -14,12 +14,14 @@ namespace Bot.Knowledge
     internal sealed class KnowledgeV2WorkflowDraftPage : UserControl, IKnowledgeV2Refreshable
     {
         private readonly string _seller;
+        private readonly string _shopKey;
         private readonly TextBlock _status;
         private readonly TextBox _editor;
 
-        public KnowledgeV2WorkflowDraftPage(string seller)
+        public KnowledgeV2WorkflowDraftPage(string seller, string shopKey)
         {
             _seller = (seller ?? string.Empty).Trim();
+            _shopKey = (shopKey ?? string.Empty).Trim();
             var root = new DockPanel { Margin = new Thickness(12) };
             var top = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             top.Children.Add(new TextBlock { Text = "Reception Agent 接待流程", FontSize = 20,
@@ -66,7 +68,7 @@ namespace Bot.Knowledge
         public void RefreshView()
         {
             _status.Text = "读取当前店铺已发布流程...";
-            Task.Run(() => ReceptionWorkflowCatalogService.GetActiveJson(_seller))
+            Task.Run(() => ReceptionWorkflowCatalogService.GetActiveJson(_seller, _shopKey))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() => {
                     if (t.IsFaulted) {
                         _status.Text = "读取失败：" + t.Exception.GetBaseException().Message;
@@ -81,7 +83,7 @@ namespace Bot.Knowledge
         {
             try
             {
-                _status.Text = ReceptionWorkflowCatalogService.Publish(_seller, _editor.Text);
+                _status.Text = ReceptionWorkflowCatalogService.Publish(_seller, _editor.Text, _shopKey);
                 RefreshView(); // Reload the incremented active revision before the next edit.
             }
             catch (Exception ex)
@@ -97,7 +99,7 @@ namespace Bot.Knowledge
                 return;
             try
             {
-                _status.Text = ReceptionWorkflowCatalogService.RollbackToPreviousPublished(_seller);
+                _status.Text = ReceptionWorkflowCatalogService.RollbackToPreviousPublished(_seller, _shopKey);
                 RefreshView();
             }
             catch (Exception ex)

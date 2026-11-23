@@ -26,7 +26,7 @@ The catalog cannot grant arbitrary code execution, payment, recharge, refund, ac
 
 ## Autonomous publication and recovery
 
-- The catalog uses a stable, uniquely resolved ShopKey and the exact per-shop settings scope.
+- Every public catalog operation requires the exact ShopKey captured by the Knowledge Center or message event, resolves one stable ShopContext once, and reuses that exact context for the active catalog, legacy migration, history snapshots, and rollback paths. If a seller nickname is present it must match the resolved profile; offline profiles may be accessed by exact ShopKey even when the nickname is unavailable. Seller nickname is never the primary key and is never re-resolved midway through a write.
 - The active-version pointer is stored in the same catalog document as the immutable flow definitions, so publication and pointer replacement share one atomic write.
 - `Publish` validates the complete document and publishes it in one cross-process locked transaction.
 - A revision compare-and-swap prevents stale editors or concurrent Agents from overwriting a newer publication.
