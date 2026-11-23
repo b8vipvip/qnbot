@@ -66,7 +66,7 @@ namespace Bot.ChromeNs
     internal static class ReceptionWorkflowAgentService
     {
         private static readonly HashSet<string> EvidenceKinds = new HashSet<string>(
-            new[] { "buyer_message", "image_message", "vision_observation", "order_snapshot", "manual_correction" },
+            new[] { "buyer_message", "image_message", "vision_observation", "account_evidence", "order_snapshot", "manual_correction" },
             StringComparer.Ordinal);
         private static readonly HashSet<string> Actions = new HashSet<string>(
             new[] { "WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY" }, StringComparer.Ordinal);
@@ -239,6 +239,42 @@ namespace Bot.ChromeNs
                     .Append(summary).AppendLine();
             }
 
+            // Account evidence is derived only from a recent, non-withdrawn observation
+            // of the official Kugou app. Never send the raw nickname or account ID to the model.
+            try
+            {
+                KugouAccountEvidence accountEvidence;
+                if (RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                    shopKey, seller, buyer, out accountEvidence)
+                    && accountEvidence != null
+                    && !string.IsNullOrWhiteSpace(accountEvidence.MessageKey))
+                {
+                    var alias = "A1";
+                    var summary = "酷狗官方App账号证据：已从买家图片识别到"
+                        + (string.IsNullOrWhiteSpace(accountEvidence.Nickname) ? "账号昵称未识别" : "账号昵称字段")
+                        + "、"
+                        + (string.IsNullOrWhiteSpace(accountEvidence.UserId) ? "账号ID未识别" : "账号ID字段")
+                        + "；原始昵称和ID已脱敏，不包含可直接识别账号的原值。";
+                    context.References[alias] = new ReceptionWorkflowEvidenceReference
+                    {
+                        Alias = alias,
+                        Kind = "account_evidence",
+                        Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|"
+                            + accountEvidence.MessageKey + "|" + accountEvidence.Nickname + "|" + accountEvidence.UserId),
+                        MessageKey = accountEvidence.MessageKey,
+                        Summary = summary,
+                        ObservedAtUtcTicks = accountEvidence.ObservedAt == DateTime.MinValue
+                            ? 0 : accountEvidence.ObservedAt.ToUniversalTime().Ticks
+                    };
+                    prompt.Append('[').Append(alias).Append("][account_evidence] ")
+                        .Append(summary).AppendLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent读取账号图片证据失败，本轮不使用账号候选：" + ex.Message, 5);
+            }
+
             context.PromptText = prompt.ToString().Trim();
             return context;
         }
@@ -305,6 +341,17 @@ namespace Bot.ChromeNs
             if (requiresVisualEvidence && !selected.Any(x => x.Kind == "vision_observation"))
             {
                 reason = "图片流程必须引用同一买家真实图片OCR/视觉观察证据";
+                return false;
+            }
+            var requiresAccountEvidence = (proposal["steps"] as JArray ?? new JArray())
+                .OfType<JObject>().Any(x =>
+                {
+                    var required = x["required_evidence"] as JArray ?? new JArray();
+                    return required.Any(e => Convert.ToString(e) == "account_evidence");
+                });
+            if (requiresAccountEvidence && !selected.Any(x => x.Kind == "account_evidence"))
+            {
+                reason = "账号核验步骤缺少来自买家图片的已验证酷狗账号证据";
                 return false;
             }
 
@@ -468,6 +515,12 @@ namespace Bot.ChromeNs
                     && !selected.Any(x => x.Kind == "vision_observation"))
                 {
                     reason = "图片步骤缺少真实图片来源证据";
+                    return false;
+                }
+                if (required.Any(x => Convert.ToString(x) == "account_evidence")
+                    && !selected.Any(x => x.Kind == "account_evidence"))
+                {
+                    reason = "账号核验步骤缺少已验证账号证据";
                     return false;
                 }
             }
