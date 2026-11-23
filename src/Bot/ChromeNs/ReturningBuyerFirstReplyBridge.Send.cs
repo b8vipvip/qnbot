@@ -1,18 +1,20 @@
 using BotLib;
 using Bot.ShopScope;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
     internal static partial class ReturningBuyerFirstReplyBridge
     {
-        private static async Task SendAsync(QN qn, string seller, string buyer, string question, string key)
+        private static async Task SendAsync(QN qn, string shopKey, string seller, string buyer, string question, DateTime detectedAt, string key)
         {
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
                 if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                     || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
                 {
                     Release(key);
@@ -22,8 +24,9 @@ namespace Bot.ChromeNs
 
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    await Task.Delay(120);
-                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply() || FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey))
+                    await Task.Delay(120).ConfigureAwait(false);
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                        || FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey))
                     {
                         Release(key);
                         return;
@@ -33,12 +36,36 @@ namespace Bot.ChromeNs
                     var answer = BotFeatureStore.ApplyOutputPolicy(cfg.Answer.Trim()) ?? "";
                     if (answer.Length == 0) { Release(key); return; }
                     answer = BotOutboundMessageFormatter.EnsureAiMarker(answer);
+
+                    string initialRelevanceReason;
+                    if (!ParallelReplyRelevanceGate.ShouldSend(
+                        seller, buyer, question, detectedAt, out initialRelevanceReason, false, shop.ShopKey))
+                    {
+                        Log.Info("回访首答发送前已存在更新消息或人工接管，阻止旧固定回复: reason=" + initialRelevanceReason);
+                        Release(key);
+                        return;
+                    }
+
+                    Func<bool> preSendGuard = () =>
+                    {
+                        if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                            || FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey))
+                            return false;
+                        string latestRelevanceReason;
+                        var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                            seller, buyer, question, detectedAt, out latestRelevanceReason, false, shop.ShopKey);
+                        if (!shouldSend)
+                            Log.Info("回访首答等待发送资源期间会话已变化，阻止迟到固定回复: reason=" + latestRelevanceReason);
+                        return shouldSend;
+                    };
+
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, "首条咨询固定回复-10分钟回访");
-                    var ok = await qn.SendTextWithRetryAsync(buyer, answer, 1);
+                    var ok = await qn.SendTextWithRetryAsync(
+                        buyer, answer, 1, CancellationToken.None, preSendGuard).ConfigureAwait(false);
                     if (ok)
                     {
                         FirstInquiryFixedReplyService.MarkDelivered(seller, buyer, shop.ShopKey);
-                        ReplyDeduplicationService.RememberDelivered(seller, buyer, answer);
+                        ReplyDeduplicationService.RememberDelivered(seller, buyer, answer, shop.ShopKey);
                         Log.Info("回访买家超过10分钟无互动，首次固定回复已发送: seller=" + seller + ", buyer=" + buyer);
                     }
                     else Release(key);
