@@ -2,6 +2,8 @@
 
 This document describes the generic, shop-scoped reception workflow catalog. It contains no merchant URL, vendor branding, product identifiers, or buyer messages.
 
+## Autonomous publication policy
+
 ## Product policy
 
 Reception Agent may create, edit, validate, publish, and roll back workflow definitions autonomously. A validated publication becomes the active version immediately. No administrator approval, manual activation token, or mandatory gray-rollout stage is required.
