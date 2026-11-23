@@ -160,12 +160,19 @@ namespace Bot.ChromeNs
                         request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
                         content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                         request.Content = content;
+                        Log.Info("服务端OCR真实图片上传开始: bytes=" + imageBytes.LongLength
+                            + ", sha256=" + ShortHash(sha256)
+                            + ", endpointSource=" + endpoint.Source
+                            + ", shopRef=" + Bot.ShopScope.ShopContextLocator.DiagnosticShopRef(shopKey));
 
                         using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false))
                         {
                             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                             if (!response.IsSuccessStatusCode)
                             {
+                                Log.ErrorWithMaxCount("服务端OCR上传已到达服务端但响应失败: HTTP "
+                                    + (int)response.StatusCode + ", bytes=" + imageBytes.LongLength
+                                    + ", sha256=" + ShortHash(sha256), 20);
                                 return Failure("服务端OCR HTTP " + (int)response.StatusCode + " " + LimitError(body), startedAt, sha256);
                             }
 
