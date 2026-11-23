@@ -154,3 +154,17 @@ def test_failed_image_download_can_retry_once_with_browser_session():
     assert "record.BrowserClient = browserClient" in cache
     assert "record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)" in cache
     assert "图片获取失败：直连下载=" in cache
+
+
+def test_withdrawn_image_cache_miss_fallback_rechecks_human_takeover_before_send():
+    source = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    fallback = source[
+        source.index("private static async Task SendCacheMissFallbackAsync"):
+        source.index("private static bool TryRebindRecentCachedImage")
+    ]
+
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in fallback
+    assert "lifecycleLease.IsCurrent" in fallback
+    assert "lifecycleLease.CancellationToken.IsCancellationRequested" in fallback
+    assert "preSendGuard" in fallback
+    assert "burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken, preSendGuard" in fallback
