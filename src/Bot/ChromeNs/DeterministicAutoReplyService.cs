@@ -483,7 +483,15 @@ namespace Bot.ChromeNs
             string source,
             int delaySeconds = 0)
         {
-            if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return false;
+            var sourceClient = qn == null ? null : qn.CDP;
+            var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            if (qn == null || item == null || sourceClient == null
+                || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || string.IsNullOrWhiteSpace(item.ShopKey)
+                || !string.Equals(sourceClient.ShopKey, item.ShopKey, StringComparison.Ordinal)
+                || sourceSessionId.Length == 0 || sourceServer == null
+                || !sourceServer.IsAuthoritativeShopSession(item.ShopKey, sourceSessionId)) return false;
             answer = FixedAutoReplyVariantService.Select(source, answer);
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer))
@@ -540,20 +548,26 @@ namespace Bot.ChromeNs
                     Log.Info(source + "等待独立发送延迟: seller=" + item.SellerNick
                         + ", buyer=" + item.BuyerNick + ", delaySeconds=" + boundedDelay);
                     await Task.Delay(TimeSpan.FromSeconds(boundedDelay), generationToken).ConfigureAwait(false);
-                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
-                        || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     {
-                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭");
                         return false;
                     }
                     ShopContext verifiedShop;
                     try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
                     catch { verifiedShop = null; }
+                    var currentClient = qn.CDP;
+                    var currentServer = MyWebSocketServer.WSocketSvrInst;
                     if (verifiedShop == null
                         || !string.Equals(verifiedShop.ShopKey, item.ShopKey, StringComparison.Ordinal)
                         || !string.Equals(verifiedShop.SellerNick, item.SellerNick, StringComparison.Ordinal)
-                        || !string.Equals(qn.CDP.ShopKey, item.ShopKey, StringComparison.Ordinal)
-                        || qn.CDP.IsShopIdentityRetired)
+                        || currentClient == null || !ReferenceEquals(currentClient, sourceClient)
+                        || currentClient.IsInvalidated || currentClient.IsShopIdentityRetired
+                        || !string.Equals(currentClient.ShopKey, item.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(currentClient.SessionId, sourceSessionId, StringComparison.Ordinal)
+                        || !ReferenceEquals(qn.CDP, currentClient)
+                        || currentServer == null
+                        || !currentServer.IsAuthoritativeShopSession(item.ShopKey, sourceSessionId))
                     {
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间原店铺ShopKey/CDP身份已变化");
                         Log.ErrorWithMaxCount(source + "延迟后店铺身份复核失败，已阻止跨店发送: shopRef="
