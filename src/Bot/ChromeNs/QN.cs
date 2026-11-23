@@ -204,7 +204,8 @@ namespace Bot.ChromeNs
             string buyer,
             string text,
             int retryCount,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<bool> preSendGuard = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             const string segmentToken = "{分段符}";
@@ -218,7 +219,7 @@ namespace Bot.ChromeNs
                 {
                     var segment = segments[segmentIndex];
                     Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
-                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken)) return false;
+                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)) return false;
                     if (segmentIndex + 1 < segments.Count) await Task.Delay(220, cancellationToken);
                 }
                 return true;
@@ -261,6 +262,8 @@ namespace Bot.ChromeNs
                     rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
                     return false;
                 }
+                if (!IsPreSendGuardSatisfied(preSendGuard, "首次发送"))
+                    return false;
                 var sendStartedAt = DateTime.Now;
                 var ok = await SendTextAsync(buyer, text);
                 if (!ok && rpa.LastSendWasCancelled)
@@ -308,6 +311,8 @@ namespace Bot.ChromeNs
                         rpa.SetSendFailure("重试ShopKey作用域复核", shopScopeReason);
                         return false;
                     }
+                    if (!IsPreSendGuardSatisfied(preSendGuard, "重试发送"))
+                        return false;
                     ok = await SendTextAsync(buyer, text);
                     if (!ok && rpa.LastSendWasCancelled)
                     {
@@ -350,6 +355,29 @@ namespace Bot.ChromeNs
                         + ", cancelled=" + rpa.LastSendWasCancelled
                         + ", reason=" + rpa.GetSendFailureReason());
                 }
+            }
+        }
+
+        private bool IsPreSendGuardSatisfied(Func<bool> preSendGuard, string stage)
+        {
+            if (preSendGuard == null) return true;
+            try
+            {
+                if (preSendGuard()) return true;
+                rpa.SetSendFailure(
+                    "发送前业务状态复核",
+                    "会话或业务证据在" + (stage ?? "发送") + "前发生变化，已阻止发送");
+                Log.Info("可靠发送在最终业务状态复核处被抑制: stage=" + (stage ?? string.Empty));
+                return false;
+            }
+            catch (Exception ex)
+            {
+                rpa.SetSendFailure(
+                    "发送前业务状态复核",
+                    "复核发生异常，已按安全策略阻止发送");
+                Log.ErrorWithMaxCount(
+                    "可靠发送最终业务状态复核异常，已阻止发送: " + ex.Message, 10);
+                return false;
             }
         }
 
