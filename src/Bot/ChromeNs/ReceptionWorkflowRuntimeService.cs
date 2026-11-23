@@ -353,7 +353,9 @@ namespace Bot.ChromeNs
                             string.Equals(Convert.ToString(x["state"]), candidateState, StringComparison.Ordinal));
                         if (candidateStep != null && candidateStep.Value<bool?>("terminal") == true) continue;
                         if (candidateRecord != null
-                            && !string.Equals(candidateState, candidateInitial, StringComparison.Ordinal))
+                            && (!string.Equals(candidateState, candidateInitial, StringComparison.Ordinal)
+                                || !string.IsNullOrWhiteSpace(Convert.ToString(candidateRecord["pending_source_key"]))
+                                || candidateRecord.Value<bool?>("delivery_uncertain") == true))
                         {
                             progressedFlows.Add(candidate);
                             continue;
