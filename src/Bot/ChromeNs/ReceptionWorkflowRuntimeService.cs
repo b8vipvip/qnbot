@@ -983,7 +983,8 @@ namespace Bot.ChromeNs
                     var buyerKey = Digest(decision.ShopKey + "|" + decision.Seller + "|" + decision.Buyer);
                     var record = FindRecord(document["records"] as JArray, buyerKey, decision.FlowId);
                     if (record == null
-                        || !string.Equals(Convert.ToString(record["pending_source_key"]), decision.SourceKey, StringComparison.Ordinal))
+                        || !string.Equals(Convert.ToString(record["pending_source_key"]), decision.SourceKey, StringComparison.Ordinal)
+                        || (record.Value<int?>("flow_version") ?? 0) != decision.FlowVersion)
                         return false;
                     record["pending_source_key"] = string.Empty;
                     record["pending_started_utc_ticks"] = 0;
