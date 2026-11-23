@@ -249,25 +249,33 @@ namespace Bot.ChromeNs
                 result.MatchedVisualKnowledgeId,
                 "ocr-direct-knowledge-v2",
                 StringComparison.Ordinal);
-            var deduplication = trustedOcrKnowledge
-                ? ReplyDeduplicationService.EnsureDistinct(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    result.Answer,
-                    lifecycleLease.CancellationToken,
-                    true)
-                : ReplyDeduplicationService.EnsureDistinct(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    result.Answer);
+            var deduplication = workflowDecision != null && workflowDecision.RequiresSend
+                ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                    result.Answer, burst.ShopKey, lifecycleLease.CancellationToken)
+                : (trustedOcrKnowledge
+                    ? ReplyDeduplicationService.EnsureDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        result.Answer, lifecycleLease.CancellationToken, true)
+                    : ReplyDeduplicationService.EnsureDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, result.Answer));
             if (trustedOcrKnowledge)
             {
                 Log.Info("OCR-first权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
+            if (string.IsNullOrWhiteSpace(answer)
+                || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lifecycleLease.MarkFailed("vision_pre_send_validation_failed");
+                if (ctl != null) ctl.SetStatus("发送前答案校验未通过，已阻止自动发送", false);
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "发送前答案校验未通过，已阻止自动发送", burst.ShopKey);
+                return;
+            }
             ShopContext visionShop = null;
             KugouReceptionConfig visionConfig = null;
             try
@@ -387,7 +395,11 @@ namespace Bot.ChromeNs
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                if (workflowDecision != null && workflowDecision.RequiresSend)
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+                else
+                    ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
                 if (workflowDecision == null && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                 {
                     KnowledgeLearningService.QueueLearn(
