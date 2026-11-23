@@ -328,8 +328,12 @@ namespace Bot.ChromeNs
             }
 
             string businessBlock;
-            if (KugouReceptionPolicy.BlockOutgoing(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock))
+            var businessBlocked = workflowDecision != null
+                ? KugouReceptionPolicy.BlockOutgoing(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock, burst.ShopKey)
+                : KugouReceptionPolicy.BlockOutgoing(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock);
+            if (businessBlocked)
             {
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lease.MarkCompleted("reception_business_guard_suppressed");
