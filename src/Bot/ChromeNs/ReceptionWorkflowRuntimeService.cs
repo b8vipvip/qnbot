@@ -323,6 +323,16 @@ namespace Bot.ChromeNs
             }).ToList();
             if (matchingFlows.Count == 0) return null;
 
+            // Read the visual ledger before taking the cross-process state lock. SQLite I/O
+            // must not extend the buyer/flow transaction lock or stall other shop conversations.
+            List<VisualKnowledgeObservationEntity> recentVisual;
+            try { recentVisual = RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 8); }
+            catch (Exception ex)
+            {
+                recentVisual = new List<VisualKnowledgeObservationEntity>();
+                Log.ErrorWithMaxCount("Reception Agent运行时读取视觉证据失败，本轮按缺少图片证据处理：" + ex.Message, 5);
+            }
+
             try
             {
                 var decision = Mutate(shop, document =>
@@ -458,8 +468,6 @@ namespace Bot.ChromeNs
                             .ToList();
                         var hasBuyer = question.Length > 0;
                         var hasOrder = matchingOrders.Count > 0;
-                        var recentVisual = RecentVisualContextService.GetRecentWorkflowEvidence(
-                            shopKey, seller, buyer, 8);
                         var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
                         var hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
                             x != null && x.ObservedAtTicks >= visualCutoffTicks);
