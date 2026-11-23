@@ -19,7 +19,8 @@ def test_session_learning_waits_five_minutes_and_keeps_audit_records():
     assert 'EnableVerifiedCorpusCorrectionWrites = true' in source
     assert '自动新增' in source
     assert '自动修订' in source
-    assert '通用AI建议仍待人工审核' in source
+    assert 'Reception Agent自动发布=' in source
+    assert 'receptionWorkflowWriteMode' in source
     assert "ResumePending" in source
 
 
