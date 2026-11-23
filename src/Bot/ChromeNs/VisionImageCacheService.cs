@@ -630,10 +630,10 @@ namespace Bot.ChromeNs
                 + "const data=canvas.toDataURL('image/png');const b=data.substring(data.indexOf(',')+1);"
                 + "if(!b||b.length>Math.ceil(max*4/3)+8)return null;return {ok:true,base64:b,mime:'image/png'};"
                 + "}catch(e){return null;}}"
-                + "let last='no_matching_image_source';"
-                + "for(const item of candidates){try{return await fromUrl(item.url);}catch(e){last='browser_fetch_failed';"
+                + "let last='no_matching_image_source';let resolvedUrl='';"
+                + "for(const item of candidates){resolvedUrl=item.url;try{return await fromUrl(item.url);}catch(e){last=String(e&&e.message||'browser_fetch_failed').slice(0,80);"
                 + "const canvas=fromCanvas(item.img);if(canvas)return canvas;}}"
-                + "return {ok:false,error:last,resolvedUrl:candidates.length?candidates[0].url:''};"
+                + "return {ok:false,error:last,resolvedUrl:resolvedUrl};"
                 + "})(" + json + ")";
         }
 
