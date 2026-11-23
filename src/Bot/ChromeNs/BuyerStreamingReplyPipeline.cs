@@ -417,6 +417,24 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Human seller replies are observational and intentionally do not cancel the
+            // generation. Re-read takeover/timeline evidence after any configured delay
+            // and immediately before entering the irreversible send path.
+            string finalRelevanceReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                out finalRelevanceReason, false, burst.ShopKey))
+            {
+                var finalSuppression = "发送前检测到人工接管或买家问题已变化，已阻止旧回复：" + finalRelevanceReason;
+                lease.MarkCompleted("streaming_final_relevance_suppressed");
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, finalSuppression);
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, finalSuppression, burst.ShopKey);
+                Log.Info("文本自动回复最终发送门禁阻止迟到回复: buyer=" + burst.BuyerNick
+                    + ", reason=" + finalRelevanceReason);
+                return;
+            }
+
             if (!lease.MarkSending("streaming_send_started"))
             {
                 const string invalidBeforeSend = "未发送：generation在发送前已失效";
