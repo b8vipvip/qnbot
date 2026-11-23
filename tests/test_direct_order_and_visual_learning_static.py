@@ -83,6 +83,9 @@ def test_visual_learning_links_source_atomically_and_revokes_entry_when_source_i
     assert "currentObservation.LearnedKnowledgeId = created.EntityId" in upsert
     assert "new List<object> { best, currentObservation }" in upsert
     assert "new List<object> { created, currentObservation }" in upsert
+    assert "Similarity(currentObservation.VisualQuestion" in upsert
+    assert "PreferLonger(best.VisualSummary, currentObservation.VisualSummary)" in upsert
+    assert "Similarity(observation.VisualQuestion" not in upsert
 
 
 def test_withdrawal_lookup_does_not_let_newer_alias_row_hide_an_older_tombstone():
