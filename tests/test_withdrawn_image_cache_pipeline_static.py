@@ -11,7 +11,8 @@ def read(path: str) -> str:
 def test_incoming_image_is_cached_before_burst_delay_and_withdrawal_is_recorded():
     source = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
 
-    assert "VisionImageCacheService.Prime(message, messageText, shopKey);" in source
+    assert "VisionImageCacheService.Prime(message, messageText, shopKey, browserClient);" in source
+    assert "CDPClient browserClient = null" in source
     assert "VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText, shopKey);" in source
     assert "图片若已收到将继续后台分析" in source
     assert source.index("MarkLatestBuyerImageWithdrawn") < source.index('return Skip("[撤回提示]"')
@@ -106,7 +107,7 @@ def test_vision_cache_records_and_withdrawal_markers_are_shopkey_isolated():
     assert "Records.Values" in cache
     assert "string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)" in cache
     assert "var current = QN.CurQN;" not in cache
-    assert "VisionImageCacheService.Prime(visionItem.Message, visionItem.DisplayText, burst.ShopKey)" in pipeline
+    assert "VisionImageCacheService.Prime(visionItem.Message, visionItem.DisplayText, burst.ShopKey, qn.CDP)" in pipeline
     assert "visionItem.Message,\n                burst.ShopKey)" in pipeline
     assert "out recent,\n                burst.ShopKey)" in pipeline
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in manual
@@ -120,3 +121,30 @@ def test_vision_cache_never_uses_global_current_qn_for_shop_identity():
     assert "GetSellerNick(message, shopKey)" in cache
     assert "GetSellerNick(notice, shopKey)" in cache
     assert "ResolveRuntimeByShopKey(shopKey)" in cache
+
+
+
+def test_image_download_falls_back_to_authenticated_qianniu_browser_and_message_history():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    assert "DownloadAndPersistFromBrowserAsync" in cache
+    assert "DownloadBuyerImageWithQianniuSession" in cache
+    assert "credentials:'include'" in cache
+    assert "im.singlemsg.GetRemoteHisMsg" in cache
+    assert "window._db&&window._db.msgDataMap" in cache
+    assert "message.originalData.fileId" in cache
+    assert "browserClient.ShopKey" in cache
+    assert "IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)" in qn
+    assert "IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)" in recovery
+    assert "responseTimeoutMs: responseTimeoutMs" in cdp
+    assert "safeResponseTimeoutMs" in cdp
+
+
+def test_failed_image_download_can_retry_once_with_browser_session():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    assert "record.DownloadAttempts < 2" in cache
+    assert "record.BrowserClient = browserClient" in cache
+    assert "record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)" in cache
+    assert "图片获取失败：直连下载=" in cache
