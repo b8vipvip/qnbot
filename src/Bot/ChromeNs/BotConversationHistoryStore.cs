@@ -750,31 +750,59 @@ namespace Bot.ChromeNs
             DateTime from,
             DateTime to)
         {
-            Initialize();
-            FlushNow();
-            EnsureSchema();
+            List<BotConversationHistoryEntity> records;
+            TryLoadRangeComplete(shopKey, seller, buyer, from, to, out records);
+            return records;
+        }
 
-            shopKey = (shopKey ?? string.Empty).Trim();
-            seller = (seller ?? string.Empty).Trim();
-            buyer = (buyer ?? string.Empty).Trim();
-            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
-                return new List<BotConversationHistoryEntity>();
-            BackfillLegacyShopRows(shopKey, seller);
-
-            var fromTicks = from == DateTime.MinValue
-                ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
-            var toTicks = to == DateTime.MinValue ? DateTime.Now.Ticks : to.Ticks;
-            if (toTicks < fromTicks)
-            {
-                var swap = fromTicks;
-                fromTicks = toTicks;
-                toTicks = swap;
-            }
-
+        // Safety-sensitive learning must distinguish an empty result from an unavailable
+        // or potentially truncated Bot-history index. A missing card is not proof that an
+        // assistant turn was human-authored.
+        public static bool TryLoadRangeComplete(
+            string shopKey,
+            string seller,
+            string buyer,
+            DateTime from,
+            DateTime to,
+            out List<BotConversationHistoryEntity> records)
+        {
+            records = new List<BotConversationHistoryEntity>();
             try
             {
+                Initialize();
+                FlushNow();
+                EnsureSchema();
+
+                shopKey = (shopKey ?? string.Empty).Trim();
+                seller = (seller ?? string.Empty).Trim();
+                buyer = (buyer ?? string.Empty).Trim();
+                if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
+                    return false;
+                BackfillLegacyShopRows(shopKey, seller);
+
+                var fromTicks = from == DateTime.MinValue
+                    ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
+                var toTicks = to == DateTime.MinValue ? DateTime.Now.Ticks : to.Ticks;
+                if (toTicks < fromTicks)
+                {
+                    var swap = fromTicks;
+                    fromTicks = toTicks;
+                    toTicks = swap;
+                }
+
+                // The session window must fit inside retention. When the global history
+                // table is at its cap, older Bot cards may already have been pruned.
+                if (fromTicks < DateTime.Now.AddDays(-RetentionDays).Ticks)
+                    return false;
+
                 lock (DbSync)
                 {
+                    var retained = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "order by UpdatedAtTicks desc limit " + MaxTotalRecords);
+                    if (retained == null || retained.Count >= MaxTotalRecords)
+                        return false;
+
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
                         "where ShopKey = ? and Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
@@ -784,18 +812,38 @@ namespace Bot.ChromeNs
                         buyer,
                         fromTicks,
                         toTicks);
-                    return (rows ?? new List<object>())
+                    if (rows == null) return false;
+                    records = rows
                         .OfType<BotConversationHistoryEntity>()
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
                         .OrderBy(x => x.CreatedAtTicks)
                         .ThenBy(x => x.UpdatedAtTicks)
                         .ToList();
+
+                    // A legacy row without ShopKey cannot safely be attributed to this
+                    // shop. If guarded backfill did not resolve it, the Bot echo index is
+                    // incomplete for this exact seller/buyer/session window.
+                    var unscoped = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "where (ShopKey is null or ShopKey = '') and Seller = ? and Buyer = ? "
+                        + "and CreatedAtTicks >= ? and CreatedAtTicks <= ? limit 1",
+                        seller,
+                        buyer,
+                        fromTicks,
+                        toTicks);
+                    if (unscoped != null && unscoped.Count > 0)
+                    {
+                        records = new List<BotConversationHistoryEntity>();
+                        return false;
+                    }
+                    return true;
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("读取完整接待Bot问答历史失败：" + ex.Message, 10);
-                return new List<BotConversationHistoryEntity>();
+                Log.ErrorWithMaxCount("读取完整接待Bot问答历史失败： " + ex.Message, 10);
+                records = new List<BotConversationHistoryEntity>();
+                return false;
             }
         }
 
