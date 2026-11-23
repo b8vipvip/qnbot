@@ -419,10 +419,11 @@ def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_e
     ]
 
     assert "GetNativeMessageId(x)" in builder
-    assert "OrderByDescending(x => x.Timestamp)" in builder
+    assert "OrderByDescending(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)" in builder
     assert ".Take(40)" in builder
-    assert "OrderBy(x => x.Timestamp)" in builder
-    assert builder.index("OrderByDescending(x => x.Timestamp)") < builder.index(".Take(40)") < builder.index("OrderBy(x => x.Timestamp)")
+    assert "OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)" in builder
+    assert builder.index("OrderByDescending(x => x.PreciseTimeTicks") < builder.index(".Take(40)") < builder.index("OrderBy(x => x.PreciseTimeTicks")
+    assert "ObservedAtUtcTicks = GetTurnObservedAtUtcTicks(turn)" in builder
     assert "GetNativeMessageId(turn)" in builder
     assert "seenNativeMessageIds.Add(nativeMessageId)" in builder
     assert "MessageKey = nativeMessageId" in builder
@@ -431,5 +432,7 @@ def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_e
     assert "IsValidHumanEvidencePair(evidence, selected, replyEvidence)" in flow_builder
     assert "manualReplies.All(reply => IsValidHumanEvidencePair(evidence, selected, reply))" in pair_gate
     assert "buyerQuestion" in pair_gate
+    assert "GetTurnObservedAtUtcTicks" in agent
+    assert "turn.PreciseTimeTicks > DateTime.MinValue.Ticks" in agent
     assert "TimeSpan.FromMinutes(30).Ticks" in pair_gate
     assert "humanRepliesBetween.Count == 1" in pair_gate
