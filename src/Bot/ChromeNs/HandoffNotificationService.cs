@@ -59,9 +59,28 @@ namespace Bot.ChromeNs
         private static bool HasSuccessfulChannel(string result)
         {
             if (string.IsNullOrWhiteSpace(result)) return false;
-            return result.IndexOf("成功", StringComparison.Ordinal) >= 0
-                || result.IndexOf("已发送", StringComparison.Ordinal) >= 0
-                || result.IndexOf("已受理", StringComparison.Ordinal) >= 0;
+            // SendAsync may aggregate several channels. Count a successful channel only
+            // when that channel's own result is positive; phrases such as "不成功" or
+            // "未受理" must never pin the cooldown reservation as a delivered handoff.
+            return result.Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(channel =>
+                {
+                    channel = (channel ?? string.Empty).Trim();
+                    if (channel.Length == 0
+                        || channel.IndexOf("失败", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("未成功", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("不成功", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("未发送", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("未受理", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("未配置", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("异常", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("错误", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("HTTP ", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return false;
+                    return channel.IndexOf("成功", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("已发送", StringComparison.Ordinal) >= 0
+                        || channel.IndexOf("已受理", StringComparison.Ordinal) >= 0;
+                });
         }
 
         public static void QueueNotify(
