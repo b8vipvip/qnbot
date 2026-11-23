@@ -117,3 +117,24 @@ def test_manual_learning_uses_one_reliable_bot_history_snapshot_for_all_seller_t
     assert "botCards == null || answerAt == DateTime.MinValue" in bot_classifier
     assert "card.AnswerReadyAtTicks" in bot_classifier
     assert "return true;" in bot_classifier
+
+
+def test_ambiguous_seller_echo_blocks_send_without_becoming_human_learning_evidence():
+    learning = _text(KNOWLEDGE)
+    rpa = _text(ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.cs")
+    method = learning[
+        learning.index("public static bool TryBlockForManualReply("):
+        learning.index("public static bool TryTakeSendBlock(")
+    ]
+    unavailable = method[
+        method.index("if (!BotConversationHistoryStore.TryLoadRangeComplete("):
+        method.index("if (IsBotAnswer(seller, buyer, sellerEcho")
+    ]
+    catch_block = method[method.index("catch (Exception ex)", method.index("ambiguousSellerEcho = true;")):]
+
+    assert "ambiguousSellerEcho = true;" in method
+    assert "return true;" in unavailable
+    assert "manualAnswer = sellerEcho;" in method
+    assert method.index("if (IsBotAnswer(seller, buyer, sellerEcho") < method.index("manualAnswer = sellerEcho;")
+    assert "return ambiguousSellerEcho;" in catch_block
+    assert "来源无法确认" in rpa
