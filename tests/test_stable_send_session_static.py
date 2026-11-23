@@ -58,7 +58,7 @@ def test_delivery_watchdog_starts_only_after_transaction_guards_and_is_shop_boun
     ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", draft_index)
     send_index = open_send.index("sendResult = await TrySendTextNativeFirstAsync", ensure_index)
     assert pre_session < pre_refresh < write_index < post_session < draft_index < ensure_index < send_index
-    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck, preSendGuard)" in native
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
     assert "pair.Value.Started == 0" in watchdog
@@ -104,12 +104,12 @@ def test_send_path_drops_wpf_context_and_never_uses_enter_for_delivery():
     native = text("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     send = qnrpa[qnrpa.index("public async Task<bool> SendTextAsync"):qnrpa.index("private string SellerNick")]
     assert "Task.Delay(180).ConfigureAwait(false)" in send
-    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed).ConfigureAwait(false)" in send
+    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed, preSendGuard).ConfigureAwait(false)" in send
     assert ".GetAwaiter().GetResult()" not in qnrpa
     assert "keybd_event(0x0D" not in qnrpa
     assert "PressEnter" not in qnrpa
     assert "TrySendTextNativeFirstAsync" in qnrpa
-    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck, preSendGuard)" in native
     assert "PressEnter" not in native
 
 
