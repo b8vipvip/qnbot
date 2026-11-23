@@ -88,7 +88,8 @@ namespace Bot.ChromeNs
         /// is never re-written merely because transport evidence arrived late.
         /// </summary>
         private async Task<bool> TrySendTextNativeFirstAsync(
-            string buyer, string text, DateTime sendStart, string shopKey, Func<bool> manualTakeoverCheck)
+            string buyer, string text, DateTime sendStart, string shopKey,
+            Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)
         {
             if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
             {
@@ -119,7 +120,8 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer, shopKey, sourceClient).ConfigureAwait(false);
+            var domTriggered = await TryTriggerSendViaCdpDomAsync(
+                buyer, shopKey, sourceClient, preSendGuard).ConfigureAwait(false);
             if (domTriggered)
             {
                 if (await WaitForTextSubmissionAcceptedAsync(
@@ -161,7 +163,8 @@ namespace Bot.ChromeNs
                 return false;
             }
             var hwndPosted = await RunUiActionAsync(
-                TryPostSafeMainSendMouseMessage,
+                () => IsPreSendGuardSatisfied(preSendGuard, "HWND安全发送")
+                    && TryPostSafeMainSendMouseMessage(),
                 "发送按钮HWND安全消息",
                 UiActionTimeoutMs).ConfigureAwait(false);
             if (hwndPosted)
@@ -197,7 +200,8 @@ namespace Bot.ChromeNs
                 return false;
             }
             var safeUiaInvoked = await RunUiActionAsync(
-                TryInvokeCachedSendButtonNow,
+                () => IsPreSendGuardSatisfied(preSendGuard, "安全UIA发送")
+                    && TryInvokeCachedSendButtonNow(),
                 "发送按钮左侧UIA安全调用（原生前置）",
                 UiActionTimeoutMs).ConfigureAwait(false);
             if (safeUiaInvoked)
@@ -233,7 +237,7 @@ namespace Bot.ChromeNs
                 return false;
             }
             var uiResult = await TrySendTextViaUiaAsync(
-                buyer, text, sendStart, manualTakeoverCheck).ConfigureAwait(false);
+                buyer, text, sendStart, manualTakeoverCheck, preSendGuard).ConfigureAwait(false);
             if (uiResult) return true;
             if (await StopIfPlatformSendBlockedAsync(buyer, text, "UIA发送后", shopKey).ConfigureAwait(false)) return false;
 
@@ -267,9 +271,10 @@ namespace Bot.ChromeNs
         }
 
         private async Task<bool> TryTriggerSendViaCdpDomAsync(
-            string buyer, string shopKey, CDPClient sourceClient)
+            string buyer, string shopKey, CDPClient sourceClient, Func<bool> preSendGuard)
         {
             if (!IsExpectedShopSessionCurrent(sourceClient, shopKey)) return false;
+            if (!IsPreSendGuardSatisfied(preSendGuard, "CDP页面发送")) return false;
             const string expression = @"(function(){
   try {
     var norm=function(v){return String(v||'').replace(/\s+/g,' ').trim();};
