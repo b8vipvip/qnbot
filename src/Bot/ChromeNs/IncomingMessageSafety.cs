@@ -318,7 +318,7 @@ namespace Bot.ChromeNs
                 // Start downloading immediately, before the burst quiet delay. The complete image
                 // is written under the persistent user-data directory and remains available even
                 // if the buyer withdraws the remote message a moment later.
-                VisionImageCacheService.Prime(message, messageText, shopKey);
+                VisionImageCacheService.Prime(message, messageText, shopKey, browserClient);
             }
             if (!string.IsNullOrWhiteSpace(unsupportedType))
             {
