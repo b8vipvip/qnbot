@@ -266,14 +266,14 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "EnsurePending(" in rpa and "shopKey" in rpa
     assert "CancelPending(" in rpa and "shopKey" in rpa
     assert "if (shopKey.Length == 0)" in rpa
-    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed)" in rpa
+    assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed, preSendGuard)" in rpa
     assert "client.IsShopIdentityRetired" in send_guard
     assert "client.ShopKey" in send_guard
     assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in send_guard
     assert "server.IsAuthoritativeShopSession(bound, client.SessionId)" in send_guard
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in send_guard
     assert "ResolveRuntimeBySellerIdentity(current.Result)" in send_guard
-    assert "TrySendTextNativeFirstAsync(\n            string buyer, string text, DateTime sendStart, string shopKey, Func<bool> manualTakeoverCheck)" in native_send
+    assert "TrySendTextNativeFirstAsync(\n            string buyer, string text, DateTime sendStart, string shopKey, Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native_send
     assert "WaitForTextSubmissionAcceptedAsync(" in send_guard
     assert "string method, int timeoutMs, string shopKey" in send_guard
     assert "ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey)" in send_guard
