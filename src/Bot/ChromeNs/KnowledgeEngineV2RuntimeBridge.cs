@@ -265,6 +265,42 @@ namespace Bot.ChromeNs
                 return true;
             }
 
+            var replyRules = BotFeatureStore.GetAutoReplyRules();
+            var directDelaySeconds = Math.Max(0, Math.Min(300,
+                replyRules == null ? 3 : replyRules.KnowledgeDirectReplyDelaySeconds));
+            if (directDelaySeconds > 0)
+            {
+                if (ctl != null) ctl.SetStatus("知识库直答已生成，等待" + directDelaySeconds + "秒发送", true);
+                Log.Info("Knowledge Engine V2本地直答等待配置延迟: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick + ", delaySeconds=" + directDelaySeconds);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds), lease.CancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间已人工接管或新消息使本轮失效");
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge V2直答延迟期间generation已失效", burst.ShopKey);
+                    return true;
+                }
+                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot或自动回复开关已关闭");
+                    lease.MarkCompleted("knowledge_v2_direct_reply_disabled_during_delay");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    return true;
+                }
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                    || !await lease.ConfirmStableAsync(80).ConfigureAwait(false))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：延迟结束后generation或会话稳定性校验失败");
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge V2直答延迟后稳定性校验失败", burst.ShopKey);
+                    return true;
+                }
+            }
+
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");

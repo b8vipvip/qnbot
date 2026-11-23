@@ -13,6 +13,7 @@ namespace Bot.ChromeNs
     {
         public bool Enabled { get; set; }
         public string Answer { get; set; }
+        public int DelaySeconds { get; set; }
     }
 
     internal static class FirstInquiryFixedReplyService
@@ -24,6 +25,7 @@ namespace Bot.ChromeNs
         private const string SettingsScope = "feature";
         private const string EnabledKey = "FirstInquiryFixedReplyEnabled";
         private const string AnswerKey = "FirstInquiryFixedReplyAnswer";
+        private const string DelayKey = "FirstInquiryFixedReplyDelaySeconds";
 
         private static readonly HashSet<string> GreetingOnlyTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -55,19 +57,36 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, DateTime> KnownNonProblemMessageKeys =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
-        public static FirstInquiryFixedReplySettings Load(string seller)
+        public static FirstInquiryFixedReplySettings Load(string seller, string shopKey = null)
         {
-            return RunInShopScope(seller, LoadCurrentScope);
+            return RunInShopScope(seller, LoadCurrentScope, shopKey);
+        }
+
+        public static int ClampDelaySeconds(int seconds)
+        {
+            return Math.Max(0, Math.Min(300, seconds));
+        }
+
+        public static int GetDelaySeconds(string seller, string shopKey = null)
+        {
+            var settings = Load(seller, shopKey);
+            return ClampDelaySeconds(settings == null ? 0 : settings.DelaySeconds);
         }
 
         public static void Save(string seller, bool enabled, string answer)
+        {
+            Save(seller, enabled, answer, 0);
+        }
+
+        public static void Save(string seller, bool enabled, string answer, int delaySeconds, string shopKey = null)
         {
             var saved = RunInShopScope(seller, delegate
             {
                 BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(EnabledKey, SettingsScope, enabled ? "true" : "false");
                 BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(AnswerKey, SettingsScope, (answer ?? string.Empty).Trim());
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(DelayKey, SettingsScope, ClampDelaySeconds(delaySeconds).ToString());
                 return true;
-            });
+            }, shopKey);
             if (!saved)
                 throw new InvalidOperationException("无法确认首条咨询固定回复配置所属店铺，已阻止保存到全局设置。");
         }
@@ -480,8 +499,16 @@ namespace Bot.ChromeNs
             return new FirstInquiryFixedReplySettings
             {
                 Enabled = string.Equals(enabledText, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(enabledText, "1", StringComparison.OrdinalIgnoreCase),
-                Answer = string.IsNullOrWhiteSpace(answer) ? string.Empty : answer
+                Answer = string.IsNullOrWhiteSpace(answer) ? string.Empty : answer,
+                DelaySeconds = ClampDelaySeconds(ParseDelaySeconds(
+                    BotLib.Db.Sqlite.PersistentParams.GetParam2Key(DelayKey, SettingsScope, "0")))
             };
+        }
+
+        private static int ParseDelaySeconds(string value)
+        {
+            int seconds;
+            return int.TryParse(value, out seconds) ? seconds : 0;
         }
 
         private static void CleanupRuntimeState(string key, DateTime now)

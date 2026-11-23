@@ -415,7 +415,8 @@ namespace Bot.ChromeNs
                     qn,
                     item,
                     firstReply,
-                    "首条咨询固定回复").ConfigureAwait(false);
+                    "首条咨询固定回复",
+                    FirstInquiryFixedReplyService.GetDelaySeconds(item.SellerNick, item.ShopKey)).ConfigureAwait(false);
                 if (firstOk)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(
@@ -479,7 +480,8 @@ namespace Bot.ChromeNs
             QN qn,
             BuyerMessageBurstItem item,
             string answer,
-            string source)
+            string source,
+            int delaySeconds = 0)
         {
             if (qn == null || qn.CDP == null || qn.CDP.IsShopIdentityRetired) return false;
             answer = FixedAutoReplyVariantService.Select(source, answer);
@@ -532,6 +534,19 @@ namespace Bot.ChromeNs
                     source + "在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
+                var boundedDelay = Math.Max(0, Math.Min(300, delaySeconds));
+                if (boundedDelay > 0)
+                {
+                    Log.Info(source + "等待独立发送延迟: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", delaySeconds=" + boundedDelay);
+                    await Task.Delay(TimeSpan.FromSeconds(boundedDelay), generationToken).ConfigureAwait(false);
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                        || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
+                        return false;
+                    }
+                }
                 if (item.SessionGeneration > 0
                     && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
                 {

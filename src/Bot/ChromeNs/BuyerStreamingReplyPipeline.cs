@@ -349,6 +349,47 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (IsLocalKnowledgeDirectAnswerSource(answerSource))
+            {
+                var replyRules = BotFeatureStore.GetAutoReplyRules();
+                var directDelaySeconds = Math.Max(0, Math.Min(300,
+                    replyRules == null ? 3 : replyRules.KnowledgeDirectReplyDelaySeconds));
+                if (directDelaySeconds > 0)
+                {
+                    if (conversationCtl != null)
+                        conversationCtl.SetProcessing("本地知识直答已生成，等待" + directDelaySeconds + "秒发送");
+                    Log.Info("Smart Reply本地知识直答等待配置延迟: seller=" + burst.SellerNick
+                        + ", buyer=" + burst.BuyerNick + ", source=" + answerSource
+                        + ", delaySeconds=" + directDelaySeconds);
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds), lease.CancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        const string cancelledDuringDelay = "未发送：知识直答延迟期间本轮已失效";
+                        if (conversationCtl != null) conversationCtl.SetSendResult(false, cancelledDuringDelay);
+                        ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringDelay, burst.ShopKey);
+                        return;
+                    }
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    {
+                        if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：延迟期间Bot或自动回复开关已关闭");
+                        lease.MarkCompleted("streaming_knowledge_direct_disabled_during_delay");
+                        ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                        return;
+                    }
+                    if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                        || !await lease.ConfirmStableAsync(80).ConfigureAwait(false))
+                    {
+                        const string unstableAfterDelay = "未发送：延迟结束后generation或会话稳定性校验失败";
+                        if (conversationCtl != null) conversationCtl.SetSendResult(false, unstableAfterDelay);
+                        ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstableAfterDelay, burst.ShopKey);
+                        return;
+                    }
+                }
+            }
+
             if (!lease.MarkSending("streaming_send_started"))
             {
                 const string invalidBeforeSend = "未发送：generation在发送前已失效";
@@ -400,6 +441,12 @@ namespace Bot.ChromeNs
             Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+        }
+
+        private static bool IsLocalKnowledgeDirectAnswerSource(string source)
+        {
+            return string.Equals(source, "智能路由-本地直答", StringComparison.Ordinal)
+                || string.Equals(source, "智能路由-离线知识兜底", StringComparison.Ordinal);
         }
 
         private static async Task<T> AwaitWithCancellationAsync<T>(Task<T> task, CancellationToken token)

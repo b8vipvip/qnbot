@@ -67,8 +67,8 @@ namespace Bot.ChromeNs
                 // Public cursor operations also call Initialize. Keep them blocked
                 // until the first disk read has completed and the timer is installed.
                 if (_initialized != 0) return;
-                _initialized = 1;
                 AutoDeliveryConfirmationLedger.Initialize();
+                _cursorStateUnavailable = false;
                 bool loadedSuccessfully;
                 _cursors = LoadCursors(out loadedSuccessfully);
                 if (!loadedSuccessfully)
@@ -82,7 +82,9 @@ namespace Bot.ChromeNs
                     _cursorStateUnavailable = true;
                     return;
                 }
-                _timer = new Timer(_ => Tick(), null, 1200, 1800);
+                _timer = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
+                _initialized = 1;
+                _timer.Change(1200, 1800);
             }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
         }
