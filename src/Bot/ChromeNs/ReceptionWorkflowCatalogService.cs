@@ -221,6 +221,9 @@ namespace Bot.ChromeNs
                     if (!stages.Contains(next))
                         throw new InvalidDataException("下一状态在当前流程中不存在：" + next);
                 }
+                var initialState = Convert.ToString(flow["initial_state"]);
+                if (!string.IsNullOrWhiteSpace(initialState) && !stages.Contains(initialState))
+                    throw new InvalidDataException("流程初始状态未在步骤中定义");
 
                 var sourceEvidence = flow["source_evidence"] as JArray;
                 if (sourceEvidence != null)
@@ -267,7 +270,9 @@ namespace Bot.ChromeNs
                         ["flow_id"] = Convert.ToString(flow["flow_id"]),
                         ["flow_version"] = flow.Value<int>("flow_version"),
                         ["status"] = "active",
-                        ["initial_state"] = SafeMetadata(flow["initial_state"], 80),
+                        ["initial_state"] = SafeMetadata(flow["initial_state"], 80).Length > 0
+                            ? SafeMetadata(flow["initial_state"], 80)
+                            : Convert.ToString(((JObject)((JArray)flow["steps"])[0])["state"]),
                         ["product_ids"] = flow["product_ids"].DeepClone(),
                         ["sku_ids"] = flow["sku_ids"].DeepClone(),
                         ["confidence"] = flow.Value<double?>("confidence") ?? 0,
@@ -591,6 +596,7 @@ namespace Bot.ChromeNs
                 WriteCatalog(path, restored);
             }
 
+            ReceptionWorkflowRuntimeService.InvalidateShop(shopKey);
             return "已自动回滚到上一有效发布版本的内容，并以新修订版本 "
                 + restoredRevision.ToString(CultureInfo.InvariantCulture) + " 立即生效。";
         }
