@@ -447,3 +447,15 @@ def test_manual_reconcile_comment_forces_executor_even_when_observation_is_uncha
     observer = read(".github/gptauto/observer.py")
     assert 'event in {"workflow_dispatch", "issue_comment"}' in observer
     assert "and not (previous_terminal_done and authority[\"terminal_done\"])" in observer
+
+
+
+def test_reconcile_reuses_exact_sha_api_ci_when_default_branch_has_advanced():
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    validation = reconcile[reconcile.index("id: validation-plan"):reconcile.index("- name: Wait for terminal post-merge validation gates")]
+    assert 'if [[ "$current_main" != "$MERGE_SHA" && -z "$existing_success"' in validation
+    assert '"$primary" == "CI" || "$primary" == "Build and Test"' in validation
+    assert 'select(.name == "API control plane CI" and' in validation
+    assert 'primary="API control plane CI"' in validation
+    assert 'Reusing exact-SHA API control-plane CI run' in validation
+    assert 'Default branch advanced to $current_main and no successful exact-SHA validation exists' in validation
