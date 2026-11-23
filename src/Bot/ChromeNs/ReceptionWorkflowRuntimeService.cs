@@ -459,7 +459,8 @@ namespace Bot.ChromeNs
                         var hasRecentImage = recentVisual != null && recentVisual.Any(x =>
                             x != null && x.ObservedAtTicks >= DateTime.Now.AddMinutes(-candidateTimeout).Ticks);
                         var imageTrigger = (isImage || hasRecentImage)
-                            && candidateRequired.Any(x => Convert.ToString(x) == "image_message");
+                            && candidateRequired.Any(x => Convert.ToString(x) == "image_message"
+                                || Convert.ToString(x) == "vision_observation");
                         var accountTrigger = isImage
                             && candidateRequired.Any(x => Convert.ToString(x) == "account_evidence");
                         if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords))
