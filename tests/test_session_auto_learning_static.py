@@ -1094,6 +1094,7 @@ def test_incomplete_bot_echo_history_never_promotes_unknown_seller_turns_to_huma
     ]
 
     assert "retained.Count >= MaxTotalRecords" in loader
+    assert "retainedRows.Min(x => x.UpdatedAtTicks) >= fromTicks" in loader
     assert "fromTicks < DateTime.Now.AddDays(-RetentionDays).Ticks" in loader
     assert "return false;" in loader
     assert "TryLoadRangeComplete(" in finalize
