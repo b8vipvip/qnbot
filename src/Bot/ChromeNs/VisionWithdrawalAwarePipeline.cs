@@ -1,5 +1,6 @@
 using Bot.AssistWindow.Widget.Robot;
 using BotLib;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
