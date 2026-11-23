@@ -892,7 +892,9 @@ namespace Bot.ChromeNs
             if (!KnowledgeLearningService.TryBlockForManualReply(
                 _qn, buyer, text, out manualQuestion, out manualAnswer, shopKey, out bypassed))
                 return false;
-            SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
+            SetSendCancellation("人工接管", string.IsNullOrWhiteSpace(manualAnswer)
+                ? "检测到客服消息但来源无法确认，为避免覆盖人工回复已停止本次Bot发送"
+                : "检测到客服已人工回复，本次Bot发送已停止");
             return true;
         }
 
