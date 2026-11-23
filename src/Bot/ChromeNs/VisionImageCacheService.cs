@@ -132,6 +132,11 @@ namespace Bot.ChromeNs
 
                 EnsureCleanupTimer();
                 var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
+                if (string.IsNullOrWhiteSpace(messageKey) && string.IsNullOrWhiteSpace(url))
+                {
+                    Log.ErrorWithMaxCount("买家图片缺少可用消息身份和媒体地址，已拒绝建立可能串图的缓存记录。", 20);
+                    return;
+                }
                 var key = BuildKey(shopKey, messageKey, url);
                 CacheRecord record;
                 var created = false;
@@ -275,7 +280,8 @@ namespace Bot.ChromeNs
             QNChatMessage message,
             AiEndpointConfig endpoint,
             CancellationToken cancellationToken,
-            string shopKey = null)
+            string shopKey = null,
+            CDPClient browserClient = null)
         {
             if (message == null) return Fail("图片消息为空");
             var url = VisionImageResolver.ExtractUrl(message);
@@ -285,12 +291,8 @@ namespace Bot.ChromeNs
             if (shop == null) return Fail("无法确认图片消息所属ShopKey，已阻止跨店缓存读取");
             shopKey = shop.ShopKey;
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, GetMessageText(message));
+            Prime(message, GetMessageText(message), shopKey, browserClient);
             var record = FindRecord(messageKey, url, shopKey);
-            if (record == null)
-            {
-                Prime(message, string.Empty, shopKey);
-                record = FindRecord(messageKey, url, shopKey);
-            }
             if (record == null) return Fail("图片本地缓存任务未建立");
 
             CacheDownloadResult cached;
