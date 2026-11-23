@@ -52,6 +52,12 @@ def test_manual_visual_learning_waits_for_inflight_vision_instead_of_cancelling_
     assert "for (var attempt = 0; attempt < 60; attempt++)" in source
     assert "await Task.Delay(2000)" in source
     assert "LoadObservation(pending)" in source
+    poll = source[
+        source.index("for (var attempt = 0; attempt < 60; attempt++)"):
+        source.index("if (observation != null", source.index("for (var attempt = 0; attempt < 60; attempt++)"))
+    ]
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn" in poll
+    assert poll.index("IsMessageKeyWithdrawn") < poll.index("LoadObservation(pending)")
     assert "Vision.ExecuteAsync(task, CancellationToken.None)" in withdrawal
     assert "人工视觉回复等待两分钟仍未取得图片语义" in source
 
