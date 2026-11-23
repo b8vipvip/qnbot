@@ -92,3 +92,20 @@ def test_withdrawal_lookup_does_not_let_newer_alias_row_hide_an_older_tombstone(
     assert "limit 1" not in method
     assert "observations.Any(observation =>" in method
     assert 'observation.Status, "图片已撤回"' in method
+
+
+def test_manual_visual_learning_uses_shared_atomic_withdrawal_gate():
+    service = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    manual = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+    helper = service[
+        service.index("internal static bool TrySaveManualVisualKnowledge"):
+        service.index("public static bool TryFindMatch")
+    ]
+
+    assert "lock (DbSync)" in helper
+    assert 'current.Status, "图片已撤回"' in helper
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in helper
+    assert "knowledge.ShopKey, current.ShopKey" in helper
+    assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { knowledge, current })" in helper
+    assert "VisualKnowledgeLearningService.TrySaveManualVisualKnowledge(observation, target)" in manual
+    assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { target, observation })" not in manual
