@@ -137,6 +137,7 @@ def test_image_download_falls_back_to_authenticated_qianniu_browser_and_message_
     assert "resolvedUrl:resolvedUrl" in cache
     assert "record.Url = payload.resolvedUrl" in cache
     assert "IsHttpImageUrl(payload.resolvedUrl)" in cache
+    assert "买家图片未能转存到客户端缓存，服务端OCR不会收到图片二进制" in cache
     assert "window._db&&window._db.msgDataMap" in cache
     assert "tokens.some(t=>vals.some(v=>v===t||" in cache
     assert "fileId = original == null ? string.Empty : (original.fileId ?? string.Empty)" in cache
