@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
     {
         public string Nickname { get; set; }
         public string UserId { get; set; }
+        public string MessageKey { get; set; }
         public DateTime ObservedAt { get; set; }
         public string Summary { get; set; }
     }
@@ -196,6 +197,7 @@ namespace Bot.ChromeNs
                 {
                     Nickname = nickname,
                     UserId = userId,
+                    MessageKey = item.MessageKey,
                     ObservedAt = SafeTime(item.ObservedAtTicks),
                     Summary = CleanForPrompt(item.VisualSummary, 220)
                 };
