@@ -80,12 +80,19 @@ namespace Bot.ChromeNs
 
         public static void Save(string seller, bool enabled, string answer, int delaySeconds, string shopKey = null)
         {
+            var expectedEnabled = enabled ? "true" : "false";
+            var expectedAnswer = (answer ?? string.Empty).Trim();
+            var expectedDelay = ClampDelaySeconds(delaySeconds).ToString();
             var saved = RunInShopScope(seller, delegate
             {
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(EnabledKey, SettingsScope, enabled ? "true" : "false");
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(AnswerKey, SettingsScope, (answer ?? string.Empty).Trim());
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(DelayKey, SettingsScope, ClampDelaySeconds(delaySeconds).ToString());
-                return true;
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(EnabledKey, SettingsScope, expectedEnabled);
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(AnswerKey, SettingsScope, expectedAnswer);
+                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(DelayKey, SettingsScope, expectedDelay);
+                // PersistentParams write helpers are best-effort/void. Read back all three
+                // values so cloud sync cannot acknowledge a delay that failed to persist.
+                return string.Equals(BotLib.Db.Sqlite.PersistentParams.GetParam2Key(EnabledKey, SettingsScope, "true"), expectedEnabled, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(BotLib.Db.Sqlite.PersistentParams.GetParam2Key(AnswerKey, SettingsScope, DefaultAnswer), expectedAnswer, StringComparison.Ordinal)
+                    && string.Equals(BotLib.Db.Sqlite.PersistentParams.GetParam2Key(DelayKey, SettingsScope, "0"), expectedDelay, StringComparison.Ordinal);
             }, shopKey);
             if (!saved)
                 throw new InvalidOperationException("无法确认首条咨询固定回复配置所属店铺，已阻止保存到全局设置。");
