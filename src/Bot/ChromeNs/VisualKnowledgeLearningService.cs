@@ -209,7 +209,22 @@ namespace Bot.ChromeNs
                     observation.Status = "图片已撤回";
                     observation.UpdatedAtTicks = DateTime.Now.Ticks;
                 }
-                DbHelper.Db.SaveRecordsInTransaction(new List<object> { observation });
+                var updates = new List<object> { observation };
+                if (!string.IsNullOrWhiteSpace(observation.LearnedKnowledgeId))
+                {
+                    var learned = SelectKnowledge(
+                        "where EntityId = ? limit 1", observation.LearnedKnowledgeId).FirstOrDefault();
+                    if (learned != null && learned.Enabled)
+                    {
+                        // A withdrawn image must not leave a visual FAQ active after it was
+                        // learned from that exact message. Re-learning from later valid evidence
+                        // can safely re-enable the entry.
+                        learned.Enabled = false;
+                        learned.UpdatedAtTicks = DateTime.Now.Ticks;
+                        updates.Add(learned);
+                    }
+                }
+                DbHelper.Db.SaveRecordsInTransaction(updates);
                 observationId = observation.EntityId;
             }
 
@@ -398,7 +413,13 @@ namespace Bot.ChromeNs
                         best.Confirmations = Math.Max(1, best.Confirmations) + 1;
                         best.Enabled = true;
                         best.UpdatedAtTicks = now;
-                        DbHelper.Db.SaveRecordsInTransaction(new List<object> { best });
+                        currentObservation.Status = "已学习";
+                        currentObservation.LearnedKnowledgeId = best.EntityId;
+                        currentObservation.UpdatedAtTicks = now;
+                        // Persist the knowledge and its exact source observation atomically.
+                        // Withdrawal can then either win before this transaction or disable
+                        // the linked entry after it; it cannot race between the two writes.
+                        DbHelper.Db.SaveRecordsInTransaction(new List<object> { best, currentObservation });
                         return best;
                     }
 
@@ -417,7 +438,10 @@ namespace Bot.ChromeNs
                         CreatedAtTicks = now,
                         UpdatedAtTicks = now
                     };
-                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { created });
+                    currentObservation.Status = "已学习";
+                    currentObservation.LearnedKnowledgeId = created.EntityId;
+                    currentObservation.UpdatedAtTicks = now;
+                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { created, currentObservation });
                     DbHelper.Db.Execute("delete from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? and EntityId not in "
                         + "(select EntityId from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "
                         + MaxKnowledgeEntriesPerSeller + ")", observation.ShopKey, observation.Seller, observation.ShopKey, observation.Seller);
