@@ -212,7 +212,9 @@ namespace Bot.ChromeNs
                     // Check it on every poll as well as the durable observation tombstone:
                     // persistence can fail while the cache has already marked the image withdrawn.
                     if (VisionImageCacheService.IsMessageKeyWithdrawn(
-                        pending.Seller, pending.Buyer, pending.MessageKey, pending.ShopKey))
+                            pending.Seller, pending.Buyer, pending.MessageKey, pending.ShopKey)
+                        || VisualKnowledgeLearningService.IsObservationWithdrawn(
+                            pending.ShopKey, pending.Seller, pending.Buyer, pending.MessageKey))
                     {
                         Log.Info("图片已撤回，立即停止等待人工视觉学习证据: seller="
                             + pending.Seller + ", buyer=" + pending.Buyer);
