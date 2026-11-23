@@ -53,4 +53,4 @@ def test_first_inquiry_and_segmented_order_replies_share_the_reliable_send_path(
     assert "FirstInquiryFixedReplyService.TryResolve" in deterministic
     assert "await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in deterministic
     assert 'const string segmentToken = "{分段符}"' in qn
-    assert "await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken)" in qn
+    assert "await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)" in qn
