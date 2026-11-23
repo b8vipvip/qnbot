@@ -472,3 +472,22 @@ def test_github_cli_mutations_put_endpoint_before_method_flags():
     assert 'github_api_write PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in executor
     assert 'github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"' in reconcile
     assert 'github_api_write()' in read(".github/gptauto/dispatch_workflow.sh")
+
+
+
+def test_gptauto_multiline_comment_writes_use_the_shared_json_rest_writer():
+    helper = read(".github/gptauto/dispatch_workflow.sh")
+    for path in (
+        ".github/workflows/gptauto-executor.yml",
+        ".github/workflows/gptauto-reconcile.yml",
+        ".github/workflows/gptauto-repair.yml",
+    ):
+        workflow = read(path)
+        assert "source .github/gptauto/dispatch_workflow.sh" in workflow
+        assert "github_api_write PATCH" in workflow
+        assert "github_api_write POST" in workflow
+        assert "--method PATCH -f body=" not in workflow
+        assert "--method POST -f body=" not in workflow
+    assert "local method=" in helper
+    assert "200|201|202|204" in helper
+    assert "Content-Type: application/json" in helper
