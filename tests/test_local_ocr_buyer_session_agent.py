@@ -15,14 +15,16 @@ def test_server_ocr_client_is_compiled_cached_authenticated_and_used_by_vision()
     assert "LocalOcrService.cs" in props
     assert "ComputeSha256" in service
     assert "ocr-cache" in service
-    assert "ResolveControlPlaneEndpoint" in service
+    assert "ResolveControlPlaneEndpoint(sellerNick, shopKey)" in service
+    assert "ResolveRuntimeByShopKey(shopKey)" in service
+    assert "IsServerOcrConfigured" in service
     assert 'new AuthenticationHeaderValue("Bearer", endpoint.ApiKey)' in service
     assert '"X-Image-Sha256"' in service
     assert "CancellationTokenSource.CreateLinkedTokenSource" in service
     assert "timeout.CancelAfter(safeTimeout)" in service
     assert '"/api/runtime/v1/ocr"' in service
     assert "LocalOcrWorker.exe" not in service
-    assert "LocalOcrService.TryRecognizeAsync(image.LocalCachePath" in vision
+    assert "image.LocalCachePath, task.SellerNick, task.ShopKey, cts.Token" in vision
     assert "LocalOcrService.BuildPromptEvidence(localOcr)" in vision
     assert "服务端OCR预识别，仅作辅助证据" in service
 
