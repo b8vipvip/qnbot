@@ -174,6 +174,13 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool SameBuyerForWithdrawal(string seller, string left, string right)
+        {
+            if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)) return true;
+            try { return BuyerIdentityAliasService.AreEquivalent(seller, left, right); }
+            catch { return false; }
+        }
+
         internal static void MarkObservationWithdrawn(
             string shopKey, string seller, string buyer, string messageKey)
         {
@@ -185,16 +192,18 @@ namespace Bot.ChromeNs
                 return;
 
             EnsureInitialized();
-            string observationId = string.Empty;
+            var observationIds = new List<string>();
             lock (DbSync)
             {
-                var observation = SelectObservations(
-                    "where ShopKey = ? and Seller = ? and Buyer = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
-                    shopKey, seller, buyer, messageKey).FirstOrDefault();
-                if (observation == null)
+                var matching = SelectObservations(
+                    "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc",
+                    shopKey, seller, messageKey)
+                    .Where(x => x != null && SameBuyerForWithdrawal(seller, x.Buyer, buyer))
+                    .ToList();
+                var now = DateTime.Now.Ticks;
+                if (matching.Count == 0)
                 {
-                    var now = DateTime.Now.Ticks;
-                    observation = new VisualKnowledgeObservationEntity
+                    matching.Add(new VisualKnowledgeObservationEntity
                     {
                         EntityId = Guid.NewGuid().ToString("N"),
                         ShopKey = shopKey,
@@ -205,36 +214,41 @@ namespace Bot.ChromeNs
                         LearnedKnowledgeId = string.Empty,
                         ObservedAtTicks = now,
                         UpdatedAtTicks = now
-                    };
+                    });
                 }
-                else
+
+                var updates = new List<object>();
+                var disabledKnowledgeIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var observation in matching)
                 {
                     observation.Status = "图片已撤回";
-                    observation.UpdatedAtTicks = DateTime.Now.Ticks;
-                }
-                var updates = new List<object> { observation };
-                if (!string.IsNullOrWhiteSpace(observation.LearnedKnowledgeId))
-                {
-                    var learned = SelectKnowledge(
-                        "where EntityId = ? limit 1", observation.LearnedKnowledgeId).FirstOrDefault();
+                    observation.UpdatedAtTicks = now;
+                    updates.Add(observation);
+                    observationIds.Add(observation.EntityId);
+
+                    var knowledgeId = (observation.LearnedKnowledgeId ?? string.Empty).Trim();
+                    if (knowledgeId.Length == 0 || !disabledKnowledgeIds.Add(knowledgeId)) continue;
+                    var learned = SelectKnowledge("where EntityId = ? limit 1", knowledgeId).FirstOrDefault();
                     if (learned != null && learned.Enabled)
                     {
                         // A withdrawn image must not leave a visual FAQ active after it was
                         // learned from that exact message. Re-learning from later valid evidence
                         // can safely re-enable the entry.
                         learned.Enabled = false;
-                        learned.UpdatedAtTicks = DateTime.Now.Ticks;
+                        learned.UpdatedAtTicks = now;
                         updates.Add(learned);
                     }
                 }
                 DbHelper.Db.SaveRecordsInTransaction(updates);
-                observationId = observation.EntityId;
             }
 
-            Timer timer;
-            if (Timers.TryRemove(observationId, out timer))
+            foreach (var observationId in observationIds)
             {
-                try { timer.Dispose(); } catch { }
+                Timer timer;
+                if (Timers.TryRemove(observationId, out timer))
+                {
+                    try { timer.Dispose(); } catch { }
+                }
             }
         }
 
