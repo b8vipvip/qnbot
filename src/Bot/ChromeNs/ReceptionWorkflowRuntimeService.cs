@@ -387,20 +387,43 @@ namespace Bot.ChromeNs
                             .ToList();
                         var hasBuyer = question.Length > 0;
                         var hasOrder = matchingOrders.Count > 0;
-                        var hasVision = !string.IsNullOrWhiteSpace(visualSummary)
-                            || RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 8).Count > 0;
+                        var recentVisual = RecentVisualContextService.GetRecentWorkflowEvidence(
+                            shopKey, seller, buyer, 8);
+                        var hasRecentVisual = recentVisual != null && recentVisual.Count > 0;
+                        var hasImage = isImage || hasRecentVisual;
+                        var hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
                         var evidenceReady = HasRequiredEvidence(
-                            required, hasBuyer, isImage, hasVision, hasOrder, hasManual);
+                            required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
                         var initialState = string.Equals(currentState, initial, StringComparison.Ordinal);
+                        var action = Convert.ToString(step["action"]);
                         if (keywords.Count > 0 && !ContainsAny(question, keywords)
-                            && !(isImage && required.Any(x => Convert.ToString(x) == "image_message"))
+                            && !(hasImage && required.Any(x => Convert.ToString(x) == "image_message"))
+                            && !(isImage && action == "ASK_EVIDENCE")
                             && initialState)
                             continue;
 
-                        var action = Convert.ToString(step["action"]);
                         var nextState = Convert.ToString(step["next_state"]);
                         var reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
+
+                        // If the buyer supplied the requested image in the same burst or a later
+                        // image turn, do not ask for it again. Move to the evidence-consuming state.
+                        if (isImage && action == "ASK_EVIDENCE")
+                        {
+                            var nextStep = steps.OfType<JObject>().FirstOrDefault(x =>
+                                string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal));
+                            if (nextStep != null)
+                            {
+                                currentState = nextState;
+                                step = nextStep;
+                                required = step["required_evidence"] as JArray ?? new JArray();
+                                action = Convert.ToString(step["action"]);
+                                nextState = Convert.ToString(step["next_state"]);
+                                reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
+                                evidenceReady = HasRequiredEvidence(
+                                    required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
+                            }
+                        }
                         if (action == "READ_ONLY_TOOL" || action == "REPLY" || action == "REPLY_REVIEWED" && reply.Length == 0)
                         {
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
