@@ -203,6 +203,7 @@ try {
                 BusinessInboundHookRepairScript,
                 "BusinessInboundLivenessHookRepair").ConfigureAwait(false);
             if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, shop.ShopKey, StringComparison.Ordinal)
                 || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
             result = (result ?? string.Empty).Trim().Trim('\"');
             if (string.Equals(result, "installed", StringComparison.Ordinal))
