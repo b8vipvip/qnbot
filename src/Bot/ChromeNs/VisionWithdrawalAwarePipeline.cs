@@ -154,6 +154,7 @@ namespace Bot.ChromeNs
             // withdrawal, or a human reply may make the outgoing answer stale, but must not cancel
             // image download/analysis or prevent visual_summary from being persisted.
             var result = await Vision.ExecuteAsync(task, CancellationToken.None);
+            ApplyOcrTextToQuestionCard(ctl, burst.CombinedQuestion, result, detectedAt);
             var withdrawn = VisionImageCacheService.IsWithdrawn(
                 burst.SellerNick,
                 burst.BuyerNick,
@@ -503,6 +504,35 @@ namespace Bot.ChromeNs
                 + ", cacheComplete=" + recent.CacheComplete
                 + ", question=" + Short(question, 100));
             return true;
+        }
+
+        private static void ApplyOcrTextToQuestionCard(
+            CtlConversation control,
+            string originalQuestion,
+            VisionRequestResult result,
+            DateTime detectedAt)
+        {
+            if (control == null || result == null || string.IsNullOrWhiteSpace(result.LocalOcrText))
+                return;
+
+            var recognizedText = Short(result.LocalOcrText, 800);
+            if (string.IsNullOrWhiteSpace(recognizedText)) return;
+
+            var label = result.LocalOcrCacheHit ? "服务端OCR缓存命中" : "服务端OCR识别";
+            if (!string.IsNullOrWhiteSpace(result.LocalOcrEngine))
+                label += "（" + Short(result.LocalOcrEngine, 32) + "）";
+            if (result.LocalOcrConfidence > 0d)
+                label += "，置信度=" + result.LocalOcrConfidence.ToString("0.00");
+
+            var question = string.IsNullOrWhiteSpace(originalQuestion)
+                ? "[图片]"
+                : originalQuestion.Trim();
+            // This is a UI-only annotation. The canonical buyer question, message IDs,
+            // learning evidence and dedupe keys remain the original native message values.
+            if (question.IndexOf("服务端OCR识别", StringComparison.Ordinal) >= 0
+                || question.IndexOf("服务端OCR缓存命中", StringComparison.Ordinal) >= 0)
+                return;
+            control.SetQuestion(question + Environment.NewLine + label + "：" + recognizedText, detectedAt);
         }
 
         private static bool ShouldBindToRecentImage(string text, TimeSpan elapsed)
