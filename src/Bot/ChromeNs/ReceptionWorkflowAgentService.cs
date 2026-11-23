@@ -188,7 +188,8 @@ namespace Bot.ChromeNs
                     Digest = Digest(shopKey + "|" + visual.MessageKey),
                     MessageKey = visual.MessageKey,
                     Summary = summary,
-                    ObservedAtUtcTicks = visual.ObservedAtTicks
+                    ObservedAtUtcTicks = visual.ObservedAtTicks <= 0 ? 0
+                        : new DateTime(visual.ObservedAtTicks, DateTimeKind.Local).ToUniversalTime().Ticks
                 };
                 prompt.Append('[').Append(alias).Append("][vision_observation] ")
                     .Append(summary).AppendLine();
