@@ -84,7 +84,6 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(shopKey, seller);
             if (shop == null) return string.Empty;
             var items = LoadRecent(shop.ShopKey, seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
-                .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .Take(MaxPromptObservations)
                 .OrderBy(x => SafeTime(x.ObservedAtTicks))
@@ -94,14 +93,18 @@ namespace Bot.ChromeNs
             var sb = new StringBuilder();
             sb.Append("\n\n最近图片理解缓存（后台视觉分析结果，仅属于当前客服+当前买家；即使当时回复因人工接管或新消息而没有发送，这些图片语义仍然有效）：");
             sb.Append("\n只在与当前问题相关时使用。它只描述图片中可见内容，不代表订单、付款、账号、充值等实时状态；不要把缓存内容说成买家刚刚重新发送的图片。");
+            sb.Append("\n如果图片已撤回，只能在买家明确引用该历史图片时作为对话上下文；绝不能将撤回图片用作新的流程发布、订单证明或自动业务决策证据。");
             foreach (var item in items)
             {
                 var at = SafeTime(item.ObservedAtTicks);
                 var summary = CleanForPrompt(item.VisualSummary, 520);
                 var tags = CleanForPrompt(item.VisualTags, 220);
                 if (summary.Length == 0) continue;
+                var withdrawn = IsWithdrawnObservation(shop.ShopKey, seller, buyer, item);
                 sb.Append("\n[").Append(at == DateTime.MinValue ? "时间未知" : at.ToString("HH:mm:ss"))
-                    .Append(" 图片分析] ").Append(summary);
+                    .Append(" 图片分析")
+                    .Append(withdrawn ? "（已撤回，仅限买家明确引用时使用）" : string.Empty)
+                    .Append("] ").Append(summary);
                 if (tags.Length > 0) sb.Append("；标签：").Append(tags);
             }
             return sb.ToString();
