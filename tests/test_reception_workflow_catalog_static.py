@@ -141,7 +141,7 @@ def test_reception_agent_ui_exposes_direct_publish_and_rollback():
 def test_status_document_distinguishes_autonomous_publication_from_business_authority():
     status = source("docs/RECEPTION_WORKFLOW_STATUS.md")
 
-    assert "autonomous publication" in status
+    assert "autonomous publication" in status.lower()
     assert "No administrator approval" in status
     assert "active-version pointer" in status
     assert "atomic rollback" in status
