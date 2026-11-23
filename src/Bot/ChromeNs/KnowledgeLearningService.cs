@@ -234,6 +234,7 @@ namespace Bot.ChromeNs
 
             DateTime questionTime;
             if (!ConversationContextStore.TryGetLatestBuyerQuestion(seller, buyer, out question, out questionTime)) return false;
+            var ambiguousSellerEcho = false;
             try
             {
                 var flags = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -249,6 +250,9 @@ namespace Bot.ChromeNs
                 if (echoTime < questionTime.AddMilliseconds(-500) || echoTime < DateTime.Now.AddMinutes(-20)) return false;
                 if (string.IsNullOrWhiteSpace(echoText)) return false;
 
+                // Once a recent seller echo is observed, uncertainty must block this
+                // exact pending Bot send. It must not be promoted to human evidence.
+                ambiguousSellerEcho = true;
                 var sellerEcho = echoText.Trim();
                 // Seller echoes include both human messages and Bot messages. Read the
                 // exact ShopKey/session Bot-card range before treating an unmarked echo
@@ -257,12 +261,13 @@ namespace Bot.ChromeNs
                 if (!BotConversationHistoryStore.TryLoadRangeComplete(
                     shopKey, seller, buyer, questionTime.AddMinutes(-1), echoTime.AddMinutes(1), out botCards))
                 {
-                    Log.Info("Bot回显历史不可可靠读取，本轮不将客服消息作为人工纠正证据: seller="
+                    Log.Info("Bot回显历史不可可靠读取，按来源不明保护并停止当前Bot发送: seller="
                         + seller + ", buyer=" + buyer);
-                    return false;
+                    return true;
                 }
                 if (IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards))
                 {
+                    ambiguousSellerEcho = false;
                     Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
                         + seller + ", buyer=" + buyer);
                     return false;
@@ -325,8 +330,9 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.Info("检测本店客服人工回复失败，继续原发送流程：" + ex.Message);
-                return false;
+                Log.Info("检测本店客服回显来源失败：" + ex.Message
+                    + (ambiguousSellerEcho ? "；来源不明，停止当前Bot发送" : "；未观察到有效卖家回显"));
+                return ambiguousSellerEcho;
             }
             }
         }
@@ -361,7 +367,7 @@ namespace Bot.ChromeNs
                 if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey))
                     return true;
             }
-            catch { return true; }
+            catch { /* The reliable session-scoped Bot-card snapshot remains authoritative. */ }
             if (botCards == null || answerAt == DateTime.MinValue) return true;
 
             var normalized = NormalizeBotAnswer(answer);
