@@ -415,7 +415,8 @@ def test_auto_delivery_worker_never_executes_without_a_durable_queue_checkpoint(
     execute = worker.index("await ProcessRecordAsync(record).ConfigureAwait(false);", persist)
     assert reserve < persist < execute
     assert "if (_stateLoadFailed) return;" in worker
-    assert "_stateLoadFailed = true;" in save
+    assert "MarkStateLoadFailed();" in save
+    assert "_stateLoadFailed = true;" in runtime
     assert "已暂停自动发货" in save
 
 
@@ -431,7 +432,8 @@ def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwr
     ]
 
     assert "ReloadStateForMutationLocked(true)" in initialize
-    assert "_stateLoadFailed = true;" in initialize
+    assert "MarkStateLoadFailed();" in initialize
+    assert "_stateLoadFailed = true;" in runtime
     failed_branch = initialize[initialize.index("if (!ReloadStateForMutationLocked(true))"):]
     return_index = failed_branch.index("return;")
     assert return_index < failed_branch.index("CleanupExpiredLocked")
@@ -758,8 +760,9 @@ def test_auto_delivery_queue_retries_startup_recovery_without_enabling_unreadabl
     tick = runtime[runtime.index("private static void OnTimerTick"):runtime.index("private static bool TryRecoverQueueState")]
     recover = runtime[runtime.index("private static bool TryRecoverQueueState"):runtime.index("public static bool IsOperational")]
     assert "if (_stateLoadFailed && !TryRecoverQueueState()) return;" in tick
-    assert "ReloadStateForMutationLocked(true)" in recover
-    assert "if (!ReloadStateForMutationLocked(true))" in recover
+    assert "var allowMissing = !_stateFileMustExistForRecovery && _initialized == 0;" in recover
+    assert "ReloadStateForMutationLocked(allowMissing)" in recover
+    assert "if (!ReloadStateForMutationLocked(allowMissing))" in recover
     assert "if (!SaveStateLocked()) return false;" in recover
     assert "_initialized = 1;" in recover
     assert "EnsureRecoveryTimerLocked();" in recover
