@@ -1,165 +1,149 @@
-"""Generic reception workflow draft schema must be safe and shop-scoped."""
+"""Reception Agent autonomous publishing must remain shop-scoped and reversible."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def source(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
-def test_generic_flow_catalog_does_not_publish_or_execute_operations():
-    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    assert 'qnbot.reception-workflow-drafts.v1' in s
-    assert 'Convert.ToString(flow["status"]) != "draft"' in s
-    assert '"WAIT", "ASK_EVIDENCE", "HANDOFF", "READ_ONLY_TOOL", "REPLY_REVIEWED"' in s
-    assert 'order_snapshot' in s and 'image_message' in s and 'manual_correction' in s
-    assert 'next_state' in s and 'timeout_minutes' in s
-    assert 'Path.Combine(dir, "reception-workflow-drafts.json")' in s
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in s
-    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in s
-    assert "RestoreLatestDraft(" in s
-    assert "SendTextWithRetryAsync" not in s
-    assert "SubmitRecharge" not in s
 
-def test_workflow_draft_path_respects_exact_current_shop_scope():
-    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    resolver = s[s.index("private static string PathForShop"):s.index("private static JObject Default")]
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in resolver
-    assert "ShopSettingsScope.Enter(shop)" in resolver
-
-
-def test_generic_workflow_editor_exposes_draft_only_navigation():
-    ui = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
-    page = source("src/Bot/Knowledge/KnowledgeV2WorkflowDraftPage.cs")
-    build = source("src/Directory.Build.targets")
-    assert 'Nav("通用流程草稿", () => new KnowledgeV2WorkflowDraftPage(_seller))' in ui
-    assert "ReceptionWorkflowCatalogService.SaveDraft(" in page
-    assert "ReceptionWorkflowCatalogService.RestoreLatestDraft(" in page
-    assert "ReceptionWorkflowCatalogService.cs" in build
-    assert "KnowledgeV2WorkflowDraftPage.cs" in build
-
-def test_workflow_restore_skips_corrupt_newest_backup_and_keeps_draft_fail_closed():
-    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    restore = s[
-        s.index("public static string RestoreLatestDraft"):
-        s.index("\n    }\n}")
-    ]
-    assert "OrderByDescending(x => x, StringComparer.Ordinal).ToList()" in restore
-    assert "foreach (var candidate in backups)" in restore
-    assert "Validate(File.ReadAllText(candidate, Encoding.UTF8))" in restore
-    assert "没有找到有效的流程草稿备份，当前草稿未修改" in restore
-    assert 'restored["draft_revision"] = currentRevision + 1' in restore
-    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in restore
-    assert 'path, restored.ToString(Formatting.Indented), 3, 50, out error' in restore
-    assert "仍需单独人工审核和灰度激活" in restore
-
-def test_workflow_draft_backup_names_are_unique_under_rapid_repeated_saves():
-    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    save = s[
-        s.index("public static string SaveDraft"):
-        s.index("public static string RestoreLatestDraft")
-    ]
-    helper = s[s.index("private static string CreateBackupPath"):s.index("public static string GetDraftJson")]
-    assert 'path + ".backup." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfffffff")' in helper
-    assert 'Guid.NewGuid().ToString("N")' in helper
-    assert "File.Copy(path, CreateBackupPath(path), false)" in save
-
-
-
-
-
-def test_workflow_draft_storage_requires_stable_shop_identity_and_shopkey():
+def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    path = service[
-        service.index("private static string PathForShop"):
+    scope = service[
+        service.index("private static string ShopDirectoryForSeller"):
         service.index("private static JObject Default")
     ]
 
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
-    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
-    assert "!shop.HasStableSellerId" in path
-    assert "不允许保存流程草稿" in path
+    assert 'qnbot.reception-workflows.v2' in service
+    assert 'reception-workflow-catalog.json' in service
+    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in scope
+    assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in scope
+    assert "!shop.HasStableSellerId" in scope
+    assert "ShopSettingsScope.Enter(shop)" in scope
 
 
-def test_workflow_steps_require_nonempty_unique_evidence_contracts():
-    s = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    validation = s[
-        s.index("private static JObject Validate"):
-        s.index("private static bool ValidKey")
+def test_legacy_drafts_migrate_to_active_catalog_without_admin_approval():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    migration = service[
+        service.index("private static void EnsureLegacyDraftMigrated"):
+        service.index("public static string GetActiveJson")
     ]
-    assert "required.Count < 1 || required.Count > 10" in validation
-    assert "new HashSet<string>(StringComparer.Ordinal)" in validation
-    assert "evidenceKinds.Add(Convert.ToString(kind))" in validation
-    assert "同一步骤不允许重复声明相同证据类型" in validation
+
+    assert 'qnbot.reception-workflow-drafts.v1' in service
+    assert 'reception-workflow-drafts.json' in service
+    assert "Validate(legacyJson)" in migration
+    assert 'migrated["publication_mode"] = "autonomous-migration"' in migration
+    assert 'migrated["published_revision"] = newRevision' in migration
+    assert "WriteCatalog(path, migrated)" in migration
 
 
+def test_validated_agent_publish_is_immediate_and_has_no_admin_approval_gate():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    publish = service[
+        service.index("public static string Publish"):
+        service.index("public static string RollbackToPreviousPublished")
+    ]
 
-def test_status_document_distinguishes_draft_catalog_from_missing_approval_publish_and_rollback():
+    assert "public static string Publish(string seller, string json)" in publish
+    assert "var candidate = Validate(json)" in publish
+    assert 'candidate["publication_mode"] = "autonomous"' in publish
+    assert 'candidate["published_revision"] = nextRevision' in publish
+    assert 'candidate["published_at_utc"]' in publish
+    assert "WriteCatalog(path, candidate)" in publish
+    assert "无需管理员审批" in service
+    assert "approval_token" not in service.lower()
+    assert "trusted_approver" not in service.lower()
+
+
+def test_published_workflows_keep_high_risk_business_actions_out_of_catalog_authority():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    actions = service[
+        service.index("private static readonly HashSet<string> AllowedActions"):
+        service.index("private static readonly HashSet<string> AllowedEvidence")
+    ]
+
+    for allowed in ('"WAIT"', '"ASK_EVIDENCE"', '"HANDOFF"', '"READ_ONLY_TOOL"', '"REPLY"'):
+        assert allowed in actions
+    for forbidden in ('"PAYMENT"', '"RECHARGE"', '"REFUND"', '"FULFILL"', '"CHANGE_ACCOUNT"'):
+        assert forbidden not in actions
+    assert "付款、充值、退款、账号修改和实际履约动作不允许由流程目录授权" in service
+
+
+def test_publish_uses_shop_scoped_cas_and_monotonic_flow_versions():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    publish = service[
+        service.index("public static string Publish"):
+        service.index("public static string RollbackToPreviousPublished")
+    ]
+
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowPublish", 3000)' in publish
+    assert "expectedRevision != currentRevision" in publish
+    assert "currentRevision == long.MaxValue" in publish
+    assert "SaveHistorySnapshot(seller, current)" in publish
+    assert "BumpFlowVersions(candidate, current)" in publish
+    assert 'candidate["catalog_revision"] = nextRevision' in publish
+    assert "WriteCatalog(path, candidate)" in publish
+
+
+def test_rollback_restores_previous_valid_published_snapshot_as_new_revision():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    rollback = service[
+        service.index("public static string RollbackToPreviousPublished"):
+        service.rindex("\n    }\n}")
+    ]
+
+    assert "public static string RollbackToPreviousPublished(string seller)" in rollback
+    assert '"revision-*.json"' in rollback
+    assert "OrderByDescending(item => item.Revision)" in rollback
+    assert "Validate(contents)" in rollback
+    assert "SaveHistorySnapshot(seller, current)" in rollback
+    assert "BumpFlowVersions(restored, current)" in rollback
+    assert 'restored["catalog_revision"] = restoredRevision' in rollback
+    assert 'restored["publication_mode"] = "autonomous-rollback"' in rollback
+    assert "WriteCatalog(path, restored)" in rollback
+    assert "当前生效版本未修改" in rollback
+
+
+def test_history_snapshots_are_immutable_and_keep_revision_identity():
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    history_path = service[
+        service.index("private static string HistoryPath"):
+        service.index("private static void SaveHistorySnapshot")
+    ]
+    history = service[
+        service.index("private static void SaveHistorySnapshot"):
+        service.index("private static void WriteCatalog")
+    ]
+
+    assert '"revision-" + revision.ToString("D10"' in history_path
+    assert "HistoryDirectoryForShop(seller)" in history
+    assert "if (!IsMissing(path)) return;" in history
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in history
+
+
+def test_reception_agent_ui_exposes_direct_publish_and_rollback():
+    page = source("src/Bot/Knowledge/KnowledgeV2WorkflowDraftPage.cs")
+    navigation = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    build = source("src/Directory.Build.targets")
+
+    assert 'Text = "Reception Agent 接待流程"' in page
+    assert 'Content = "校验并立即发布"' in page
+    assert 'Content = "回滚上一发布版本"' in page
+    assert "ReceptionWorkflowCatalogService.GetActiveJson(_seller)" in page
+    assert "ReceptionWorkflowCatalogService.Publish(_seller, _editor.Text)" in page
+    assert "ReceptionWorkflowCatalogService.RollbackToPreviousPublished(_seller)" in page
+    assert 'Nav("Reception Agent 接待流程"' in navigation
+    assert "ReceptionWorkflowCatalogService.cs" in build
+    assert "KnowledgeV2WorkflowDraftPage.cs" in build
+
+
+def test_status_document_distinguishes_autonomous_publication_from_business_authority():
     status = source("docs/RECEPTION_WORKFLOW_STATUS.md")
 
-    assert "privacy-minimized, cross-restart evidence ledger" in status
-    assert "versioned workflow draft catalog" in status
-    assert "Every saved flow remains `draft`" in status
-    assert "trusted operator identity and authorization source" in status
+    assert "autonomous publication" in status.lower()
+    assert "No administrator approval" in status
     assert "active-version pointer" in status
     assert "atomic rollback" in status
-    assert "must remain draft-only" in status
-
-
-def test_workflow_draft_save_uses_shop_scoped_revision_compare_and_swap():
-    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    read = service[
-        service.index("private static long ReadCurrentRevision"):
-        service.index("private static string CreateBackupPath")
-    ]
-    save = service[
-        service.index("public static string SaveDraft"):
-        service.index("public static string RestoreLatestDraft")
-    ]
-    restore = service[
-        service.index("public static string RestoreLatestDraft"):
-        service.index("\n    }\n}")
-    ]
-    page = source("src/Bot/Knowledge/KnowledgeV2WorkflowDraftPage.cs")
-
-    assert '["draft_revision"] = 0' in service
-    assert '["draft_revision"] = draftRevision' in service
-    assert "expectedRevision = data.Value<long>(\"draft_revision\")" in save
-    assert "currentRevision = ReadCurrentRevision(path)" in save
-    assert "if (expectedRevision != currentRevision)" in save
-    assert "本次修改未覆盖任何数据" in save
-    assert 'data["draft_revision"] = currentRevision + 1' in save
-    assert "CrossProcessAtomicStateFile.Acquire(path, \"ReceptionWorkflowDraft\", 3000)" in save
-    assert "Validate(contents).Value<long>(\"draft_revision\")" in read
-    assert 'restored["draft_revision"] = currentRevision + 1' in restore
-    assert "修订版本已递增" in restore
-    assert "RefreshView();" in page[page.index("private void Save()"):page.index("private void Restore()")]
-
-
-def test_workflow_catalog_rejects_duplicate_product_and_sku_ids_and_oversized_drafts():
-    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    validation = service[
-        service.index("private static JObject Validate"):
-        service.index("private static bool ValidKey")
-    ]
-    keys = service[
-        service.index("private static void CheckKeys"):
-        service.index("private static long ReadCurrentRevision")
-    ]
-
-    assert "json.Length > 1024 * 1024" in validation
-    assert "draftRevision < 0" in validation
-    assert "var unique = new HashSet<string>(StringComparer.Ordinal)" in keys
-    assert "if (!unique.Add(Convert.ToString(id)))" in keys
-    assert "不允许重复标识" in keys
-
-
-
-def test_unreadable_existing_draft_cannot_be_mistaken_for_revision_zero():
-    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
-    revision_reader = service[service.index("private static long ReadCurrentRevision"):service.index("private static string CreateBackupPath")]
-    assert "File.GetAttributes(path)" in revision_reader
-    assert "catch (FileNotFoundException)" in revision_reader
-    assert "catch (DirectoryNotFoundException)" in revision_reader
-    assert "无法确认现有流程草稿的文件状态；拒绝覆盖" in revision_reader
-    assert "if (!File.Exists(path)) return 0;" not in revision_reader
-    assert "return Validate(contents).Value<long>(\"draft_revision\")" in revision_reader
+    assert "high-risk business actions" in status
+    assert "runtime execution adapter" in status

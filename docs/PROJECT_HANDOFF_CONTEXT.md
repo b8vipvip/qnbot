@@ -1,9 +1,9 @@
 # Qianniu AI Bot 项目交接上下文
 
-更新时间：2026-11-21  
+更新时间：2026-11-23  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前正式客户端：`bot-v1.1.2481`  
+当前正式客户端：`bot-v1.1.3111`  
 统一未完成事项：Issue #366
 
 ## 1. 当前目标
@@ -13,7 +13,7 @@
 1. 买家消息接收、buyer/seller/ShopKey 身份和 Bot Web 消息镜像；
 2. 多店铺 CDP 会话隔离、重连和长期资源生命周期；
 3. Knowledge V2 完整会话、全语料覆盖、检查点恢复和安全候选；
-4. 通用接待流程 Agent 的证据、审批、授权、回滚闭环；
+4. 通用接待流程 Agent 的自主发布、证据闭环、运行时执行和回滚；
 5. GPTAuto Reconcile / Release 工作流精确 SHA 关联。
 
 不得将源码实现、CI 通过、Release 发布和 Windows/千牛实机验收混为同一个完成状态。
@@ -30,9 +30,9 @@
 
 ## 3. Current release baseline
 
-- Latest stable release：`bot-v1.1.2481`
-- Release target：`35f5ed0138eba56e3f341915b7e2a800c102007d`
-- x64 package SHA-256：`126e6c96545dd962c0e33c7626575106dda457c19b83732d0c3746ba22183abf`
+- Latest stable release：`bot-v1.1.3111`
+- Release target：`3718607df7a01ee776c0aadceb63f331004c9aef`
+- x64 package SHA-256：`c51887a1699dc5a861cfd522e21eb1a9d605c51f87278cf86d82da2182359b4`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
 - Validated release-source SHA: `35f5ed0138eba56e3f341915b7e2a800c102007d`; API Full Gate passed (Fast Gate 1686 passed / 16 skipped, API package tests 141 passed, Windows Static Gate passed) and Windows x64 build run `44858618045` completed successfully. Post-release cleanup master SHA `5fce1c3869b19dd044cd4d39db31ae9456df1b64` also passed API Full Gate and Windows x64 build run `44859065309`.
 - Release `bot-v1.1.2481` includes the GPTAuto Reconcile recovery marker fix, Knowledge V2 full-corpus write gate, read-only auto-delivery manual-review escalation, bounded buyer alias cache, seller TargetId ingress validation and ambient ShopKey timeline guard. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
@@ -101,12 +101,12 @@ Qianniu renderer
 - Human evidence IDs must map to the exact current transcript.
 - The current master baseline remains dry-run. The new branch intentionally removes human approval and gray rollout for the narrow AI-generated FAQ auto-publish path; it still requires exact-SHA CI/build, shop isolation, evidence/PII/risk/dedup/version gates, atomic transaction, rollback history and immediate index refresh before merge/release.
 
-### P1 — reception workflow Agent (#346)
-- Persisted multi-shop/product/SKU/version workflow state.
-- Trusted text/image/OCR/order evidence chain.
-- Authenticated approver and authorized scheduler; manual takeover and rollback.
-- Shadow decisions → human review → small canary → reversible release.
-- High-risk actions remain disabled by default.
+### P1 — Reception Agent autonomous workflow publication (#346)
+- The workflow catalog is being upgraded from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
+- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision.
+- The catalog may orchestrate WAIT, ASK_EVIDENCE, HANDOFF, READ_ONLY_TOOL and reply intents; reply intents still pass through the canonical send pipeline.
+- Payment, recharge, refund, account mutation and actual fulfillment remain outside catalog authority and require their own authoritative evidence and idempotent execution guards.
+- The generic runtime state-machine adapter still needs to consume active catalog transitions against real message/image/OCR/order/account evidence; publication alone is not proof that the full Reception Agent is executing in production.
 
 ### P1 — GPTAuto Reconcile regression maintenance
 - Keep exact source SHA, Windows build association, task-aware run title and terminal Completion Lease checks covered by regression tests.
@@ -142,4 +142,4 @@ Optional existing samplers:
 - Every Windows script must pass the Windows PowerShell 5.1 parser.
 - Exact-SHA CI and x64 build are required before release.
 - Real runtime behavior still requires real Windows/Qianniu evidence.
-- Keep dry-run and fail-closed defaults until the relevant safety acceptance gates pass.
+- Keep high-risk business operations fail-closed until their independent evidence and idempotency gates pass. Reception workflow definition publication itself is autonomous and does not require administrator approval.
