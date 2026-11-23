@@ -68,3 +68,11 @@ def test_direct_order_event_is_dispatched_before_normal_message_loop_and_uses_sh
     assert 'await qn.ProcessDirectOrderMessageAsync' in bridge
     assert 'private readonly SemaphoreSlim _sendGate' in qn
     assert 'await _sendGate.WaitAsync(cancellationToken);' in qn
+
+
+def test_legacy_settings_page_no_longer_forces_order_reply_delay_to_zero():
+    feature = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    settings = read("src/Bot/Options/OrderPlacedReplyDelaySettings.cs")
+    assert "ApplyForcedImmediateUi(legacyContent)" not in feature
+    assert "ForcedDelaySeconds" not in settings
+    assert "OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay))" in read("src/Bot/Options/CtlRobotOptions.xaml.cs")
