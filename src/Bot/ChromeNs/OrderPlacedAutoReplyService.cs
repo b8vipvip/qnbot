@@ -1635,7 +1635,8 @@ namespace Bot.ChromeNs
                         if (verifiedShop == null
                             || !string.Equals(verifiedShop.ShopKey, plan.ShopKey, StringComparison.Ordinal)
                             || !string.Equals(verifiedShop.SellerNick, plan.Seller, StringComparison.Ordinal)
-                            || CDP == null || CDP.IsShopIdentityRetired)
+                            || CDP == null || CDP.IsShopIdentityRetired
+                            || !string.Equals(CDP.ShopKey, plan.ShopKey, StringComparison.Ordinal))
                         {
                             OrderPlacedAutoReplyService.Complete(plan, false);
                             OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
