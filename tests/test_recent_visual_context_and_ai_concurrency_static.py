@@ -120,6 +120,6 @@ def test_withdrawn_visual_context_is_injected_only_for_explicit_historical_image
 
     assert "VisionFollowUpContextPipeline.IsVisionReferentialFollowUp(question)" in method
     assert "刚才|刚刚|之前|上次|前面|上一张|那张|这张|这个" in method
-    assert "Regex.Replace(question ?? string.Empty, @\\"\\\\s+\\"" in method
+    assert r'Regex.Replace(question ?? string.Empty, @"\s+"' in method
     assert "allowWithdrawnContext || !IsWithdrawnObservation(" in prompt
     assert "已撤回，仅限买家明确引用时使用" in prompt
