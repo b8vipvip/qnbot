@@ -1,5 +1,6 @@
 using Bot.ChatRecord;
 using BotLib;
+using Bot.ShopScope;
 using Newtonsoft.Json;
 using System;
 using System.Linq;
@@ -30,15 +31,30 @@ namespace Bot.ChromeNs
                         Log.Info("回访首答已跳过非买家消息: reason=" + nonBuyerReason);
                         continue;
                     }
-                    var prior = ConversationContextStore.GetRecentTurns(seller, buyer, question, 24)
+                    ShopContext shop;
+                    try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                    catch { shop = null; }
+                    if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                        || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                        continue;
+
+                    DateTime detectedAt;
+                    if (!OrderCardParser.TryGetMessageTime(m, out detectedAt) || detectedAt == DateTime.MinValue)
+                        detectedAt = DateTime.Now;
+                    List<ConversationContextTurn> priorTurns;
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        priorTurns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 24);
+                    }
+                    var prior = (priorTurns ?? new List<ConversationContextTurn>())
                         .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
                         .OrderByDescending(x => x.Timestamp).FirstOrDefault();
                     if (prior == null || prior.Timestamp == DateTime.MinValue) continue;
-                    var idle = DateTime.Now - prior.Timestamp;
+                    var idle = detectedAt - prior.Timestamp;
                     if (idle.TotalMinutes <= ReturningBuyerIdleMinutes || idle.TotalMinutes >= ExistingSessionResetMinutes) continue;
-                    var key = seller + "#" + buyer;
+                    var key = shop.ShopKey + "#" + seller + "#" + buyer;
                     if (!Reservations.TryAdd(key, DateTime.Now)) continue;
-                    Task.Run(async () => await SendAsync(qn, seller, buyer, question, key));
+                    Task.Run(async () => await SendAsync(qn, shop.ShopKey, seller, buyer, question, detectedAt, key));
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("回访首答事件处理失败：" + ex.Message, 10); }
