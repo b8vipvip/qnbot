@@ -260,7 +260,7 @@ namespace Bot.ChromeNs
                         Alias = alias,
                         Kind = "account_evidence",
                         Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|"
-                            + accountEvidence.MessageKey + "|" + accountEvidence.Nickname + "|" + accountEvidence.UserId),
+                            + accountEvidence.MessageKey + "|account_evidence"),
                         MessageKey = accountEvidence.MessageKey,
                         Summary = summary,
                         ObservedAtUtcTicks = accountEvidence.ObservedAt == DateTime.MinValue
