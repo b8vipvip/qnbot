@@ -151,3 +151,15 @@ def test_workflow_catalog_rejects_duplicate_product_and_sku_ids_and_oversized_dr
     assert "var unique = new HashSet<string>(StringComparer.Ordinal)" in keys
     assert "if (!unique.Add(Convert.ToString(id)))" in keys
     assert "不允许重复标识" in keys
+
+
+
+def test_unreadable_existing_draft_cannot_be_mistaken_for_revision_zero():
+    service = read("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    revision_reader = service[service.index("private static long ReadCurrentRevision"):service.index("private static string CreateBackupPath")]
+    assert "File.GetAttributes(path)" in revision_reader
+    assert "catch (FileNotFoundException)" in revision_reader
+    assert "catch (DirectoryNotFoundException)" in revision_reader
+    assert "无法确认现有流程草稿的文件状态；拒绝覆盖" in revision_reader
+    assert "if (!File.Exists(path)) return 0;" not in revision_reader
+    assert "return Validate(contents).Value<long>(\"draft_revision\")" in revision_reader
