@@ -344,3 +344,16 @@ def test_reception_agent_normalizes_seller_transport_nick_before_classifying_sho
     assert "DirectOrderIdentityResolver.IdentityEquals(loginNick, expectedNick)" in identity
     assert "message.fromid.targetId" in identity
     assert "message.toid.targetId" in identity
+
+
+
+def test_conversation_timeline_never_uses_a_shared_seller_only_fallback_when_shop_resolution_is_ambiguous():
+    source = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    scope = source[
+        source.index("private static string ScopeKey(string seller, string shopKey = null)"):
+        source.index("private static ShopContext ResolveShop", source.index("private static string ScopeKey(string seller, string shopKey = null)"))
+    ]
+    assert "ShopSettingsScope.Current" in scope
+    assert "ResolveShop(seller)" in scope
+    assert '"unresolved:" + Guid.NewGuid().ToString("N")' in scope
+    assert '"legacy-" + StableHash((seller ?? string.Empty).Trim())' not in scope
