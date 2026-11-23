@@ -219,6 +219,13 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert "terminalOrderChanged" in runtime
     assert "TimeSpan.FromHours(24).Ticks" in runtime
     assert "FingerprintOrders(candidateOrders)" in runtime
+    fingerprint = runtime[
+        runtime.index("private static string FingerprintOrders"):
+        runtime.index("private static string RuntimePath")
+    ]
+    assert "x.OrderId" in fingerprint and "x.ItemId" in fingerprint
+    assert "x.SkuId" in fingerprint and "x.Quantity" in fingerprint
+    assert "x.TradeStatus" not in fingerprint and "x.IsPaid" not in fingerprint
     assert "OrderFingerprint = orderFingerprint" in runtime
     assert "NextStateTerminal" in runtime
     assert "IsDecisionCurrent" in runtime
@@ -248,3 +255,14 @@ def test_stale_cancel_cannot_release_a_newer_workflow_version_reservation():
     assert "pending_source_key" in cancel
     assert "record.Value<int?>(\"flow_version\")" in cancel
     assert "decision.FlowVersion" in cancel
+
+
+def test_workflow_send_is_blocked_if_auto_guidance_is_disabled_after_generation():
+    policy = read("src/Bot/ChromeNs/KugouReceptionPolicy.cs")
+    guard = policy[
+        policy.index("internal static bool BlockOutgoing("):
+        policy.index("internal static bool IsScreenshotQuestion")
+    ]
+
+    assert "requireEnabled && !config.EnableAutoGuidance" in guard
+    assert "当前店铺已关闭自动接待流程，拒绝发送旧流程回复" in guard
