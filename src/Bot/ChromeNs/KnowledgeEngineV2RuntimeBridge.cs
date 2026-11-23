@@ -245,7 +245,8 @@ namespace Bot.ChromeNs
                 answer,
                 sourceLabel,
                 detectedAt,
-                readyAt);
+                readyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
             Log.Info("Knowledge Engine V2本地答案已就绪: buyer=" + burst.BuyerNick
@@ -261,7 +262,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("knowledge_v2_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Engine V2本地命中）", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return true;
             }
 
@@ -321,7 +322,7 @@ namespace Bot.ChromeNs
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在V2发送前已失效");
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效");
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效", burst.ShopKey);
                 return true;
             }
 
@@ -335,7 +336,7 @@ namespace Bot.ChromeNs
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效");
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效", burst.ShopKey);
                 Log.Info("Knowledge Engine V2发送期间generation硬失效，已停止后续UI发送副作用: buyer="
                     + burst.BuyerNick);
                 return true;
@@ -376,7 +377,7 @@ namespace Bot.ChromeNs
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
             return true;
         }
 
