@@ -279,6 +279,9 @@ def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
     assert "!config.Enabled || !config.EnableAutoGuidance" in current
     assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
     assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
+    assert "LoadRecentNonterminalOrders(" in current
+    assert "currentMatchingOrders.Count == 0" in current
+    assert "FingerprintOrders(currentMatchingOrders), decision.OrderFingerprint" in current
 
 
 def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning():
@@ -298,3 +301,19 @@ def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning()
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in recent
     assert "IsMessageKeyWithdrawn(" in manual_learning
     assert 'observation.Status, "图片已撤回"' in manual_learning
+
+
+def test_order_evidence_loader_uses_latest_nonterminal_order_per_exact_shop_and_buyer():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    loader = runtime[
+        runtime.index("private static List<OrderSnapshot> LoadRecentNonterminalOrders"):
+        runtime.index("private static string RuntimePath")
+    ]
+
+    assert "GetRecentOrderSnapshots(seller, buyer, 12, shopKey)" in loader
+    assert "x.ShopKey, shopKey, StringComparison.Ordinal" in loader
+    assert "x.Seller, seller, StringComparison.OrdinalIgnoreCase" in loader
+    assert "x.Buyer, buyer, StringComparison.OrdinalIgnoreCase" in loader
+    assert "GroupBy(x => x.OrderId, StringComparer.Ordinal)" in loader
+    assert "OrderEventType.Created || x.EventType == OrderEventType.Paid" in loader
+    assert "关闭|退款|CLOSED|REFUND|CANCEL" in loader
