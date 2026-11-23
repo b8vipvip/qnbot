@@ -38,7 +38,8 @@ def test_workflow_candidates_require_real_evidence_and_are_not_general_answers()
     assert 'replyEvidence.Kind != "manual_correction"' in agent
     assert '"WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY"' in agent
     assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
-    assert "proposals.OfType<JObject>().Take(4)" in agent
+    assert "var boundedProposals = proposals.Take(4).ToList();" in agent
+    assert "var proposal = token as JObject;" in agent
 def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
     policy = text(POLICY)
     assert "GetRecentStage(string seller, string buyer)" in policy
