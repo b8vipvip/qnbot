@@ -94,6 +94,8 @@ namespace Bot.ChromeNs
 
             EnsureInitialized();
             BackfillLegacyShopRows(shopKey, seller);
+            var withdrawn = VisionImageCacheService.IsMessageKeyWithdrawn(
+                seller, buyer, messageKey, shopKey);
             var observedAt = GetMessageTime(message);
             if (observedAt == DateTime.MinValue || observedAt > DateTime.Now.AddMinutes(2)) observedAt = DateTime.Now;
             var entity = new VisualKnowledgeObservationEntity
@@ -107,7 +109,7 @@ namespace Bot.ChromeNs
                 VisualSummary = visualSummary,
                 VisualTags = visualTags,
                 GeneratedAnswer = generatedAnswer,
-                Status = "等待人工接待结束",
+                Status = withdrawn ? "图片已撤回" : "等待人工接待结束",
                 LearnedKnowledgeId = string.Empty,
                 ObservedAtTicks = observedAt.Ticks,
                 UpdatedAtTicks = DateTime.Now.Ticks
@@ -125,15 +127,48 @@ namespace Bot.ChromeNs
                         old.VisualSummary = entity.VisualSummary;
                         old.VisualTags = entity.VisualTags;
                         old.GeneratedAnswer = entity.GeneratedAnswer;
+                        if (withdrawn) old.Status = "图片已撤回";
                         old.UpdatedAtTicks = DateTime.Now.Ticks;
                         entity = old;
                     }
                 }
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
             }
-            Schedule(entity.EntityId, TimeSpan.FromMinutes(BuyerQuietMinutes));
+            if (string.Equals(entity.Status, "等待人工接待结束", StringComparison.Ordinal))
+                Schedule(entity.EntityId, TimeSpan.FromMinutes(BuyerQuietMinutes));
             Cleanup();
             Log.Info("已记录视觉知识学习候选: seller=" + seller + ", buyer=" + buyer + ", summary=" + Short(visualSummary, 120));
+        }
+
+        internal static void MarkObservationWithdrawn(
+            string shopKey, string seller, string buyer, string messageKey)
+        {
+            shopKey = Clean(shopKey, 200);
+            seller = Clean(seller, 160);
+            buyer = Clean(buyer, 160);
+            messageKey = Clean(messageKey, 500);
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || messageKey.Length == 0)
+                return;
+
+            EnsureInitialized();
+            string observationId = string.Empty;
+            lock (DbSync)
+            {
+                var observation = SelectObservations(
+                    "where ShopKey = ? and Seller = ? and Buyer = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
+                    shopKey, seller, buyer, messageKey).FirstOrDefault();
+                if (observation == null) return;
+                observation.Status = "图片已撤回";
+                observation.UpdatedAtTicks = DateTime.Now.Ticks;
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { observation });
+                observationId = observation.EntityId;
+            }
+
+            Timer timer;
+            if (Timers.TryRemove(observationId, out timer))
+            {
+                try { timer.Dispose(); } catch { }
+            }
         }
 
         public static bool TryFindMatch(
@@ -265,6 +300,12 @@ namespace Bot.ChromeNs
             }
 
             var knowledge = UpsertKnowledge(observation, answer);
+            if (knowledge == null)
+            {
+                var latest = LoadObservation(id);
+                if (latest == null || !string.Equals(latest.Status, "等待人工接待结束", StringComparison.Ordinal))
+                    return;
+            }
             UpdateObservationStatus(observation,
                 knowledge == null ? "视觉知识写入失败" : "已学习",
                 knowledge == null ? string.Empty : knowledge.EntityId);
@@ -282,6 +323,11 @@ namespace Bot.ChromeNs
             {
                 lock (DbSync)
                 {
+                    var currentObservation = SelectObservations(
+                        "where EntityId = ? limit 1", observation.EntityId).FirstOrDefault();
+                    if (currentObservation == null
+                        || !string.Equals(currentObservation.Status, "等待人工接待结束", StringComparison.Ordinal))
+                        return null;
                     var entries = SelectKnowledge("where ShopKey = ? and Seller = ? and Enabled = 1 order by UpdatedAtTicks desc limit "
                         + MaxKnowledgeEntriesPerSeller, observation.ShopKey, observation.Seller);
                     VisualKnowledgeEntryEntity best = null;
@@ -338,10 +384,18 @@ namespace Bot.ChromeNs
 
         private static void UpdateObservationStatus(VisualKnowledgeObservationEntity item, string status, string knowledgeId)
         {
-            item.Status = status;
-            item.LearnedKnowledgeId = knowledgeId ?? string.Empty;
-            item.UpdatedAtTicks = DateTime.Now.Ticks;
-            lock (DbSync) DbHelper.Db.SaveRecordsInTransaction(new List<object> { item });
+            if (item == null || string.IsNullOrWhiteSpace(item.EntityId)) return;
+            lock (DbSync)
+            {
+                var current = SelectObservations("where EntityId = ? limit 1", item.EntityId).FirstOrDefault();
+                if (current == null
+                    || !string.Equals(current.Status, "等待人工接待结束", StringComparison.Ordinal))
+                    return;
+                current.Status = status;
+                current.LearnedKnowledgeId = knowledgeId ?? string.Empty;
+                current.UpdatedAtTicks = DateTime.Now.Ticks;
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { current });
+            }
         }
 
         private static VisualKnowledgeObservationEntity LoadObservation(string id)
