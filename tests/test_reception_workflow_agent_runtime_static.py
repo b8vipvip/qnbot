@@ -161,3 +161,32 @@ def test_new_agent_runtime_files_are_included_in_windows_build():
 
     assert "ReceptionWorkflowAgentService.cs" in targets
     assert "ReceptionWorkflowRuntimeService.cs" in targets
+
+
+
+def test_handoff_requires_configured_channel_and_notifies_the_exact_shop():
+    agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    handoff = read("src/Bot/ChromeNs/HandoffNotificationService.cs")
+
+    assert "HandoffNotificationService.IsWorkflowHandoffConfigured()" in agent
+    assert 'action == "HANDOFF" && !handoffConfigured' in agent
+    assert "QueueReceptionWorkflowHandoff(" in runtime
+    assert "QueueReceptionWorkflowHandoff(" in handoff
+    assert "ResolveRuntimeByShopKey(shopKey)" in handoff
+    assert "SendAsync(" in handoff
+    assert "EnableHandoffNotification" in handoff
+
+
+def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
+    catalog = read("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    learning = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+
+    assert '["terminal"]' in catalog
+    assert '["terminal"] = step.Value<bool?>("terminal") ?? (action == "WAIT" && state == nextState)' in agent
+    assert 'step.Value<bool?>("terminal") == true' in runtime
+    assert "timeoutMinutes" in runtime
+    assert "DateTime.UtcNow.Ticks - updatedTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks" in runtime
+    assert '"terminal":true' in learning
