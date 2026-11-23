@@ -26,6 +26,8 @@ namespace Bot.ChromeNs
         public string Action { get; set; }
         public string ReplyText { get; set; }
         public string SourceKey { get; set; }
+        public string OrderFingerprint { get; set; }
+        public bool NextStateTerminal { get; set; }
         public bool SuppressReply { get; set; }
         public bool RequiresSend { get; set; }
         public string Reason { get; set; }
@@ -59,6 +61,16 @@ namespace Bot.ChromeNs
             using (var hash = SHA256.Create())
                 return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)))
                     .Replace("-", string.Empty).ToLowerInvariant();
+        }
+
+        private static string FingerprintOrders(IEnumerable<OrderSnapshot> orders)
+        {
+            var ids = (orders ?? Enumerable.Empty<OrderSnapshot>())
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.OrderId))
+                .Select(x => x.OrderId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(x => x, StringComparer.Ordinal);
+            return Digest(string.Join("|", ids));
         }
 
         private static string RuntimePath(ShopContext shop)
@@ -445,6 +457,14 @@ namespace Bot.ChromeNs
                         var record = FindRecord(records, buyerKey, flowId);
                         var currentState = record == null ? initial : Convert.ToString(record["current_state"]);
                         var savedVersion = record == null ? flowVersion : record.Value<int?>("flow_version") ?? 0;
+                        var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                        var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                        var matchingOrders = orders.Where(x =>
+                            (flowProducts.Count == 0 || flowProducts.Contains(x.ItemId, StringComparer.Ordinal))
+                            && (flowSkus.Count == 0 || flowSkus.Contains(x.SkuId, StringComparer.Ordinal))
+                            && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal))
+                            .ToList();
+                        var orderFingerprint = FingerprintOrders(matchingOrders);
                         var faults = document["faults"] as JArray;
                         var faultKey = flowId + "|" + catalog.Revision.ToString(CultureInfo.InvariantCulture);
                         var quarantinedFault = faults.OfType<JObject>().FirstOrDefault(x =>
@@ -514,6 +534,8 @@ namespace Bot.ChromeNs
                             record["pending_source_key"] = string.Empty;
                             record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["completed_utc_ticks"] = 0;
+                            record["completed_order_fingerprint"] = string.Empty;
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                         }
@@ -534,6 +556,8 @@ namespace Bot.ChromeNs
                             record["pending_source_key"] = string.Empty;
                             record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["completed_utc_ticks"] = 0;
+                            record["completed_order_fingerprint"] = string.Empty;
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             step = steps.OfType<JObject>().FirstOrDefault(x =>
@@ -543,31 +567,46 @@ namespace Bot.ChromeNs
 
                         if (step.Value<bool?>("terminal") == true)
                         {
+                            var completedAt = record == null ? 0 : record.Value<long?>("completed_utc_ticks") ?? 0;
+                            var previousOrderFingerprint = record == null
+                                ? string.Empty : Convert.ToString(record["completed_order_fingerprint"]);
+                            var canReenter = record == null || completedAt <= 0
+                                || DateTime.UtcNow.Ticks - completedAt >= TimeSpan.FromHours(24).Ticks
+                                || !string.Equals(previousOrderFingerprint, orderFingerprint, StringComparison.Ordinal);
+                            if (!canReenter)
+                            {
+                                record["last_source_key"] = sourceKey;
+                                record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                return null;
+                            }
+
+                            currentState = initial;
                             if (record == null)
                             {
                                 record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
                                 records.Add(record);
                             }
                             record["flow_version"] = flowVersion;
-                            record["current_state"] = currentState;
-                            record["last_source_key"] = sourceKey;
-                            record["pending_source_key"] = string.Empty;
-                            record["pending_started_utc_ticks"] = 0;
-                            record["delivery_uncertain"] = false;
+                            record["current_state"] = initial;
+                            record["last_source_key"] = string.Empty;
+                            record["completed_utc_ticks"] = 0;
+                            record["completed_order_fingerprint"] = string.Empty;
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
-                            record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
-                            return null;
+                            step = steps.OfType<JObject>().FirstOrDefault(x =>
+                                string.Equals(Convert.ToString(x["state"]), initial, StringComparison.Ordinal));
+                            if (step == null || step.Value<bool?>("terminal") == true)
+                            {
+                                record["current_state"] = initial;
+                                record["last_source_key"] = sourceKey;
+                                record["completed_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                record["completed_order_fingerprint"] = orderFingerprint;
+                                record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                return null;
+                            }
                         }
 
                         var keywords = (step["trigger_keywords"] as JArray ?? new JArray()).Values<string>().ToList();
                         var required = step["required_evidence"] as JArray ?? new JArray();
-                        var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
-                        var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
-                        var matchingOrders = orders.Where(x =>
-                            (flowProducts.Count == 0 || flowProducts.Contains(x.ItemId, StringComparer.Ordinal))
-                            && (flowSkus.Count == 0 || flowSkus.Contains(x.SkuId, StringComparer.Ordinal))
-                            && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal))
-                            .ToList();
                         var hasBuyer = question.Length > 0;
                         var hasOrder = matchingOrders.Count > 0;
                         var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
@@ -669,7 +708,11 @@ namespace Bot.ChromeNs
                                     Seller = seller, Buyer = buyer, ShopKey = shopKey,
                                     FlowId = flowId, FlowVersion = flowVersion, CatalogRevision = catalog.Revision,
                                     State = currentState, NextState = nextState, Action = action,
-                                    ReplyText = reply, SourceKey = sourceKey, RequiresSend = true,
+                                    ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
+                                    NextStateTerminal = steps.OfType<JObject>().Any(x =>
+                                        string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal)
+                                        && x.Value<bool?>("terminal") == true),
+                                    RequiresSend = true,
                                     Reason = "已根据流程索取缺失证据"
                                 };
                             }
@@ -719,6 +762,11 @@ namespace Bot.ChromeNs
                             record["pending_source_key"] = string.Empty;
                             record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            var transitionTerminal = steps.OfType<JObject>().Any(x =>
+                                string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal)
+                                && x.Value<bool?>("terminal") == true);
+                            record["completed_utc_ticks"] = transitionTerminal ? DateTime.UtcNow.Ticks : 0;
+                            record["completed_order_fingerprint"] = transitionTerminal ? orderFingerprint : string.Empty;
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
@@ -753,7 +801,11 @@ namespace Bot.ChromeNs
                                 Seller = seller, Buyer = buyer, ShopKey = shopKey,
                                 FlowId = flowId, FlowVersion = flowVersion, CatalogRevision = catalog.Revision,
                                 State = currentState, NextState = nextState, Action = action,
-                                ReplyText = reply, SourceKey = sourceKey, RequiresSend = true,
+                                ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
+                                NextStateTerminal = steps.OfType<JObject>().Any(x =>
+                                    string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal)
+                                    && x.Value<bool?>("terminal") == true),
+                                RequiresSend = true,
                                 Reason = action == "ASK_EVIDENCE" ? "流程索证步骤" : "采用真实人工回复证据"
                             };
                         }
@@ -809,6 +861,16 @@ namespace Bot.ChromeNs
                         record["current_state"] = decision.NextState;
                         record["last_source_key"] = decision.SourceKey;
                         record["delivery_uncertain"] = false;
+                        if (decision.NextStateTerminal)
+                        {
+                            record["completed_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            record["completed_order_fingerprint"] = decision.OrderFingerprint ?? string.Empty;
+                        }
+                        else
+                        {
+                            record["completed_utc_ticks"] = 0;
+                            record["completed_order_fingerprint"] = string.Empty;
+                        }
                         record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                     }
                     else
