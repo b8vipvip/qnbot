@@ -79,3 +79,16 @@ def test_visual_learning_links_source_atomically_and_revokes_entry_when_source_i
     assert "currentObservation.LearnedKnowledgeId = created.EntityId" in upsert
     assert "new List<object> { best, currentObservation }" in upsert
     assert "new List<object> { created, currentObservation }" in upsert
+
+
+def test_withdrawal_lookup_does_not_let_newer_alias_row_hide_an_older_tombstone():
+    service = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    method = service[
+        service.index("internal static bool IsObservationWithdrawn"):
+        service.index("internal static void MarkObservationWithdrawn")
+    ]
+
+    assert "order by UpdatedAtTicks desc\"" in method
+    assert "limit 1" not in method
+    assert "observations.Any(observation =>" in method
+    assert 'observation.Status, "图片已撤回"' in method
