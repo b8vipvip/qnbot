@@ -351,7 +351,7 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     ]
     runtime_current = runtime[
         runtime.index("internal static bool IsDecisionCurrent("):
-        runtime.index("private static bool Mutate(")
+        runtime.index("private static T Mutate<")
     ]
 
     assert "public string MessageKey { get; set; }" in account_type
@@ -365,5 +365,6 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     assert "TryGetRecentKugouAccountEvidence(" in runtime_current
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in runtime_current
     assert "var accountTrigger = isImage" in runtime
+    assert "if ((hasImage || hasAccountEvidence) && action == \"ASK_EVIDENCE\")" in runtime
     assert "hasAccountEvidence" in runtime
     assert "account_evidence" in session
