@@ -517,7 +517,8 @@ namespace Bot.ChromeNs
                 result.Items.Add(new ReceptionWorkflowPublishItem { Message = "无法解析精确ShopKey，未发布" });
                 return result;
             }
-            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
             {
                 result.SkippedCount = proposals.Count;
@@ -527,8 +528,18 @@ namespace Bot.ChromeNs
 
             using (ShopSettingsScope.Enter(shop))
             {
-                var config = KugouReceptionConfigService.GetConfig(shop);
-                if (!config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
+                KugouReceptionConfig config;
+                try { config = KugouReceptionConfigService.GetConfig(shop); }
+                catch (Exception ex)
+                {
+                    result.SkippedCount = proposals.Count;
+                    result.Items.Add(new ReceptionWorkflowPublishItem
+                    {
+                        Message = "当前店铺Reception Agent配置无法读取，未发布：" + Clean(ex.Message, 180)
+                    });
+                    return result;
+                }
+                if (config == null || !config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
                 {
                     result.SkippedCount = proposals.Count;
                     result.Items.Add(new ReceptionWorkflowPublishItem
@@ -538,7 +549,12 @@ namespace Bot.ChromeNs
                     return result;
                 }
 
-                var handoffConfigured = HandoffNotificationService.IsWorkflowHandoffConfigured();
+                var handoffConfigured = false;
+                try { handoffConfigured = HandoffNotificationService.IsWorkflowHandoffConfigured(); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Reception Agent读取转人工通知配置失败：" + ex.Message, 5);
+                }
                 var built = new List<JObject>();
                 var boundedProposals = proposals.Take(4).ToList();
                 if (proposals.Count > boundedProposals.Count)
