@@ -640,8 +640,17 @@ namespace Bot.ChromeNs
                     }
                     else
                     {
-                        EnsureLoaded();
-                        Log.ErrorWithMaxCount("订单事件状态跨进程锁等待超时；本次事件继续处理，但持久化去重降级为进程内状态。", 10);
+                        // The auto-reply and auto-delivery consumers read the durable ledger.
+                        // Accepting an in-memory-only event here would create a false success:
+                        // the side effect could run, while restart recovery has no event to replay.
+                        Log.ErrorWithMaxCount("订单事件状态跨进程锁等待超时；本次事件fail-closed，不允许非持久化订单触发回复或发货。", 10);
+                        return new OrderEventPublishResult
+                        {
+                            Detected = true,
+                            Accepted = false,
+                            Reason = "order_event_state_lock_unavailable_fail_closed",
+                            Snapshot = snapshot
+                        };
                     }
 
                     var now = DateTime.Now;
@@ -705,19 +714,33 @@ namespace Bot.ChromeNs
                     {
                         _state.Events = _state.Events.OrderByDescending(x => x.SeenAt).Take(2000).ToList();
                     }
-                    var persisted = lease.Acquired && SaveInternal(path);
+                    var persisted = SaveInternal(path);
+                    if (!persisted)
+                    {
+                        _state.Events.RemoveAll(x => x != null
+                            && string.Equals(x.Key, key, StringComparison.Ordinal));
+                        Log.ErrorWithMaxCount("新订单事件无法持久化；已撤销内存接受状态并fail-closed，等待后续消息/历史恢复重试。", 20);
+                        return new OrderEventPublishResult
+                        {
+                            Detected = true,
+                            Accepted = false,
+                            Reason = "order_event_persistence_failed_fail_closed",
+                            Snapshot = snapshot
+                        };
+                    }
+
                     Log.Info("识别到结构化订单事件: event=" + snapshot.EventType
                         + ", seller=" + snapshot.Seller
                         + ", buyer=" + snapshot.Buyer
                         + ", orderId=" + snapshot.OrderId
                         + ", item=" + Short(snapshot.ItemTitle, 80)
                         + ", status=" + snapshot.TradeStatus
-                        + ", persisted=" + persisted);
+                        + ", persisted=true");
                     return new OrderEventPublishResult
                     {
                         Detected = true,
                         Accepted = true,
-                        Reason = persisted ? "新订单事件" : "新订单事件（状态持久化暂时降级）",
+                        Reason = "新订单事件",
                         Snapshot = snapshot
                     };
                 }
