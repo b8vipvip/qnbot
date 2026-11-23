@@ -867,6 +867,41 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static bool IsDecisionCurrent(ReceptionWorkflowDecision decision)
+        {
+            if (decision == null || !decision.RequiresSend) return true;
+            ShopContext shop;
+            try { shop = ResolveShop(decision.Seller, decision.ShopKey); }
+            catch { return false; }
+            try
+            {
+                CatalogIndex catalog;
+                using (ShopSettingsScope.Enter(shop))
+                    catalog = LoadCatalog(decision.Seller, decision.ShopKey);
+                if (catalog == null || catalog.Revision != decision.CatalogRevision)
+                    return false;
+                var flow = catalog.Flows.FirstOrDefault(x =>
+                    string.Equals(Convert.ToString(x["flow_id"]), decision.FlowId, StringComparison.Ordinal));
+                if (flow == null || (flow.Value<int?>("flow_version") ?? 0) != decision.FlowVersion)
+                    return false;
+
+                return Mutate(shop, document =>
+                {
+                    var buyerKey = Digest(decision.ShopKey + "|" + decision.Seller + "|" + decision.Buyer);
+                    var record = FindRecord(document["records"] as JArray, buyerKey, decision.FlowId);
+                    return record != null
+                        && string.Equals(Convert.ToString(record["pending_source_key"]), decision.SourceKey, StringComparison.Ordinal)
+                        && (record.Value<int?>("flow_version") ?? 0) == decision.FlowVersion
+                        && record.Value<bool?>("delivery_uncertain") != true;
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent发送前目录/状态二次校验失败，已阻止旧流程回复：" + ex.Message, 10);
+                return false;
+            }
+        }
+
         internal static void CompleteDecision(ReceptionWorkflowDecision decision, bool sendSucceeded)
         {
             if (decision == null || !decision.RequiresSend || string.IsNullOrWhiteSpace(decision.ShopKey)
