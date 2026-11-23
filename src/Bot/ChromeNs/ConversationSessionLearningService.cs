@@ -256,6 +256,9 @@ namespace Bot.ChromeNs
         private static DateTime _lastLearningDiagnosticsWriteUtc = DateTime.MinValue;
         private static int _initialized;
         private static int _schemaReady;
+        private static int _resumePendingRunning;
+        private static Timer _pendingRecoveryTimer;
+        private static readonly TimeSpan PendingRecoveryInterval = TimeSpan.FromSeconds(30);
 
         private static ShopGateEntry AddShopGateReference(
             ConcurrentDictionary<string, ShopGateEntry> entries, string shopKey)
@@ -334,6 +337,7 @@ namespace Bot.ChromeNs
                     await Task.Delay(2500);
                     ResumePending();
                     CleanupReports();
+                    StartPendingRecoveryTimer();
                 });
                 Log.Info("接待结束自动学习已启用：买家或客服连续5分钟无新消息后自动复盘；历史覆盖不完整时跳过AI与知识写入。");
             }
@@ -4100,8 +4104,22 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static void StartPendingRecoveryTimer()
+        {
+            if (Volatile.Read(ref _initialized) == 0) return;
+            var timer = new Timer(_ =>
+            {
+                if (Volatile.Read(ref _initialized) == 0) return;
+                ResumePending();
+                CleanupReports();
+            }, null, PendingRecoveryInterval, PendingRecoveryInterval);
+            var existing = Interlocked.CompareExchange(ref _pendingRecoveryTimer, timer, null);
+            if (existing != null) timer.Dispose();
+        }
+
         private static void ResumePending()
         {
+            if (Interlocked.CompareExchange(ref _resumePendingRunning, 1, 0) != 0) return;
             try
             {
                 List<ConversationSessionLearningReportEntity> allReports;
@@ -4151,21 +4169,44 @@ namespace Bot.ChromeNs
 
                     if (string.IsNullOrWhiteSpace(report.ShopKey))
                     {
-                        // Legacy reports did not persist ShopKey. Restore only when
-                        // the seller nickname resolves to exactly one connected shop.
+                        // Legacy reports may be restored before Qianniu has connected.
+                        // A missing runtime binding is transient: keep the report pending
+                        // and retry from the periodic recovery sweep. Never turn a
+                        // temporarily unavailable or ambiguous shop identity into a
+                        // terminal "completed" report, and never guess across shops.
                         try
                         {
-                            report.ShopKey = ShopContextLocator.ResolveRuntimeBySellerNick(report.Seller).ShopKey;
+                            var resolvedShop = ShopContextLocator.ResolveRuntimeBySellerNick(report.Seller);
+                            if (resolvedShop == null
+                                || string.IsNullOrWhiteSpace(resolvedShop.ShopKey)
+                                || !string.Equals(
+                                    (resolvedShop.SellerNick ?? string.Empty).Trim(),
+                                    (report.Seller ?? string.Empty).Trim(),
+                                    StringComparison.Ordinal))
+                                throw new InvalidOperationException("seller identity did not resolve to one stable shop");
+                            report.ShopKey = resolvedShop.ShopKey.Trim();
+                            report.Status = "恢复店铺身份成功，等待继续学习";
+                            report.Error = string.Empty;
                             report.UpdatedAtTicks = DateTime.Now.Ticks;
                             SaveReport(report);
                         }
                         catch
                         {
-                            report.Status = "店铺身份无法唯一解析，待人工复核";
-                            report.Error = "legacy_report_shop_scope_unavailable";
-                            report.CompletedAtTicks = DateTime.Now.Ticks;
-                            report.UpdatedAtTicks = DateTime.Now.Ticks;
-                            SaveReport(report);
+                            const string pendingStatus = "店铺尚未连接或身份无法唯一解析，等待自动恢复";
+                            const string pendingError = "legacy_report_shop_scope_pending";
+                            if (!string.Equals(report.Status, pendingStatus, StringComparison.Ordinal)
+                                || !string.Equals(report.Error, pendingError, StringComparison.Ordinal))
+                            {
+                                report.Status = pendingStatus;
+                                report.Error = pendingError;
+                                // CompletedAtTicks deliberately remains zero so the
+                                // report is eligible for the next recovery sweep.
+                                report.CompletedAtTicks = 0;
+                                report.UpdatedAtTicks = DateTime.Now.Ticks;
+                                SaveReport(report);
+                                Log.Info("旧版Knowledge V2待恢复记录暂时缺少唯一店铺身份，将在后续连接周期重试: seller="
+                                    + (report.Seller ?? string.Empty));
+                            }
                             continue;
                         }
                     }
@@ -4248,6 +4289,10 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("恢复待学习接待轮次失败：" + ex.Message, 10);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _resumePendingRunning, 0);
             }
         }
 
@@ -4511,6 +4556,9 @@ namespace Bot.ChromeNs
 
         private static void DisposeAll()
         {
+            Interlocked.Exchange(ref _initialized, 0);
+            var recoveryTimer = Interlocked.Exchange(ref _pendingRecoveryTimer, null);
+            if (recoveryTimer != null) recoveryTimer.Dispose();
             foreach (var session in Active.Values) DisposeTimer(session);
             Active.Clear();
         }
