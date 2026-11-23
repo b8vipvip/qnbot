@@ -668,7 +668,11 @@ namespace Bot.ChromeNs
 
                         var keywords = (step["trigger_keywords"] as JArray ?? new JArray()).Values<string>().ToList();
                         var required = step["required_evidence"] as JArray ?? new JArray();
-                        var hasBuyer = question.Length > 0;
+                        // An image-only buyer event is still a real buyer message.
+                        // Otherwise a buyer who answers ASK_EVIDENCE by uploading only an
+                        // image can never satisfy a required buyer_message + image proof set.
+                        var hasBuyer = question.Length > 0
+                            || (isImage && !string.IsNullOrWhiteSpace(messageKey));
                         var hasOrder = matchingOrders.Count > 0;
                         var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
                         var recentVisualEvidence = (recentVisual ?? new List<VisualKnowledgeObservationEntity>())
