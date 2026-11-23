@@ -377,7 +377,8 @@ namespace Bot.ChromeNs
                 if (card == null) return false;
                 var cardAnswer = NormalizeBotAnswer(card.Answer);
                 var cardTicks = card.AnswerReadyAtTicks > 0 ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
-                return cardAnswer.Length >= 4 && cardAnswer.Contains(normalized)
+                return (string.Equals(cardAnswer, normalized, StringComparison.Ordinal)
+                        || (normalized.Length >= 8 && cardAnswer.Contains(normalized)))
                     && cardTicks > 0
                     && Math.Abs((double)(cardTicks - answerAt.Ticks)) <= TimeSpan.FromMinutes(30).Ticks;
             });
