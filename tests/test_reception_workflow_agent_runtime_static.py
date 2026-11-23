@@ -19,9 +19,7 @@ def test_ai_learning_proposals_are_bound_to_real_shop_scoped_evidence_and_auto_p
         learning.index("private static string BuildTranscript")
     ]
 
-    assert "ReceptionWorkflowAgentService.BuildEvidenceContext(" in prompt
-    assert "session.Seller, session.Buyer, session.ShopKey, turns, cards" in prompt
-    assert "workflowEvidence.PromptText" in prompt
+    assert "workflowEvidenceContext.PromptText" in prompt
     assert '"evidence_refs"' in prompt
     assert "M1" in prompt and "O1" in prompt and "V1" in prompt
     assert "通过程序化证据绑定和目录校验后将自动发布，无需管理员审批" in prompt
