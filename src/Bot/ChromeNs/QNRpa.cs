@@ -849,7 +849,25 @@ namespace Bot.ChromeNs
             return isok;
         }
 
-        public async Task<bool> SendTextAsync(string buyer, string text)
+        private bool IsPreSendGuardSatisfied(Func<bool> preSendGuard, string stage)
+        {
+            if (preSendGuard == null) return true;
+            try
+            {
+                if (preSendGuard()) return true;
+                SetSendFailure("发送前业务状态复核", "会话或业务证据在" + (stage ?? "发送") + "前发生变化，已阻止发送");
+                Log.Info("千牛RPA在最终业务状态复核处停止发送: stage=" + (stage ?? string.Empty));
+                return false;
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure("发送前业务状态复核", "复核异常，已按安全策略阻止发送");
+                Log.ErrorWithMaxCount("千牛RPA最终业务状态复核异常，已阻止发送: " + ex.Message, 10);
+                return false;
+            }
+        }
+
+        public async Task<bool> SendTextAsync(string buyer, string text, Func<bool> preSendGuard = null)
         {
             var shopKey = ResolveShopKeyForDeliveryWatchdog();
             if (shopKey.Length == 0)
@@ -860,7 +878,7 @@ namespace Bot.ChromeNs
             await Task.Delay(180).ConfigureAwait(false);
             bool manualBypassConsumed;
             if (TryCancelForManualTakeover(buyer, text, shopKey, out manualBypassConsumed)) return false;
-            return await OpenAndSendText(buyer, text, shopKey, manualBypassConsumed).ConfigureAwait(false);
+            return await OpenAndSendText(buyer, text, shopKey, manualBypassConsumed, preSendGuard).ConfigureAwait(false);
         }
 
         private bool TryCancelForManualTakeover(
@@ -1387,7 +1405,7 @@ namespace Bot.ChromeNs
         }
 
         private async Task<bool> OpenAndSendText(
-            string buyer, string text, string shopKey, bool manualBypassConsumed)
+            string buyer, string text, string shopKey, bool manualBypassConsumed, Func<bool> preSendGuard)
         {
             var sendResult = false;
             ResetSendFailure();
@@ -1516,7 +1534,7 @@ namespace Bot.ChromeNs
                     SellerNick, buyer, text, shopKey);
                 var sendStart = DateTime.Now;
                 sendResult = await TrySendTextNativeFirstAsync(
-                    buyer, text, sendStart, shopKey, manualTakeoverCheck).ConfigureAwait(false);
+                    buyer, text, sendStart, shopKey, manualTakeoverCheck, preSendGuard).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "发送主按钮动作后未确认消息真实回显");
