@@ -76,7 +76,7 @@ namespace Bot.ChromeNs
         private static bool ExplicitlyReferencesWithdrawnImage(string question)
         {
             if (VisionFollowUpContextPipeline.IsVisionReferentialFollowUp(question)) return true;
-            var compact = Regex.Replace(question ?? string.Empty, @"\\s+", string.Empty).ToLowerInvariant();
+            var compact = Regex.Replace(question ?? string.Empty, @"\s+", string.Empty).ToLowerInvariant();
             if (compact.Length == 0) return false;
             return Regex.IsMatch(compact,
                 @"(刚才|刚刚|之前|上次|前面|上一张|那张|这张|这个).{0,12}(图片|截图|照片|图|界面|页面)")
