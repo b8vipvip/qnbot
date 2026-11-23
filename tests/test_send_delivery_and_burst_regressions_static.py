@@ -84,7 +84,7 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
         learning.index("private static string NormalizeBotAnswer(")
     ]
     assert "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey)" in classifier
-    assert "catch { return true; }" in classifier
+    assert "catch { /* The reliable session-scoped Bot-card snapshot remains authoritative. */ }" in classifier
     assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert "return true;" in manual
     assert 'SetSendCancellation("人工接管"' in read("src/Bot/ChromeNs/QNRpa.cs")
