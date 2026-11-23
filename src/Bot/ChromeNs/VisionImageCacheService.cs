@@ -473,7 +473,7 @@ namespace Bot.ChromeNs
                 };
                 var expression = BuildBrowserImageFetchExpression(args);
                 var responseText = await client.EvaluateExpressionAsync(
-                    expression, "DownloadBuyerImageWithQianniuSession").ConfigureAwait(false);
+                    expression, "DownloadBuyerImageWithQianniuSession", 25000).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(responseText))
                 {
                     result.Error = "千牛浏览器没有返回图片数据";
@@ -564,7 +564,7 @@ namespace Bot.ChromeNs
                 + "function matches(m){const orig=m&&m.originBanamaMessage?m.originBanamaMessage:m||{};"
                 + "const mc=orig.mcode||m.mcode||{};const ex=orig.ext||m.ext||{};const od=orig.originalData||m.originalData||{};"
                 + "const vals=[mc.messageId,mc.clientId,ex.ww_msgid,od.fileId,od.url].filter(Boolean).map(String);"
-                + "return tokens.length>0&&tokens.some(t=>vals.some(v=>v===t||(v.length>12&&v.indexOf(t)>=0)));}"
+                + "m=m||{};return tokens.length>0&&tokens.some(t=>t.length>=8&&vals.some(v=>v===t||(v.length>12&&v.indexOf(t)>=0)));}"
                 + "function addMessage(m){if(!matches(m))return;const orig=m&&m.originBanamaMessage?m.originBanamaMessage:m;"
                 + "const od=orig&&orig.originalData?orig.originalData:{};add(od.url||od.fileId,null);}"
                 + "try{const map=window._db&&window._db.msgDataMap;if(map){Array.from(map.values?map.values():Object.values(map)).forEach(arr=>"
@@ -581,8 +581,10 @@ namespace Bot.ChromeNs
                 + "values.push(node.getAttribute&&node.getAttribute(attr));}"
                 + "if(tokens.length&&tokens.some(t=>values.some(v=>v&&String(v).indexOf(t)>=0)))add(img.currentSrc||img.src,img);"
                 + "}}catch(e){}"
-                + "async function fromUrl(u){const response=await fetch(u,{method:'GET',credentials:'include',"
-                + "cache:'no-store',redirect:'follow'});if(!response.ok)throw new Error('http_'+response.status);"
+                + "async function fromUrl(u){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),20000);"
+                + "let response;try{response=await fetch(u,{method:'GET',credentials:'include',"
+                + "cache:'no-store',redirect:'follow',signal:controller.signal});}finally{clearTimeout(timer);}"
+                + "if(!response.ok)throw new Error('http_'+response.status);"
                 + "const blob=await response.blob();if(!blob.size||blob.size>max)throw new Error('image_size');"
                 + "const buffer=await blob.arrayBuffer();const bytes=new Uint8Array(buffer);let binary='';"
                 + "for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode.apply(null,bytes.subarray(i,Math.min(i+0x8000,bytes.length)));"
