@@ -620,6 +620,8 @@ namespace Bot.ChromeNs
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             step = steps.OfType<JObject>().FirstOrDefault(x =>
                                 string.Equals(Convert.ToString(x["state"]), initial, StringComparison.Ordinal));
+                            if (step != null)
+                                timeoutMinutes = Math.Max(1, Math.Min(10080, step.Value<int?>("timeout_minutes") ?? 60));
                             if (step == null || step.Value<bool?>("terminal") == true)
                             {
                                 record["current_state"] = initial;
