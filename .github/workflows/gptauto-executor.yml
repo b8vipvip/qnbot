@@ -94,6 +94,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           pr="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
           actual_head="$(jq -r '.head.sha' <<<"$pr")"
           [[ "$actual_head" == "$EXPECTED_HEAD" ]] || { echo "::error::PR head moved; refusing stale merge"; exit 1; }
@@ -155,8 +156,7 @@ jobs:
             --arg merge_sha "$merge_sha" \
             --arg release_required "${{ steps.state.outputs.release-required }}" \
             '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,merge_sha:$merge_sha,release_required:$release_required}}')"
-          printf '%s' "$reconcile_payload" | gh api --method POST \
-            "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/dispatches" --input -
+          dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto scheduled Reconcile for task $TASK_ID merge $merge_sha. Automatic wakeups reuse this handoff; explicit manual recovery remains available."
 
@@ -173,6 +173,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || { echo "::error::Reconcile adoption is missing task/PR/merge identity."; exit 1; }
           marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$MERGE_SHA -->"
           completion_marker="<!-- gptauto-completion-lease:$TASK_ID -->"
@@ -227,8 +228,7 @@ jobs:
             --arg merge_sha "$MERGE_SHA" \
             --arg release_required "$RELEASE_REQUIRED" \
             '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,merge_sha:$merge_sha,release_required:$release_required}}')"
-          printf '%s' "$reconcile_payload" | gh api --method POST \
-            "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/dispatches" --input -
+          dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"
 
           scheduled_body="$marker
           GPTAuto recovery Reconcile dispatch submitted for task $TASK_ID merge $MERGE_SHA.
@@ -328,6 +328,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           if [[ -z "$PR_NUMBER" ]]; then
             echo "::notice::Direct-push repair request has no PR context; skipping PR repair dispatch."
             exit 0
@@ -360,8 +361,7 @@ jobs:
             --arg head_sha "$HEAD_SHA" \
             --arg failed_run_id "$FAILED_RUN_ID" \
             '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,head_sha:$head_sha,failed_run_id:$failed_run_id}}')"
-          printf '%s' "$repair_payload" | gh api --method POST \
-            "repos/$REPOSITORY/actions/workflows/gptauto-repair.yml/dispatches" --input -
+          dispatch_workflow "$REPOSITORY" "gptauto-repair.yml" "$repair_payload"
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto dispatched the three-tier repair pipeline for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates."
 
