@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Diagnostics;
@@ -27,13 +28,11 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken)
         {
             if (task == null || task.Message == null) return null;
-            if (!KnowledgeEngineV2Service.IsEnabled(task.SellerNick)
-                || !KnowledgeEngineV2Service.IsSnapshotReady(task.SellerNick))
-            {
-                return null;
-            }
 
-            var priority = await VisionOcrPriorityService.ResolveAsync(task.SellerNick, cancellationToken).ConfigureAwait(false);
+            // OCR is independent of Knowledge V2 readiness. Keep OCR available for AI-first
+            // auxiliary evidence and for text fallback while the knowledge snapshot is cold.
+            var priority = await VisionOcrPriorityService.ResolveAsync(
+                task.SellerNick, task.ShopKey, cancellationToken).ConfigureAwait(false);
             if (VisionOcrPriorityService.IsAiFirst(priority))
             {
                 var visionEndpoints = AiEndpointStore.GetVisionEnabledEndpoints();
@@ -68,6 +67,7 @@ namespace Bot.ChromeNs
                 ocr = await LocalOcrService.TryRecognizeAsync(
                     image.LocalCachePath,
                     task.SellerNick,
+                    task.ShopKey,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -88,7 +88,26 @@ namespace Bot.ChromeNs
             KnowledgeV2Decision decision;
             try
             {
-                decision = KnowledgeEngineV2Service.Resolve(task.SellerNick, task.BuyerNick, question);
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
+                if (shop == null
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                        (task.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+                {
+                    Log.ErrorWithMaxCount("OCR已完成，但Knowledge V2缺少匹配的ShopKey，禁止跨店检索。", 20);
+                    return null;
+                }
+
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    if (!KnowledgeEngineV2Service.IsEnabled(task.SellerNick)
+                        || !KnowledgeEngineV2Service.IsSnapshotReady(task.SellerNick))
+                    {
+                        Log.Info("服务端OCR已完成，但Knowledge V2尚未就绪；保留OCR缓存并继续视觉/文字兜底: seller="
+                            + task.SellerNick + ", buyer=" + task.BuyerNick);
+                        return null;
+                    }
+                    decision = KnowledgeEngineV2Service.Resolve(task.SellerNick, task.BuyerNick, question);
+                }
             }
             catch (Exception ex)
             {
