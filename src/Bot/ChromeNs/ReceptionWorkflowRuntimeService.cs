@@ -386,7 +386,11 @@ namespace Bot.ChromeNs
                                 .Values<string>().ToList();
                         var candidateRequired = candidateStep == null
                             ? new JArray() : candidateStep["required_evidence"] as JArray ?? new JArray();
-                        var imageTrigger = isImage
+                        var candidateTimeout = Math.Max(1, Math.Min(10080,
+                            candidateStep == null ? 60 : candidateStep.Value<int?>("timeout_minutes") ?? 60));
+                        var hasRecentImage = recentVisual != null && recentVisual.Any(x =>
+                            x != null && x.ObservedAtTicks >= DateTime.Now.AddMinutes(-candidateTimeout).Ticks);
+                        var imageTrigger = (isImage || hasRecentImage)
                             && candidateRequired.Any(x => Convert.ToString(x) == "image_message");
                         if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords)) || imageTrigger)
                             triggeredFlows.Add(candidate);
