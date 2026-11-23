@@ -2,6 +2,8 @@ from pathlib import Path
 
 import importlib.util
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import types
 from contextlib import contextmanager
@@ -379,3 +381,32 @@ def test_v2_runtime_settings_reject_non_finite_thresholds_without_queueing(tmp_p
     with module._cp.db() as conn:
         queued = conn.execute("SELECT COUNT(*) FROM bot_commands").fetchone()[0]
     assert queued == 0
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_two_windows_syncing_from_the_same_revision_cannot_overwrite_the_winner(tmp_path):
+    module = _load_v2_cas_module(tmp_path)
+    barrier = threading.Barrier(2)
+
+    def push(answer):
+        barrier.wait(timeout=5)
+        return module._save(
+            1,
+            [_v2_cas_record(answer)],
+            "windows",
+            expected_revision=0,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(push, "device A answer"),
+            executor.submit(push, "device B answer"),
+        ]
+        results = [future.result(timeout=10) for future in futures]
+
+    state = module._state(1)
+    assert state["revision"] == 1
+    assert state["records"][0]["Answer"] in ("device A answer", "device B answer")
+    # Both clients must receive the single committed winner, never a stale local write.
+    assert all(result["revision"] == 1 for result in results)
+    assert all(result["records"][0]["Answer"] == state["records"][0]["Answer"] for result in results)
