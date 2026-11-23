@@ -295,8 +295,11 @@ namespace Bot.ChromeNs
                 return;
             }
             string receptionBlock;
-            if (KugouReceptionPolicy.BlockOutgoing(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out receptionBlock, burst.ShopKey))
+            var receptionBlocked = KugouReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
+                out receptionBlock, burst.ShopKey,
+                workflowDecision != null && workflowDecision.RequiresSend);
+            if (receptionBlocked)
             {
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkCompleted("vision_business_guard_suppressed");
