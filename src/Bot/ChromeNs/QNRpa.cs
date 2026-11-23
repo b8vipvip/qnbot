@@ -654,9 +654,9 @@ namespace Bot.ChromeNs
                     await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
                     return false;
                 }
-                if (!IsPreSendGuardSatisfied(preSendGuard, "UIA坐标发送")) return false;
                 var clicked = await RunUiActionAsync(
-                    () => TryClickCachedSendButtonNow(),
+                    () => IsPreSendGuardSatisfied(preSendGuard, "UIA坐标发送")
+                        && TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
                     UiActionTimeoutMs).ConfigureAwait(false);
                 if (clicked)
@@ -686,9 +686,9 @@ namespace Bot.ChromeNs
                     await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
                     return false;
                 }
-                if (!IsPreSendGuardSatisfied(preSendGuard, "UIA主按钮回退")) return false;
                 var invoked = await RunUiActionAsync(
-                    () => TryInvokeCachedSendButtonNow(),
+                    () => IsPreSendGuardSatisfied(preSendGuard, "UIA主按钮回退")
+                        && TryInvokeCachedSendButtonNow(),
                     "发送按钮左侧UIA安全调用",
                     UiActionTimeoutMs).ConfigureAwait(false);
                 if (!invoked)
