@@ -272,13 +272,20 @@ namespace Bot.ChromeNs
                         || !string.Equals(current.ShopKey, observation.ShopKey, StringComparison.Ordinal)
                         || !string.Equals(current.Seller, observation.Seller, StringComparison.Ordinal)
                         || !string.Equals(current.MessageKey, observation.MessageKey, StringComparison.Ordinal)
-                        || (!string.Equals(current.Buyer, observation.Buyer, StringComparison.OrdinalIgnoreCase)
-                            && !BuyerIdentityAliasService.AreEquivalent(
-                                current.Seller, current.Buyer, observation.Buyer))
+                        || !SameBuyerForWithdrawal(
+                            current.Seller, current.Buyer, observation.Buyer)
                         || !string.Equals(knowledge.ShopKey, current.ShopKey, StringComparison.Ordinal)
                         || !string.Equals(knowledge.Seller, current.Seller, StringComparison.OrdinalIgnoreCase)
                         || VisionImageCacheService.IsMessageKeyWithdrawn(
                             current.Seller, current.Buyer, current.MessageKey, current.ShopKey))
+                        return false;
+
+                    var sameMessageRows = SelectObservations(
+                        "where ShopKey = ? and Seller = ? and MessageKey = ?",
+                        current.ShopKey, current.Seller, current.MessageKey);
+                    if (sameMessageRows.Any(x =>
+                        string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal)
+                        || !SameBuyerForWithdrawal(current.Seller, x.Buyer, current.Buyer)))
                         return false;
 
                     var now = DateTime.Now.Ticks;
