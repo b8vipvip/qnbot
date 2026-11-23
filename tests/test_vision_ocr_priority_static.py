@@ -75,3 +75,22 @@ def test_ai_first_yields_before_ocr_direct_reply_but_keeps_no_ai_fallback():
     assert "AiEndpointStore.GetVisionEnabledEndpoints()" in decision
     assert "跳过OCR+知识库提前直答" in decision
     assert "未配置可用视觉模型，允许OCR+知识库兜底" in decision
+
+
+def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
+    decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision_gate = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    ocr_call = decision.index("LocalOcrService.TryRecognizeAsync")
+    knowledge_gate = decision.index("KnowledgeEngineV2Service.IsEnabled")
+    assert ocr_call < knowledge_gate
+    assert "task.ShopKey," in decision
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey)" in decision
+    assert "LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)" in vision_gate
+    assert "CanUseServerOcr" in vision_gate
+
+
+def test_ai_first_multimodal_path_still_attaches_shop_scoped_server_ocr():
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    resolver = read("src/Bot/ChromeNs/VisionImageResolver.cs")
+    assert "image.LocalCachePath, task.SellerNick, task.ShopKey, cts.Token" in vision
+    assert "ResolveAsync(message, endpoint, cancellationToken, shopKey)" in resolver
