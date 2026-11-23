@@ -97,12 +97,44 @@ namespace Bot.ChromeNs
         private static int _initialized;
         private static int _workerRunning;
 
+        private static string StateMarkerPath()
+        {
+            return StatePath() + ".initialized";
+        }
+
+        // File.Exists can return false for access errors. Treat only explicit not-found
+        // exceptions as absence; every other filesystem error must fail closed.
+        private static bool TryGetFilePresence(string path, out bool exists)
+        {
+            exists = false;
+            try
+            {
+                File.GetAttributes(path);
+                exists = true;
+                return true;
+            }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("检查自动发货持久化文件状态失败，按文件可能存在处理：" + ex.Message, 10);
+                exists = true;
+                return false;
+            }
+        }
+
         private static void MarkStateLoadFailed()
         {
             _stateLoadFailed = true;
             try
             {
-                if (_initialized != 0 || File.Exists(StatePath()))
+                bool queueExists;
+                bool markerExists;
+                if (_initialized != 0
+                    || !TryGetFilePresence(StatePath(), out queueExists)
+                    || queueExists
+                    || !TryGetFilePresence(StateMarkerPath(), out markerExists)
+                    || markerExists)
                     _stateFileMustExistForRecovery = true;
             }
             catch { _stateFileMustExistForRecovery = true; }
@@ -965,8 +997,21 @@ namespace Bot.ChromeNs
         {
             if (_stateLoadFailed) return false;
             var path = StatePath();
-            if (!File.Exists(path))
+            bool queueExists;
+            if (!TryGetFilePresence(path, out queueExists))
             {
+                MarkStateLoadFailed();
+                return false;
+            }
+            if (!queueExists)
+            {
+                bool markerExists;
+                if (!TryGetFilePresence(StateMarkerPath(), out markerExists) || markerExists)
+                {
+                    MarkStateLoadFailed();
+                    Log.ErrorWithMaxCount("自动发货任务队列文件缺失但持久化标记仍存在；拒绝以空队列覆盖历史任务。", 10);
+                    return false;
+                }
                 if (!allowMissing)
                 {
                     MarkStateLoadFailed();
@@ -979,7 +1024,9 @@ namespace Bot.ChromeNs
 
             bool loadedSuccessfully;
             var loaded = LoadState(out loadedSuccessfully);
-            if (!loadedSuccessfully || loaded == null || loaded.Pending == null || !File.Exists(path))
+            bool stillExists;
+            if (!loadedSuccessfully || loaded == null || loaded.Pending == null
+                || !TryGetFilePresence(path, out stillExists) || !stillExists)
             {
                 MarkStateLoadFailed();
                 Log.ErrorWithMaxCount("自动发货任务队列跨进程重新读取失败；暂停队列操作并保留原状态文件。", 10);
@@ -995,7 +1042,9 @@ namespace Bot.ChromeNs
             try
             {
                 var path = StatePath();
-                if (!File.Exists(path))
+                bool exists;
+                if (!TryGetFilePresence(path, out exists)) return new StateDocument();
+                if (!exists)
                 {
                     loadedSuccessfully = true;
                     return new StateDocument();
@@ -1046,6 +1095,16 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool EnsureStateMarkerLocked()
+        {
+            bool exists;
+            if (!TryGetFilePresence(StateMarkerPath(), out exists)) return false;
+            if (exists) return true;
+            string error;
+            return CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                StateMarkerPath(), "schema=1", 3, 50, out error);
+        }
+
         private static bool SaveStateLocked()
         {
             try
@@ -1055,6 +1114,8 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                     path, JsonConvert.SerializeObject(_state, Formatting.Indented), 3, 50, out error))
                     throw new IOException("原子保存失败：" + error);
+                if (!EnsureStateMarkerLocked())
+                    throw new IOException("自动发货队列已保存，但无法持久化初始化标记。");
                 return true;
             }
             catch (Exception ex)
