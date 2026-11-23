@@ -298,3 +298,30 @@ def test_final_reply_relevance_gate_fails_closed_when_timeline_or_event_read_fai
     assert "Log.ErrorWithMaxCount" in catch
     assert "return false;" in catch
     assert "return true;" not in catch
+
+
+
+def test_text_reply_rechecks_human_takeover_after_delay_immediately_before_send():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    start = pipeline.index("private static async Task ProcessTextBurstStreamingAsync")
+    end = pipeline.index("private static bool IsLocalKnowledgeDirectAnswerSource", start)
+    method = pipeline[start:end]
+    final_gate = method.rindex("ParallelReplyRelevanceGate.ShouldSend(")
+    assert method.index("await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)") < final_gate
+    assert final_gate < method.index('lease.MarkSending("streaming_send_started")')
+    assert method.index('lease.MarkSending("streaming_send_started")') < method.index("qn.SendTextWithRetryAsync(")
+    assert "streaming_final_relevance_suppressed" in method
+
+
+def test_vision_reply_rechecks_human_takeover_and_records_send_terminal_state():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    start = qn.index("private async Task ProcessVisionBurstAsync")
+    end = qn.index("private void AddSkippedConversation", start)
+    method = qn[start:end]
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in method
+    assert method.index("ParallelReplyRelevanceGate.ShouldSend(") < method.index(
+        'lease.MarkSending("vision_send_started")'
+    ) < method.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)")
+    assert "vision_final_relevance_suppressed" in method
+    assert 'lease.MarkCompleted("vision_send_completed")' in method
+    assert 'lease.MarkFailed("vision_send_failed")' in method
