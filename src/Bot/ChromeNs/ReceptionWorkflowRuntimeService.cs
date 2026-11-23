@@ -286,8 +286,14 @@ namespace Bot.ChromeNs
                             && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
                             && string.Equals(x.Seller, seller, StringComparison.OrdinalIgnoreCase)
                             && string.Equals(x.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
-                            && (x.EventType == OrderEventType.Created || x.EventType == OrderEventType.Paid)
+                            && !string.IsNullOrWhiteSpace(x.OrderId)
                             && x.EventTime >= DateTime.Now.AddDays(-7))
+                        .GroupBy(x => x.OrderId, StringComparer.Ordinal)
+                        .Select(g => g.OrderByDescending(x => x.EventTime).First())
+                        .Where(x => (x.EventType == OrderEventType.Created || x.EventType == OrderEventType.Paid)
+                            && !System.Text.RegularExpressions.Regex.IsMatch(
+                                x.TradeStatus ?? string.Empty, @"关闭|退款|CLOSED|REFUND|CANCEL",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                         .ToList();
                 }
             }
@@ -309,10 +315,10 @@ namespace Bot.ChromeNs
             {
                 var products = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                 var skus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
-                var productMatch = products.Count == 0 || orders.Any(x => products.Contains(x.ItemId, StringComparer.Ordinal));
-                var skuMatch = skus.Count == 0 || orders.Any(x => skus.Contains(x.SkuId, StringComparer.Ordinal));
-                return productMatch && skuMatch
-                    && orders.Any(x => config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal));
+                return orders.Any(x =>
+                    (products.Count == 0 || products.Contains(x.ItemId, StringComparer.Ordinal))
+                    && (skus.Count == 0 || skus.Contains(x.SkuId, StringComparer.Ordinal))
+                    && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal));
             }).ToList();
             if (matchingFlows.Count == 0) return null;
 
@@ -372,10 +378,12 @@ namespace Bot.ChromeNs
 
                         var keywords = (step["trigger_keywords"] as JArray ?? new JArray()).Values<string>().ToList();
                         var required = step["required_evidence"] as JArray ?? new JArray();
+                        var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                        var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                         var matchingOrders = orders.Where(x =>
-                            (flow["product_ids"] as JArray ?? new JArray()).Values<string>().Contains(x.ItemId, StringComparer.Ordinal)
-                            && ((flow["sku_ids"] as JArray ?? new JArray()).Count == 0
-                                || (flow["sku_ids"] as JArray).Values<string>().Contains(x.SkuId, StringComparer.Ordinal)))
+                            (flowProducts.Count == 0 || flowProducts.Contains(x.ItemId, StringComparer.Ordinal))
+                            && (flowSkus.Count == 0 || flowSkus.Contains(x.SkuId, StringComparer.Ordinal))
+                            && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal))
                             .ToList();
                         var hasBuyer = question.Length > 0;
                         var hasOrder = matchingOrders.Count > 0;
