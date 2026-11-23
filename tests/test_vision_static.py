@@ -110,3 +110,12 @@ def test_vision_reply_task_keeps_authoritative_browser_session_for_image_resolut
     assert 'BrowserClient = qn.CDP' in pipeline
     assert 'task.BrowserClient' in service
     assert 'task.BrowserClient' in ocr_first
+
+
+
+def test_direct_qn_vision_task_carries_current_shop_cdp_session():
+    qn = read('src/Bot/ChromeNs/QN.cs')
+    task_start = qn.index('var task = new VisionReplyTask')
+    task_end = qn.index('};', task_start)
+    task = qn[task_start:task_end]
+    assert 'BrowserClient = CDP' in task
