@@ -143,7 +143,7 @@ jobs:
             exit 0
           fi
           reconcile_title="GPTAuto Reconcile ($TASK_ID / PR #$PR_NUMBER)"
-          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" --jq --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
+          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" | jq -r --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
           if [[ -n "$active_reconcile_run" ]]; then
             echo "Reconcile run $active_reconcile_run is already active for task=$TASK_ID merge=$merge_sha; no duplicate workflow will be queued."
             exit 0
@@ -191,7 +191,7 @@ jobs:
           fi
 
           reconcile_title="GPTAuto Reconcile ($TASK_ID / PR #$PR_NUMBER)"
-          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" --jq --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
+          active_reconcile_run="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/runs?per_page=100" | jq -r --arg title "$reconcile_title" '[.workflow_runs[] | select(.display_title == $title and .status != "completed")] | sort_by(.created_at, .id) | reverse | .[0].id // empty')"
           if [[ -n "$active_reconcile_run" ]]; then
             echo "Reconcile run $active_reconcile_run is already active for task=$TASK_ID merge=$MERGE_SHA; recovery dispatch deferred."
             exit 0
