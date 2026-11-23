@@ -523,3 +523,19 @@ def test_active_workflow_bootstrap_read_errors_do_not_fall_back_to_unconstrained
     assert "QueueHandoff(shop, seller, buyer, question, shopKey, \"runtime-bootstrap-error\")" in failure
     assert "return Suppressed(" in failure
     assert "已阻止普通AI绕过流程" in failure
+
+
+def test_image_message_evidence_keeps_native_key_for_withdrawal_recheck_even_when_ocr_fails():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    decision = runtime[
+        runtime.index("VisualEvidenceMessageKey = required.Any("):
+        runtime.index("AccountEvidenceMessageKey =", runtime.index("VisualEvidenceMessageKey = required.Any("))
+    ]
+    current = runtime[
+        runtime.index("internal static bool IsDecisionCurrent("):
+        runtime.index("internal static void CompleteDecision(")
+    ]
+
+    assert "hasImage ? messageKey : string.Empty" in decision
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in current
+    assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in current
