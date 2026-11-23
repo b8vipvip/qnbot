@@ -377,17 +377,17 @@ def test_final_guard_is_carried_to_the_last_moment_of_each_qianniu_physical_send
 
     assert "SendTextAsync(string buyer, string text, Func<bool> preSendGuard = null)" in qn
     assert "return await rpa.SendTextAsync(buyer, text, preSendGuard)" in qn
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"旧版接口发送\\")" in qn
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"旧版接口发送\")" in qn
     assert "SendTextAsync(buyer, text, preSendGuard)" in qn
 
     assert "SendTextAsync(string buyer, string text, Func<bool> preSendGuard = null)" in qnrpa
     assert "OpenAndSendText(buyer, text, shopKey, manualBypassConsumed, preSendGuard)" in qnrpa
     assert "manualTakeoverCheck, preSendGuard" in qnrpa
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"UIA坐标发送\\")" in qnrpa
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"UIA主按钮回退\\")" in qnrpa
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"UIA坐标发送\")" in qnrpa
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"UIA主按钮回退\")" in qnrpa
 
     assert "Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"CDP页面发送\\")" in native
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"HWND安全发送\\")" in native
-    assert "IsPreSendGuardSatisfied(preSendGuard, \\"安全UIA发送\\")" in native
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"CDP页面发送\")" in native
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")" in native
+    assert "IsPreSendGuardSatisfied(preSendGuard, \"安全UIA发送\")" in native
     assert "manualTakeoverCheck, preSendGuard).ConfigureAwait(false)" in native
