@@ -76,7 +76,7 @@ namespace Bot.ChromeNs
             @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex UnsafeReplyText = new Regex(
-            @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号|自动履约|确认收货",
+            @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号|自动履约|确认收货|订单号|订单编号|快递单号|订单状态|收货人|收件人|收货地址|邮寄地址|金额|实付款",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static string Digest(string value)
@@ -252,6 +252,7 @@ namespace Bot.ChromeNs
             ReceptionWorkflowEvidenceContext evidence,
             KugouReceptionConfig config,
             bool handoffConfigured,
+            string buyer,
             string shopKey,
             out JObject flow,
             out string reason)
@@ -388,8 +389,18 @@ namespace Bot.ChromeNs
                         reason = "真实人工回复别名必须同时出现在evidence_refs中，确保来源审计完整";
                         return false;
                     }
+                    if (replyEvidence.ObservedAtUtcTicks <= 0
+                        || !selected.Any(x => x.Kind == "buyer_message"
+                            && x.ObservedAtUtcTicks > 0
+                            && x.ObservedAtUtcTicks <= replyEvidence.ObservedAtUtcTicks))
+                    {
+                        reason = "人工回复必须发生在同一证据集中的买家原始问题之后";
+                        return false;
+                    }
                     replyTemplate = BuyerMessageArchiveService.Redact(Clean(replyEvidence.ReplyText, 1200));
-                    if (replyTemplate.Length < 2 || UnsafeReplyText.IsMatch(replyTemplate))
+                    if ((!string.IsNullOrWhiteSpace(buyer)
+                            && replyTemplate.IndexOf(buyer, StringComparison.OrdinalIgnoreCase) >= 0)
+                        || replyTemplate.Length < 2 || UnsafeReplyText.IsMatch(replyTemplate))
                     {
                         reason = "人工回复为空或涉及不允许自动化的高风险业务结论";
                         return false;
@@ -573,7 +584,7 @@ namespace Bot.ChromeNs
                     }
                     JObject flow;
                     string reason;
-                    if (!TryBuildFlow(proposal, evidence, config, handoffConfigured, shopKey, out flow, out reason))
+                    if (!TryBuildFlow(proposal, evidence, config, handoffConfigured, buyer, shopKey, out flow, out reason))
                     {
                         result.SkippedCount++;
                         result.Items.Add(new ReceptionWorkflowPublishItem
