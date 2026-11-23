@@ -215,4 +215,7 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert "terminalOrderChanged" in runtime
     assert "TimeSpan.FromHours(24).Ticks" in runtime
     assert "FingerprintOrders(candidateOrders)" in runtime
+    assert "OrderFingerprint = orderFingerprint" in runtime
+    assert "NextStateTerminal" in runtime
+    assert "IsDecisionCurrent" in runtime
     assert r'\"terminal\":true' in learning
