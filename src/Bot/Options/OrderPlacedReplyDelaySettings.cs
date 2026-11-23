@@ -23,9 +23,9 @@ using System.Windows.Controls;
 namespace Bot.Options
 {
     /// <summary>
-    /// 下单后的预设固定答案属于交易流程引导，必须优先于买家随后发来的普通文本/图片消息进入发送队列。
-    /// 旧版本允许配置 0-300 秒延时；该延时会让 Smart Reply 在固定答案之前先回复，造成流程顺序错误。
-    /// 现在统一强制为 0 秒，旧 params.db 中已保存的延时值会被忽略并在下次保存设置时归零。
+    /// 下单后固定回复延迟属于店铺级设置，允许 0-300 秒。
+    /// 延迟结束后必须重新校验Bot开关、原店铺ShopKey和CDP会话，避免切店后误发到其他买家。
+    /// 旧配置缺少该字段时由 AutoReplyRuleConfig 构造函数保持 0 秒默认值。
     /// </summary>
     public static class OrderPlacedReplyDelaySettings
     {
