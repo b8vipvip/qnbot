@@ -183,12 +183,12 @@ namespace Bot.ChromeNs
         }
 
         internal static ReceptionWorkflowDecision EvaluateVision(
-            BuyerMessageBurst burst, string messageKey, string visualSummary)
+            BuyerMessageBurst burst, string messageKey, string visualSummary, bool withdrawn)
         {
             if (burst == null) return null;
             return Evaluate(
                 burst.SellerNick, burst.BuyerNick, burst.ShopKey, burst.CombinedQuestion,
-                messageKey, true, visualSummary);
+                messageKey, !withdrawn, withdrawn ? string.Empty : visualSummary);
         }
 
         private static bool ContainsAny(string text, IEnumerable<string> keywords)
