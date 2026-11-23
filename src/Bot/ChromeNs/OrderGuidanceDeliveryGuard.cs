@@ -170,7 +170,7 @@ namespace Bot.ChromeNs
             // status so an early paid snapshot cannot remain the semantic truth forever.
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded()) return;
                 CleanupInternal();
                 var record = FindInternal(shopKey, snapshot.Seller, snapshot.Buyer, snapshot.OrderId);
                 if (record == null)
@@ -215,7 +215,7 @@ namespace Bot.ChromeNs
             maxCount = Math.Max(1, Math.Min(20, maxCount));
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded()) return result;
                 CleanupInternal();
                 foreach (var record in _state.Records
                     .Where(x => x != null
@@ -243,7 +243,7 @@ namespace Bot.ChromeNs
             if (shopKey.Length == 0) return false;
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded()) return false;
                 CleanupInternal();
                 var record = FindLatestInternal(shopKey, seller, buyer);
                 if (record == null || record.Snapshot == null) return false;
@@ -277,7 +277,11 @@ namespace Bot.ChromeNs
 
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded())
+                {
+                    reason = "订单账本无法读取，已阻止自动补发";
+                    return false;
+                }
                 CleanupInternal();
                 if (HasLegacyRecord(seller, buyer, null))
                 {
@@ -321,7 +325,11 @@ namespace Bot.ChromeNs
 
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded())
+                {
+                    reason = "订单账本无法读取，已阻止发送";
+                    return true;
+                }
                 CleanupInternal();
                 if (HasLegacyRecord(plan.Seller, plan.Buyer, plan.OrderId))
                 {
@@ -403,7 +411,11 @@ namespace Bot.ChromeNs
             if (plan == null || string.IsNullOrWhiteSpace(plan.OrderId)) return;
             lock (Sync)
             {
-                EnsureLoaded();
+                if (!EnsureLoaded())
+                {
+                    Log.ErrorWithMaxCount("订单发送成功后无法读取持久订单账本，保留原文件并等待恢复", 10);
+                    return;
+                }
                 CleanupInternal();
                 if (string.IsNullOrWhiteSpace(plan.ShopKey)) return;
                 var record = FindInternal(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
@@ -595,25 +607,49 @@ namespace Bot.ChromeNs
             return string.Equals((left ?? string.Empty).Trim(), (right ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
         }
 
-        private static void EnsureLoaded()
+        private static bool EnsureLoaded()
         {
-            if (_state != null) return;
+            if (_state != null) return true;
             try
             {
                 var path = GetPath();
-                _state = File.Exists(path)
-                    ? JsonConvert.DeserializeObject<OrderGuidanceState>(File.ReadAllText(path, Encoding.UTF8))
-                    : new OrderGuidanceState();
-                if (_state == null || (_state.SchemaVersion != 1 && _state.SchemaVersion != 2))
+                var exists = false;
+                try
+                {
+                    File.GetAttributes(path);
+                    exists = true;
+                }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
+
+                if (!exists)
+                {
                     _state = new OrderGuidanceState();
-                else if (_state.SchemaVersion == 1)
-                    _state.SchemaVersion = 2;
-                if (_state.Records == null) _state.Records = new List<OrderGuidanceRecord>();
+                    return true;
+                }
+
+                string error;
+                var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 3, 30, out error);
+                if (!string.IsNullOrWhiteSpace(error))
+                    throw new IOException("读取订单账本失败：" + error);
+                if (string.IsNullOrWhiteSpace(raw))
+                    throw new InvalidDataException("订单账本文件存在但内容为空");
+
+                var loaded = JsonConvert.DeserializeObject<OrderGuidanceState>(raw);
+                if (loaded == null || (loaded.SchemaVersion != 1 && loaded.SchemaVersion != 2)
+                    || loaded.Records == null)
+                    throw new InvalidDataException("订单账本结构或版本无效；拒绝将其重置为空账本");
+                if (loaded.SchemaVersion == 1) loaded.SchemaVersion = 2;
+                _state = loaded;
+                return true;
             }
             catch (Exception ex)
             {
-                Log.Info("读取下单充值流程发送状态失败，使用空状态：" + ex.Message);
-                _state = new OrderGuidanceState();
+                // A corrupt/unreadable ledger is not an empty ledger. Keep the durable file
+                // untouched and make callers return no evidence / block a new send or follow-up.
+                _state = null;
+                Log.ErrorWithMaxCount("读取下单充值流程持久账本失败，已fail-closed且不会覆盖旧文件：" + ex.Message, 10);
+                return false;
             }
         }
 
@@ -627,7 +663,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void SaveInternal()
+        private static bool SaveInternal()
         {
             try
             {
@@ -635,14 +671,26 @@ namespace Bot.ChromeNs
                 _state.SchemaVersion = 2;
                 var directory = Path.GetDirectoryName(path);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                var temp = path + ".tmp";
-                File.WriteAllText(temp, JsonConvert.SerializeObject(_state, Formatting.Indented), new UTF8Encoding(false));
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(temp, path);
+                string error;
+                var saved = CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                    path,
+                    JsonConvert.SerializeObject(_state, Formatting.Indented),
+                    3,
+                    50,
+                    out error);
+                if (saved) return true;
+
+                // Drop the in-memory copy so the next operation must reload the last durable
+                // version. The atomic writer preserves that file when the replacement fails.
+                _state = null;
+                Log.ErrorWithMaxCount("保存下单充值流程状态失败，已保留旧账本并暂停后续写入：" + error, 10);
+                return false;
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("保存下单充值流程发送状态失败：" + ex.Message, 10);
+                _state = null;
+                Log.ErrorWithMaxCount("保存下单充值流程状态失败，已保留旧账本并暂停后续写入：" + ex.Message, 10);
+                return false;
             }
         }
 
