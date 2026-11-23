@@ -20,16 +20,17 @@ Allowed catalog actions are limited to:
 - `READ_ONLY_TOOL` — request a read-only lookup.
 - `REPLY` / `REPLY_REVIEWED` — express a reply intent; outgoing text must still pass the existing canonical send pipeline and its takeover, relevance, identity, deduplication, and pre-send checks.
 
-The catalog cannot grant arbitrary code execution, payment, recharge, refund, account modification, or actual fulfillment actions.
+The catalog cannot grant arbitrary code execution, payment, recharge, refund, account modification, or actual fulfillment actions. These high-risk business actions remain outside autonomous workflow publication.
 
 ## Autonomous publication and recovery
 
 - The catalog uses a stable, uniquely resolved ShopKey and the exact per-shop settings scope.
+- The active-version pointer is stored in the same catalog document as the immutable flow definitions, so publication and pointer replacement share one atomic write.
 - `Publish` validates the complete document and publishes it in one cross-process locked transaction.
 - A revision compare-and-swap prevents stale editors or concurrent Agents from overwriting a newer publication.
 - Catalog revision and per-flow versions are monotonic.
 - Previous published snapshots are retained as immutable history records.
-- `RollbackToPreviousPublished` restores the previous valid content as a new published revision; rollback is also immediate and does not require administrator approval.
+- `RollbackToPreviousPublished` restores the previous valid content as a new published revision through an atomic rollback; rollback is also immediate and does not require administrator approval.
 - Existing `qnbot.reception-workflow-drafts.v1` files are migrated to the new active catalog only after schema and action validation. The original legacy file is retained.
 - A corrupt or unreadable current catalog, failed lock, revision conflict, or invalid history snapshot blocks the write; it never silently resets the active version.
 
