@@ -84,7 +84,10 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'RELEASE_PATH: ${{ steps.validation-plan.outputs.release-path }}' in reconcile
     assert 'RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}' in reconcile
     assert 'RELEASE_WORKFLOW_ID: ${{ steps.validation-plan.outputs.release-workflow-id }}' in reconcile
-    assert '-f source_sha="$MERGE_SHA"' in reconcile
+    assert 'release_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg source_sha "$MERGE_SHA"' in reconcile
+    assert 'actions/workflows/$RELEASE_WORKFLOW_ID/dispatches' in reconcile
+    assert 'printf \'%s\' "$release_payload" | gh api --method POST' in reconcile
+    assert "--input -" in reconcile
     assert 'select(.display_title == $title' in reconcile
     assert 'select(.name == $workflow and .display_title == $title' not in reconcile
     assert 'baseline="$(jq -r \'[.workflow_runs[].id] | max // 0\' <<<"$runs")"' in reconcile
