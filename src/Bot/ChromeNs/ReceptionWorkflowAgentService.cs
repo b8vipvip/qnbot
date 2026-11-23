@@ -378,6 +378,11 @@ namespace Bot.ChromeNs
                         reason = "人工回复为空或涉及不允许自动化的高风险业务结论";
                         return false;
                     }
+                    if (!required.Values<string>().Contains("manual_correction", StringComparer.Ordinal))
+                    {
+                        reason = "真人回复步骤必须显式声明manual_correction必要证据";
+                        return false;
+                    }
                 }
 
                 steps.Add(new JObject
@@ -417,16 +422,29 @@ namespace Bot.ChromeNs
                 }
             }
 
-            var trigger = (proposal["trigger_keywords"] as JArray ?? new JArray())
-                .Values<string>().Select(x => Clean(x, 40)).Where(x => x.Length > 0)
+            var triggerTokens = proposal["trigger_keywords"] as JArray;
+            if (triggerTokens == null || triggerTokens.Count < 1 || triggerTokens.Count > 8
+                || triggerTokens.Any(x => x == null || x.Type != JTokenType.String
+                    || string.IsNullOrWhiteSpace(Convert.ToString(x))
+                    || Convert.ToString(x).Length > 40))
+            {
+                reason = "流程触发关键词缺失或格式无效";
+                return false;
+            }
+            var trigger = triggerTokens.Values<string>()
+                .Select(x => Clean(x, 40)).Where(x => x.Length > 0)
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
             if (trigger.Count == 0)
             {
                 reason = "流程缺少触发关键词";
                 return false;
             }
-            var idMaterial = shopKey + "|" + string.Join(",", productIds.OrderBy(x => x, StringComparer.Ordinal))
-                + "|" + string.Join(",", trigger);
+            var flowName = Clean(Convert.ToString(proposal["name"]), 80);
+            if (flowName.Length == 0) flowName = string.Join("、", trigger.Take(3));
+            var normalizedName = Regex.Replace(flowName, @"[\s\p{P}\p{S}]+", string.Empty)
+                .ToLowerInvariant();
+            var idMaterial = shopKey + "|" + string.Join(",", productIds.OrderBy(x, StringComparer.Ordinal))
+                + "|" + normalizedName;
             var flowId = "wf-" + Digest(idMaterial).Substring(0, 24);
             var sourceEvidence = new JArray(selected.Take(12).Select(x => new JObject
             {
@@ -437,8 +455,10 @@ namespace Bot.ChromeNs
             flow = new JObject
             {
                 ["flow_id"] = flowId,
+                ["flow_name"] = flowName,
                 ["flow_version"] = 1,
                 ["status"] = "active",
+                ["trigger_keywords"] = new JArray(trigger),
                 ["product_ids"] = new JArray(productIds),
                 ["sku_ids"] = new JArray(skuIds),
                 ["initial_state"] = Convert.ToString(steps[0]["state"]),
@@ -541,7 +561,30 @@ namespace Bot.ChromeNs
                             var flowId = Convert.ToString(flow["flow_id"]);
                             var existing = flows.OfType<JObject>().FirstOrDefault(x =>
                                 string.Equals(Convert.ToString(x["flow_id"]), flowId, StringComparison.Ordinal));
-                            if (existing != null) existing.Replace(flow);
+                            if (existing == null)
+                            {
+                                var candidateProducts = (flow["product_ids"] as JArray ?? new JArray())
+                                    .Values<string>().OrderBy(x => x, StringComparer.Ordinal).ToList();
+                                var candidateTriggers = (flow["trigger_keywords"] as JArray ?? new JArray())
+                                    .Values<string>().OrderBy(x => x, StringComparer.Ordinal).ToList();
+                                existing = flows.OfType<JObject>().FirstOrDefault(x =>
+                                {
+                                    if (!string.IsNullOrWhiteSpace(Convert.ToString(x["flow_name"])))
+                                        return false;
+                                    var oldProducts = (x["product_ids"] as JArray ?? new JArray())
+                                        .Values<string>().OrderBy(v => v, StringComparer.Ordinal).ToList();
+                                    var oldTriggers = (x["trigger_keywords"] as JArray ?? new JArray())
+                                        .Values<string>().OrderBy(v => v, StringComparer.Ordinal).ToList();
+                                    return candidateProducts.SequenceEqual(oldProducts, StringComparer.Ordinal)
+                                        && candidateTriggers.SequenceEqual(oldTriggers, StringComparer.Ordinal);
+                                });
+                            }
+                            if (existing != null)
+                            {
+                                flow["flow_id"] = Convert.ToString(existing["flow_id"]);
+                                flow["flow_version"] = existing.Value<int?>("flow_version") ?? 1;
+                                existing.Replace(flow);
+                            }
                             else flows.Add(flow);
                         }
                         catalog["flows"] = flows;
