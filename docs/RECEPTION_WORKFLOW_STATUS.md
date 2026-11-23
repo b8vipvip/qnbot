@@ -1,45 +1,54 @@
-# Reception workflow engineering status
+# Reception Agent autonomous workflow publishing status
 
-This document describes a generic, shop-scoped checkout and account-evidence flow. It contains no actual merchant URL, vendor branding, product identifiers, or buyer messages.
+This document describes the generic, shop-scoped reception workflow catalog. It contains no merchant URL, vendor branding, product identifiers, or buyer messages.
 
-## Authorization boundary
+## Product policy
 
-Order created, payment confirmed, device eligibility, personal account binding, final fulfillment authorization, and delivery completion are **separate assertions**. No one stage implies the next.
+Reception Agent may create, edit, validate, publish, and roll back workflow definitions autonomously. A validated publication becomes the active version immediately. No administrator approval, manual activation token, or mandatory gray-rollout stage is required.
 
-## Workflow example
+This policy applies to publishing workflow definitions. It does not turn workflow publication into payment, account, refund, order, or fulfillment authority.
 
-| Stage | Evidence needed | Allowed next step |
-|---|---|---|
-| `awaiting_order` | No authoritative order | Provide generic catalog guidance |
-| `awaiting_evidence` | Paid order, missing required screenshot | Ask once, then WAIT |
-| `account_review` | Current conversation image + OCR and provenance | Validate or ask for clearer evidence |
-| `awaiting_binding` | Confirmed supported app but missing owner binding | Guide from per-shop private guide URL |
-| `pending_order_review` | Binding verified by authoritative signal | Recheck current order; no automatic fulfillment |
-| `human_handoff` | Manual takeover, unknown platform, or conflicting evidence | Do not send stale AI answer |
-| `completed` | Confirmed final delivery event | Customer support only |
+## Published workflow model
 
-The planned generic model uses `shop_key`, `product_id`, `sku`, `flow_version`, `stage`, `required_evidence`, `guard`, `action`, `next_stage`, and idempotent audit events.
+The catalog is versioned by `shop_key`, `product_id`, `sku`, flow ID, and flow version. Each step declares its state, required evidence, allowed action, next state, and timeout.
 
-## Runtime protection already implemented
+Allowed catalog actions are limited to:
 
-Current implementation includes:
+- `WAIT` — wait for a later event or required evidence.
+- `ASK_EVIDENCE` — request missing or clearer evidence.
+- `HANDOFF` — hand the conversation to a human.
+- `READ_ONLY_TOOL` — request a read-only lookup.
+- `REPLY` / `REPLY_REVIEWED` — express a reply intent; outgoing text must still pass the existing canonical send pipeline and its takeover, relevance, identity, deduplication, and pre-send checks.
 
-- Shop-scoped knowledge quarantine, pre-send text/vision safety checks, a bounded recent-image follow-up window, conservative OCR decisions, and cautious learning candidates. Learning candidates do not automatically authorize financial or account operations.
-- A privacy-minimized, cross-restart evidence ledger. It stores hashes and structured observations rather than raw chat, OCR, image URLs, phone numbers, or order IDs; writes are serialized per shop and retained for seven days (maximum 500 rows).
-- A shop-scoped, versioned workflow draft catalog with strict schema validation, cross-process atomic writes, backup, and restore. Every saved flow remains `draft`; the catalog cannot activate or execute a workflow.
+The catalog cannot grant arbitrary code execution, payment, recharge, refund, account modification, or actual fulfillment actions.
 
-## Remaining approval and runtime gaps
+## Autonomous publication and recovery
 
-- A trusted operator identity and authorization source for approval. A UI click or a local draft edit is not proof of an authorized approver.
-- An auditable approval record bound to the exact ShopKey, flow ID/version, approved evidence requirements, approver identity, and approval time.
-- Controlled publication of an approved immutable version, an active-version pointer, and an atomic rollback to the prior approved version. These operations are not implemented; the current catalog must remain draft-only.
-- Trusted external order/account truth and guarded, idempotent execution of irreversible operations. The evidence ledger is diagnostic and must never be treated as order/payment authority.
-- UI for reviewing learning proposals and editing/reviewing actual state transitions.
-- Complete migration of legacy knowledge with human-approved conflict resolution.
-- Field acceptance of real-world client sessions, customer images, manual takeover, and recovery after a real process restart.
+- The catalog uses a stable, uniquely resolved ShopKey and the exact per-shop settings scope.
+- `Publish` validates the complete document and publishes it in one cross-process locked transaction.
+- A revision compare-and-swap prevents stale editors or concurrent Agents from overwriting a newer publication.
+- Catalog revision and per-flow versions are monotonic.
+- Previous published snapshots are retained as immutable history records.
+- `RollbackToPreviousPublished` restores the previous valid content as a new published revision; rollback is also immediate and does not require administrator approval.
+- Existing `qnbot.reception-workflow-drafts.v1` files are migrated to the new active catalog only after schema and action validation. The original legacy file is retained.
+- A corrupt or unreadable current catalog, failed lock, revision conflict, or invalid history snapshot blocks the write; it never silently resets the active version.
 
-Never declare the project completed or auto-merge high-risk changes based solely on unit tests. Perform a shadow evaluation, manual review, and canary rollout first.
+## Existing runtime protection
+
+The existing application still owns the actual conversation and business side effects:
+
+- Manual takeover, stale-generation cancellation, exact buyer/seller/ShopKey identity, send deduplication, delivery evidence, and pre-send validation remain in the canonical send pipeline.
+- The privacy-minimized evidence ledger is diagnostic. It stores hashes and structured observations rather than raw chat, OCR, image URLs, phone numbers, or order IDs.
+- Order created, payment confirmed, device eligibility, personal account binding, final fulfillment authorization, and delivery completion are separate assertions. No one stage implies the next.
+- The evidence ledger is never an order/payment authority and cannot authorize an irreversible operation.
+
+## Remaining implementation and acceptance boundary
+
+- The active catalog read API is available to the Reception Agent/runtime adapter. The complete generic state-machine executor still needs to be connected to real message, OCR, order, and account evidence sources; publishing a catalog does not by itself prove that every flow transition is executing.
+- Trusted external order/account truth and guarded, idempotent execution of irreversible operations remain separate integrations. The workflow catalog must not enable these operations.
+- UI/runtime review of active state transitions, full migration of legacy knowledge, and field acceptance of real client sessions, customer images, manual takeover, and process restart recovery remain open.
+- CI/build success does not replace real Windows/Qianniu acceptance.
 
 ## Public repository privacy
 
-No real company name, SKU, shop key, tutorial hostname, product URL, customer account, or order must appear in publicly versioned documentation. Set merchant details using private per-shop runtime configuration instead.
+No real company name, SKU, ShopKey, tutorial hostname, product URL, customer account, order, or raw customer message may appear in public documentation. Merchant details belong in private per-shop runtime configuration.
