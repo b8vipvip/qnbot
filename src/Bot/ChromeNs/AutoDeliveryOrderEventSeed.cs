@@ -346,8 +346,16 @@ namespace Bot.ChromeNs
             try
             {
                 var path = CursorPath();
-                if (!File.Exists(path))
+                bool exists;
+                if (!TryGetFilePresence(path, out exists)) return new CursorState();
+                if (!exists)
                 {
+                    bool markerExists;
+                    if (!TryGetFilePresence(CursorMarkerPath(), out markerExists) || markerExists)
+                    {
+                        Log.ErrorWithMaxCount("自动发货事件游标文件缺失但持久化标记仍存在；拒绝重置游标并跳过历史订单。", 10);
+                        return new CursorState();
+                    }
                     loadedSuccessfully = true;
                     return new CursorState();
                 }
@@ -364,6 +372,7 @@ namespace Bot.ChromeNs
                     state.Schema = 2;
                     _cursorStateDirty = true;
                 }
+                if (!EnsureCursorMarkerLocked()) return new CursorState();
                 loadedSuccessfully = true;
                 return state;
             }
@@ -384,6 +393,8 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                     path, JsonConvert.SerializeObject(_cursors, Formatting.Indented), 3, 50, out error))
                     throw new IOException("原子保存失败：" + error);
+                if (!EnsureCursorMarkerLocked())
+                    throw new IOException("自动发货事件游标已保存，但无法持久化初始化标记。");
                 _cursorStateDirty = false;
                 return true;
             }
@@ -393,6 +404,40 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("保存自动发货订单事件游标失败；暂停事件消费以防丢失订单：" + ex.Message, 10);
                 return false;
             }
+        }
+
+        private static string CursorMarkerPath()
+        {
+            return CursorPath() + ".initialized";
+        }
+
+        private static bool TryGetFilePresence(string path, out bool exists)
+        {
+            exists = false;
+            try
+            {
+                File.GetAttributes(path);
+                exists = true;
+                return true;
+            }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("检查自动发货事件游标文件状态失败，按文件可能存在处理：" + ex.Message, 10);
+                exists = true;
+                return false;
+            }
+        }
+
+        private static bool EnsureCursorMarkerLocked()
+        {
+            bool exists;
+            if (!TryGetFilePresence(CursorMarkerPath(), out exists)) return false;
+            if (exists) return true;
+            string error;
+            return CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                CursorMarkerPath(), "schema=1", 3, 50, out error);
         }
 
         private static string DataRoot()
