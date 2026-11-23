@@ -28,6 +28,9 @@ def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     assert "private static string HistoryDirectoryForShop(ShopContext shop)" in service
     assert "private static void EnsureLegacyDraftMigrated(ShopContext shop)" in service
     assert "private static void SaveHistorySnapshot(ShopContext shop, JObject catalog)" in service
+    assert "KugouReceptionPolicy.ResolveShopForSeller" not in service
+    assert "public static string GetActiveJson(string seller, string shopKey)" in service
+    assert "public static string GetActiveFlowJson(string seller, string flowId, string shopKey)" in service
 
 
 def test_legacy_drafts_migrate_to_active_catalog_without_admin_approval():
@@ -134,6 +137,8 @@ def test_reception_agent_ui_exposes_direct_publish_and_rollback():
     navigation = source("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     build = source("src/Directory.Build.targets")
 
+    assert "KnowledgeV2WorkflowDraftPage(string seller, string shopKey)" in page
+    assert "private readonly string _shopKey;" in page
     assert 'Text = "Reception Agent 接待流程"' in page
     assert 'Content = "校验并立即发布"' in page
     assert 'Content = "回滚上一发布版本"' in page
