@@ -112,6 +112,8 @@ def test_manual_visual_learning_uses_shared_atomic_withdrawal_gate():
     assert "lock (DbSync)" in helper
     assert 'current.Status, "图片已撤回"' in helper
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in helper
+    assert "sameMessageRows = SelectObservations(" in helper
+    assert "sameMessageRows.Any(x =>" in helper
     assert "knowledge.ShopKey, current.ShopKey" in helper
     assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { knowledge, current })" in helper
     assert "VisualKnowledgeLearningService.TrySaveManualVisualKnowledge(observation, target)" in manual
