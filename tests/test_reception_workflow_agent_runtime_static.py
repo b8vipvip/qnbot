@@ -419,7 +419,11 @@ def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_e
     ]
 
     assert "GetNativeMessageId(x)" in builder
-    assert "turn.NativeAliases" not in builder or "GetNativeMessageId(turn)" in builder
+    assert "OrderByDescending(x => x.Timestamp)" in builder
+    assert ".Take(40)" in builder
+    assert "OrderBy(x => x.Timestamp)" in builder
+    assert builder.index("OrderByDescending(x => x.Timestamp)") < builder.index(".Take(40)") < builder.index("OrderBy(x => x.Timestamp)")
+    assert "GetNativeMessageId(turn)" in builder
     assert "seenNativeMessageIds.Add(nativeMessageId)" in builder
     assert "MessageKey = nativeMessageId" in builder
     assert "Digest(shopKey + \"|\" + seller + \"|\" + buyer + \"|\" + nativeMessageId)" in builder
