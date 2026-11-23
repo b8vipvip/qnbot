@@ -504,11 +504,28 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                    return false;
+                string latestRelevanceReason;
+                if (!ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestRelevanceReason, false, burst.ShopKey))
+                {
+                    Log.Info("文本回复等待发送资源期间会话相关性发生变化，已阻止发送: reason="
+                        + latestRelevanceReason);
+                    return false;
+                }
+                return workflowDecision == null || !workflowDecision.RequiresSend
+                    || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+            };
+
             bool sendOk;
             try
             {
                 sendOk = await qn.SendTextWithRetryAsync(
-                    burst.BuyerNick, answer, 1, lease.CancellationToken);
+                    burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             }
             catch (OperationCanceledException)
             {
