@@ -154,14 +154,17 @@ namespace Bot.ChromeNs
                 EnsureSchema();
                 lock (DbSync)
                 {
-                    var observation = SelectObservations(
-                        "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
-                        shopKey, seller, messageKey).FirstOrDefault();
-                    if (observation == null) return false;
-                    var sameBuyer = string.Equals(observation.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
-                        || BuyerIdentityAliasService.AreEquivalent(seller, observation.Buyer, buyer);
-                    if (!sameBuyer) return true;
-                    return string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal);
+                    var observations = SelectObservations(
+                        "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc",
+                        shopKey, seller, messageKey);
+                    if (observations.Count == 0) return false;
+                    // Message keys are expected to be unique within one shop/seller. If legacy
+                    // alias rows exist, inspect all of them: a newer active duplicate must never
+                    // hide an older withdrawal tombstone for the same source message.
+                    return observations.Any(observation =>
+                        !string.Equals(observation.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
+                            && !BuyerIdentityAliasService.AreEquivalent(seller, observation.Buyer, buyer)
+                        || string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal));
                 }
             }
             catch (Exception ex)
