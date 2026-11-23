@@ -300,6 +300,7 @@ namespace Bot.ChromeNs
                     until) ?? new List<object>())
                     .OfType<VisualKnowledgeObservationEntity>()
                     .FirstOrDefault(x => x != null
+                        && string.Equals(x.MessageKey, pending.MessageKey, StringComparison.Ordinal)
                         && SameBuyer(pending.Seller, x.Buyer, pending.Buyer));
             }
             catch
