@@ -172,7 +172,11 @@ def test_auto_delivery_queue_read_failure_fails_closed_without_overwriting_pendi
     assert "ReloadStateForMutationLocked(true)" in initialize
     assert "if (!ReloadStateForMutationLocked(true))" in initialize
     assert "if (!SaveStateLocked())" in initialize
-    assert initialize.index("if (!ReloadStateForMutationLocked(true))") < initialize.index("new Timer(")
+    failed_branch = initialize[initialize.index("if (!ReloadStateForMutationLocked(true))"):]
+    assert "EnsureRecoveryTimerLocked()" in failed_branch
+    assert failed_branch.index("EnsureRecoveryTimerLocked()") < failed_branch.index("return;")
+    assert "private static void EnsureRecoveryTimerLocked()" in runtime
+    assert "new Timer(_ => OnTimerTick()" in runtime
     assert "保留原状态文件并暂停自动发货" in initialize
     assert "LoadState(out loadedSuccessfully)" in loader
     assert "private static StateDocument LoadState(out bool loadedSuccessfully)" in loader
@@ -193,8 +197,12 @@ def test_auto_delivery_initializers_publish_ready_state_only_after_locked_first_
         assert "if (_initialized != 0) return;" in initializer
         assert "Interlocked.Exchange(ref _initialized" not in initializer
         assert initializer.index("if (_initialized != 0) return;") < initializer.index("_initialized = 1;")
-    assert runtime_init.index("ReloadStateForMutationLocked(true)") < runtime_init.index("new Timer(")
-    assert seed_init.index("_cursors = LoadCursors(out loadedSuccessfully);") < seed_init.index("new Timer(")
+    assert runtime_init.index("ReloadStateForMutationLocked(true)") < runtime_init.index("_initialized = 1;")
+    assert "EnsureRecoveryTimerLocked()" in runtime_init
+    assert seed_init.index("_cursors = LoadCursors(out loadedSuccessfully);") < seed_init.index("_initialized = 1;")
+    assert "EnsureRecoveryTimerLocked()" in seed_init
+    assert "private static void EnsureRecoveryTimerLocked()" in seed
+    assert "private static void EnsureRecoveryTimerLocked()" in runtime
 
 
 def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwriting():
@@ -206,7 +214,11 @@ def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwrit
 
     assert "LoadCursors(out loadedSuccessfully)" in initialize
     assert "if (!loadedSuccessfully)" in initialize
-    assert initialize.index("if (!loadedSuccessfully)") < initialize.index("new Timer(")
+    failed_branch = initialize[initialize.index("if (!loadedSuccessfully)"):]
+    assert "EnsureRecoveryTimerLocked()" in failed_branch
+    assert failed_branch.index("EnsureRecoveryTimerLocked()") < failed_branch.index("return;")
+    assert "private static void OnTimerTick()" in seed
+    assert "TryRecoverCursorState()" in seed
     assert "private static volatile bool _cursorStateUnavailable;" in seed
     assert "state == null || (state.Schema != 1 && state.Schema != 2) || state.Sellers == null" in loader
     assert "loadedSuccessfully = false;" in loader
@@ -423,7 +435,8 @@ def test_corrupt_or_unreadable_auto_delivery_queue_never_starts_worker_or_overwr
     failed_branch = initialize[initialize.index("if (!ReloadStateForMutationLocked(true))"):]
     return_index = failed_branch.index("return;")
     assert return_index < failed_branch.index("CleanupExpiredLocked")
-    assert return_index < failed_branch.index("_timer = new Timer(")
+    assert failed_branch.index("EnsureRecoveryTimerLocked()") < return_index
+    assert "EnsureRecoveryTimerLocked()" in initialize
     assert "LoadState(out loadedSuccessfully)" in loader
     assert "拒绝以空队列覆盖原任务状态" in loader
     assert "loadedSuccessfully = true;" not in loader[loader.index("catch (Exception ex)"):]
@@ -737,3 +750,30 @@ def test_auto_delivery_worker_claim_token_fences_stale_processes_before_irrevers
     renew_before_click = execute.index("RenewWorkerClaim(", persist)
     click = execute.index('ReadModalStateAsync(sourceClient, "confirm")', renew_before_click)
     assert persist < renew_before_click < click
+
+
+
+def test_auto_delivery_queue_retries_startup_recovery_without_enabling_unreadable_state():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    tick = runtime[runtime.index("private static void OnTimerTick"):runtime.index("private static bool TryRecoverQueueState")]
+    recover = runtime[runtime.index("private static bool TryRecoverQueueState"):runtime.index("public static bool IsOperational")]
+    assert "if (_stateLoadFailed && !TryRecoverQueueState()) return;" in tick
+    assert "ReloadStateForMutationLocked(true)" in recover
+    assert "if (!ReloadStateForMutationLocked(true))" in recover
+    assert "if (!SaveStateLocked()) return false;" in recover
+    assert "_initialized = 1;" in recover
+    assert "EnsureRecoveryTimerLocked();" in recover
+    assert "ScheduleWorker();" in tick
+
+
+def test_auto_delivery_event_cursor_retries_startup_recovery_before_consuming_events():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    tick = seed[seed.index("private static void OnTimerTick"):seed.index("private static bool TryRecoverCursorState")]
+    recover = seed[seed.index("private static bool TryRecoverCursorState"):seed.index("private static void Tick")]
+    assert "if (_cursorStateUnavailable && !TryRecoverCursorState()) return;" in tick
+    assert "if (!_cursorStateUnavailable) Tick();" in tick
+    assert "LoadCursors(out loadedSuccessfully)" in recover
+    assert "if (!loadedSuccessfully)" in recover
+    assert "if (_cursorStateDirty && !SaveCursorsLocked()) return false;" in recover
+    assert "_initialized = 1;" in recover
+    assert "EnsureRecoveryTimerLocked();" in recover
