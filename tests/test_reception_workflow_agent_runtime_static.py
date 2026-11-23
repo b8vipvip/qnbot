@@ -121,8 +121,8 @@ def test_runtime_auto_repairs_stale_state_and_auto_rolls_back_repeated_faults_wi
     assert "currentState = initial" in runtime
     assert "AutoRollbackFailureThreshold = 3" in runtime
     assert "FaultWindow = TimeSpan.FromMinutes(10)" in runtime
-    assert "fault["failure_count"] = count" in runtime
-    assert "fault["quarantined"] = true" in runtime
+    assert 'fault["failure_count"] = count' in runtime
+    assert 'fault["quarantined"] = true' in runtime
     assert "RollbackToPreviousPublished(" in runtime
     assert "seller, shopKey, revision" in runtime
 
@@ -142,7 +142,7 @@ def test_runtime_never_sends_directly_and_only_commits_state_after_canonical_del
     assert "EvaluateVision(" in vision_pipeline
     assert "CompleteDecision(workflowDecision, sendOk)" in vision_pipeline
     assert "ParallelReplyRelevanceGate.ShouldSend(" in vision_pipeline
-    assert "lifecycleLease.MarkSending("vision_send_started")" in vision_pipeline
+    assert 'lifecycleLease.MarkSending("vision_send_started")' in vision_pipeline
 
 
 def test_runtime_deduplicates_pending_messages_and_fails_closed_on_uncertain_delivery():
@@ -150,8 +150,11 @@ def test_runtime_deduplicates_pending_messages_and_fails_closed_on_uncertain_del
 
     assert 'record["pending_source_key"]' in runtime
     assert 'record["last_source_key"]' in runtime
-    assert "正在发送，防止流程重复执行" in runtime
-    assert "record["delivery_uncertain"] = true" in runtime
+    assert "上一条流程回复仍在发送或等待提交，本轮暂缓避免并发重复" in runtime
+    assert 'record["delivery_uncertain"] = true' in runtime
+    assert "PendingDeliveryUncertainAfter" in runtime
+    assert "pending_started_utc_ticks" in runtime
+    assert "检测到重启或超时遗留的待发送流程" in runtime
     assert "上一条流程回复发送结果不确定" in runtime
     assert "同一来源消息已处理" in runtime
 
@@ -188,5 +191,5 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert '["terminal"] = step.Value<bool?>("terminal") ?? (action == "WAIT" && state == nextState)' in agent
     assert 'step.Value<bool?>("terminal") == true' in runtime
     assert "timeoutMinutes" in runtime
-    assert "DateTime.UtcNow.Ticks - updatedTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks" in runtime
+    assert "DateTime.UtcNow.Ticks - stateEnteredTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks" in runtime
     assert '"terminal":true' in learning
