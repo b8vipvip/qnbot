@@ -489,3 +489,19 @@ def test_vision_ocr_failure_still_routes_through_active_workflow_evidence_reques
     assert "result.Answer = workflowDecision.ReplyText" in failure
     assert "if (workflowDecision == null)" in later
     assert "EvaluateVision(" in later
+
+
+def test_handoff_cooldown_is_released_for_negative_channel_results():
+    handoff = read("src/Bot/ChromeNs/HandoffNotificationService.cs")
+    classifier = handoff[
+        handoff.index("private static bool HasSuccessfulChannel("):
+        handoff.index("public static void QueueNotify(")
+    ]
+
+    assert "result.Split(new[] { '；' }" in classifier
+    assert 'IndexOf("失败"' in classifier
+    assert 'IndexOf("未成功"' in classifier
+    assert 'IndexOf("不成功"' in classifier
+    assert 'IndexOf("未受理"' in classifier
+    assert 'IndexOf("HTTP "' in classifier
+    assert "return channel.IndexOf(\"成功\"" in classifier
