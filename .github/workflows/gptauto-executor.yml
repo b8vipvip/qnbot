@@ -132,7 +132,7 @@ jobs:
             sleep 10
           done
 
-          gh api --method PUT "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" \
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" --method PUT \
             -f merge_method=squash -f sha="$EXPECTED_HEAD" | tee /tmp/gptauto-merge.json
           jq -e '.merged == true' /tmp/gptauto-merge.json >/dev/null
           merge_sha="$(jq -r '.sha' /tmp/gptauto-merge.json)"
@@ -215,9 +215,9 @@ jobs:
           if [[ -n "$handoff_id" ]]; then
             # Persist the dispatch lease BEFORE calling workflow_dispatch. If the
             # run-list is temporarily stale, a second Executor still sees this marker.
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$recovery_body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$handoff_id" --method PATCH -f body="$recovery_body" >/dev/null
           else
-            handoff_id="$(gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$recovery_body" --jq '.id')"
+            handoff_id="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$recovery_body" --jq '.id')"
             [[ -n "$handoff_id" ]] || { echo "::error::Unable to persist Reconcile dispatch lease marker"; exit 1; }
           fi
 
@@ -233,7 +233,7 @@ jobs:
           scheduled_body="$marker
           GPTAuto recovery Reconcile dispatch submitted for task $TASK_ID merge $MERGE_SHA.
           The Completion Lease remains ACTIVE until this exact merge receives a durable terminal DONE receipt."
-          gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id" -f body="$scheduled_body" >/dev/null
+          gh api "repos/$REPOSITORY/issues/comments/$handoff_id" --method PATCH -f body="$scheduled_body" >/dev/null
 
       - name: Retry transient failed jobs only
         id: transient-retry
@@ -252,7 +252,7 @@ jobs:
           conclusion="$(jq -r '.conclusion // "failure"' <<<"$run_json")"
           gh run view "$FAILED_RUN_ID" --repo "$REPOSITORY" --log-failed > /tmp/gptauto-failed.log 2>&1 || true
           if PYTHONPATH=.github python -m gptauto.ci_policy --log /tmp/gptauto-failed.log --conclusion "$conclusion" --attempt "$attempt" >/dev/null; then
-            gh api --method POST "repos/$REPOSITORY/actions/runs/$FAILED_RUN_ID/rerun-failed-jobs" >/dev/null
+            gh api "repos/$REPOSITORY/actions/runs/$FAILED_RUN_ID/rerun-failed-jobs" --method POST >/dev/null
             echo "retried=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Transient CI evidence detected; re-running failed jobs only for run $FAILED_RUN_ID before spending a repair generation."
           fi
@@ -426,9 +426,9 @@ jobs:
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
           else
-            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
           fi
 
       - name: Summary
