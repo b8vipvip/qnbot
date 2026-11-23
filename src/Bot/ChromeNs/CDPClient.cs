@@ -420,7 +420,8 @@ namespace Bot.ChromeNs
 
         private async Task<string> SendExecuteAndWaitAsync(
             string cmd, string desc, bool allowRetiredIdentityRead = false,
-            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs)
+            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs,
+            int responseTimeoutMs = InvokeTimeoutMs)
         {
             if (IsShopIdentityRetired && !allowRetiredIdentityRead)
             {
@@ -437,15 +438,16 @@ namespace Bot.ChromeNs
                 if (preferred != null && !ReferenceEquals(preferred, this))
                     return await preferred.SendExecuteAndWaitCoreAsync(
                         cmd, desc + "@runtime-active-session", allowRetiredIdentityRead,
-                        gateWaitTimeoutMs).ConfigureAwait(false);
+                        gateWaitTimeoutMs, responseTimeoutMs).ConfigureAwait(false);
             }
             return await SendExecuteAndWaitCoreAsync(
-                cmd, desc, allowRetiredIdentityRead, gateWaitTimeoutMs).ConfigureAwait(false);
+                cmd, desc, allowRetiredIdentityRead, gateWaitTimeoutMs, responseTimeoutMs).ConfigureAwait(false);
         }
 
         private async Task<string> SendExecuteAndWaitCoreAsync(
             string cmd, string desc, bool allowRetiredIdentityRead = false,
-            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs)
+            int gateWaitTimeoutMs = ExecuteGateWaitTimeoutMs,
+            int responseTimeoutMs = InvokeTimeoutMs)
         {
             var gateAcquired = false;
             var effectiveGateWaitTimeoutMs = Math.Max(
@@ -507,7 +509,8 @@ namespace Bot.ChromeNs
                     return string.Empty;
                 }
 
-                var timeoutTask = Task.Delay(InvokeTimeoutMs);
+                var safeResponseTimeoutMs = Math.Max(InvokeTimeoutMs, Math.Min(30000, responseTimeoutMs));
+                var timeoutTask = Task.Delay(safeResponseTimeoutMs);
                 var completed = await Task.WhenAny(requestCompletion.Task, timeoutTask).ConfigureAwait(false);
                 if (completed != requestCompletion.Task && !requestCompletion.Task.IsCompleted)
                 {
@@ -536,10 +539,19 @@ namespace Bot.ChromeNs
 
         internal Task<string> EvaluateExpressionAsync(string expression, string description)
         {
+            return EvaluateExpressionAsync(expression, description, InvokeTimeoutMs);
+        }
+
+        internal Task<string> EvaluateExpressionAsync(
+            string expression,
+            string description,
+            int responseTimeoutMs)
+        {
             if (string.IsNullOrWhiteSpace(expression)) return Task.FromResult(string.Empty);
             return SendExecuteAndWaitAsync(
                 expression,
-                string.IsNullOrWhiteSpace(description) ? "EvaluateExpression" : description);
+                string.IsNullOrWhiteSpace(description) ? "EvaluateExpression" : description,
+                responseTimeoutMs: responseTimeoutMs);
         }
 
         private string SendExecuteAndWait(string cmd, string desc)
