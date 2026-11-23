@@ -173,7 +173,10 @@ namespace Bot.ChromeNs
                         // A failed first attempt must not permanently poison the message key.
                         // The vision pipeline calls Prime again with the authoritative CDP client;
                         // use that opportunity for one bounded retry through the logged-in browser.
-                        if (record.BrowserClient == null && browserClient != null)
+                        if (browserClient != null && !browserClient.IsInvalidated
+                            && !browserClient.IsShopIdentityRetired
+                            && string.Equals((browserClient.ShopKey ?? string.Empty).Trim(),
+                                shopKey, StringComparison.Ordinal))
                             record.BrowserClient = browserClient;
                         if (record.Message == null) record.Message = message;
                         if ((record.DownloadTask == null
@@ -281,7 +284,7 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return Fail("无法确认图片消息所属ShopKey，已阻止跨店缓存读取");
             shopKey = shop.ShopKey;
-            var messageKey = IncomingMessageSafety.BuildMessageKey(message, string.Empty);
+            var messageKey = IncomingMessageSafety.BuildMessageKey(message, GetMessageText(message));
             var record = FindRecord(messageKey, url, shopKey);
             if (record == null)
             {
@@ -465,6 +468,7 @@ namespace Bot.ChromeNs
                     messageId = message == null || message.mcode == null ? string.Empty : (message.mcode.messageId ?? string.Empty),
                     clientId = message == null || message.mcode == null ? string.Empty : (message.mcode.clientId ?? string.Empty),
                     wwMsgId = message == null || message.ext == null ? string.Empty : message.ext.ww_msgid.ToString(),
+                    ccode = message == null || message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty),
                     maxBytes = Math.Max(1024L, maxBytes)
                 };
                 var expression = BuildBrowserImageFetchExpression(args);
@@ -557,6 +561,18 @@ namespace Bot.ChromeNs
                 + "else if(u.charAt(0)==='/')u=new URL(u,location.href).href;else return;}}catch(e){return;}"
                 + "if(!candidates.some(x=>x.url===u))candidates.push({url:u,img:img||null});}"
                 + "add(a.url,null);"
+                + "function matches(m){const orig=m&&m.originBanamaMessage?m.originBanamaMessage:m||{};"
+                + "const mc=orig.mcode||m.mcode||{};const ex=orig.ext||m.ext||{};const od=orig.originalData||m.originalData||{};"
+                + "const vals=[mc.messageId,mc.clientId,ex.ww_msgid,od.fileId,od.url].filter(Boolean).map(String);"
+                + "return tokens.length>0&&tokens.some(t=>vals.some(v=>v===t||(v.length>12&&v.indexOf(t)>=0)));}"
+                + "function addMessage(m){if(!matches(m))return;const orig=m&&m.originBanamaMessage?m.originBanamaMessage:m;"
+                + "const od=orig&&orig.originalData?orig.originalData:{};add(od.url||od.fileId,null);}"
+                + "try{const map=window._db&&window._db.msgDataMap;if(map){Array.from(map.values?map.values():Object.values(map)).forEach(arr=>"
+                + "Array.from(arr||[]).forEach(addMessage));}}catch(e){}"
+                + "try{if(a.ccode&&window.imsdk&&typeof window.imsdk.invoke==='function'){"
+                + "const history=await window.imsdk.invoke('im.singlemsg.GetRemoteHisMsg',{cid:{ccode:a.ccode,type:1},"
+                + "count:50,gohistory:1,msgid:'-1',msgtime:'-1'});"
+                + "const msgs=history&&history.result?history.result.msgs||[]:[];msgs.forEach(addMessage);}}catch(e){}"
                 + "try{const imgs=Array.from(document.querySelectorAll('img'));"
                 + "for(const img of imgs){const values=[img.currentSrc,img.src,img.getAttribute('data-src'),"
                 + "img.getAttribute('data-original'),img.getAttribute('data-url'),img.getAttribute('data-file-id')];"
@@ -851,6 +867,23 @@ namespace Bot.ChromeNs
             if (string.Equals(mime, "image/webp", StringComparison.OrdinalIgnoreCase)) return ".webp";
             if (string.Equals(mime, "image/gif", StringComparison.OrdinalIgnoreCase)) return ".gif";
             return ".jpg";
+        }
+
+        private static string GetMessageText(QNChatMessage message)
+        {
+            if (message == null) return string.Empty;
+            try
+            {
+                if (message.originalData != null)
+                {
+                    var text = message.originalData.text ?? string.Empty;
+                    if (message.originalData.header != null)
+                        text += message.originalData.header.summary ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(text)) return text.Trim();
+                }
+            }
+            catch { }
+            return (message.summary ?? string.Empty).Trim();
         }
 
         private static DateTime GetObservedAt(QNChatMessage message)
