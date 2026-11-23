@@ -29,121 +29,31 @@ namespace Bot.Options
     /// </summary>
     public static class OrderPlacedReplyDelaySettings
     {
-        private const string DelayRowTag = "OrderPlacedReplyDelayRow";
-        private const string ForcedImmediateTag = "forced-immediate";
-        public const int ForcedDelaySeconds = 0;
-        private static int _initialized;
+        public const int DefaultDelaySeconds = 0;
+        public const int MaxDelaySeconds = 300;
 
         public static void Initialize()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EventManager.RegisterClassHandler(
-                typeof(FeatureSettingsWindow),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnFeatureSettingsLoaded),
-                true);
-            // Preserve early rich-order payload capture before the legacy order bridge.
+            // Capture the full raw order payload before the legacy bridge drops SKU/quantity/payment fields.
             Bot.ChromeNs.OrderRichPayloadBridge.Initialize();
         }
 
         public static int Clamp(int seconds)
         {
-            return ForcedDelaySeconds;
+            return Math.Max(0, Math.Min(MaxDelaySeconds, seconds));
         }
 
         public static int GetSeconds()
         {
-            return ForcedDelaySeconds;
+            var config = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
+            return Clamp(config.OrderPlacedReplyDelaySeconds);
         }
 
         public static void SaveSeconds(int seconds)
         {
             var config = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
-            config.OrderPlacedReplyDelaySeconds = ForcedDelaySeconds;
+            config.OrderPlacedReplyDelaySeconds = Clamp(seconds);
             BotFeatureStore.SaveAutoReplyRules(config);
-        }
-
-        internal static void ApplyForcedImmediateUi(DependencyObject root)
-        {
-            var panel = FindOrderPlacedSectionPanel(root);
-            if (panel == null) return;
-            if (panel.Children.OfType<FrameworkElement>().Any(x =>
-                string.Equals(Convert.ToString(x.Tag), ForcedImmediateTag, StringComparison.Ordinal)))
-                return;
-
-            var oldRow = panel.Children.OfType<FrameworkElement>().FirstOrDefault(x =>
-                string.Equals(Convert.ToString(x.Tag), DelayRowTag, StringComparison.Ordinal));
-            var insertIndex = oldRow == null ? panel.Children.Count : panel.Children.IndexOf(oldRow);
-            if (oldRow != null)
-            {
-                oldRow.Visibility = Visibility.Collapsed;
-                oldRow.Tag = "legacy-ignored-delay-row";
-            }
-
-            var row = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 8),
-                Tag = DelayRowTag
-            };
-            row.Children.Add(new TextBlock
-            {
-                Text = "下单回复延时",
-                Width = 125,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            row.Children.Add(new TextBox
-            {
-                Text = ForcedDelaySeconds.ToString(),
-                Width = 60,
-                Height = 26,
-                IsReadOnly = true,
-                IsEnabled = false,
-                Tag = ForcedImmediateTag,
-                ToolTip = "旧延时配置会被忽略；下单预设回复固定立即发送。"
-            });
-            row.Children.Add(new TextBlock
-            {
-                Text = "强制立即发送（0 秒），优先于后续普通 AI 回复",
-                Margin = new Thickness(10, 4, 0, 0),
-                Foreground = System.Windows.Media.Brushes.Gray
-            });
-            panel.Children.Insert(Math.Max(0, Math.Min(insertIndex, panel.Children.Count)), row);
-        }
-
-        private static void OnFeatureSettingsLoaded(object sender, RoutedEventArgs e)
-        {
-            ApplyForcedImmediateUi(sender as DependencyObject);
-        }
-
-        private static StackPanel FindOrderPlacedSectionPanel(DependencyObject root)
-        {
-            foreach (var child in LogicalChildren(root))
-            {
-                var panel = child as StackPanel;
-                if (panel != null && panel.Children.OfType<TextBlock>().Any(x =>
-                    string.Equals((x.Text ?? string.Empty).Trim(), "买家下单后自动发送", StringComparison.Ordinal)))
-                    return panel;
-                var nested = FindOrderPlacedSectionPanel(child);
-                if (nested != null) return nested;
-            }
-            return null;
-        }
-
-        private static DependencyObject[] LogicalChildren(DependencyObject root)
-        {
-            if (root == null) return new DependencyObject[0];
-            try
-            {
-                return LogicalTreeHelper.GetChildren(root)
-                    .Cast<object>()
-                    .OfType<DependencyObject>()
-                    .ToArray();
-            }
-            catch
-            {
-                return new DependencyObject[0];
-            }
         }
     }
 }
