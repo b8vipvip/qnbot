@@ -274,8 +274,7 @@ namespace Bot.ChromeNs
                     .OfType<VisualKnowledgeObservationEntity>()
                     .FirstOrDefault();
                 if (byMessage != null && SameBuyer(pending.Seller, byMessage.Buyer, pending.Buyer))
-                    return string.Equals(byMessage.Status, "图片已撤回", StringComparison.Ordinal)
-                        ? null : byMessage;
+                    return byMessage;
 
                 var since = pending.ImageObservedAt.AddMinutes(-1).Ticks;
                 var until = pending.ImageObservedAt.AddMinutes(5).Ticks;
@@ -288,7 +287,6 @@ namespace Bot.ChromeNs
                     until) ?? new List<object>())
                     .OfType<VisualKnowledgeObservationEntity>()
                     .FirstOrDefault(x => x != null
-                        && !string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal)
                         && SameBuyer(pending.Seller, x.Buyer, pending.Buyer));
             }
             catch
