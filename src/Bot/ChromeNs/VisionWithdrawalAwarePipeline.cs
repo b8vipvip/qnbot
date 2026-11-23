@@ -267,9 +267,19 @@ namespace Bot.ChromeNs
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
-            if (KugouReceptionPolicy.Applies(burst.SellerNick, burst.ShopKey)
-                && !KugouReceptionConfigService.GetConfig(ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey)).EnableAutoGuidance)
+            ShopContext visionShop = null;
+            KugouReceptionConfig visionConfig = null;
+            try
             {
+                visionShop = ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
+                if (visionShop != null
+                    && string.Equals(visionShop.SellerNick, burst.SellerNick, StringComparison.OrdinalIgnoreCase))
+                    visionConfig = KugouReceptionConfigService.GetConfig(visionShop);
+            }
+            catch { }
+            if (visionConfig != null && visionConfig.Enabled && !visionConfig.EnableAutoGuidance)
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkCompleted("vision_auto_guidance_disabled");
                 if (ctl != null) ctl.SetSkipped("本店已关闭自动视觉设备引导，图片仍可供人工核验");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
