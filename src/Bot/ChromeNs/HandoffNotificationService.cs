@@ -20,6 +20,49 @@ namespace Bot.ChromeNs
         private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         private static readonly ConcurrentDictionary<string, DateTime> Recent =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private const int MaxRecentEntries = 4096;
+
+        private static void RemoveRecentIfUnchanged(string key, DateTime expected)
+        {
+            ((ICollection<KeyValuePair<string, DateTime>>)Recent).Remove(
+                new KeyValuePair<string, DateTime>(key, expected));
+        }
+
+        private static void PruneRecent(DateTime now)
+        {
+            foreach (var entry in Recent)
+                if (entry.Value <= now) RemoveRecentIfUnchanged(entry.Key, entry.Value);
+
+            var overflow = Recent.Count - MaxRecentEntries;
+            if (overflow <= 0) return;
+            foreach (var entry in Recent.OrderBy(x => x.Value).Take(overflow))
+                RemoveRecentIfUnchanged(entry.Key, entry.Value);
+        }
+
+        private static bool TryReserveRecent(
+            string key, DateTime now, int cooldownMinutes, out DateTime expires)
+        {
+            PruneRecent(now);
+            expires = now.AddMinutes(Math.Max(1, Math.Min(10080, cooldownMinutes)));
+            while (true)
+            {
+                DateTime current;
+                if (Recent.TryGetValue(key, out current))
+                {
+                    if (current > now) return false;
+                    if (Recent.TryUpdate(key, expires, current)) return true;
+                }
+                else if (Recent.TryAdd(key, expires)) return true;
+            }
+        }
+
+        private static bool HasSuccessfulChannel(string result)
+        {
+            if (string.IsNullOrWhiteSpace(result)) return false;
+            return result.IndexOf("成功", StringComparison.Ordinal) >= 0
+                || result.IndexOf("已发送", StringComparison.Ordinal) >= 0
+                || result.IndexOf("已受理", StringComparison.Ordinal) >= 0;
+        }
 
         public static void QueueNotify(
             string seller,
@@ -52,13 +95,13 @@ namespace Bot.ChromeNs
             var shopKey = shop == null ? "legacy" : shop.ShopKey;
             var key = shopKey + "#" + Normalize(seller) + "#" + Normalize(buyer) + "#" + Normalize(question);
             var now = DateTime.Now;
-            DateTime until;
-            if (Recent.TryGetValue(key, out until) && until > now) return;
-            Recent[key] = now.AddMinutes(Math.Max(1, cfg.NotificationCooldownMinutes));
+            DateTime reservationExpires;
+            if (!TryReserveRecent(key, now, cfg.NotificationCooldownMinutes, out reservationExpires)) return;
 
             Task.Run(async () =>
             {
                 IDisposable scope = null;
+                var notificationSucceeded = false;
                 try
                 {
                     if (shop != null) scope = ShopSettingsScope.Enter(shop);
@@ -71,6 +114,7 @@ namespace Bot.ChromeNs
                         question,
                         decision,
                         false);
+                    notificationSucceeded = HasSuccessfulChannel(result);
                     Log.Info("本店转人工通知结果：" + result);
                 }
                 catch (Exception ex)
@@ -79,6 +123,7 @@ namespace Bot.ChromeNs
                 }
                 finally
                 {
+                    if (!notificationSucceeded) RemoveRecentIfUnchanged(key, reservationExpires);
                     if (scope != null) scope.Dispose();
                 }
             });
@@ -108,7 +153,17 @@ namespace Bot.ChromeNs
                 || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            AutoReplyRuleConfig cfg;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                    cfg = BotFeatureStore.GetAutoReplyRules();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent读取本店转人工通知配置失败：" + ex.Message, 5);
+                return false;
+            }
             if (cfg == null || !cfg.EnableHandoffNotification
                 || !(cfg.NotifyWeChat || cfg.NotifyQQ || cfg.NotifyFeishu
                     || cfg.NotifyDingTalk || cfg.NotifyEmail || WeComAppBridgeClient.IsConfigured()))
@@ -117,9 +172,9 @@ namespace Bot.ChromeNs
             var key = shopKey + "#" + Normalize(seller) + "#" + Normalize(buyer)
                 + "#workflow#" + Normalize(flowId);
             var now = DateTime.Now;
-            DateTime until;
-            if (Recent.TryGetValue(key, out until) && until > now) return true;
-            Recent[key] = now.AddMinutes(Math.Max(1, cfg.NotificationCooldownMinutes));
+            DateTime reservationExpires;
+            if (!TryReserveRecent(key, now, cfg.NotificationCooldownMinutes, out reservationExpires))
+                return true;
 
             var decision = new AutoReplyRuleDecision
             {
@@ -133,6 +188,7 @@ namespace Bot.ChromeNs
             Task.Run(async () =>
             {
                 IDisposable scope = null;
+                var notificationSucceeded = false;
                 try
                 {
                     scope = ShopSettingsScope.Enter(shop);
@@ -141,6 +197,7 @@ namespace Bot.ChromeNs
                         scopedConfig,
                         BuildMessage(seller, buyer, question, decision),
                         seller, buyer, question, decision, false);
+                    notificationSucceeded = HasSuccessfulChannel(result);
                     Log.Info("Reception Agent转人工通知结果：shop=" + shopKey + ", flow=" + flowId + ", " + result);
                 }
                 catch (Exception ex)
@@ -149,6 +206,7 @@ namespace Bot.ChromeNs
                 }
                 finally
                 {
+                    if (!notificationSucceeded) RemoveRecentIfUnchanged(key, reservationExpires);
                     if (scope != null) scope.Dispose();
                 }
             });
