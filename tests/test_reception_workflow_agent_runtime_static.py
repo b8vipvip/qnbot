@@ -401,3 +401,31 @@ def test_new_image_cannot_borrow_a_prior_images_visual_summary_or_message_key():
     assert "hasVision = hasCurrentVisual || hasRecentVisual;" in evaluate
     assert "visualEvidenceMessageKey = hasCurrentVisual" in evaluate
     assert "recentVisualEvidence.MessageKey" in evaluate
+
+
+def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_evidence_pairs():
+    agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+    builder = agent[
+        agent.index("internal static ReceptionWorkflowEvidenceContext BuildEvidenceContext("):
+        agent.index("private static string GetNativeMessageId(")
+    ]
+    pair_gate = agent[
+        agent.index("private static bool HasUniqueHumanEvidencePair("):
+        agent.index("private static bool IsSafeKey(")
+    ]
+    flow_builder = agent[
+        agent.index("private static bool TryBuildFlow("):
+        agent.index("private static string GetNativeMessageId(")
+    ]
+
+    assert "GetNativeMessageId(x)" in builder
+    assert "turn.NativeAliases" not in builder or "GetNativeMessageId(turn)" in builder
+    assert "seenNativeMessageIds.Add(nativeMessageId)" in builder
+    assert "MessageKey = nativeMessageId" in builder
+    assert "Digest(shopKey + \"|\" + seller + \"|\" + buyer + \"|\" + nativeMessageId)" in builder
+    assert "HasUniqueHumanEvidencePair(evidence, selected)" in flow_builder
+    assert "IsValidHumanEvidencePair(evidence, selected, replyEvidence)" in flow_builder
+    assert "manualReplies.All(reply => IsValidHumanEvidencePair(evidence, selected, reply))" in pair_gate
+    assert "buyerQuestion" in pair_gate
+    assert "TimeSpan.FromMinutes(30).Ticks" in pair_gate
+    assert "humanRepliesBetween.Count == 1" in pair_gate
