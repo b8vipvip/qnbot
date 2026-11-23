@@ -451,3 +451,20 @@ def test_image_only_upload_counts_as_buyer_message_for_ask_evidence():
     assert "|| (isImage && !string.IsNullOrWhiteSpace(messageKey));" in evaluate
     assert "var hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
     assert "var hasVision = hasCurrentVisual || hasRecentVisual;" in evaluate
+
+
+def test_initial_visual_observation_step_is_triggered_by_image_event_without_text_keyword():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    evaluate = runtime[
+        runtime.index("private static ReceptionWorkflowDecision Evaluate("):
+        runtime.index("internal static bool IsDecisionCurrent(")
+    ]
+    trigger = evaluate[
+        evaluate.index("var hasRecentImage ="):
+        evaluate.index("List<JObject> selectedFlows;")
+    ]
+
+    assert "(isImage || hasRecentImage)" in trigger
+    assert 'Convert.ToString(x) == "image_message"' in trigger
+    assert 'Convert.ToString(x) == "vision_observation"' in trigger
+    assert "var accountTrigger = isImage" in trigger
