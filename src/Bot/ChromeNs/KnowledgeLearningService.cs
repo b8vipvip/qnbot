@@ -351,7 +351,7 @@ namespace Bot.ChromeNs
             string seller, string buyer, string answer, DateTime answerAt,
             string shopKey, IList<BotConversationHistoryEntity> botCards)
         {
-            var compact = Regex.Replace(answer ?? string.Empty, @"\\s+", string.Empty);
+            var compact = Regex.Replace(answer ?? string.Empty, @"\s+", string.Empty);
             if (compact.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
                 || compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
                 || compact.EndsWith("【AI】", StringComparison.OrdinalIgnoreCase)
