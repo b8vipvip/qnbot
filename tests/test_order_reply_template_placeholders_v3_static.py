@@ -27,7 +27,7 @@ def test_template_preserves_authored_layout():
 def test_segment_token_sends_sequentially_without_trim():
     assert 'text.Split(new[] { segmentToken }, StringSplitOptions.None)' in QN
     assert 'var segment = segments[segmentIndex];' in QN
-    assert 'await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken)' in QN
+    assert 'await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)' in QN
     block = QN.split('const string segmentToken = "{分段符}";', 1)[1].split('await _sendGate.WaitAsync(cancellationToken);', 1)[0]
     assert '.Trim()' not in block
 
