@@ -332,7 +332,7 @@ def test_visual_withdrawal_is_rechecked_against_exact_message_before_send():
     visual = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
 
     assert "public string VisualEvidenceMessageKey { get; set; }" in runtime
-    assert "visualEvidenceMessageKey = isImage" in runtime
+    assert "visualEvidenceMessageKey = hasCurrentVisual" in runtime
     assert "recentVisualEvidence.MessageKey" in runtime
     assert "VisualEvidenceMessageKey = required.Any(" in runtime
     assert "internal static bool IsObservationWithdrawn(" in visual
@@ -391,7 +391,7 @@ def test_new_image_cannot_borrow_a_prior_images_visual_summary_or_message_key():
     runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
     evaluate = runtime[
         runtime.index("private static ReceptionWorkflowDecision Evaluate("):
-        runtime.index("private static bool HasRequiredEvidence(")
+        runtime.index("internal static bool IsDecisionCurrent(")
     ]
 
     assert "var hasRecentVisual = !isImage && recentVisualEvidence != null;" in evaluate
