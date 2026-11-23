@@ -105,3 +105,21 @@ def test_multiple_buyers_get_independent_ai_workers_while_real_sends_remain_seri
     assert "private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);" in qn
     send_method = qn.index("public async Task<bool> SendTextWithRetryAsync")
     assert "await _sendGate.WaitAsync(cancellationToken);" in qn[send_method:send_method + 2500]
+
+
+def test_withdrawn_visual_context_is_injected_only_for_explicit_historical_image_references():
+    helper = text("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    method = helper[
+        helper.index("private static bool ExplicitlyReferencesWithdrawnImage"):
+        helper.index("public static string BuildPromptAddon")
+    ]
+    prompt = helper[
+        helper.index("public static string BuildPromptAddon(string shopKey"):
+        helper.index("internal static List<VisualKnowledgeObservationEntity> GetRecentWorkflowEvidence")
+    ]
+
+    assert "VisionFollowUpContextPipeline.IsVisionReferentialFollowUp(question)" in method
+    assert "刚才|刚刚|之前|上次|前面|上一张|那张|这张|这个" in method
+    assert "Regex.Replace(question ?? string.Empty, @\\"\\\\s+\\"" in method
+    assert "allowWithdrawnContext || !IsWithdrawnObservation(" in prompt
+    assert "已撤回，仅限买家明确引用时使用" in prompt
