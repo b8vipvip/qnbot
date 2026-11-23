@@ -547,7 +547,7 @@ jobs:
           else
             github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
-          verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          verified_comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
           grep -Fq "Completion Lease is RELEASED" <<<"$verified_body" || {
             echo "::error::Completion Lease comment was not durably updated to RELEASED."
@@ -580,7 +580,7 @@ jobs:
           GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: reconcile_recovery).
 
           Terminal capture succeeded for merge $MERGE_SHA, but the terminal receipt or durable artifact upload failed. This task is NOT complete; rerun Reconcile until both terminal evidence and its foreground receipt are durably published."
-          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate | jq -s 'add // []')"
           body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
@@ -588,7 +588,7 @@ jobs:
           else
             github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
-          verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          verified_comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
           grep -Fq "Completion Lease is ACTIVE" <<<"$verified_body" || {
             echo "::error::Unable to restore active Completion Lease after terminal persistence failure."
