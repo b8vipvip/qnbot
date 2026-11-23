@@ -47,6 +47,7 @@ def test_agent_requires_buyer_human_order_evidence_and_configured_product_scope(
     assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
     assert "人工回复必须发生在同一证据集中的买家原始问题之后" in agent
     assert "replyTemplate.IndexOf(buyer, StringComparison.OrdinalIgnoreCase)" in agent
+    assert "索证话术为空、包含高风险业务承诺或带有买家专属信息" in agent
     assert "订单|快递|价格|优惠|库存" in agent
     assert 'new[] { "WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY" }' in agent
     assert 'READ_ONLY_TOOL' not in agent
