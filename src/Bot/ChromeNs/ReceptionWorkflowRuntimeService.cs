@@ -676,7 +676,7 @@ namespace Bot.ChromeNs
                                 visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
                                 hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
                                     x != null && x.ObservedAtTicks >= visualCutoffTicks);
-                                hasImage = isImage || hasRecentVisual;
+                                hasImage = isImage;
                                 hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
                                     required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
