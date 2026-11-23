@@ -460,8 +460,10 @@ namespace Bot.ChromeNs
                             x != null && x.ObservedAtTicks >= DateTime.Now.AddMinutes(-candidateTimeout).Ticks);
                         var imageTrigger = (isImage || hasRecentImage)
                             && candidateRequired.Any(x => Convert.ToString(x) == "image_message");
+                        var accountTrigger = isImage
+                            && candidateRequired.Any(x => Convert.ToString(x) == "account_evidence");
                         if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords))
-                            || imageTrigger || terminalOrderChanged)
+                            || imageTrigger || accountTrigger || terminalOrderChanged)
                             triggeredFlows.Add(candidate);
                     }
 
