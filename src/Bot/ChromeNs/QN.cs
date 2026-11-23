@@ -133,7 +133,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        public async Task<bool> SendTextAsync(string buyer, string text)
+        public async Task<bool> SendTextAsync(string buyer, string text, Func<bool> preSendGuard = null)
         {
             var comparison = String.Compare(QnVersion, "9.19.06N", StringComparison.OrdinalIgnoreCase);
             if (comparison < 0)
@@ -154,6 +154,9 @@ namespace Bot.ChromeNs
                     rpa.SetSendFailure("旧版发送店铺身份确认", "当前CDP不是该ShopKey的权威登录会话，已阻止旧版接口发送");
                     return false;
                 }
+
+                if (!IsPreSendGuardSatisfied(preSendGuard, "旧版接口发送"))
+                    return false;
 
                 var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
                 var now = DateTime.Now;
@@ -190,7 +193,7 @@ namespace Bot.ChromeNs
             }
             else
             {
-                return await rpa.SendTextAsync(buyer, text);
+                return await rpa.SendTextAsync(buyer, text, preSendGuard);
             }
         }
 
@@ -265,7 +268,7 @@ namespace Bot.ChromeNs
                 if (!IsPreSendGuardSatisfied(preSendGuard, "首次发送"))
                     return false;
                 var sendStartedAt = DateTime.Now;
-                var ok = await SendTextAsync(buyer, text);
+                var ok = await SendTextAsync(buyer, text, preSendGuard);
                 if (!ok && rpa.LastSendWasCancelled)
                 {
                     Log.Info("自动发送因人工接管取消，禁止重试: buyer=" + buyer
@@ -313,7 +316,7 @@ namespace Bot.ChromeNs
                     }
                     if (!IsPreSendGuardSatisfied(preSendGuard, "重试发送"))
                         return false;
-                    ok = await SendTextAsync(buyer, text);
+                    ok = await SendTextAsync(buyer, text, preSendGuard);
                     if (!ok && rpa.LastSendWasCancelled)
                     {
                         Log.Info("自动发送重试期间检测到人工接管，立即停止后续重试: buyer=" + buyer
