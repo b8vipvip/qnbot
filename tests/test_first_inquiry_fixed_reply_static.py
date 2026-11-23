@@ -238,7 +238,7 @@ def test_delayed_exact_seller_echo_cancels_retry_and_false_failure():
     assert "按真实送达处理并取消重试" in retry
     assert "按真实送达处理并取消重复发送" in retry
     assert "最终失败判定前收到延迟卖家回显，改判真实送达" in retry
-    assert retry.index("HasRecentSellerEcho(buyer, text, sendStartedAt)") < retry.index("ok = await SendTextAsync(buyer, text);", retry.index("for (var i = 0"))
+    assert retry.index("HasRecentSellerEcho(buyer, text, sendStartedAt)") < retry.index("ok = await SendTextAsync(buyer, text, preSendGuard);", retry.index("for (var i = 0"))
 
 
 
