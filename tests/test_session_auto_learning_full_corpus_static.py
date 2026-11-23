@@ -1064,3 +1064,21 @@ def test_legacy_shop_resolution_retries_offline_but_terminally_marks_ambiguous_i
     assert "report.Error = pendingError;" in transient
     assert "report.CompletedAtTicks = 0;" in transient
     assert "StartPendingRecoveryTimer();" in service
+
+
+
+def test_pending_learning_waits_for_authoritative_qn_session_even_when_shop_profile_resolves():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    recovery = service[
+        service.index("private static void ResumePending()"):
+        service.index("private static void CleanupReports()")
+    ]
+    live_gate = recovery.index("ShopContextLocator.FindConnectedQnByShopKey(report.ShopKey) == null")
+    active_insert = recovery.index("Active.TryAdd(key, session)")
+    gate = recovery[live_gate:active_insert]
+    assert live_gate < active_insert
+    assert "shop_runtime_session_unavailable" in gate
+    assert "等待店铺千牛会话连接后继续学习" in gate
+    assert "report.CompletedAtTicks = 0;" in gate
+    assert "continue;" in gate
+    assert "StartPendingRecoveryTimer();" in service
