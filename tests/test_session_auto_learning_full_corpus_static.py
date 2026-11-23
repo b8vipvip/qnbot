@@ -1037,3 +1037,26 @@ def test_legacy_pending_reports_without_shopkey_wait_for_reconnect_instead_of_be
     ]
     assert "Volatile.Read(ref _initialized) == 0" in service
     assert "recoveryTimer.Dispose();" in service
+
+
+
+def test_legacy_shop_resolution_retries_offline_but_terminally_marks_ambiguous_identity():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    recovery = service[
+        service.index("private static void ResumePending()"):
+        service.index("private static void CleanupReports()")
+    ]
+    branch = recovery[
+        recovery.index("if (string.IsNullOrWhiteSpace(report.ShopKey))"):
+        recovery.index("var key = Key(report.ShopKey")
+    ]
+    ambiguous = branch[
+        branch.index("catch (AmbiguousShopIdentityException)"):
+        branch.index("catch\n                        {")
+    ]
+    transient = branch[branch.index("catch\n                        {"):]
+    assert 'report.Error = "legacy_report_shop_scope_unavailable";' in ambiguous
+    assert "report.CompletedAtTicks = DateTime.Now.Ticks;" in ambiguous
+    assert 'report.Error = "legacy_report_shop_scope_pending";' in transient
+    assert "report.CompletedAtTicks = 0;" in transient
+    assert "StartPendingRecoveryTimer();" in service
