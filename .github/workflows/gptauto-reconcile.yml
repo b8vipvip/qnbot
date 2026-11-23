@@ -395,16 +395,16 @@ jobs:
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           recovery_id="$(jq -r --arg marker "$recovery_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$recovery_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$recovery_id" -f body="$recovery_body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$recovery_id" --method PATCH -f body="$recovery_body" >/dev/null
           else
-            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$recovery_body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$recovery_body" >/dev/null
           fi
 
           lease_id="$(jq -r --arg marker "$lease_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$lease_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$lease_id" -f body="$lease_body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$lease_id" --method PATCH -f body="$lease_body" >/dev/null
           else
-            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$lease_body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$lease_body" >/dev/null
           fi
 
           {
@@ -538,9 +538,9 @@ jobs:
           comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
           else
-            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
           fi
           verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
@@ -577,9 +577,9 @@ jobs:
           comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
-            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
           else
-            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
           fi
           verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
