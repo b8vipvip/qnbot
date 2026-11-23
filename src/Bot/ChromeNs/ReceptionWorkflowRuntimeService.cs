@@ -729,8 +729,10 @@ namespace Bot.ChromeNs
                 {
                     RegisterFailure(seller, shopKey, decision.FlowId, decision.CatalogRevision,
                         decision.Reason.Substring("runtime_failure:".Length));
-                    QueueHandoff(shop, seller, buyer, question, shopKey, decision.FlowId);
-                    decision.Reason = "流程运行异常已记录并通知人工；连续异常达到阈值后将自动回滚";
+                    var handoffQueued = QueueHandoff(shop, seller, buyer, question, shopKey, decision.FlowId);
+                    decision.Reason = handoffQueued
+                        ? "流程运行异常已记录并通知人工；连续异常达到阈值后将自动回滚"
+                        : "流程运行异常已记录，但当前转人工通知渠道不可用；连续异常达到阈值后将自动回滚";
                 }
                 return decision;
             }
