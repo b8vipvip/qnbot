@@ -292,6 +292,18 @@ namespace Bot.ChromeNs
                 reason = "缺少买家原始消息、人工实际回复或已核验订单证据";
                 return false;
             }
+            var requiresVisualEvidence = (proposal["steps"] as JArray ?? new JArray())
+                .OfType<JObject>().Any(x =>
+                {
+                    var required = x["required_evidence"] as JArray ?? new JArray();
+                    return required.Any(e => Convert.ToString(e) == "image_message"
+                        || Convert.ToString(e) == "vision_observation");
+                });
+            if (requiresVisualEvidence && !selected.Any(x => x.Kind == "vision_observation"))
+            {
+                reason = "图片流程必须引用同一买家真实图片OCR/视觉观察证据";
+                return false;
+            }
 
             var productIds = selected.Where(x => x.Kind == "order_snapshot")
                 .Select(x => x.ProductId).Where(IsSafeKey).Distinct(StringComparer.Ordinal)
