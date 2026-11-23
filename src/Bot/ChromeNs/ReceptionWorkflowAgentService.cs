@@ -598,15 +598,25 @@ namespace Bot.ChromeNs
                         });
                         continue;
                     }
-                    JObject flow;
-                    string reason;
-                    if (!TryBuildFlow(proposal, evidence, config, handoffConfigured, buyer, shopKey, out flow, out reason))
+                    JObject flow = null;
+                    string reason = string.Empty;
+                    var validProposal = false;
+                    try
+                    {
+                        validProposal = TryBuildFlow(
+                            proposal, evidence, config, handoffConfigured, buyer, shopKey, out flow, out reason);
+                    }
+                    catch (Exception ex)
+                    {
+                        reason = "流程候选结构解析异常：" + Clean(ex.Message, 160);
+                    }
+                    if (!validProposal)
                     {
                         result.SkippedCount++;
                         result.Items.Add(new ReceptionWorkflowPublishItem
                         {
                             Stage = Clean(Convert.ToString(proposal["name"]), 80),
-                            Message = reason
+                            Message = string.IsNullOrWhiteSpace(reason) ? "流程候选未通过校验" : reason
                         });
                         continue;
                     }
