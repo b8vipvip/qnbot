@@ -53,7 +53,7 @@ namespace Bot.ChromeNs
                 // before deciding that the shop has no image capability. VisionRequestService executes
                 // this local route before selecting any external provider, so pre-routing must not skip
                 // the image merely because no billable vision endpoint is configured.
-                var localUsable = CanUseLocalOcrKnowledge(seller, shopKey);
+                var localUsable = CanUseServerOcr(seller, shopKey);
                 var selectedEndpoints = ResolveShopVisionEndpoints(message, shopKey);
                 var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
                     e => e != null
@@ -90,7 +90,7 @@ namespace Bot.ChromeNs
                     Kind = VisionDecisionKind.Vision,
                     QuestionLabel = "[图片]",
                     Note = localUsable && !externalUsable
-                        ? "使用本地OCR+Knowledge V2图片理解；无需外部视觉模型。"
+                        ? "使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。"
                         : string.Empty
                 };
             }
@@ -120,7 +120,7 @@ namespace Bot.ChromeNs
             return Skip("[图片]", safetyDecision.Note);
         }
 
-        private static bool CanUseLocalOcrKnowledge(string sellerNick, string shopKey)
+        private static bool CanUseServerOcr(string sellerNick, string shopKey)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
@@ -128,18 +128,20 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                if (shop == null || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                if (shop == null
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
                     return false;
-                using (ShopSettingsScope.Enter(shop))
+                using (ShopSettingsScope.Enter(shop, false))
                 {
-                    return KnowledgeEngineV2Service.IsEnabled(sellerNick)
-                        && KnowledgeEngineV2Service.IsSnapshotReady(sellerNick);
+                    // OCR remains available while Knowledge V2 is disabled or rebuilding;
+                    // its cached text can still support a text-only or multimodal fallback.
+                    return LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey);
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "图片本地OCR能力探测失败，继续检查外部视觉模型：" + Safe(ex.Message, 220),
+                    "图片服务端OCR能力探测失败，继续检查外部视觉模型：" + Safe(ex.Message, 220),
                     20);
                 return false;
             }
