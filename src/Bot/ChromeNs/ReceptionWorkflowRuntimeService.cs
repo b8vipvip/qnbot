@@ -627,12 +627,14 @@ namespace Bot.ChromeNs
                                     record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
                                     records.Add(record);
                                 }
+                                var stateChanged = !string.Equals(
+                                    Convert.ToString(record["current_state"]), currentState, StringComparison.Ordinal);
                                 record["flow_version"] = flowVersion;
                                 record["current_state"] = currentState;
                                 record["pending_source_key"] = sourceKey;
                                 record["pending_started_utc_ticks"] = DateTime.UtcNow.Ticks;
-                                record["state_entered_utc_ticks"] = record.Value<long?>("state_entered_utc_ticks")
-                                    ?? DateTime.UtcNow.Ticks;
+                                if (stateChanged || (record.Value<long?>("state_entered_utc_ticks") ?? 0) <= 0)
+                                    record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                                 record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                                 return new ReceptionWorkflowDecision
                                 {
@@ -648,9 +650,13 @@ namespace Bot.ChromeNs
                                 record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
                                 records.Add(record);
                             }
+                            var missingEvidenceStateChanged = !string.Equals(
+                                Convert.ToString(record["current_state"]), currentState, StringComparison.Ordinal);
                             record["flow_version"] = flowVersion;
                             record["current_state"] = currentState;
                             record["last_source_key"] = sourceKey;
+                            if (missingEvidenceStateChanged || (record.Value<long?>("state_entered_utc_ticks") ?? 0) <= 0)
+                                record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "WAIT", sourceKey,
@@ -705,12 +711,14 @@ namespace Bot.ChromeNs
                                 record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
                                 records.Add(record);
                             }
+                            var replyStateChanged = !string.Equals(
+                                Convert.ToString(record["current_state"]), currentState, StringComparison.Ordinal);
                             record["flow_version"] = flowVersion;
                             record["current_state"] = currentState;
                             record["pending_source_key"] = sourceKey;
                             record["pending_started_utc_ticks"] = DateTime.UtcNow.Ticks;
-                            record["state_entered_utc_ticks"] = record.Value<long?>("state_entered_utc_ticks")
-                                ?? DateTime.UtcNow.Ticks;
+                            if (replyStateChanged || (record.Value<long?>("state_entered_utc_ticks") ?? 0) <= 0)
+                                record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return new ReceptionWorkflowDecision
                             {
