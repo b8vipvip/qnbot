@@ -25,13 +25,17 @@ def test_order_reply_delay_rechecks_bot_and_exact_shop_before_sending():
     delay_lookup = "var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();"
     delay_guard = "if (delaySeconds > 0)"
     delay = "await Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ConfigureAwait(false);"
-    exact_shop = "!string.Equals(CDP.ShopKey, plan.ShopKey, StringComparison.Ordinal)"
+    exact_shop = "!string.Equals(currentClient.ShopKey, plan.ShopKey, StringComparison.Ordinal)"
+    exact_session = "!string.Equals(currentClient.SessionId, plan.SourceSessionId, StringComparison.Ordinal)"
+    authority = "currentServer.IsAuthoritativeShopSession(plan.ShopKey, currentClient.SessionId)"
+    source_session = "plan.SourceSessionId = sourceClient.SessionId;"
     preset_send = "presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);"
     mandatory = "sendOk = await SendMandatoryOrderTextAsync(plan, answer);"
     assert delay_lookup in order and delay_guard in order and delay in order
-    assert exact_shop in order
+    assert source_session in order
+    assert exact_shop in order and exact_session in order and authority in order
     assert order.index(delay_lookup) < order.index(delay_guard) < order.index(delay) < order.index(exact_shop)
-    assert order.index(exact_shop) < order.index(preset_send) < order.index(mandatory)
+    assert order.index(exact_shop) < order.index(exact_session) < order.index(authority) < order.index(preset_send) < order.index(mandatory)
     process = order[order.index("private async Task ProcessOrderPlacedReplyAsync"): ]
     assert "ResponseProgressTracker.HasActiveManualIntervention" not in process
     assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text);" in order
