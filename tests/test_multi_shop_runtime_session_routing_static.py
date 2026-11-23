@@ -101,7 +101,7 @@ def test_background_buyer_liveness_probe_uses_exact_shop_scoped_desk_and_aliases
 
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in schedule
     assert "HasVerifiedReceptionDesk(seller, shop.ShopKey)" in schedule
-    assert "ProbeCurrentConversationAsync(qn, shop.ShopKey)" in schedule
+    assert "ProbeCurrentConversationAsync(qn, shop.ShopKey, sourceClient, sourceSessionId)" in schedule
     assert "FindSellerDesk(seller, shopKey)" in desk_lookup
     assert "ShopSettingsScope.Enter(shop, false)" in schedule
     assert "AreSameBuyer(seller, currentNick, firstNick)" in schedule
