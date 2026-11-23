@@ -884,13 +884,24 @@ namespace Bot.ChromeNs
             try
             {
                 CatalogIndex catalog;
+                KugouReceptionConfig config;
                 using (ShopSettingsScope.Enter(shop))
+                {
+                    config = KugouReceptionConfigService.GetConfig(shop);
                     catalog = LoadCatalog(decision.Seller, decision.ShopKey);
+                }
+                if (config == null || !config.Enabled || !config.EnableAutoGuidance
+                    || config.ProductIds == null || config.ProductIds.Count == 0)
+                    return false;
                 if (catalog == null || catalog.Revision != decision.CatalogRevision)
                     return false;
                 var flow = catalog.Flows.FirstOrDefault(x =>
                     string.Equals(Convert.ToString(x["flow_id"]), decision.FlowId, StringComparison.Ordinal));
                 if (flow == null || (flow.Value<int?>("flow_version") ?? 0) != decision.FlowVersion)
+                    return false;
+                var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                if (flowProducts.Count == 0
+                    || flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal)))
                     return false;
 
                 return Mutate(shop, document =>
