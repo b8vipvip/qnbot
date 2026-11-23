@@ -162,3 +162,25 @@ def test_duplicate_retirement_cannot_close_a_promoted_or_rebound_shop_session():
     assert "string.Equals(pendingShopKey, shopKey, StringComparison.Ordinal)" in retire
     assert "session.Send(command);" in retire
     assert "_standbyLoggedSessions.TryRemove(sessionId, out ignoredRetirementShop);" in server
+
+
+
+def test_same_physical_websocket_a_to_b_to_a_requires_fresh_identity_binding_each_time():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    claim = server[
+        server.index("private bool TryClaimShopSession("):
+        server.index("private async Task<bool> TryPromoteDuplicateShopSessionAsync")
+    ]
+
+    # A->B and later B->A both detach the old identity first. The transition
+    # event invalidates in-flight inbound payloads before any old QN is retired.
+    assert claim.count("DuplicateCdpInboundRecoveryBridge.MarkSessionIdentityTransition(sessionId);") == 1
+    assert "NextShopIdentityProbeGenerationLocked(sessionId);" in claim
+    assert "CDPClient.ReleasePreferredRuntimeSession(previousShopKey, sessionId);" in claim
+    assert "previousQn.CDP.IsShopIdentityRetired = true;" in claim
+    assert "previousQn.CDP = null;" in claim
+    assert "return false;" in claim[claim.index("if (identityChanged)"):]
+    assert "if (!identityChanged)" in claim
+    assert "_sessionShopKeys.TryRemove(sessionId, out ignoredShop);" in claim
+    assert "_shopSessions[shopKey] = sessionId;" in claim
+    assert "if (!_connectedSessions.ContainsKey(sessionId)) return false;" in claim
