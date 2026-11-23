@@ -264,7 +264,11 @@ def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_ev
     assert '[[ -n "$existing_success" ]]' in validation
     assert "no successful exact-SHA validation exists" in validation
     assert "reusing exact-SHA validation run" in validation
-    assert 'gh workflow run "$primary_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"' in validation
+    assert 'primary_workflow_file="${primary_path##*/}"' in validation
+    assert 'actions/workflows/$primary_workflow_file/dispatches' in validation
+    assert 'printf \'%s\' "$validation_payload" | gh api --method POST' in validation
+    assert "--input -" in validation
+    assert 'gh workflow run "$primary_path"' not in validation
 
 
 
@@ -319,7 +323,10 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert 'grep -Fq "Completion Lease is RELEASED"' in adoption
     assert 'grep -Fq "Terminal state: DONE"' in adoption
     assert 'grep -Fq "Merge SHA: $MERGE_SHA"' in adoption
-    assert 'gh workflow run gptauto-reconcile.yml' in adoption
+    assert 'actions/workflows/gptauto-reconcile.yml/dispatches' in adoption
+    assert 'printf \'%s\' "$reconcile_payload" | gh api --method POST' in adoption
+    assert "--input -" in adoption
+    assert "gh workflow run gptauto-reconcile.yml" not in adoption
     assert 'gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
     assert 'if grep -Fq "$marker" <<<"$existing"; then' not in adoption
     assert "dispatch lease reserved at" in adoption
@@ -382,7 +389,7 @@ def test_reconcile_adoption_debounces_recent_handoff_when_run_list_is_eventually
     assert "if (( handoff_age < 600 )); then" in adoption
     assert "deferring recovery dispatch to avoid an eventual-consistency duplicate" in adoption
     assert "Existing Reconcile handoff timestamp is unreadable; suppressing duplicate dispatch" in adoption
-    assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index("gh workflow run gptauto-reconcile.yml")
+    assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index("actions/workflows/gptauto-reconcile.yml/dispatches")
 
 def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
     executor = read(".github/workflows/gptauto-executor.yml")
@@ -392,9 +399,24 @@ def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
     ]
 
     lease = adoption.index('recovery_body="$marker')
-    dispatch = adoption.index('gh workflow run gptauto-reconcile.yml')
+    dispatch = adoption.index('actions/workflows/gptauto-reconcile.yml/dispatches')
     scheduled = adoption.index('scheduled_body="$marker')
     assert lease < adoption.index('gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"') < dispatch
     assert lease < adoption.index('gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"') < dispatch
     assert dispatch < scheduled
     assert "dispatch lease reserved at $(date -u +%Y-%m-%dT%H:%M:%SZ)" in adoption
+
+
+def test_all_gptauto_workflow_dispatches_use_rest_json_payloads_not_cli_positional_args():
+    executor = read(".github/workflows/gptauto-executor.yml")
+    reconcile = read(".github/workflows/gptauto-reconcile.yml")
+    observer = read(".github/workflows/gptauto-observer.yml")
+    assert "actions/workflows/gptauto-reconcile.yml/dispatches" in executor
+    assert "actions/workflows/gptauto-repair.yml/dispatches" in executor
+    assert "actions/workflows/gptauto-observer.yml/dispatches" in observer
+    assert "actions/workflows/$primary_workflow_file/dispatches" in reconcile
+    assert "actions/workflows/$RELEASE_WORKFLOW_ID/dispatches" in reconcile
+    for workflow in (executor, reconcile, observer):
+        assert "gh workflow run" not in workflow
+        assert "--input -" in workflow
+
