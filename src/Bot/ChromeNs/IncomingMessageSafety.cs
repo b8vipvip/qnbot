@@ -249,7 +249,12 @@ namespace Bot.ChromeNs
         private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v" };
         private static readonly string[] AudioExtensions = { ".amr", ".mp3", ".wav", ".m4a", ".aac", ".ogg" };
 
-        public static IncomingMessageDecision Evaluate(QNChatMessage message, string messageText, DateTime safetyStartedAt, string shopKey = null)
+        public static IncomingMessageDecision Evaluate(
+            QNChatMessage message,
+            string messageText,
+            DateTime safetyStartedAt,
+            string shopKey = null,
+            CDPClient browserClient = null)
         {
             string nonBuyerReason;
             var sellerNick = message == null || message.loginid == null ? string.Empty : message.loginid.nick;
