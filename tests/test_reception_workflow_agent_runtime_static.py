@@ -301,7 +301,12 @@ def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning()
     assert 'EntityId = Guid.NewGuid().ToString("N")' in visual_learning
     assert "MarkObservationWithdrawn(" in visual_learning
     assert "IsWithdrawnObservation(" in recent
-    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in recent
+    withdrawal = recent[
+        recent.index("private static bool IsWithdrawnObservation("):
+        recent.index("private static bool ExplicitlyReferencesWithdrawnImage(")
+    ]
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in withdrawal
+    assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in withdrawal
     assert "IsMessageKeyWithdrawn(" in manual_learning
     assert 'observation.Status, "图片已撤回"' in manual_learning
 
