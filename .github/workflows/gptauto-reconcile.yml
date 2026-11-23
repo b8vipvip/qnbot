@@ -372,6 +372,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           recovery_marker="<!-- gptauto-post-merge-recovery:$TASK_ID:$MERGE_SHA -->"
           lease_marker="<!-- gptauto-completion-lease:$TASK_ID -->"
           run_url="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
@@ -393,18 +394,20 @@ jobs:
           This engineering task is NOT complete. Post-merge reconciliation failed for merge $MERGE_SHA in run $RUN_ID. Continue recovery until Reconcile produces terminal DONE evidence."
 
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
+          recovery_payload="$(jq -n --arg body "$recovery_body" '{body:$body}')"
+          lease_payload="$(jq -n --arg body "$lease_body" '{body:$body}')"
           recovery_id="$(jq -r --arg marker "$recovery_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$recovery_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$recovery_id" --method PATCH -f body="$recovery_body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$recovery_id" "$recovery_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$recovery_body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$recovery_payload" >/dev/null
           fi
 
           lease_id="$(jq -r --arg marker "$lease_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$lease_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$lease_id" --method PATCH -f body="$lease_body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$lease_id" "$lease_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$lease_body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$lease_payload" >/dev/null
           fi
 
           {
@@ -528,6 +531,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           marker="<!-- gptauto-completion-lease:$TASK_ID -->"
           body="$marker
           GPTAuto Completion Lease is RELEASED for task $TASK_ID.
@@ -536,11 +540,12 @@ jobs:
           Merge SHA: $MERGE_SHA
           Foreground completion is now permitted because Reconcile produced terminal DONE evidence."
           comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$comment_id" "$body_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
           verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
@@ -569,17 +574,19 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           marker="<!-- gptauto-completion-lease:$TASK_ID -->"
           body="$marker
           GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: reconcile_recovery).
 
           Terminal capture succeeded for merge $MERGE_SHA, but the terminal receipt or durable artifact upload failed. This task is NOT complete; rerun Reconcile until both terminal evidence and its foreground receipt are durably published."
           comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$comment_id" "$body_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
           verified_comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
           verified_body="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$verified_comments")"
