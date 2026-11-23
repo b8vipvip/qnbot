@@ -73,6 +73,16 @@ namespace Bot.ChromeNs
                     seller, buyer, item.MessageKey, shopKey);
         }
 
+        private static bool ExplicitlyReferencesWithdrawnImage(string question)
+        {
+            if (VisionFollowUpContextPipeline.IsVisionReferentialFollowUp(question)) return true;
+            var compact = Regex.Replace(question ?? string.Empty, @"\\s+", string.Empty).ToLowerInvariant();
+            if (compact.Length == 0) return false;
+            return Regex.IsMatch(compact,
+                @"(刚才|刚刚|之前|上次|前面|上一张|那张|这张|这个).{0,12}(图片|截图|照片|图|界面|页面)")
+                || Regex.IsMatch(compact, @"(图里|图片里|截图里|照片里|上面那张|前面那张)");
+        }
+
         public static string BuildPromptAddon(string seller, string buyer, string currentQuestion)
         {
             var shop = ResolveShop(string.Empty, seller);
@@ -83,7 +93,9 @@ namespace Bot.ChromeNs
         {
             var shop = ResolveShop(shopKey, seller);
             if (shop == null) return string.Empty;
+            var allowWithdrawnContext = ExplicitlyReferencesWithdrawnImage(currentQuestion);
             var items = LoadRecent(shop.ShopKey, seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
+                .Where(x => allowWithdrawnContext || !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .Take(MaxPromptObservations)
                 .OrderBy(x => SafeTime(x.ObservedAtTicks))
