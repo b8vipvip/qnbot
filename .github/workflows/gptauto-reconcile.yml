@@ -98,7 +98,10 @@ jobs:
               echo "::error::Canonical post-merge workflow $primary_path has no workflow_dispatch trigger. Add workflow_dispatch or configure GPTAUTO_POST_MERGE_WORKFLOW to a dispatchable product workflow."
               exit 1
             }
-            gh workflow run "$primary_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"
+            primary_workflow_file="${primary_path##*/}"
+            validation_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" '{ref:$ref}')"
+            printf '%s' "$validation_payload" | gh api --method POST \
+              "repos/$REPOSITORY/actions/workflows/$primary_workflow_file/dispatches" --input -
             echo "Dispatched canonical post-merge validation for merge $MERGE_SHA."
 
             registration_deadline=$((SECONDS + 90))
@@ -281,7 +284,9 @@ jobs:
                 exit 1
               }
               baseline="$(jq -r '[.workflow_runs[].id] | max // 0' <<<"$runs")"
-              gh workflow run "$RELEASE_PATH" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f source_sha="$MERGE_SHA"
+              release_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg source_sha "$MERGE_SHA" '{ref:$ref,inputs:{source_sha:$source_sha}}')"
+              printf '%s' "$release_payload" | gh api --method POST \
+                "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/dispatches" --input -
               echo "Dispatched exact-SHA release workflow $RELEASE_PATH for $MERGE_SHA."
 
               registration_deadline=$((SECONDS + 90))
