@@ -115,14 +115,26 @@ namespace Bot.ChromeNs
 
         private static async Task ProcessTextBurstStreamingAsync(QN qn, BuyerMessageBurstLease lease)
         {
-            // Consult Knowledge V2 directly in the canonical streaming handler. The old
-            // implementation raced two independent reflection patchers: depending on which
-            // timer wrapped BuyerMessageBurstCoordinator last, the streaming handler could
-            // replace the V2 wrapper without ever invoking it.
-            if (await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))
-                return;
-
             var burst = lease.Burst;
+            var workflowDecision = ReceptionWorkflowRuntimeService.EvaluateText(burst);
+            if (workflowDecision != null && workflowDecision.SuppressReply)
+            {
+                var workflowDetectedAt = burst.Items.Min(x => x.ReceivedAt);
+                var workflowCtl = ResponseProgressTracker.BeginAnswer(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                    workflowDetectedAt, burst.ShopKey);
+                lease.MarkCompleted("reception_workflow_" + (workflowDecision.Action ?? "wait").ToLowerInvariant());
+                if (workflowCtl != null) workflowCtl.SetSkipped(workflowDecision.Reason);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                Log.Info("Reception Agent状态机抑制普通AI回复: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick + ", flow=" + workflowDecision.FlowId
+                    + ", action=" + workflowDecision.Action);
+                return;
+            }
+
+            // Knowledge V2 remains the normal text-answer route when no active workflow matched.
+            if (workflowDecision == null && await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))
+                return;
             var sourceClient = qn.CDP;
             var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
@@ -148,26 +160,34 @@ namespace Bot.ChromeNs
             string answer;
             try
             {
-                var answerTask = StreamingBuyerAnswerService.GetAnswerAsync(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion,
-                    generationCts.Token,
-                    partial =>
-                    {
-                        if (conversationCtl == null || !lease.IsCurrent) return;
-                        var preview = CompactPreview(partial, 110);
-                        if (!string.IsNullOrWhiteSpace(preview))
+                if (workflowDecision != null && workflowDecision.RequiresSend)
+                {
+                    answer = workflowDecision.ReplyText;
+                    if (conversationCtl != null) conversationCtl.SetProcessing("Reception Agent已匹配已发布流程");
+                }
+                else
+                {
+                    var answerTask = StreamingBuyerAnswerService.GetAnswerAsync(
+                        burst.SellerNick,
+                        burst.BuyerNick,
+                        string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion,
+                        generationCts.Token,
+                        partial =>
                         {
-                            conversationCtl.SetProcessing("正在流式生成答案：" + preview);
-                        }
-                    },
-                    burst.ShopKey);
-                // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
-                // after they begin. Race the whole answer task only against the canonical generation
-                // budget. Provider/control-plane timeouts remain upstream concerns and must not be
-                // pre-empted by a second shorter Windows timer.
-                answer = await AwaitWithCancellationAsync(answerTask, generationCts.Token);
+                            if (conversationCtl == null || !lease.IsCurrent) return;
+                            var preview = CompactPreview(partial, 110);
+                            if (!string.IsNullOrWhiteSpace(preview))
+                            {
+                                conversationCtl.SetProcessing("正在流式生成答案：" + preview);
+                            }
+                        },
+                        burst.ShopKey);
+                    // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
+                    // after they begin. Race the whole answer task only against the canonical generation
+                    // budget. Provider/control-plane timeouts remain upstream concerns and must not be
+                    // pre-empted by a second shorter Windows timer.
+                    answer = await AwaitWithCancellationAsync(answerTask, generationCts.Token);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -286,6 +306,7 @@ namespace Bot.ChromeNs
 
             if (!await lease.ConfirmStableAsync(180))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 const string unstable = "发送前任务发生显式失效，答案已取消";
                 if (conversationCtl != null) conversationCtl.SetStatus(unstable, false);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable, burst.ShopKey);
@@ -297,6 +318,7 @@ namespace Bot.ChromeNs
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason,
                 false, burst.ShopKey))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 var suppressed = "并发旧答案已抑制：" + relevanceReason;
                 lease.MarkCompleted("streaming_relevance_suppressed");
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
@@ -309,6 +331,7 @@ namespace Bot.ChromeNs
             if (KugouReceptionPolicy.BlockOutgoing(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lease.MarkCompleted("reception_business_guard_suppressed");
                 if (conversationCtl != null) conversationCtl.SetSkipped(businessBlock);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -317,6 +340,7 @@ namespace Bot.ChromeNs
 
             if (!lease.MarkReady("streaming_answer_materialized"))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 const string invalidAtReady = "generation在答案发布前已终止，迟到答案已丢弃";
                 if (conversationCtl != null) conversationCtl.SetStatus(invalidAtReady, false);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidAtReady, burst.ShopKey);
@@ -324,11 +348,13 @@ namespace Bot.ChromeNs
             }
 
             var answerReadyAt = DateTime.Now;
-            var answerSource = KnowledgeLearningService.ResolveAnswerSource(
-                burst.SellerNick,
-                burst.BuyerNick,
-                burst.CombinedQuestion,
-                answer);
+            var answerSource = workflowDecision != null && workflowDecision.RequiresSend
+                ? "Reception Agent"
+                : KnowledgeLearningService.ResolveAnswerSource(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer);
             conversationCtl = ResponseProgressTracker.SetAnswerReady(
                 burst.SellerNick,
                 burst.BuyerNick,
@@ -345,6 +371,7 @@ namespace Bot.ChromeNs
 
             if (!autoSend)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lease.MarkCompleted("streaming_answer_generated_only");
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -425,6 +452,7 @@ namespace Bot.ChromeNs
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                 out finalRelevanceReason, false, burst.ShopKey))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 var finalSuppression = "发送前检测到人工接管或买家问题已变化，已阻止旧回复：" + finalRelevanceReason;
                 lease.MarkCompleted("streaming_final_relevance_suppressed");
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, finalSuppression);
@@ -437,6 +465,7 @@ namespace Bot.ChromeNs
 
             if (!lease.MarkSending("streaming_send_started"))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 const string invalidBeforeSend = "未发送：generation在发送前已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidBeforeSend);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend, burst.ShopKey);
@@ -451,6 +480,7 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 const string cancelledDuringSend = "未发送：generation在等待发送资源/会话确认期间已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, cancelledDuringSend);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend, burst.ShopKey);
@@ -458,6 +488,7 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick);
                 return;
             }
+            ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
                 ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
