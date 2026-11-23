@@ -156,6 +156,22 @@ namespace Bot.ChromeNs
                 CheckKeys(flow["product_ids"] as JArray, "product_ids");
                 CheckKeys(flow["sku_ids"] as JArray, "sku_ids");
 
+                var flowKeywords = flow["trigger_keywords"] as JArray;
+                if (flowKeywords != null)
+                {
+                    if (flowKeywords.Count > 8)
+                        throw new InvalidDataException("流程触发关键词数量超出范围");
+                    var uniqueFlowKeywords = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var keyword in flowKeywords)
+                    {
+                        var value = Convert.ToString(keyword);
+                        if (keyword == null || keyword.Type != JTokenType.String
+                            || string.IsNullOrWhiteSpace(value) || value.Length > 40
+                            || !uniqueFlowKeywords.Add(value))
+                            throw new InvalidDataException("流程触发关键词无效或重复");
+                    }
+                }
+
                 var steps = flow["steps"] as JArray;
                 if (steps == null || steps.Count < 1 || steps.Count > 30)
                     throw new InvalidDataException("流程步骤数量无效");
@@ -213,6 +229,13 @@ namespace Bot.ChromeNs
                     var replyTemplate = Convert.ToString(step["reply_template"]);
                     if (replyTemplate != null && replyTemplate.Length > 1200)
                         throw new InvalidDataException("流程回复模板超过1200字符");
+                    var action = Convert.ToString(step["action"]);
+                    if ((action == "ASK_EVIDENCE" || action == "REPLY" || action == "REPLY_REVIEWED")
+                        && string.IsNullOrWhiteSpace(replyTemplate))
+                        throw new InvalidDataException("索证或人工证据回复步骤必须包含回复模板");
+                    if ((action == "REPLY" || action == "REPLY_REVIEWED")
+                        && !evidenceKinds.Contains("manual_correction"))
+                        throw new InvalidDataException("人工回复步骤必须声明manual_correction必要证据");
                 }
 
                 foreach (var step in steps.Cast<JObject>())
