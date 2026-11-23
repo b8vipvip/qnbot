@@ -598,10 +598,34 @@ namespace Bot.ChromeNs
                                 action = Convert.ToString(step["action"]);
                                 nextState = Convert.ToString(step["next_state"]);
                                 reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
+                                timeoutMinutes = Math.Max(1, Math.Min(10080, step.Value<int?>("timeout_minutes") ?? 60));
+                                visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
+                                hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
+                                    x != null && x.ObservedAtTicks >= visualCutoffTicks);
+                                hasImage = isImage || hasRecentVisual;
+                                hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
                                     required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
                             }
                         }
+                        if (step.Value<bool?>("terminal") == true)
+                        {
+                            if (record == null)
+                            {
+                                record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
+                                records.Add(record);
+                            }
+                            record["flow_version"] = flowVersion;
+                            record["current_state"] = currentState;
+                            record["last_source_key"] = sourceKey;
+                            record["pending_source_key"] = string.Empty;
+                            record["pending_started_utc_ticks"] = 0;
+                            record["delivery_uncertain"] = false;
+                            record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            return null;
+                        }
+
                         if (action == "READ_ONLY_TOOL")
                             action = "HANDOFF";
 
