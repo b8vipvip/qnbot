@@ -296,7 +296,10 @@ namespace Bot.ChromeNs
             if (catalog == null || catalog.Flows == null || catalog.Flows.Count == 0 || orders.Count == 0)
                 return null;
 
-            var sourceKey = Digest(shopKey + "|" + (messageKey ?? string.Empty)
+            var sourceMaterial = string.IsNullOrWhiteSpace(messageKey)
+                ? DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture)
+                : messageKey;
+            var sourceKey = Digest(shopKey + "|" + sourceMaterial
                 + "|" + Digest(question) + "|" + (isImage ? "image" : "text"));
             var buyerKey = Digest(shopKey + "|" + seller + "|" + buyer);
             var matchingFlows = catalog.Flows.Where(flow =>
@@ -312,7 +315,7 @@ namespace Bot.ChromeNs
 
             try
             {
-                return Mutate(shop, document =>
+                var decision = Mutate(shop, document =>
                 {
                     var records = document["records"] as JArray;
                     foreach (var flow in matchingFlows)
@@ -333,10 +336,12 @@ namespace Bot.ChromeNs
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
                                 "上一条流程回复发送结果不确定，已停止自动重发并等待人工确认");
 
-                        if (record != null && string.Equals(Convert.ToString(record["last_source_key"]), sourceKey, StringComparison.Ordinal))
+                        if (record != null
+                            && (string.Equals(Convert.ToString(record["last_source_key"]), sourceKey, StringComparison.Ordinal)
+                                || string.Equals(Convert.ToString(record["pending_source_key"]), sourceKey, StringComparison.Ordinal)))
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "WAIT", sourceKey,
-                                "同一来源消息已处理，防止流程重复执行");
+                                "同一来源消息已处理或正在发送，防止流程重复执行");
 
                         // Automatic repair: after a new flow version or an invalid persisted state,
                         // reset only this buyer+flow cursor to the first valid state.
@@ -387,11 +392,9 @@ namespace Bot.ChromeNs
                         var reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
                         if (action == "READ_ONLY_TOOL" || action == "REPLY" || action == "REPLY_REVIEWED" && reply.Length == 0)
                         {
-                            RegisterFailure(seller, shopKey, flowId, catalog.Revision,
-                                "unsupported_action_or_missing_reply_template");
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
-                                "流程动作或回复模板无效，已阻止执行");
+                                "runtime_failure:unsupported_action_or_missing_reply_template");
                         }
 
                         if (!evidenceReady)
@@ -452,10 +455,9 @@ namespace Bot.ChromeNs
                         {
                             if (reply.Length == 0)
                             {
-                                RegisterFailure(seller, shopKey, flowId, catalog.Revision, "missing_reply_template");
                                 return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                     catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
-                                    "回复模板缺失，已停止自动执行");
+                                    "runtime_failure:missing_reply_template");
                             }
                             if (record == null)
                             {
@@ -478,6 +480,14 @@ namespace Bot.ChromeNs
                     }
                     return null;
                 });
+                if (decision != null && (decision.Reason ?? string.Empty).StartsWith(
+                    "runtime_failure:", StringComparison.Ordinal))
+                {
+                    RegisterFailure(seller, shopKey, decision.FlowId, decision.CatalogRevision,
+                        decision.Reason.Substring("runtime_failure:".Length));
+                    decision.Reason = "流程运行异常已记录；连续异常达到阈值后将自动回滚";
+                }
+                return decision;
             }
             catch (Exception ex)
             {
