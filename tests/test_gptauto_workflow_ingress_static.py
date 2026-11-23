@@ -31,7 +31,7 @@ def test_executor_defers_draft_prs_without_failing_or_bypassing_the_merge_gate()
     assert "if [[ \"$(jq -r '.draft' <<<\"$pr\")\" == \"true\" ]]; then" in executor
     assert "merge deferred until required real-client acceptance is recorded" in executor
     assert "[[ \"$actual_head\" == \"$EXPECTED_HEAD\" ]]" in executor
-    assert 'gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" --method PUT' in executor
+    assert 'github_api_write PUT "repos/$REPOSITORY/pulls/$PR_NUMBER/merge"' in executor
 
 
 
@@ -327,7 +327,7 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert 'actions/workflows/${workflow_ref}/dispatches' in read(".github/gptauto/dispatch_workflow.sh")
     assert 'dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"' in adoption
     assert "gh workflow run gptauto-reconcile.yml" not in adoption
-    assert 'gh api "repos/$REPOSITORY/issues/comments/$handoff_id" --method PATCH' in adoption
+    assert 'github_api_write PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
     assert 'if grep -Fq "$marker" <<<"$existing"; then' not in adoption
     assert "dispatch lease reserved at" in adoption
     assert "This recent marker suppresses duplicate dispatch" in adoption
@@ -401,8 +401,8 @@ def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
     lease = adoption.index('recovery_body="$marker')
     dispatch = adoption.index('dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"')
     scheduled = adoption.index('scheduled_body="$marker')
-    assert lease < adoption.index('gh api "repos/$REPOSITORY/issues/comments/$handoff_id" --method PATCH') < dispatch
-    assert lease < adoption.index('gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST') < dispatch
+    assert lease < adoption.index('github_api_write PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"') < dispatch
+    assert lease < adoption.index('github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"') < dispatch
     assert dispatch < scheduled
     assert "dispatch lease reserved at $(date -u +%Y-%m-%dT%H:%M:%SZ)" in adoption
 
@@ -469,5 +469,6 @@ def test_github_cli_mutations_put_endpoint_before_method_flags():
     repair = read(".github/workflows/gptauto-repair.yml")
     for workflow in (executor, observer, reconcile, repair):
         assert "gh api --method " not in workflow
-    assert 'gh api "repos/$REPOSITORY/issues/comments/$handoff_id" --method PATCH' in executor
-    assert 'gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST' in reconcile
+    assert 'github_api_write PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in executor
+    assert 'github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"' in reconcile
+    assert 'github_api_write()' in read(".github/gptauto/dispatch_workflow.sh")
