@@ -56,7 +56,7 @@ def test_changed_off_hours_config_warms_variant_compiler_immediately():
 
 def test_sync_poll_does_not_warmup_or_retry_ai_while_idle():
     sync = read(SYNC)
-    before = sync.split("private static JObject BuildCurrentSettings()", 1)[1].split(
+    before = sync.split("private static JObject BuildCurrentSettings(ShopContext shop)", 1)[1].split(
         "private static void ApplyDesiredSettings(", 1)[0]
     assert "FixedAutoReplyVariantService.Warmup(" not in before
     assert 'string.Equals(previousOffHoursText, cfg.OffHoursFixedText, StringComparison.Ordinal)' in sync
