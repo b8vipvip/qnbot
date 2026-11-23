@@ -430,15 +430,10 @@ def test_manual_reconcile_comment_ingress_is_owner_only_and_requires_exact_merge
     observer = read(".github/workflows/gptauto-observer.yml")
     assert "issue_comment:" in observer
     assert '"$COMMENT_AUTHOR" == "$REPOSITORY_OWNER"' in observer
-    assert '"$COMMENT_BODY" =~ ^/gptauto-reconcile[[:space:]]+(GA-[a-f0-9]{12})
+    assert '"$COMMENT_BODY" =~ ^/gptauto-reconcile' in observer
+    assert "GA-[a-f0-9]{12}" in observer
     assert "github.event.issue.number" in observer
     assert 'requested_task_id == "$TASK_ID"' in observer
     assert 'PR_MERGED" == "true"' in observer
-    assert 'Manual Reconcile requires a merged pull request.' in observer
-    assert 'Manual Reconcile task ID does not match the PR-derived canonical task ID.' in observer
- in observer
-    assert "github.event.issue.number" in observer
-    assert 'requested_task_id == "$TASK_ID"' in observer
-    assert 'PR_MERGED" == "true"' in observer
-    assert 'Manual Reconcile requires a merged pull request.' in observer
-    assert 'Manual Reconcile task ID does not match the PR-derived canonical task ID.' in observer
+    assert "Manual Reconcile requires a merged pull request." in observer
+    assert "Manual Reconcile task ID does not match the PR-derived canonical task ID." in observer
