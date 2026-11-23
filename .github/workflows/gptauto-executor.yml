@@ -137,7 +137,7 @@ jobs:
           jq -e '.merged == true' /tmp/gptauto-merge.json >/dev/null
           merge_sha="$(jq -r '.sha' /tmp/gptauto-merge.json)"
           marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$merge_sha -->"
-          existing="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate --jq '.[].body' 2>/dev/null || true)"
           if grep -Fq "$marker" <<<"$existing"; then
             echo "Reconcile already dispatched for task=$TASK_ID merge=$merge_sha; no duplicate workflow."
             exit 0
@@ -177,7 +177,7 @@ jobs:
           [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || { echo "::error::Reconcile adoption is missing task/PR/merge identity."; exit 1; }
           marker="<!-- gptauto-reconcile-dispatched:$TASK_ID:$MERGE_SHA -->"
           completion_marker="<!-- gptauto-completion-lease:$TASK_ID -->"
-          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate | jq -s 'add // []')"
           completion_body="$(jq -r --arg marker "$completion_marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .body // ""' <<<"$comments")"
 
           # A dispatch marker records only that a Reconcile was attempted. It is
