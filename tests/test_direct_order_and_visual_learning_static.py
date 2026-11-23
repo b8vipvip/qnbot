@@ -56,3 +56,26 @@ def test_visual_learning_stores_semantics_not_raw_image_payloads():
     assert "ImageBytes" not in service
     assert "VisualSummary" in service
     assert "VisualTags" in service
+
+
+def test_visual_learning_links_source_atomically_and_revokes_entry_when_source_image_is_withdrawn():
+    service = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    mark = service[
+        service.index("internal static void MarkObservationWithdrawn"):
+        service.index("public static bool TryFindMatch")
+    ]
+    upsert = service[
+        service.index("private static VisualKnowledgeEntryEntity UpsertKnowledge"):
+        service.index("private static void UpdateObservationStatus")
+    ]
+
+    assert "observation.LearnedKnowledgeId" in mark
+    assert "SelectKnowledge(" in mark
+    assert "learned.Enabled = false" in mark
+    assert "DbHelper.Db.SaveRecordsInTransaction(updates)" in mark
+
+    assert 'currentObservation.Status = "已学习"' in upsert
+    assert "currentObservation.LearnedKnowledgeId = best.EntityId" in upsert
+    assert "currentObservation.LearnedKnowledgeId = created.EntityId" in upsert
+    assert "new List<object> { best, currentObservation }" in upsert
+    assert "new List<object> { created, currentObservation }" in upsert
