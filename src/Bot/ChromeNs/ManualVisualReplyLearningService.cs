@@ -209,7 +209,10 @@ namespace Bot.ChromeNs
                 {
                     if (!IsCurrent(pending, capturedVersion)) return;
                     observation = LoadObservation(pending);
-                    if (observation != null && !string.IsNullOrWhiteSpace(observation.VisualSummary)) break;
+                    if (observation != null
+                        && (string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal)
+                            || !string.IsNullOrWhiteSpace(observation.VisualSummary)))
+                        break;
                     await Task.Delay(2000);
                 }
 
