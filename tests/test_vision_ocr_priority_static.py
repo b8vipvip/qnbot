@@ -94,3 +94,13 @@ def test_ai_first_multimodal_path_still_attaches_shop_scoped_server_ocr():
     resolver = read("src/Bot/ChromeNs/VisionImageResolver.cs")
     assert "image.LocalCachePath, task.SellerNick, task.ShopKey, cts.Token" in vision
     assert "ResolveAsync(message, endpoint, cancellationToken, shopKey)" in resolver
+
+
+
+def test_server_ocr_result_is_visible_in_question_card_without_mutating_source_question():
+    pipeline = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    assert "ApplyOcrTextToQuestionCard(ctl, burst.CombinedQuestion, result, detectedAt)" in pipeline
+    assert "服务端OCR缓存命中" in pipeline
+    assert "服务端OCR识别" in pipeline
+    assert "control.SetQuestion(question + Environment.NewLine + label + \"：\" + recognizedText, detectedAt)" in pipeline
+    assert "UI-only annotation" in pipeline
