@@ -876,14 +876,17 @@ namespace Bot.ChromeNs
                             throw;
                         }
 
-                        corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
-                            session, turns, cards, styleBefore, localFirst,
-                            Clean(Convert.ToString(analysis["summary"]), 1200), report);
+                        // Publish evidence-backed Reception Agent flows immediately after the
+                        // session analysis; the separate corpus-wide knowledge scan must not delay it.
                         workflowEvidenceContext = ReceptionWorkflowAgentService.BuildEvidenceContext(
                             session.Seller, session.Buyer, session.ShopKey, turns, cards);
                         workflowPublishResult = ReceptionWorkflowAgentService.PublishProposals(
                             session.Seller, session.Buyer, session.ShopKey,
                             analysis["workflow_proposals"] as JArray, workflowEvidenceContext);
+
+                        corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
+                            session, turns, cards, styleBefore, localFirst,
+                            Clean(Convert.ToString(analysis["summary"]), 1200), report);
                     }
                 }
                 finally
