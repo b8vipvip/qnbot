@@ -169,6 +169,7 @@ namespace Bot.ChromeNs
                 visionItem.Message,
                 burst.ShopKey);
 
+            ReceptionWorkflowDecision workflowDecision = null;
             if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
             {
                 if (withdrawn && hasFollowUpText && !cacheComplete && lifecycleLease.IsCurrent)
@@ -177,18 +178,49 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var note = withdrawn && cacheComplete
-                    ? "图片已撤回；后台识别未取得可用结果，但完整本地缓存仍保留供后续重试。"
-                    : "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
-                if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_processing_failed");
-                Log.Info("视觉消息后台处理完成但未回复: seller=" + burst.SellerNick
-                    + ", buyer=" + burst.BuyerNick
-                    + ", withdrawn=" + withdrawn
-                    + ", cacheComplete=" + cacheComplete
-                    + ", messageId=" + visionItem.MessageKey
-                    + ", reason=" + result.Error);
-                return;
+                // OCR failure is not a reason to bypass the active workflow. A failed image
+                // may still satisfy image_message, while vision_observation/account_evidence
+                // remain missing and can trigger the configured request for a clearer image.
+                if (!withdrawn || hasFollowUpText)
+                {
+                    workflowDecision = ReceptionWorkflowRuntimeService.EvaluateVision(
+                        burst, visionItem.MessageKey, string.Empty, withdrawn);
+                    if (workflowDecision != null && workflowDecision.SuppressReply)
+                    {
+                        lifecycleLease.MarkCompleted("reception_workflow_" + (workflowDecision.Action ?? "wait").ToLowerInvariant());
+                        if (ctl != null) ctl.SetSkipped(workflowDecision.Reason);
+                        ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                        Log.Info("视觉识别失败后由Reception Agent状态机处理: seller=" + burst.SellerNick
+                            + ", buyer=" + burst.BuyerNick + ", action=" + workflowDecision.Action);
+                        return;
+                    }
+                    if (workflowDecision != null && workflowDecision.RequiresSend)
+                    {
+                        result.Answer = workflowDecision.ReplyText;
+                        Log.Info("视觉识别失败，改用已发布流程的索证话术: seller="
+                            + burst.SellerNick + ", buyer=" + burst.BuyerNick);
+                    }
+                    else
+                    {
+                        workflowDecision = null;
+                    }
+                }
+
+                if (workflowDecision == null)
+                {
+                    var note = withdrawn && cacheComplete
+                        ? "图片已撤回；后台识别未取得可用结果，但完整本地缓存仍保留供后续重试。"
+                        : "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
+                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note, burst.ShopKey);
+                    if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_processing_failed");
+                    Log.Info("视觉消息后台处理完成但未回复: seller=" + burst.SellerNick
+                        + ", buyer=" + burst.BuyerNick
+                        + ", withdrawn=" + withdrawn
+                        + ", cacheComplete=" + cacheComplete
+                        + ", messageId=" + visionItem.MessageKey
+                        + ", reason=" + result.Error);
+                    return;
+                }
             }
 
             result.Answer = ReplyTranscriptSanitizer.Sanitize(result.Answer);
@@ -224,8 +256,9 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var workflowDecision = ReceptionWorkflowRuntimeService.EvaluateVision(
-                burst, visionItem.MessageKey, result.VisualSummary, withdrawn);
+            if (workflowDecision == null)
+                workflowDecision = ReceptionWorkflowRuntimeService.EvaluateVision(
+                    burst, visionItem.MessageKey, result.VisualSummary, withdrawn);
             if (workflowDecision != null && workflowDecision.SuppressReply)
             {
                 lifecycleLease.MarkCompleted("reception_workflow_" + (workflowDecision.Action ?? "wait").ToLowerInvariant());
