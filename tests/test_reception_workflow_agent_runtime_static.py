@@ -279,6 +279,9 @@ def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
     assert "!config.Enabled || !config.EnableAutoGuidance" in current
     assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
     assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
+    assert "VisualEvidenceMessageKey" in current
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in current
+    assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in current
     assert "LoadRecentNonterminalOrders(" in current
     assert "currentMatchingOrders.Count == 0" in current
     assert "FingerprintOrders(currentMatchingOrders), decision.OrderFingerprint" in current
@@ -317,3 +320,16 @@ def test_order_evidence_loader_uses_latest_nonterminal_order_per_exact_shop_and_
     assert "GroupBy(x => x.OrderId, StringComparer.Ordinal)" in loader
     assert "OrderEventType.Created || x.EventType == OrderEventType.Paid" in loader
     assert "关闭|退款|CLOSED|REFUND|CANCEL" in loader
+
+
+def test_visual_withdrawal_is_rechecked_against_exact_message_before_send():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    visual = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+
+    assert "public string VisualEvidenceMessageKey { get; set; }" in runtime
+    assert "visualEvidenceMessageKey = isImage" in runtime
+    assert "recentVisualEvidence.MessageKey" in runtime
+    assert "VisualEvidenceMessageKey = required.Any(" in runtime
+    assert "internal static bool IsObservationWithdrawn(" in visual
+    assert "BuyerIdentityAliasService.AreEquivalent(seller, observation.Buyer, buyer)" in visual
+    assert "按撤回处理" in visual
