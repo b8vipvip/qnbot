@@ -97,7 +97,7 @@ namespace Bot.ChromeNs
                 return result;
             }
 
-            result.SelectionReason = "no_structured_order";
+            result.SelectionReason = selectionReason == "order_ledger_unavailable" ? selectionReason : "no_structured_order";
             ApplyConversationFallback(result, currentQuestion, turns, state);
             return result;
         }
