@@ -17,6 +17,8 @@ def test_recent_visual_semantics_are_injected_into_later_text_ai_context():
     assert "VisualKnowledgeObservationEntity" in helper
     assert "最近图片理解缓存" in helper
     assert "不代表订单、付款、账号、充值等实时状态" in helper
+    assert "如果图片已撤回，只能在买家明确引用该历史图片时作为对话上下文" in helper
+    assert "已撤回，仅限买家明确引用时使用" in helper
     assert "RecentVisualContextService.BuildPromptAddon(seller, buyer, question)" in openai
     assert "RecentVisualContextService.cs" in targets
 
