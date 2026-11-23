@@ -245,6 +245,23 @@ namespace Bot.ChromeNs
                 && string.Equals(Convert.ToString(x["flow_id"]), flowId, StringComparison.Ordinal));
         }
 
+        private static bool QueueHandoff(
+            ShopContext shop, string seller, string buyer, string question, string shopKey, string flowId)
+        {
+            if (shop == null) return false;
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                    return HandoffNotificationService.QueueReceptionWorkflowHandoff(
+                        seller, buyer, question, shopKey, flowId);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent转人工通知入队失败：" + ex.Message, 5);
+                return false;
+            }
+        }
+
         private static ReceptionWorkflowDecision Suppressed(
             string seller, string buyer, string shopKey, string flowId, int flowVersion,
             long revision, string state, string nextState, string action, string sourceKey, string reason)
@@ -430,15 +447,21 @@ namespace Bot.ChromeNs
                             string.Equals(Convert.ToString(x["key"]), faultKey, StringComparison.Ordinal)
                             && x.Value<bool?>("quarantined") == true);
                         if (quarantinedFault != null)
+                        {
+                            QueueHandoff(shop, seller, buyer, question, shopKey, flowId);
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
                                 "当前流程版本已隔离，等待修复或回滚，不再自动执行");
+                        }
 
                         var deliveryUncertain = record != null && record.Value<bool?>("delivery_uncertain") == true;
                         if (deliveryUncertain)
+                        {
+                            QueueHandoff(shop, seller, buyer, question, shopKey, flowId);
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
                                 "上一条流程回复发送结果不确定，已停止自动重发并等待人工确认");
+                        }
 
                         var pendingSourceKey = record == null ? string.Empty : Convert.ToString(record["pending_source_key"]);
                         if (!string.IsNullOrWhiteSpace(pendingSourceKey))
@@ -453,6 +476,7 @@ namespace Bot.ChromeNs
                                 record["pending_source_key"] = string.Empty;
                                 record["pending_started_utc_ticks"] = 0;
                                 record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                QueueHandoff(shop, seller, buyer, question, shopKey, flowId);
                                 return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                     catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
                                     "检测到重启或超时遗留的待发送流程，交由人工确认，禁止重复发送");
@@ -705,13 +729,15 @@ namespace Bot.ChromeNs
                 {
                     RegisterFailure(seller, shopKey, decision.FlowId, decision.CatalogRevision,
                         decision.Reason.Substring("runtime_failure:".Length));
-                    decision.Reason = "流程运行异常已记录；连续异常达到阈值后将自动回滚";
+                    QueueHandoff(shop, seller, buyer, question, shopKey, decision.FlowId);
+                    decision.Reason = "流程运行异常已记录并通知人工；连续异常达到阈值后将自动回滚";
                 }
                 return decision;
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("Reception Agent状态机执行失败，未直接发送或修改订单：" + ex.Message, 10);
+                QueueHandoff(shop, seller, buyer, question, shopKey, "runtime-storage-error");
                 return new ReceptionWorkflowDecision
                 {
                     ShopKey = shopKey, Seller = seller, Buyer = buyer,
