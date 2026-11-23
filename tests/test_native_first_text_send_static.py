@@ -90,7 +90,8 @@ def test_dom_send_is_pinned_to_the_verified_authoritative_shop_session():
         native.index("private bool IsExpectedShopSessionCurrent")
     ]
     assert send.index("VerifyShopIdentityBeforeSendAsync(shopKey)") < send.index("TryTriggerSendViaCdpDomAsync")
-    assert "TryTriggerSendViaCdpDomAsync(buyer, shopKey, sourceClient, preSendGuard)" in send
+    assert "TryTriggerSendViaCdpDomAsync(" in send
+    assert "buyer, shopKey, sourceClient, preSendGuard).ConfigureAwait(false)" in send
     assert "禁止其他发送回退以避免重复发送" in send
 
     authority = native[
