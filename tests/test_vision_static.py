@@ -98,3 +98,15 @@ def test_image_transfer_uses_authenticated_qianniu_session_when_direct_url_downl
     assert 'HttpMethod.Post, NormalizeOcrUrl(endpoint.BaseUrl)' in ocr
     assert 'IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)' in qn
     assert 'IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)' in recovery
+
+
+
+def test_vision_reply_task_keeps_authoritative_browser_session_for_image_resolution():
+    task = read('src/Bot/ChromeNs/VisionReplyTask.cs')
+    pipeline = read('src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs')
+    service = read('src/Bot/ChromeNs/VisionRequestService.cs')
+    ocr_first = read('src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs')
+    assert 'public CDPClient BrowserClient { get; set; }' in task
+    assert 'BrowserClient = qn.CDP' in pipeline
+    assert 'task.BrowserClient' in service
+    assert 'task.BrowserClient' in ocr_first
