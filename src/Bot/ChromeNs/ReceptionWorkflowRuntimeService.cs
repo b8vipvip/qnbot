@@ -641,7 +641,9 @@ namespace Bot.ChromeNs
                         var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
                         var hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
                             x != null && x.ObservedAtTicks >= visualCutoffTicks);
-                        var hasImage = isImage || hasRecentVisual;
+                        // image_message means a new image in this event; vision_observation may
+                        // use an already-persisted observation from the same buyer conversation.
+                        var hasImage = isImage;
                         var hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
                         var evidenceReady = HasRequiredEvidence(
