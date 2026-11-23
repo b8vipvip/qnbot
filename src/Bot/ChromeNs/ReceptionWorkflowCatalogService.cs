@@ -36,16 +36,22 @@ namespace Bot.ChromeNs
                 "vision_observation", "manual_correction", "verified_account_snapshot"
             }, StringComparer.Ordinal);
 
-        private static ShopContext ResolveShopForSeller(string seller)
+        private static ShopContext ResolveShopContext(string seller, string shopKey)
         {
             seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0)
-                throw new InvalidOperationException("卖家身份为空，拒绝读取或发布接待流程");
-            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0)
+                throw new InvalidOperationException("卖家身份或ShopKey为空，拒绝读取或发布接待流程");
+
+            // The caller supplies the exact shop identity captured by the Knowledge Center
+            // or message event. Never resolve a multi-shop seller nickname as the primary key.
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             if (shop == null
                 || string.IsNullOrWhiteSpace(shop.ShopKey)
-                || !shop.HasStableSellerId)
-                throw new InvalidOperationException("店铺身份不稳定或未绑定唯一ShopKey，拒绝读取或发布接待流程");
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !shop.HasStableSellerId
+                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Seller/ShopKey 不匹配或店铺身份不稳定，拒绝读取或发布接待流程");
             return shop;
         }
 
@@ -373,17 +379,17 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static string GetActiveJson(string seller)
+        public static string GetActiveJson(string seller, string shopKey)
         {
-            var shop = ResolveShopForSeller(seller);
+            var shop = ResolveShopContext(seller, shopKey);
             EnsureLegacyDraftMigrated(shop);
             return ReadCatalog(PathForShop(shop)).ToString(Formatting.Indented);
         }
 
-        public static string GetActiveFlowJson(string seller, string flowId)
+        public static string GetActiveFlowJson(string seller, string flowId, string shopKey)
         {
             if (!ValidKey(flowId)) return string.Empty;
-            var catalog = JObject.Parse(GetActiveJson(seller));
+            var catalog = JObject.Parse(GetActiveJson(seller, shopKey));
             var flows = catalog["flows"] as JArray;
             var flow = flows == null
                 ? null
@@ -396,11 +402,11 @@ namespace Bot.ChromeNs
         /// Validates and publishes in one transaction. No administrator identity,
         /// approval token, manual activation or gray-rollout state is required.
         /// </summary>
-        public static string Publish(string seller, string json)
+        public static string Publish(string seller, string json, string shopKey)
         {
             var candidate = Validate(json);
             var expectedRevision = candidate.Value<long>("catalog_revision");
-            var shop = ResolveShopForSeller(seller);
+            var shop = ResolveShopContext(seller, shopKey);
             EnsureLegacyDraftMigrated(shop);
 
             var path = PathForShop(shop);
@@ -437,9 +443,9 @@ namespace Bot.ChromeNs
         /// Rolls back to the previous valid published snapshot as a new monotonic version.
         /// The rollback itself is immediate and does not require administrator approval.
         /// </summary>
-        public static string RollbackToPreviousPublished(string seller)
+        public static string RollbackToPreviousPublished(string seller, string shopKey)
         {
-            var shop = ResolveShopForSeller(seller);
+            var shop = ResolveShopContext(seller, shopKey);
             EnsureLegacyDraftMigrated(shop);
             var path = PathForShop(shop);
             var directory = Path.GetDirectoryName(path);
