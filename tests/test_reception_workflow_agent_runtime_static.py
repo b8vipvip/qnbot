@@ -505,3 +505,21 @@ def test_handoff_cooldown_is_released_for_negative_channel_results():
     assert 'IndexOf("未受理"' in classifier
     assert 'IndexOf("HTTP "' in classifier
     assert "return channel.IndexOf(\"成功\"" in classifier
+
+
+def test_active_workflow_bootstrap_read_errors_do_not_fall_back_to_unconstrained_ai():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    evaluate = runtime[
+        runtime.index("private static ReceptionWorkflowDecision Evaluate("):
+        runtime.index("var needsAccountEvidence =")
+    ]
+    failure = evaluate[
+        evaluate.index("catch (Exception ex)"):
+        evaluate.index("if (catalog == null")
+    ]
+
+    assert "无法确认本店策略、流程目录或订单证据" in failure
+    assert "if (shop == null) return null;" in failure
+    assert "QueueHandoff(shop, seller, buyer, question, shopKey, \"runtime-bootstrap-error\")" in failure
+    assert "return Suppressed(" in failure
+    assert "已阻止普通AI绕过流程" in failure
