@@ -157,9 +157,27 @@ namespace Bot.ChromeNs
                 var observation = SelectObservations(
                     "where ShopKey = ? and Seller = ? and Buyer = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
                     shopKey, seller, buyer, messageKey).FirstOrDefault();
-                if (observation == null) return;
-                observation.Status = "图片已撤回";
-                observation.UpdatedAtTicks = DateTime.Now.Ticks;
+                if (observation == null)
+                {
+                    var now = DateTime.Now.Ticks;
+                    observation = new VisualKnowledgeObservationEntity
+                    {
+                        EntityId = Guid.NewGuid().ToString("N"),
+                        ShopKey = shopKey,
+                        Seller = seller,
+                        Buyer = buyer,
+                        MessageKey = messageKey,
+                        Status = "图片已撤回",
+                        LearnedKnowledgeId = string.Empty,
+                        ObservedAtTicks = now,
+                        UpdatedAtTicks = now
+                    };
+                }
+                else
+                {
+                    observation.Status = "图片已撤回";
+                    observation.UpdatedAtTicks = DateTime.Now.Ticks;
+                }
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { observation });
                 observationId = observation.EntityId;
             }
