@@ -163,8 +163,7 @@ namespace Bot.ChromeNs
                 return false;
             }
             var hwndPosted = await RunUiActionAsync(
-                () => IsPreSendGuardSatisfied(preSendGuard, "HWND安全发送")
-                    && TryPostSafeMainSendMouseMessage(),
+                () => TryPostSafeMainSendMouseMessage(preSendGuard),
                 "发送按钮HWND安全消息",
                 UiActionTimeoutMs).ConfigureAwait(false);
             if (hwndPosted)
@@ -323,7 +322,7 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private bool TryPostSafeMainSendMouseMessage()
+        private bool TryPostSafeMainSendMouseMessage(Func<bool> preSendGuard = null)
         {
             if (_sendMessageButton == null && _sendMessageButtonRect.IsEmpty) return false;
             var desk = ResolveSellerDesk();
@@ -421,6 +420,7 @@ namespace Bot.ChromeNs
                 return false;
             }
             var lParam = new IntPtr((clientPoint.Y << 16) | (clientPoint.X & 0xffff));
+            if (!IsPreSendGuardSatisfied(preSendGuard, "HWND安全发送")) return false;
             Marshal.GetLastWin32Error();
             var moved = PostMessage(target, WmMouseMove, IntPtr.Zero, lParam);
             var down = PostMessage(target, WmLButtonDown, new IntPtr(MkLButton), lParam);
