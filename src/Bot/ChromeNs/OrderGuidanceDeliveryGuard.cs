@@ -215,7 +215,8 @@ namespace Bot.ChromeNs
             maxCount = Math.Max(1, Math.Min(20, maxCount));
             lock (Sync)
             {
-                if (!EnsureLoaded()) return result;
+                if (!EnsureLoaded())
+                    throw new IOException("订单账本无法读取；调用方必须按缺少可信订单证据处理");
                 CleanupInternal();
                 foreach (var record in _state.Records
                     .Where(x => x != null
