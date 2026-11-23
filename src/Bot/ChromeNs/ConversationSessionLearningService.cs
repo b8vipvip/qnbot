@@ -836,6 +836,8 @@ namespace Bot.ChromeNs
                 string styleBefore;
                 JObject analysis;
                 KnowledgeCorpusAnalysisResult corpusAnalysis;
+                ReceptionWorkflowEvidenceContext workflowEvidenceContext = null;
+                ReceptionWorkflowPublishResult workflowPublishResult = new ReceptionWorkflowPublishResult();
                 SaveReport(report);
                 NotifyChanged();
                 report.Status = "等待当前店铺AI学习队列";
@@ -877,6 +879,11 @@ namespace Bot.ChromeNs
                         corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
                             session, turns, cards, styleBefore, localFirst,
                             Clean(Convert.ToString(analysis["summary"]), 1200), report);
+                        workflowEvidenceContext = ReceptionWorkflowAgentService.BuildEvidenceContext(
+                            session.Seller, session.Buyer, session.ShopKey, turns, cards);
+                        workflowPublishResult = ReceptionWorkflowAgentService.PublishProposals(
+                            session.Seller, session.Buyer, session.ShopKey,
+                            analysis["workflow_proposals"] as JArray, workflowEvidenceContext);
                     }
                 }
                 finally
@@ -1004,25 +1011,30 @@ namespace Bot.ChromeNs
                             + "条；新增候选跳过=" + newKnowledgeSkipped
                             + "条；证据拒绝=" + corpusAnalysis.NewCandidateEvidenceRejected
                             + "条；真人纠正自动修订=" + corpusApplied
-                            + "条；通用AI建议仍待人工审核）"
-                        : "（Knowledge V2全库对照未完成或源版本发生变化；本轮禁止自动写入生产知识库）");
+                            + "条；Reception Agent自动发布=" + workflowPublishResult.PublishedCount
+                            + "条；流程候选跳过=" + workflowPublishResult.SkippedCount + "条）"
+                        : "（Knowledge V2全库对照未完成或源版本发生变化；本轮知识库写入按原门禁处理；Reception Agent流程仍须独立通过来源证据校验）");
                 report.StyleBefore = styleBefore;
                 report.StyleAfter = styleAfter;
                 report.SuggestionsJson = SerializeSuggestionsWithWorkflowReview(
-                    allSuggestions, analysis["workflow_proposals"] as JArray, session.Seller);
+                    allSuggestions, workflowPublishResult);
                 var finalCoverage = ParseCoverage(report.InputCoverageJson);
                 finalCoverage["writeMode"] = "ai_auto_publish_new_knowledge_and_verified_updates";
                 finalCoverage["newKnowledgeWriteMode"] = EnableVerifiedCorpusNewKnowledgeWrites
                     ? "ai_auto_publish_verified_human_evidence" : "dry_run";
                 finalCoverage["genericSuggestionWriteMode"] = EnableAutomaticWrites ? "automatic" : "dry_run";
+                finalCoverage["receptionWorkflowWriteMode"] = "ai_auto_publish_with_verified_shop_scoped_evidence";
+                finalCoverage["receptionWorkflowPublished"] = workflowPublishResult.PublishedCount;
+                finalCoverage["receptionWorkflowSkipped"] = workflowPublishResult.SkippedCount;
                 finalCoverage["knowledgeCorpusNewCandidateApplied"] = newKnowledgeApplied;
                 finalCoverage["knowledgeCorpusNewCandidateSkipped"] = newKnowledgeSkipped;
                 finalCoverage["knowledgeCorpusNewCandidateAnalysisComplete"] = corpusAnalysis.NewCandidateAnalysisComplete;
                 report.InputCoverageJson = finalCoverage.ToString(Formatting.None);
-                report.AppliedCount = applied + corpusApplied + newKnowledgeApplied;
+                report.AppliedCount = applied + corpusApplied + newKnowledgeApplied
+                    + workflowPublishResult.PublishedCount;
                 report.SkippedCount = skipped + corpusSkipped + newKnowledgeSkipped
                     + corpusAnalysis.EvidenceRejected + corpusAnalysis.CandidatesOmitted
-                    + corpusAnalysis.NewCandidateEvidenceRejected;
+                    + corpusAnalysis.NewCandidateEvidenceRejected + workflowPublishResult.SkippedCount;
                 report.Error = !corpusComplete
                     ? "knowledge_corpus_incomplete:" + Clean(corpusAnalysis.Error, 500)
                     : (!corpusAnalysis.NewCandidateAnalysisComplete
@@ -3388,6 +3400,8 @@ namespace Bot.ChromeNs
             var learningPolicy = localFirst
                 ? "当前店铺启用了本地优先模式。你必须阅读这一轮全部买家、Bot和人工客服消息，把可复用的真实问答整理成知识。人工客服最终有效回复优先级最高；若没有人工回复，只有当Bot答案与整轮对话不冲突、不包含无法从对话确认的新业务事实、且问题答案具有跨买家复用价值时，才可使用evidence_type=conversation_synthesis，confidence必须>=0.92。不要把寒暄、一次性订单状态、临时价格/库存或个性化承诺写成知识。"
                 : "当前店铺启用了AI优先模式。保持保守学习：没有可靠人工证据宁可skip；Bot自身回复不能作为新增事实的唯一证据。";
+            var workflowEvidence = ReceptionWorkflowAgentService.BuildEvidenceContext(
+                session.Seller, session.Buyer, session.ShopKey, turns, cards);
 
             var messages = new JArray
             {
@@ -3396,13 +3410,13 @@ namespace Bot.ChromeNs
                     ["role"] = "system",
                     ["content"] =
                         "你是电商客服接待复盘与知识迭代系统。分析完整一轮聊天，对比Bot原答案与客服最终实际回复。只输出JSON："
-                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}],\"workflow_proposals\":[{\"stage\":\"当前流程阶段\",\"trigger\":\"何种买家证据触发\",\"required_evidence\":\"必须先有的真实订单或图片证据\",\"action\":\"WAIT|ASK_EVIDENCE|REPLY|SEND_VERIFIED_GUIDE|HANDOFF\",\"next_stage\":\"下一阶段\",\"evidence\":\"本次人工操作证据\",\"reason\":\"原因\"}]}。"
+                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}],\"workflow_proposals\":[{\"name\":\"流程名称\",\"trigger_keywords\":[\"触发词\"],\"confidence\":0.95,\"evidence_refs\":[\"M1\",\"M2\",\"O1\",\"V1\"],\"steps\":[{\"state\":\"inquiry\",\"trigger_keywords\":[\"问题关键词\"],\"required_evidence\":[\"buyer_message\"],\"action\":\"ASK_EVIDENCE|REPLY|WAIT|HANDOFF\",\"reply_text\":\"仅用于索证的简短话术\",\"reply_evidence_ref\":\"M2\",\"next_state\":\"awaiting_image\",\"timeout_minutes\":60}]}]}。"
                         + learningPolicy
                         + "已通过远程历史分页及时间线条数一致性校验的聊天时间线是本轮唯一完整性依据。Bot问答卡片仅为辅助元数据，可能受本地保留上限影响而不完整；不得因卡片缺失推断Bot未回复或人工回复。"
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
-                        + "workflow_proposals只输出最多4条可核验流程建议，必须提供人工回复或明确图片/订单证据；没有证据返回空数组。所有流程建议只进入待审核报告，绝不自动生效。"
+                        + "workflow_proposals最多4条，只能引用下方真实证据别名；必须同时引用买家原始消息、人工客服真实回复和同一买家的已核验订单快照。图片相关流程可引用V开头的视觉观察别名。每个步骤的required_evidence只能使用buyer_message、image_message、vision_observation、order_snapshot、manual_correction。ASK_EVIDENCE的reply_text只能请求补充截图或必要信息，不得承诺业务结果；REPLY必须提供reply_evidence_ref且只能引用真实人工客服回复。不得生成付款、充值、退款、账号修改、发货或履约动作。无足够证据、无当前店铺商品范围或无法构造完整状态转移时返回空数组。通过程序化证据绑定和目录校验后将自动发布，无需管理员审批。"
                 },
                 new JObject
                 {
@@ -3413,6 +3427,7 @@ namespace Bot.ChromeNs
                         + "\n现有表达风格：" + (string.IsNullOrWhiteSpace(styleBefore) ? "（暂无）" : styleBefore)
                         + "\n\n聊天时间线（买家/Bot/人工客服全部消息）：\n" + BuildTranscript(turns, cards)
                         + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
+                        + "\n\n流程提案可引用的ShopKey隔离真实证据：\n" + workflowEvidence.PromptText
                 }
             };
             var lastRetryableError = string.Empty;
@@ -3662,44 +3677,24 @@ namespace Bot.ChromeNs
                 RegexOptions.IgnoreCase);
         }
 
-        // The existing SuggestionsJson remains an array for legacy UI consumers.
-        // Workflow proposals are *display-only* rows with no knowledge ID, and are
-        // never passed to ReviewedKnowledgeLearningService.ApplyReviewedKnowledge.
+        // Keep SuggestionsJson as an array for existing report consumers, but record
+        // the actual autonomous publication result rather than a manual-review-only proposal.
         private static string SerializeSuggestionsWithWorkflowReview(
-            IEnumerable<Suggestion> suggestions, JArray proposedFlows, string seller)
+            IEnumerable<Suggestion> suggestions, ReceptionWorkflowPublishResult workflowResult)
         {
             var output = JArray.Parse(SerializeSuggestions(suggestions));
-            if (!KugouReceptionPolicy.Applies(seller) || proposedFlows == null)
-                return output.ToString(Formatting.None);
-            var allowed = new HashSet<string>(StringComparer.Ordinal)
+            if (workflowResult == null) return output.ToString(Formatting.None);
+            foreach (var item in workflowResult.Items.Take(4))
             {
-                "WAIT", "ASK_EVIDENCE", "REPLY", "SEND_VERIFIED_GUIDE", "HANDOFF"
-            };
-            foreach (var token in proposedFlows.Take(4))
-            {
-                var p = token as JObject;
-                if (p == null) continue;
-                var action = Clean(Convert.ToString(p["action"]), 40).ToUpperInvariant();
-                if (!allowed.Contains(action)) continue;
-                var stage = Redact(Clean(Convert.ToString(p["stage"]), 80));
-                var evidence = Redact(Clean(Convert.ToString(p["evidence"]), 250));
-                var requiredEvidence = Redact(Clean(Convert.ToString(p["required_evidence"]), 250));
-                // No policy transition can be approved without explicit evidence.
-                if (stage.Length == 0 || evidence.Length == 0 || requiredEvidence.Length == 0)
-                    continue;
+                if (item == null) continue;
                 output.Add(new JObject
                 {
-                    ["kind"] = "reception_workflow_proposal",
-                    ["action"] = "manual_review",
-                    ["proposed_action"] = action,
-                    ["stage"] = stage,
-                    ["trigger"] = Redact(Clean(Convert.ToString(p["trigger"]), 200)),
-                    ["required_evidence"] = requiredEvidence,
-                    ["next_stage"] = Redact(Clean(Convert.ToString(p["next_stage"]), 80)),
-                    ["evidence"] = evidence,
-                    ["reason"] = Redact(Clean(Convert.ToString(p["reason"]), 240)),
-                    ["applied"] = false,
-                    ["apply_message"] = "流程候选仅供审核：未修改生产流程与知识库"
+                    ["kind"] = "reception_workflow",
+                    ["action"] = item.Published ? "auto_published" : "auto_publish_skipped",
+                    ["flow_id"] = Clean(item.FlowId, 80),
+                    ["stage"] = Redact(Clean(item.Stage, 80)),
+                    ["applied"] = item.Published,
+                    ["apply_message"] = Redact(Clean(item.Message, 500))
                 });
             }
             return output.ToString(Formatting.None);
