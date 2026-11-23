@@ -4238,6 +4238,28 @@ namespace Bot.ChromeNs
                         SaveReport(report);
                         continue;
                     }
+                    // A registered ShopProfile can resolve while its Qianniu WebSocket
+                    // is still offline. Do not schedule history learning against a profile
+                    // alone: require the exact live authoritative QN/CDP binding, and let
+                    // the periodic sweep resume once that shop reconnects.
+                    if (ShopContextLocator.FindConnectedQnByShopKey(report.ShopKey) == null)
+                    {
+                        const string runtimePendingStatus = "等待店铺千牛会话连接后继续学习";
+                        const string runtimePendingError = "shop_runtime_session_unavailable";
+                        if (!string.Equals(report.Status, runtimePendingStatus, StringComparison.Ordinal)
+                            || !string.Equals(report.Error, runtimePendingError, StringComparison.Ordinal))
+                        {
+                            report.Status = runtimePendingStatus;
+                            report.Error = runtimePendingError;
+                            report.CompletedAtTicks = 0;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                            Log.Info("Knowledge V2恢复已解析到店铺档案，但权威千牛CDP会话尚未连接；保留待恢复状态: shopRef="
+                                + MyWebSocketServer.DiagnosticRef("shop", report.ShopKey));
+                        }
+                        continue;
+                    }
+
                     var retryCoverage = ParseCoverage(report.InputCoverageJson);
                     var historyRetryCount = Math.Max(0, retryCoverage.Value<int?>("historyRetryCount") ?? 0);
                     var learningRetryCount = Math.Max(0, retryCoverage.Value<int?>("learningRetryCount") ?? 0);
