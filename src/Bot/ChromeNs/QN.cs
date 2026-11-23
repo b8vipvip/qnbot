@@ -801,7 +801,7 @@ namespace Bot.ChromeNs
                     : ProcessOrderPlacedReplyAsync(orderPlan);
             }
 
-            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey);
+            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP);
             var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
             var visionDecision = VisionMessageDecision.Decide(
                 message,
