@@ -432,13 +432,16 @@ namespace Bot.ChromeNs
                 return browser;
             }
 
-            return new CacheDownloadResult
-            {
-                Error = "图片获取失败：直连下载="
-                    + Short(direct == null ? "无结果" : direct.Error, 180)
-                    + "；千牛登录态下载="
-                    + Short(browser == null ? "无结果" : browser.Error, 180)
-            };
+            var failure = "图片获取失败：直连下载="
+                + Short(direct == null ? "无结果" : direct.Error, 180)
+                + "；千牛登录态下载="
+                + Short(browser == null ? "无结果" : browser.Error, 180);
+            Log.ErrorWithMaxCount("买家图片未能转存到客户端缓存，服务端OCR不会收到图片二进制: seller="
+                + record.SellerNick + ", buyer=" + record.BuyerNick
+                + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", record.ShopKey)
+                + ", messageKey=" + Short(record.MessageKey, 90)
+                + ", reason=" + Short(failure, 320), 20);
+            return new CacheDownloadResult { Error = failure };
         }
 
         private static async Task<CacheDownloadResult> DownloadAndPersistFromBrowserAsync(
