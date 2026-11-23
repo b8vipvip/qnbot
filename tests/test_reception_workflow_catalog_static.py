@@ -19,7 +19,8 @@ def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     assert 'reception-workflow-catalog.json' in service
     assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in scope
     assert "string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)" in scope
-    assert "string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase)" in scope
+    assert "resolvedSeller.Length > 0" in scope
+    assert "string.Equals(resolvedSeller, seller, StringComparison.OrdinalIgnoreCase)" in scope
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in scope
     assert "!shop.HasStableSellerId" in scope
     assert "ShopSettingsScope.Enter(shop)" in scope
