@@ -29,6 +29,7 @@ namespace Bot.ChromeNs
         public string SourceKey { get; set; }
         public string OrderFingerprint { get; set; }
         public string VisualEvidenceMessageKey { get; set; }
+        public string AccountEvidenceMessageKey { get; set; }
         public bool NextStateTerminal { get; set; }
         public bool SuppressReply { get; set; }
         public bool RequiresSend { get; set; }
@@ -246,6 +247,7 @@ namespace Bot.ChromeNs
             bool hasBuyerMessage,
             bool hasImage,
             bool hasVision,
+            bool hasAccountEvidence,
             bool hasOrder,
             bool hasManualCorrection)
         {
@@ -255,6 +257,7 @@ namespace Bot.ChromeNs
                 var present = kind == "buyer_message" ? hasBuyerMessage
                     : kind == "image_message" ? hasImage
                     : kind == "vision_observation" ? hasVision
+                    : kind == "account_evidence" ? hasAccountEvidence
                     : kind == "order_snapshot" ? hasOrder
                     : kind == "manual_correction" ? hasManualCorrection
                     : false;
@@ -370,6 +373,27 @@ namespace Bot.ChromeNs
                 recentVisual = new List<VisualKnowledgeObservationEntity>();
                 Log.ErrorWithMaxCount("Reception Agent运行时读取视觉证据失败，本轮按缺少图片证据处理：" + ex.Message, 5);
             }
+
+            var needsAccountEvidence = matchingFlows.Any(flow =>
+                (flow["steps"] as JArray ?? new JArray()).OfType<JObject>().Any(step =>
+                    (step["required_evidence"] as JArray ?? new JArray())
+                        .Any(x => Convert.ToString(x) == "account_evidence")));
+            KugouAccountEvidence accountEvidence = null;
+            if (needsAccountEvidence)
+            {
+                try
+                {
+                    RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                        shopKey, seller, buyer, out accountEvidence);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Reception Agent读取账号图片证据失败，本轮按缺少账号证据处理：" + ex.Message, 5);
+                }
+            }
+            var accountEvidenceMessageKey = accountEvidence == null
+                ? string.Empty : (accountEvidence.MessageKey ?? string.Empty);
+            var hasAccountEvidence = !string.IsNullOrWhiteSpace(accountEvidenceMessageKey);
 
             try
             {
@@ -658,7 +682,7 @@ namespace Bot.ChromeNs
                         var hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
                         var evidenceReady = HasRequiredEvidence(
-                            required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
+                            required, hasBuyer, hasImage, hasVision, hasAccountEvidence, hasOrder, hasManual);
                         var initialState = string.Equals(currentState, initial, StringComparison.Ordinal);
                         var action = Convert.ToString(step["action"]);
                         if (keywords.Count > 0 && !ContainsAny(question, keywords)
@@ -695,7 +719,7 @@ namespace Bot.ChromeNs
                                 hasImage = isImage;
                                 hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
-                                    required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
+                                    required, hasBuyer, hasImage, hasVision, hasAccountEvidence, hasOrder, hasManual);
                             }
                         }
                         if (step.Value<bool?>("terminal") == true)
@@ -860,6 +884,9 @@ namespace Bot.ChromeNs
                                 VisualEvidenceMessageKey = required.Any(x =>
                                     Convert.ToString(x) == "image_message" || Convert.ToString(x) == "vision_observation")
                                     ? visualEvidenceMessageKey : string.Empty,
+                                AccountEvidenceMessageKey = required.Any(x =>
+                                    Convert.ToString(x) == "account_evidence")
+                                    ? accountEvidenceMessageKey : string.Empty,
                                 NextStateTerminal = steps.OfType<JObject>().Any(x =>
                                     string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal)
                                     && x.Value<bool?>("terminal") == true),
@@ -932,6 +959,21 @@ namespace Bot.ChromeNs
                         || VisualKnowledgeLearningService.IsObservationWithdrawn(
                             decision.ShopKey, decision.Seller, decision.Buyer, decision.VisualEvidenceMessageKey)))
                     return false;
+                if (!string.IsNullOrWhiteSpace(decision.AccountEvidenceMessageKey))
+                {
+                    if (VisionImageCacheService.IsMessageKeyWithdrawn(
+                            decision.Seller, decision.Buyer, decision.AccountEvidenceMessageKey, decision.ShopKey)
+                        || VisualKnowledgeLearningService.IsObservationWithdrawn(
+                            decision.ShopKey, decision.Seller, decision.Buyer, decision.AccountEvidenceMessageKey))
+                        return false;
+                    KugouAccountEvidence currentAccountEvidence;
+                    if (!RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                            decision.ShopKey, decision.Seller, decision.Buyer, out currentAccountEvidence)
+                        || currentAccountEvidence == null
+                        || !string.Equals(currentAccountEvidence.MessageKey, decision.AccountEvidenceMessageKey,
+                            StringComparison.Ordinal))
+                        return false;
+                }
                 var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                 var currentMatchingOrders = currentOrders.Where(x =>
                     (flowProducts.Count == 0 || flowProducts.Contains(x.ItemId, StringComparer.Ordinal))
