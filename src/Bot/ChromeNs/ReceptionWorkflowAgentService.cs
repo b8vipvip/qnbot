@@ -388,6 +388,7 @@ namespace Bot.ChromeNs
                     ["required_evidence"] = required.DeepClone(),
                     ["action"] = action == "REPLY" ? "REPLY_REVIEWED" : action,
                     ["reply_template"] = replyTemplate,
+                    ["terminal"] = step.Value<bool?>("terminal") ?? (action == "WAIT" && state == nextState),
                     ["next_state"] = nextState,
                     ["timeout_minutes"] = Math.Max(1, Math.Min(10080,
                         step.Value<int?>("timeout_minutes") ?? 60))
