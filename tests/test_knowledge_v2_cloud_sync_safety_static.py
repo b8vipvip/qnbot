@@ -210,7 +210,7 @@ def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_me
         service.index("private static KnowledgeV2Record CloneRecord")
     ]
 
-    assert "MergeRecordMetadata(cloud,local)" in merge
+    assert "MergeRecordMetadata(cloud, local)" in merge
     for field in (
         "ShortAnswer", "Subject", "Predicate", "Entities", "Aliases",
         "Conditions", "Exclusions", "RequiredContext", "ProductIds",
