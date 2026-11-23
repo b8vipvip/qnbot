@@ -626,7 +626,8 @@ namespace Bot.ChromeNs
         }
 
         private async Task<bool> TrySendTextViaUiaAsync(
-            string buyer, string text, DateTime sendStart, Func<bool> manualTakeoverCheck)
+            string buyer, string text, DateTime sendStart,
+            Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)
         {
             try
             {
@@ -653,6 +654,7 @@ namespace Bot.ChromeNs
                     await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
                     return false;
                 }
+                if (!IsPreSendGuardSatisfied(preSendGuard, "UIA坐标发送")) return false;
                 var clicked = await RunUiActionAsync(
                     () => TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
@@ -684,6 +686,7 @@ namespace Bot.ChromeNs
                     await ClearExpectedDraftIfSafeAsync(buyer, text, "人工接管").ConfigureAwait(false);
                     return false;
                 }
+                if (!IsPreSendGuardSatisfied(preSendGuard, "UIA主按钮回退")) return false;
                 var invoked = await RunUiActionAsync(
                     () => TryInvokeCachedSendButtonNow(),
                     "发送按钮左侧UIA安全调用",
