@@ -362,9 +362,11 @@ namespace Bot.ChromeNs
                 {
                     replyTemplate = BuyerMessageArchiveService.Redact(Clean(
                         Convert.ToString(step["reply_text"]), 500));
-                    if (replyTemplate.Length < 4 || UnsafeAskText.IsMatch(replyTemplate))
+                    if (replyTemplate.Length < 4 || UnsafeAskText.IsMatch(replyTemplate)
+                        || (!string.IsNullOrWhiteSpace(buyer)
+                            && replyTemplate.IndexOf(buyer, StringComparison.OrdinalIgnoreCase) >= 0))
                     {
-                        reason = "索证话术为空或包含高风险业务承诺";
+                        reason = "索证话术为空、包含高风险业务承诺或带有买家专属信息";
                         return false;
                     }
                     if (!required.Values<string>().Contains("buyer_message", StringComparer.Ordinal))
