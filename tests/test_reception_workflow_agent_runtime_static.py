@@ -45,7 +45,7 @@ def test_agent_requires_buyer_human_order_evidence_and_configured_product_scope(
     assert 'config.ProductIds.Contains(x, StringComparer.Ordinal)' in agent
     assert 'replyEvidence.Kind != "manual_correction"' in agent
     assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
-    assert "人工回复必须发生在同一证据集中的买家原始问题之后" in agent
+    assert "人工回复必须与同一证据集中的最近买家原始问题构成唯一、连续且30分钟内的证据对" in agent
     assert "replyTemplate.IndexOf(buyer, StringComparison.OrdinalIgnoreCase)" in agent
     assert "索证话术为空、包含高风险业务承诺或带有买家专属信息" in agent
     assert "订单|快递|价格|优惠|库存" in agent
@@ -415,7 +415,7 @@ def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_e
     ]
     flow_builder = agent[
         agent.index("private static bool TryBuildFlow("):
-        agent.index("private static string GetNativeMessageId(")
+        agent.index("internal static ReceptionWorkflowPublishResult PublishProposals(")
     ]
 
     assert "GetNativeMessageId(x)" in builder
