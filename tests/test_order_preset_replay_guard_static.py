@@ -42,3 +42,44 @@ def test_only_explicit_followups_allow_one_extra_guidance_message():
 def test_build_includes_guard():
     targets = read("src/Directory.Build.targets")
     assert "ChromeNs\\OrderGuidanceDeliveryGuard.cs" in targets
+
+
+def test_order_guidance_ledger_corruption_fails_closed_and_never_overwrites_the_old_file():
+    guard = read("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
+    loader = guard[
+        guard.index("private static bool EnsureLoaded()"):
+        guard.index("private static void CleanupInternal()")
+    ]
+    saver = guard[
+        guard.index("private static bool SaveInternal()"):
+        guard.index("private static string GetPath()")
+    ]
+    recent = guard[
+        guard.index("public static List<OrderSnapshot> GetRecentOrderSnapshots"):
+        guard.index("public static bool TryGetLatestOrderSnapshot")
+    ]
+
+    assert "File.GetAttributes(path)" in loader
+    assert "CrossProcessAtomicStateFile.ReadAllTextShared" in loader
+    assert "loaded.Records == null" in loader
+    assert "throw new InvalidDataException" in loader
+    assert "_state = null;" in loader
+    assert "return false;" in loader
+    assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in saver
+    assert "File.Delete(path)" not in saver
+    assert "File.Move(temp, path)" not in saver
+    assert "if (!EnsureLoaded())" in recent
+    assert "throw new IOException" in recent
+
+
+def test_commerce_context_does_not_masquerade_as_empty_order_history_when_ledger_is_unavailable():
+    commerce = read("src/Bot/ChromeNs/CommerceContextService.cs")
+    select = commerce[
+        commerce.index("internal static OrderSnapshot SelectRelevantOrderSnapshot"):
+        commerce.index("private static bool ContainsSignal")
+    ]
+
+    assert "try" in select and "catch (Exception ex)" in select
+    assert "order_ledger_unavailable" in select
+    assert "GetRecentOrderSnapshots(seller, buyer, 12)" in select
+    assert "return null;" in select
