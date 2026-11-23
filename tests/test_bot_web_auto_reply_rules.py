@@ -526,3 +526,13 @@ def test_v2_web_client_cannot_set_delay_fields_before_windows_v3_adoption(tmp_pa
         )
     assert blocked.value.status_code == 409
     assert "独立发送延迟" in blocked.value.detail
+
+    # The order-delay field existed in schema v2, but old Windows clients could only
+    # execute zero seconds. Keep that contract until the v3 client adopts real delays.
+    with pytest.raises(HTTPException) as legacy_order_delay:
+        module.put_auto_reply_rules(
+            module.AutoReplyRuleSettingsInput(order_placed_reply_delay_seconds=8),
+            client={"id": 1},
+        )
+    assert legacy_order_delay.value.status_code == 422
+    assert "只能为 0 秒" in legacy_order_delay.value.detail
