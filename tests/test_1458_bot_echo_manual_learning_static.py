@@ -105,7 +105,7 @@ def test_manual_learning_uses_one_reliable_bot_history_snapshot_for_all_seller_t
     source = _text(KNOWLEDGE)
     resolver = source[
         source.index("private static bool TryResolveManualEvidenceMessageIds("):
-        source.index("private static bool IsGreetingOnly(")
+        source.index("private static void QueueManualAnswerComparison(")
     ]
     bot_classifier = source[
         source.index("private static bool IsBotAnswer("):
