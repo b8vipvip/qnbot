@@ -91,7 +91,7 @@ def test_image_transfer_uses_authenticated_qianniu_session_when_direct_url_downl
     qn = read('src/Bot/ChromeNs/QN.cs')
     recovery = read('src/Bot/ChromeNs/QN.MessageRecovery.cs')
     assert 'DownloadAndPersistFromBrowserAsync' in cache
-    assert 'credentials:'include'' in cache
+    assert "credentials:'include'" in cache
     assert 'im.singlemsg.GetRemoteHisMsg' in cache
     assert 'Array.from(map.values?map.values():Object.values(map))' in cache
     assert 'new ByteArrayContent(imageBytes)' in ocr
