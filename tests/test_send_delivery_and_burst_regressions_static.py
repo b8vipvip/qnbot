@@ -306,8 +306,9 @@ def test_text_reply_rechecks_human_takeover_after_delay_immediately_before_send(
     start = pipeline.index("private static async Task ProcessTextBurstStreamingAsync")
     end = pipeline.index("private static bool IsLocalKnowledgeDirectAnswerSource", start)
     method = pipeline[start:end]
-    final_gate = method.rindex("ParallelReplyRelevanceGate.ShouldSend(")
-    assert method.index("await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)") < final_gate
+    delay_gate = method.index("await Task.Delay(TimeSpan.FromSeconds(directDelaySeconds)")
+    final_gate = method.index("ParallelReplyRelevanceGate.ShouldSend(", delay_gate)
+    assert delay_gate < final_gate
     assert final_gate < method.index('lease.MarkSending("streaming_send_started")')
     assert method.index('lease.MarkSending("streaming_send_started")') < method.index("qn.SendTextWithRetryAsync(")
     assert "streaming_final_relevance_suppressed" in method
@@ -340,9 +341,10 @@ def test_qn_rechecks_business_guard_after_send_lock_and_before_each_physical_att
     assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)") < method.index(
         'IsPreSendGuardSatisfied(preSendGuard, "首次发送")'
     ) < method.index("var ok = await SendTextAsync(buyer, text, preSendGuard)")
-    assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)", method.index("var retry =")) < method.index(
-        'IsPreSendGuardSatisfied(preSendGuard, "重试发送")'
-    ) < method.index("ok = await SendTextAsync(buyer, text, preSendGuard)")
+    retry_start = method.index("var retry =")
+    assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)", retry_start) < method.index(
+        'IsPreSendGuardSatisfied(preSendGuard, "重试发送")', retry_start
+    ) < method.index("ok = await SendTextAsync(buyer, text, preSendGuard)", retry_start)
     assert "复核发生异常，已按安全策略阻止发送" in qn
 
 
