@@ -433,7 +433,7 @@ def test_manual_reconcile_comment_ingress_is_owner_only_and_requires_exact_merge
     assert '"$COMMENT_BODY" =~ ^/gptauto-reconcile' in observer
     assert "GA-[a-f0-9]{12}" in observer
     assert "github.event.issue.number" in observer
-    assert 'requested_task_id == "$TASK_ID"' in observer
+    assert '"$requested_task_id" == "$TASK_ID"' in observer
     assert 'PR_MERGED" == "true"' in observer
     assert "Manual Reconcile requires a merged pull request." in observer
     assert "Manual Reconcile task ID does not match the PR-derived canonical task ID." in observer
