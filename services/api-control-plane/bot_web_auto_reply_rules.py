@@ -209,6 +209,8 @@ def _normalize(values: Dict[str, Any], *, fill_defaults: bool, schema_version: i
                 raise ValueError(f"{key} 必须是整数")
             if delay < 0 or delay > 300:
                 raise ValueError(f"{key} 必须在 0-300 秒之间")
+            if key == "order_placed_reply_delay_seconds" and schema_version < 3 and delay != 0:
+                raise ValueError("旧版 schema v2 的下单回复延迟只能为 0 秒")
             result[key] = delay
     return result
 
