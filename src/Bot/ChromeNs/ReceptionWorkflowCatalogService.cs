@@ -390,6 +390,9 @@ namespace Bot.ChromeNs
             EnsureLegacyDraftMigrated(seller);
 
             var path = PathForShop(seller);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowPublish", 3000))
             {
                 if (lease == null || !lease.Acquired)
@@ -424,6 +427,9 @@ namespace Bot.ChromeNs
         {
             EnsureLegacyDraftMigrated(seller);
             var path = PathForShop(seller);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
             long restoredRevision = 0;
 
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowPublish", 3000))
