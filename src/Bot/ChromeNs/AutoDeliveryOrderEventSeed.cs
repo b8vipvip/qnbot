@@ -38,6 +38,9 @@ namespace Bot.ChromeNs
             public string Seller { get; set; }
             public bool EnabledObserved { get; set; }
             public DateTime LastSeenAt { get; set; }
+            // Timestamp alone is not a unique event cursor. Keep the event keys accepted at
+            // LastSeenAt so a later event with the same clock tick is not silently skipped.
+            public List<string> LastSeenEventKeys { get; set; }
         }
 
         private sealed class CursorState
@@ -47,7 +50,7 @@ namespace Bot.ChromeNs
 
             public CursorState()
             {
-                Schema = 2;
+                Schema = 3;
                 Sellers = new List<SellerCursor>();
             }
         }
@@ -113,6 +116,7 @@ namespace Bot.ChromeNs
                 {
                     cursor.EnabledObserved = enabled;
                     cursor.LastSeenAt = DateTime.Now;
+                    cursor.LastSeenEventKeys = new List<string>();
                     _cursorStateDirty = true;
                 }
                 if (_cursorStateDirty && !SaveCursorsLocked()) return;
@@ -190,6 +194,8 @@ namespace Bot.ChromeNs
                 var events = hub == null || hub.Events == null
                     ? new List<HubEvent>()
                     : hub.Events;
+                if (hub == null)
+                    Log.ErrorWithMaxCount("自动发货订单事件账本暂时不可读；本轮不推进事件游标，等待后台恢复后重试。", 10);
                 foreach (var qn in qns)
                 {
                     ShopContext shop;
@@ -215,17 +221,32 @@ namespace Bot.ChromeNs
                                 // false -> true begins exactly at now; all prior events are history.
                                 cursor.EnabledObserved = enabled;
                                 cursor.LastSeenAt = DateTime.Now;
+                                cursor.LastSeenEventKeys = new List<string>();
                                 _cursorStateDirty = true;
                             }
                             if (_cursorStateDirty && !SaveCursorsLocked()) return;
                         }
                         if (!enabled) continue;
+                        // A failed ledger read must never be treated as an empty event stream:
+                        // doing so would move the cursor past orders that arrive during the outage.
+                        if (hub == null) continue;
 
                         DateTime floor;
-                        lock (Sync) floor = cursor.LastSeenAt;
+                        HashSet<string> lastSeenEventKeys;
+                        lock (Sync)
+                        {
+                            floor = cursor.LastSeenAt;
+                            lastSeenEventKeys = new HashSet<string>(
+                                cursor.LastSeenEventKeys ?? new List<string>(), StringComparer.Ordinal);
+                        }
                         var matching = events
-                            .Where(x => x != null && x.Snapshot != null)
-                            .Where(x => GetAcceptedAt(x) > floor)
+                            .Where(x => x != null && x.Snapshot != null && !string.IsNullOrWhiteSpace(x.Key))
+                            .Where(x =>
+                            {
+                                var acceptedAt = GetAcceptedAt(x);
+                                return acceptedAt > floor
+                                    || (acceptedAt == floor && !lastSeenEventKeys.Contains(x.Key));
+                            })
                             .Where(x => string.Equals((x.Snapshot.ShopKey ?? string.Empty).Trim(),
                                 shop.ShopKey, StringComparison.Ordinal))
                             .Where(x => x.Snapshot.EventType == OrderEventType.Created
@@ -233,22 +254,39 @@ namespace Bot.ChromeNs
                             .Where(x => string.Equals((x.Snapshot.Seller ?? string.Empty).Trim(),
                                 seller, StringComparison.Ordinal))
                             .OrderBy(x => GetAcceptedAt(x))
+                            .ThenBy(x => x.Key, StringComparer.Ordinal)
                             .ToList();
 
                         var latest = floor;
+                        var latestEventKeys = new HashSet<string>(lastSeenEventKeys, StringComparer.Ordinal);
                         foreach (var entry in matching)
                         {
                             // Do not advance the durable event cursor unless the corresponding
                             // queue state was safely persisted or the event was intentionally ignored.
                             if (!AutoDeliveryCoordinator.Enqueue(entry.Snapshot)) return;
                             var acceptedAt = GetAcceptedAt(entry);
-                            if (acceptedAt > latest) latest = acceptedAt;
+                            if (acceptedAt > latest)
+                            {
+                                latest = acceptedAt;
+                                latestEventKeys.Clear();
+                            }
+                            if (acceptedAt == latest) latestEventKeys.Add(entry.Key);
                         }
-                        if (latest > floor)
+                        if (latest > floor || !latestEventKeys.SetEquals(lastSeenEventKeys))
                         {
                             lock (Sync)
                             {
+                                // A settings transition may have reset the cursor while this
+                                // batch was being enqueued. Never overwrite that newer baseline.
+                                var liveKeys = new HashSet<string>(
+                                    cursor.LastSeenEventKeys ?? new List<string>(), StringComparer.Ordinal);
+                                if (cursor.LastSeenAt != floor || !liveKeys.SetEquals(lastSeenEventKeys))
+                                    return;
                                 cursor.LastSeenAt = latest;
+                                cursor.LastSeenEventKeys = latestEventKeys
+                                    .OrderBy(x => x, StringComparer.Ordinal)
+                                    .Take(2000)
+                                    .ToList();
                                 _cursorStateDirty = true;
                                 if (!SaveCursorsLocked()) return;
                             }
@@ -299,7 +337,8 @@ namespace Bot.ChromeNs
                 ShopKey = shopKey,
                 Seller = seller,
                 EnabledObserved = false,
-                LastSeenAt = DateTime.Now
+                LastSeenAt = DateTime.Now,
+                LastSeenEventKeys = new List<string>()
             };
             _cursors.Sellers.Add(cursor);
             _cursorStateDirty = true;
@@ -318,7 +357,26 @@ namespace Bot.ChromeNs
         private static HubState LoadHubState()
         {
             var path = HubStatePath();
-            if (!File.Exists(path)) return new HubState { Events = new List<HubEvent>() };
+            try
+            {
+                // File.Exists returns false for access errors as well as a missing file.
+                // Only explicit not-found is a safe empty-first-run state.
+                File.GetAttributes(path);
+            }
+            catch (FileNotFoundException)
+            {
+                return new HubState { Events = new List<HubEvent>() };
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return new HubState { Events = new List<HubEvent>() };
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("检查自动发货订单事件账本状态失败；按不可读处理并暂停游标推进：" + ex.Message, 10);
+                return null;
+            }
+
             try
             {
                 using (var stream = new FileStream(
@@ -328,14 +386,18 @@ namespace Bot.ChromeNs
                     FileShare.ReadWrite | FileShare.Delete))
                 using (var reader = new StreamReader(stream, Encoding.UTF8, true))
                 {
-                    var state = JsonConvert.DeserializeObject<HubState>(reader.ReadToEnd())
-                        ?? new HubState { Events = new List<HubEvent>() };
-                    if (state.Events == null) state.Events = new List<HubEvent>();
+                    var state = JsonConvert.DeserializeObject<HubState>(reader.ReadToEnd());
+                    if (state == null || state.Events == null)
+                    {
+                        Log.ErrorWithMaxCount("自动发货订单事件账本内容无效；暂停游标推进以防丢单。", 10);
+                        return null;
+                    }
                     return state;
                 }
             }
-            catch (IOException)
+            catch (Exception ex)
             {
+                Log.ErrorWithMaxCount("读取自动发货订单事件账本失败；暂停游标推进以防丢单：" + ex.Message, 10);
                 return null;
             }
         }
@@ -360,17 +422,30 @@ namespace Bot.ChromeNs
                     return new CursorState();
                 }
                 var state = JsonConvert.DeserializeObject<CursorState>(File.ReadAllText(path, Encoding.UTF8));
-                if (state == null || (state.Schema != 1 && state.Schema != 2) || state.Sellers == null)
+                if (state == null || (state.Schema != 1 && state.Schema != 2 && state.Schema != 3) || state.Sellers == null)
                 {
                     Log.ErrorWithMaxCount("自动发货订单事件游标结构无效；拒绝重置或覆盖现有游标文件。", 10);
                     return new CursorState();
                 }
-                if (state.Schema == 1)
+                if (state.Schema < 3)
                 {
-                    // Old seller-only cursors are retained for unique-name migration; ambiguous
-                    // names intentionally do not get attached to an arbitrary ShopKey.
-                    state.Schema = 2;
+                    // Older cursors tracked timestamps only. Replay keys at the boundary once;
+                    // Enqueue and the durable confirmation ledger make that replay idempotent.
+                    foreach (var cursor in state.Sellers.Where(x => x != null))
+                        cursor.LastSeenEventKeys = new List<string>();
+                    state.Schema = 3;
                     _cursorStateDirty = true;
+                }
+                else
+                {
+                    foreach (var cursor in state.Sellers.Where(x => x != null))
+                    {
+                        if (cursor.LastSeenEventKeys == null)
+                        {
+                            cursor.LastSeenEventKeys = new List<string>();
+                            _cursorStateDirty = true;
+                        }
+                    }
                 }
                 if (!EnsureCursorMarkerLocked()) return new CursorState();
                 loadedSuccessfully = true;
