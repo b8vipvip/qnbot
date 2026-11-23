@@ -469,6 +469,21 @@ namespace Bot.ChromeNs
 
                         if (action == "WAIT" || action == "HANDOFF")
                         {
+                            if (action == "HANDOFF")
+                            {
+                                var queued = false;
+                                try
+                                {
+                                    using (ShopSettingsScope.Enter(shop))
+                                        queued = HandoffNotificationService.QueueReceptionWorkflowHandoff(
+                                            seller, buyer, question, shopKey, flowId);
+                                }
+                                catch { queued = false; }
+                                if (!queued)
+                                    return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                        catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                        "runtime_failure:handoff_notification_unavailable");
+                            }
                             if (record == null)
                             {
                                 record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
