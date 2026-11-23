@@ -146,6 +146,7 @@ namespace Bot.ChromeNs
                 BuyerNick = burst.BuyerNick,
                 MessageKey = visionItem.MessageKey,
                 Message = visionItem.Message,
+                BrowserClient = qn.CDP,
                 CombinedQuestion = burst.CombinedQuestion,
                 DeferLearningUntilDelivered = true
             };
