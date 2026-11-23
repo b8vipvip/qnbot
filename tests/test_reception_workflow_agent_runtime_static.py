@@ -210,4 +210,9 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert 'step.Value<bool?>("terminal") == true' in runtime
     assert "timeoutMinutes" in runtime
     assert "DateTime.UtcNow.Ticks - stateEnteredTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks" in runtime
+    assert "completed_utc_ticks" in runtime
+    assert "completed_order_fingerprint" in runtime
+    assert "terminalOrderChanged" in runtime
+    assert "TimeSpan.FromHours(24).Ticks" in runtime
+    assert "FingerprintOrders(candidateOrders)" in runtime
     assert r'\"terminal\":true' in learning
