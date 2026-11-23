@@ -111,30 +111,38 @@ namespace Bot.ChromeNs
                     if (lease == null || !lease.Acquired)
                     {
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；保留原任务文件并暂停自动发货。", 10);
+                        EnsureRecoveryTimerLocked();
+                        Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；保留原任务文件并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
                     }
                     if (!ReloadStateForMutationLocked(true))
                     {
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货。", 10);
+                        EnsureRecoveryTimerLocked();
+                        Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
                     }
                     CleanupExpiredLocked(DateTime.Now);
                     if (!SaveStateLocked())
                     {
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；保留原任务状态并暂停自动发货。", 10);
+                        EnsureRecoveryTimerLocked();
+                        Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；保留原任务状态并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
                     }
                     _stateLoadFailed = false;
-                    if (_timer == null)
-                        _timer = new Timer(_ => OnTimerTick(), null, Timeout.Infinite, Timeout.Infinite);
                     _initialized = 1;
-                    _timer.Change(3000, 5000);
+                    EnsureRecoveryTimerLocked();
                 }
             }
             Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
+        }
+
+        private static void EnsureRecoveryTimerLocked()
+        {
+            if (_timer == null)
+                _timer = new Timer(_ => OnTimerTick(), null, Timeout.Infinite, Timeout.Infinite);
+            _timer.Change(3000, 5000);
         }
 
         private static void OnTimerTick()
@@ -162,6 +170,8 @@ namespace Bot.ChromeNs
                     CleanupExpiredLocked(DateTime.Now);
                     if (!SaveStateLocked()) return false;
                     _stateLoadFailed = false;
+                    _initialized = 1;
+                    EnsureRecoveryTimerLocked();
                     Log.Info("自动发货队列从临时锁/存储故障中恢复：已重新载入持久队列并恢复后台调度。 pending="
                         + (_state == null || _state.Pending == null ? 0 : _state.Pending.Count));
                     return true;
