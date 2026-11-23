@@ -52,7 +52,7 @@ jobs:
           # A merge performed with GITHUB_TOKEN does not necessarily emit another
           # workflow-triggering push, so waiting for a spontaneous push CI is not
           # a valid lifecycle transition.
-          catalog="$(gh api --paginate --slurp "repos/$REPOSITORY/actions/workflows?per_page=100" | jq -c '[.[].workflows[]]')"
+          catalog="$(gh api "repos/$REPOSITORY/actions/workflows?per_page=100" --paginate --slurp | jq -c '[.[].workflows[]]')"
           configured="$(gh variable get GPTAUTO_POST_MERGE_WORKFLOW --repo "$REPOSITORY" 2>/dev/null || true)"
           if [[ -n "$configured" ]]; then
             primary_path="$(jq -r --arg wanted "$configured" '[.[] | select((.name == $wanted or .path == $wanted) and ((.state // "") | ascii_downcase | startswith("disabled") | not))][0].path // empty' <<<"$catalog")"
@@ -539,7 +539,7 @@ jobs:
           Terminal state: DONE
           Merge SHA: $MERGE_SHA
           Foreground completion is now permitted because Reconcile produced terminal DONE evidence."
-          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" | jq -s 'add // []')"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate | jq -s 'add // []')"
           body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | sort_by(.updated_at,.id) | last | .id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
