@@ -37,9 +37,8 @@ namespace Bot.ChromeNs
         }
     }
 
-    // log4net 2.0.3 used by this legacy client does not ship a RegexFilter. The runtime
-    // noise filter needs deterministic regex matching, so provide the tiny FilterSkeleton
-    // implementation locally. It is used by both normal and WPF temporary builds.
+    // Keep the runtime-noise regex filter local so its matching behavior remains explicit
+    // and deterministic across the legacy WPF host and the upgraded log4net runtime.
     internal sealed class RegexFilter : FilterSkeleton
     {
         private Regex _regex;
