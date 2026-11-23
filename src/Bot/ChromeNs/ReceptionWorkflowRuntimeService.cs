@@ -75,6 +75,25 @@ namespace Bot.ChromeNs
             return Digest(string.Join("|", ids));
         }
 
+        private static List<OrderSnapshot> LoadRecentNonterminalOrders(
+            string seller, string buyer, string shopKey)
+        {
+            return OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12, shopKey)
+                .Where(x => x != null
+                    && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                    && string.Equals(x.Seller, seller, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(x.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(x.OrderId)
+                    && x.EventTime >= DateTime.Now.AddDays(-7))
+                .GroupBy(x => x.OrderId, StringComparer.Ordinal)
+                .Select(g => g.OrderByDescending(x => x.EventTime).First())
+                .Where(x => (x.EventType == OrderEventType.Created || x.EventType == OrderEventType.Paid)
+                    && !System.Text.RegularExpressions.Regex.IsMatch(
+                        x.TradeStatus ?? string.Empty, @"关闭|退款|CLOSED|REFUND|CANCEL",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                .ToList();
+        }
+
         private static string RuntimePath(ShopContext shop)
         {
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey) || !shop.HasStableSellerId)
@@ -313,20 +332,7 @@ namespace Bot.ChromeNs
                         return null;
                     if (!config.EnableAutoGuidance) return null;
                     catalog = LoadCatalog(seller, shopKey);
-                    orders = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12, shopKey)
-                        .Where(x => x != null
-                            && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
-                            && string.Equals(x.Seller, seller, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(x.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
-                            && !string.IsNullOrWhiteSpace(x.OrderId)
-                            && x.EventTime >= DateTime.Now.AddDays(-7))
-                        .GroupBy(x => x.OrderId, StringComparer.Ordinal)
-                        .Select(g => g.OrderByDescending(x => x.EventTime).First())
-                        .Where(x => (x.EventType == OrderEventType.Created || x.EventType == OrderEventType.Paid)
-                            && !System.Text.RegularExpressions.Regex.IsMatch(
-                                x.TradeStatus ?? string.Empty, @"关闭|退款|CLOSED|REFUND|CANCEL",
-                                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                        .ToList();
+                    orders = LoadRecentNonterminalOrders(seller, buyer, shopKey);
                 }
             }
             catch (Exception ex)
@@ -885,10 +891,13 @@ namespace Bot.ChromeNs
             {
                 CatalogIndex catalog;
                 KugouReceptionConfig config;
+                List<OrderSnapshot> currentOrders;
                 using (ShopSettingsScope.Enter(shop))
                 {
                     config = KugouReceptionConfigService.GetConfig(shop);
                     catalog = LoadCatalog(decision.Seller, decision.ShopKey);
+                    currentOrders = LoadRecentNonterminalOrders(
+                        decision.Seller, decision.Buyer, decision.ShopKey);
                 }
                 if (config == null || !config.Enabled || !config.EnableAutoGuidance
                     || config.ProductIds == null || config.ProductIds.Count == 0)
@@ -902,6 +911,15 @@ namespace Bot.ChromeNs
                 var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                 if (flowProducts.Count == 0
                     || flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal)))
+                    return false;
+                var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                var currentMatchingOrders = currentOrders.Where(x =>
+                    (flowProducts.Count == 0 || flowProducts.Contains(x.ItemId, StringComparer.Ordinal))
+                    && (flowSkus.Count == 0 || flowSkus.Contains(x.SkuId, StringComparer.Ordinal))
+                    && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal)).ToList();
+                if (currentMatchingOrders.Count == 0
+                    || !string.Equals(FingerprintOrders(currentMatchingOrders), decision.OrderFingerprint,
+                        StringComparison.Ordinal))
                     return false;
 
                 return Mutate(shop, document =>
