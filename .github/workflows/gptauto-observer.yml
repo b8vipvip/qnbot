@@ -180,7 +180,7 @@ jobs:
           while read -r run_id; do
             [[ -n "$run_id" ]] || continue
             echo "Cancelling superseded PR run $run_id; current head is $CURRENT_HEAD"
-            gh api --method POST "repos/$REPOSITORY/actions/runs/$run_id/cancel" >/dev/null 2>&1 || true
+            gh api "repos/$REPOSITORY/actions/runs/$run_id/cancel" --method POST >/dev/null 2>&1 || true
           done
 
       - uses: actions/checkout@v4
@@ -384,7 +384,7 @@ jobs:
           HEAD_SHA: ${{ steps.capture.outputs.head-sha }}
         shell: bash
         run: |
-          gh api --method POST "repos/$REPOSITORY/dispatches" \
+          gh api "repos/$REPOSITORY/dispatches" --method POST \
             -f event_type='gptauto_observation' \
             -F "client_payload[observer_run_id]=$OBSERVER_RUN_ID" \
             -F "client_payload[task_id]=$TASK_ID" \
