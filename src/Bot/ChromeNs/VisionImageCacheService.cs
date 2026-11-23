@@ -581,7 +581,7 @@ namespace Bot.ChromeNs
                 + "let node=img;for(let depth=0;node&&depth<4;depth++,node=node.parentElement){"
                 + "for(const attr of ['data-message-id','data-msgid','data-mid','data-id','data-file-id'])"
                 + "values.push(node.getAttribute&&node.getAttribute(attr));}"
-                + "if(tokens.length&&tokens.some(t=>values.some(v=>v&&String(v).indexOf(t)>=0)))add(img.currentSrc||img.src,img);"
+                + "if(tokens.length&&tokens.some(t=>values.some(v=>v&&(String(v)===t||(t.length>=8&&String(v).indexOf(t)>=0)))))add(img.currentSrc||img.src,img);"
                 + "}}catch(e){}"
                 + "async function fromUrl(u){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),20000);"
                 + "try{const response=await fetch(u,{method:'GET',credentials:'include',"
