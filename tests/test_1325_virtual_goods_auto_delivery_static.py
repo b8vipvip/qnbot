@@ -782,7 +782,7 @@ def test_auto_delivery_event_cursor_retries_startup_recovery_before_consuming_ev
 
 def test_auto_delivery_queue_loss_after_restart_is_detected_by_durable_marker():
     runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
-    marker = runtime[runtime.index("private static string StateMarkerPath"):runtime.index("public static void Initialize")]
+    marker = runtime[runtime.index("private static string StateMarkerPath"):runtime.index("private static bool ReloadStateForMutationLocked")]
     reload = runtime[
         runtime.index("private static bool ReloadStateForMutationLocked"):
         runtime.index("private static StateDocument LoadState")
