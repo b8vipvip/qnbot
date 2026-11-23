@@ -155,7 +155,7 @@ def test_workflow_catalog_rejects_duplicate_product_and_sku_ids_and_oversized_dr
 
 
 def test_unreadable_existing_draft_cannot_be_mistaken_for_revision_zero():
-    service = read("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
     revision_reader = service[service.index("private static long ReadCurrentRevision"):service.index("private static string CreateBackupPath")]
     assert "File.GetAttributes(path)" in revision_reader
     assert "catch (FileNotFoundException)" in revision_reader
