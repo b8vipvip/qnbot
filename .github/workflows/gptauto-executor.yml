@@ -148,9 +148,15 @@ jobs:
             exit 0
           fi
           default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
-          gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
-            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
-            -f release_required="${{ steps.state.outputs.release-required }}"
+          reconcile_payload="$(jq -n \
+            --arg ref "$default_branch" \
+            --arg task_id "$TASK_ID" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg merge_sha "$merge_sha" \
+            --arg release_required "${{ steps.state.outputs.release-required }}" \
+            '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,merge_sha:$merge_sha,release_required:$release_required}}')"
+          printf '%s' "$reconcile_payload" | gh api --method POST \
+            "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/dispatches" --input -
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto scheduled Reconcile for task $TASK_ID merge $merge_sha. Automatic wakeups reuse this handoff; explicit manual recovery remains available."
 
@@ -214,9 +220,15 @@ jobs:
             [[ -n "$handoff_id" ]] || { echo "::error::Unable to persist Reconcile dispatch lease marker"; exit 1; }
           fi
 
-          gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
-            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
-            -f release_required="$RELEASE_REQUIRED"
+          reconcile_payload="$(jq -n \
+            --arg ref "$DEFAULT_BRANCH" \
+            --arg task_id "$TASK_ID" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg merge_sha "$MERGE_SHA" \
+            --arg release_required "$RELEASE_REQUIRED" \
+            '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,merge_sha:$merge_sha,release_required:$release_required}}')"
+          printf '%s' "$reconcile_payload" | gh api --method POST \
+            "repos/$REPOSITORY/actions/workflows/gptauto-reconcile.yml/dispatches" --input -
 
           scheduled_body="$marker
           GPTAuto recovery Reconcile dispatch submitted for task $TASK_ID merge $MERGE_SHA.
@@ -340,9 +352,16 @@ jobs:
             echo "::warning::Autonomous repair budget exhausted task=$TASK_ID attempts=$repair_count; no more repair dispatch."
             exit 0
           fi
-          gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
-            --ref "$(gh api "repos/$REPOSITORY" --jq '.default_branch')" \
-            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f head_sha="$HEAD_SHA" -f failed_run_id="$FAILED_RUN_ID"
+          default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
+          repair_payload="$(jq -n \
+            --arg ref "$default_branch" \
+            --arg task_id "$TASK_ID" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg failed_run_id "$FAILED_RUN_ID" \
+            '{ref:$ref,inputs:{task_id:$task_id,pr_number:$pr_number,head_sha:$head_sha,failed_run_id:$failed_run_id}}')"
+          printf '%s' "$repair_payload" | gh api --method POST \
+            "repos/$REPOSITORY/actions/workflows/gptauto-repair.yml/dispatches" --input -
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto dispatched the three-tier repair pipeline for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates."
 
