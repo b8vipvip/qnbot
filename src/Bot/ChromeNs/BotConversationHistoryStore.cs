@@ -779,6 +779,8 @@ namespace Bot.ChromeNs
                 if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
                     return false;
                 BackfillLegacyShopRows(shopKey, seller);
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null) return false;
 
                 var fromTicks = from == DateTime.MinValue
                     ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
@@ -797,56 +799,66 @@ namespace Bot.ChromeNs
                 if (fromTicks < DateTime.Now.AddDays(-RetentionDays).Ticks)
                     return false;
 
-                lock (DbSync)
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    var retained = DbHelper.Db.Select(
-                        typeof(BotConversationHistoryEntity),
-                        "where 1=1 order by UpdatedAtTicks desc limit " + MaxTotalRecords);
-                    if (retained == null) return false;
-                    if (retained.Count >= MaxTotalRecords)
+                    lock (DbSync)
                     {
-                        var retainedRows = retained.OfType<BotConversationHistoryEntity>()
-                            .Where(x => x != null && x.UpdatedAtTicks > 0)
+                        var retained = DbHelper.Db.Select(
+                            typeof(BotConversationHistoryEntity),
+                            "where 1=1 order by UpdatedAtTicks desc limit " + MaxTotalRecords);
+                        if (retained == null) return false;
+                        if (retained.Count >= MaxTotalRecords)
+                        {
+                            var retainedRows = retained.OfType<BotConversationHistoryEntity>()
+                                .Where(x => x != null && x.UpdatedAtTicks > 0)
+                                .ToList();
+                            if (retainedRows.Count < MaxTotalRecords
+                                || retainedRows.Min(x => x.UpdatedAtTicks) >= fromTicks)
+                                return false;
+                        }
+
+                        // Buyer nick/display aliases can change during a live session.
+                        // Read only this exact shop/seller/time range, then resolve the
+                        // buyer identity under the same ShopSettingsScope.
+                        var rows = DbHelper.Db.Select(
+                            typeof(BotConversationHistoryEntity),
+                            "where ShopKey = ? and Seller = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
+                            + "order by CreatedAtTicks asc limit " + (MaxTotalRecords + 1),
+                            shopKey,
+                            seller,
+                            fromTicks,
+                            toTicks);
+                        if (rows == null || rows.Count > MaxTotalRecords) return false;
+                        records = rows
+                            .OfType<BotConversationHistoryEntity>()
+                            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId)
+                                && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer))
+                            .OrderBy(x => x.CreatedAtTicks)
+                            .ThenBy(x => x.UpdatedAtTicks)
                             .ToList();
-                        if (retainedRows.Count < MaxTotalRecords
-                            || retainedRows.Min(x => x.UpdatedAtTicks) >= fromTicks)
+
+                        // Unscoped legacy rows for an equivalent buyer make this
+                        // seller/shop/session index ambiguous until backfill succeeds.
+                        var unscoped = DbHelper.Db.Select(
+                            typeof(BotConversationHistoryEntity),
+                            "where (ShopKey is null or ShopKey = '') and Seller = ? "
+                            + "and CreatedAtTicks >= ? and CreatedAtTicks <= ? limit " + (MaxTotalRecords + 1),
+                            seller,
+                            fromTicks,
+                            toTicks);
+                        if (unscoped == null || unscoped.Count > MaxTotalRecords)
+                        {
+                            records = new List<BotConversationHistoryEntity>();
                             return false;
+                        }
+                        if (unscoped.OfType<BotConversationHistoryEntity>()
+                            .Any(x => x != null && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer)))
+                        {
+                            records = new List<BotConversationHistoryEntity>();
+                            return false;
+                        }
+                        return true;
                     }
-
-                    var rows = DbHelper.Db.Select(
-                        typeof(BotConversationHistoryEntity),
-                        "where ShopKey = ? and Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
-                        + "order by CreatedAtTicks asc",
-                        shopKey,
-                        seller,
-                        buyer,
-                        fromTicks,
-                        toTicks);
-                    if (rows == null) return false;
-                    records = rows
-                        .OfType<BotConversationHistoryEntity>()
-                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
-                        .OrderBy(x => x.CreatedAtTicks)
-                        .ThenBy(x => x.UpdatedAtTicks)
-                        .ToList();
-
-                    // A legacy row without ShopKey cannot safely be attributed to this
-                    // shop. If guarded backfill did not resolve it, the Bot echo index is
-                    // incomplete for this exact seller/buyer/session window.
-                    var unscoped = DbHelper.Db.Select(
-                        typeof(BotConversationHistoryEntity),
-                        "where (ShopKey is null or ShopKey = '') and Seller = ? and Buyer = ? "
-                        + "and CreatedAtTicks >= ? and CreatedAtTicks <= ? limit 1",
-                        seller,
-                        buyer,
-                        fromTicks,
-                        toTicks);
-                    if (unscoped != null && unscoped.Count > 0)
-                    {
-                        records = new List<BotConversationHistoryEntity>();
-                        return false;
-                    }
-                    return true;
                 }
             }
             catch (Exception ex)
