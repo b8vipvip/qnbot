@@ -140,6 +140,37 @@ namespace Bot.ChromeNs
             Log.Info("已记录视觉知识学习候选: seller=" + seller + ", buyer=" + buyer + ", summary=" + Short(visualSummary, 120));
         }
 
+        internal static bool IsObservationWithdrawn(
+            string shopKey, string seller, string buyer, string messageKey)
+        {
+            shopKey = Clean(shopKey, 200);
+            seller = Clean(seller, 160);
+            buyer = Clean(buyer, 160);
+            messageKey = Clean(messageKey, 500);
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || messageKey.Length == 0)
+                return true;
+            try
+            {
+                EnsureSchema();
+                lock (DbSync)
+                {
+                    var observation = SelectObservations(
+                        "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc limit 1",
+                        shopKey, seller, messageKey).FirstOrDefault();
+                    if (observation == null) return false;
+                    var sameBuyer = string.Equals(observation.Buyer, buyer, StringComparison.OrdinalIgnoreCase)
+                        || BuyerIdentityAliasService.AreEquivalent(seller, observation.Buyer, buyer);
+                    if (!sameBuyer) return true;
+                    return string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("检查视觉证据撤回状态失败，按撤回处理：" + ex.Message, 10);
+                return true;
+            }
+        }
+
         internal static void MarkObservationWithdrawn(
             string shopKey, string seller, string buyer, string messageKey)
         {
