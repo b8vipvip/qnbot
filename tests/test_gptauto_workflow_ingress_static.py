@@ -207,7 +207,7 @@ def test_terminal_reconcile_receipt_is_mandatory_and_verified_before_state_uploa
     assert receipt_start < upload_start < rollback_start < summary_start
     assert "continue-on-error: true" not in reconcile[receipt_start:upload_start]
     assert "steps.lease-receipt.outcome == 'success'" in reconcile[upload_start:rollback_start]
-    assert "gh api --paginate" in receipt
+    assert 'gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate' in receipt
     assert "verified_comments=" in receipt
     assert "Completion Lease is RELEASED" in receipt
     assert "Terminal state: DONE" in receipt
