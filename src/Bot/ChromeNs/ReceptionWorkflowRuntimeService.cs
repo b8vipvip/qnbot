@@ -904,7 +904,10 @@ namespace Bot.ChromeNs
                                 ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
                                 VisualEvidenceMessageKey = required.Any(x =>
                                     Convert.ToString(x) == "image_message" || Convert.ToString(x) == "vision_observation")
-                                    ? visualEvidenceMessageKey : string.Empty,
+                                    ? (!string.IsNullOrWhiteSpace(visualEvidenceMessageKey)
+                                        ? visualEvidenceMessageKey
+                                        : (hasImage ? messageKey : string.Empty))
+                                    : string.Empty,
                                 AccountEvidenceMessageKey = required.Any(x =>
                                     Convert.ToString(x) == "account_evidence")
                                     ? accountEvidenceMessageKey : string.Empty,
