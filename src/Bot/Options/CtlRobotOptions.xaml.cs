@@ -417,6 +417,8 @@ namespace Bot.Options
         private PasswordBox _orderPlacedApiToken;
         private TextBox _orderPlacedApiTimeout;
         private TextBox _orderPlacedDedupHours;
+        private TextBox _knowledgeDirectReplyDelaySeconds;
+        private TextBox _orderPlacedReplyDelaySeconds;
         private ComboBox _tone;
         private TextBox _maxLength;
         private TextBox _bannedWords;
@@ -541,6 +543,13 @@ namespace Bot.Options
             _manualKeywords = AddLabeledText(sp, "强制转人工关键词", cfg.ManualKeywords, 78, "例：退款、投诉、差评、赔偿、发票、订单隐私。", true);
             _noAutoKeywords = AddLabeledText(sp, "仅人工确认关键词", cfg.NoAutoReplyKeywords, 68, "例：银行卡、身份证、手机号、地址、法律、维权。", true);
             _handoffText = AddLabeledText(sp, "工作时间转人工话术", cfg.HandoffText, 62, "人工在线时命中规则：Bot 不自动发送，只在面板提示并通知人工。", true);
+            _knowledgeDirectReplyDelaySeconds = AddLabeledText(
+                sp,
+                "知识库直答延迟(秒)",
+                cfg.KnowledgeDirectReplyDelaySeconds.ToString(),
+                30,
+                "仅延迟本地知识库直接命中的答案；调用AI、首条咨询和下单后自动回复不使用此延迟。默认3秒，0表示立即发送。",
+                false);
 
             sp.Children.Add(SectionTitle("买家下单后自动发送"));
             _orderPlacedReplyEnabled = new CheckBox
@@ -592,6 +601,13 @@ namespace Bot.Options
             _orderPlacedDedupHours = new TextBox { Text = cfg.OrderPlacedDedupHours.ToString(), Width = 70, Height = 26 };
             runtimeRow.Children.Add(_orderPlacedDedupHours);
             sp.Children.Add(runtimeRow);
+            _orderPlacedReplyDelaySeconds = AddLabeledText(
+                sp,
+                "下单回复延迟(秒)",
+                cfg.OrderPlacedReplyDelaySeconds.ToString(),
+                30,
+                "仅影响下单后自动回复；默认0秒立即发送。延迟期间仍会校验Bot开关和原店铺身份。",
+                false);
 
             sp.Children.Add(new TextBlock
             {
@@ -725,6 +741,10 @@ namespace Bot.Options
             if (!int.TryParse(_orderPlacedApiTimeout == null ? "10" : _orderPlacedApiTimeout.Text, out orderTimeout)) orderTimeout = 10;
             int orderDedupHours;
             if (!int.TryParse(_orderPlacedDedupHours == null ? "72" : _orderPlacedDedupHours.Text, out orderDedupHours)) orderDedupHours = 72;
+            int knowledgeDirectDelay;
+            if (!int.TryParse(_knowledgeDirectReplyDelaySeconds == null ? "3" : _knowledgeDirectReplyDelaySeconds.Text, out knowledgeDirectDelay)) knowledgeDirectDelay = 3;
+            int orderReplyDelay;
+            if (!int.TryParse(_orderPlacedReplyDelaySeconds == null ? "0" : _orderPlacedReplyDelaySeconds.Text, out orderReplyDelay)) orderReplyDelay = 0;
             return new AutoReplyRuleConfig
             {
                 Enabled = _rulesEnabled == null || (_rulesEnabled.IsChecked ?? true),
@@ -761,7 +781,9 @@ namespace Bot.Options
                 OrderPlacedApiUrl = _orderPlacedApiUrl == null ? string.Empty : _orderPlacedApiUrl.Text,
                 OrderPlacedApiToken = _orderPlacedApiToken == null ? string.Empty : _orderPlacedApiToken.Password,
                 OrderPlacedApiTimeoutSeconds = Math.Max(3, Math.Min(60, orderTimeout)),
-                OrderPlacedDedupHours = Math.Max(1, Math.Min(720, orderDedupHours))
+                OrderPlacedDedupHours = Math.Max(1, Math.Min(720, orderDedupHours)),
+                KnowledgeDirectReplyDelaySeconds = Math.Max(0, Math.Min(300, knowledgeDirectDelay)),
+                OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay))
             };
         }
 
@@ -1421,6 +1443,17 @@ namespace Bot.ChromeNs
         public string OrderPlacedApiToken { get; set; }
         public int OrderPlacedApiTimeoutSeconds { get; set; }
         public int OrderPlacedDedupHours { get; set; }
+        public int KnowledgeDirectReplyDelaySeconds { get; set; }
+        public int OrderPlacedReplyDelaySeconds { get; set; }
+
+        public AutoReplyRuleConfig()
+        {
+            // Constructor defaults preserve new delay semantics when older JSON files
+            // omit the properties: local knowledge direct answers wait 3s; order replies
+            // remain immediate until the shop owner explicitly configures a delay.
+            KnowledgeDirectReplyDelaySeconds = 3;
+            OrderPlacedReplyDelaySeconds = 0;
+        }
 
         public static AutoReplyRuleConfig Default()
         {
@@ -1445,7 +1478,9 @@ namespace Bot.ChromeNs
                 OrderPlacedApiUrl = string.Empty,
                 OrderPlacedApiToken = string.Empty,
                 OrderPlacedApiTimeoutSeconds = 10,
-                OrderPlacedDedupHours = 72
+                OrderPlacedDedupHours = 72,
+                KnowledgeDirectReplyDelaySeconds = 3,
+                OrderPlacedReplyDelaySeconds = 0
             };
         }
     }
@@ -1586,6 +1621,8 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyText)) cfg.OrderPlacedReplyText = AutoReplyRuleConfig.Default().OrderPlacedReplyText;
             if (cfg.OrderPlacedApiTimeoutSeconds <= 0) cfg.OrderPlacedApiTimeoutSeconds = 10;
             if (cfg.OrderPlacedDedupHours <= 0) cfg.OrderPlacedDedupHours = 72;
+            cfg.KnowledgeDirectReplyDelaySeconds = Math.Max(0, Math.Min(300, cfg.KnowledgeDirectReplyDelaySeconds));
+            cfg.OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, cfg.OrderPlacedReplyDelaySeconds));
             return cfg;
         }
 

@@ -106,6 +106,12 @@ namespace Bot.ChromeNs
                 _initialized = 1;
                 AutoDeliveryConfirmationLedger.Initialize();
 
+                // Start the health/recovery tick before the first disk read. A transient
+                // cross-process lock timeout or temporary file read failure must not leave
+                // auto-delivery permanently disabled until the next application restart.
+                if (_timer == null)
+                    _timer = new Timer(_ => OnTimerTick(), null, 5000, 5000);
+
                 var path = StatePath();
                 using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
                 {
@@ -113,26 +119,54 @@ namespace Bot.ChromeNs
                     {
                         _state = new StateDocument();
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；暂停自动发货并保留原任务文件。", 10);
+                        Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；暂停自动发货并保留原任务文件，后台将继续尝试恢复。", 10);
                         return;
                     }
                     if (!ReloadStateForMutationLocked(true))
                     {
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，禁止以空队列覆盖旧任务。", 10);
+                        Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，后台将继续尝试恢复。", 10);
                         return;
                     }
                     CleanupExpiredLocked(DateTime.Now);
                     if (!SaveStateLocked())
                     {
                         _stateLoadFailed = true;
-                        Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，避免使用未持久化状态。", 10);
+                        Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；暂停自动发货，后台将继续尝试恢复。", 10);
                         return;
                     }
+                    _stateLoadFailed = false;
                 }
-                _timer = new Timer(_ => ScheduleWorker(), null, 3000, 5000);
+                _timer.Change(3000, 5000);
             }
             Log.Info("虚拟商品自动发货协调器已启动：静默订单预检→仅候选订单切换买家→准确订单号+待发货→无需物流→持久防重账本→确认发货；任何不确定均失败关闭。 pending=" + PendingCount());
+        }
+
+        private static void OnTimerTick()
+        {
+            if (_stateLoadFailed && !TryRecoverQueueState()) return;
+            if (!_stateLoadFailed) ScheduleWorker();
+        }
+
+        private static bool TryRecoverQueueState()
+        {
+            lock (Sync)
+            {
+                if (!_stateLoadFailed) return true;
+                var path = StatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "VirtualGoodsAutoDeliveryQueue", 3000))
+                {
+                    if (lease == null || !lease.Acquired) return false;
+                    // Force a fresh disk read; never recover by treating an unreadable queue as empty.
+                    if (!ReloadStateForMutationLocked(true)) return false;
+                    CleanupExpiredLocked(DateTime.Now);
+                    if (!SaveStateLocked()) return false;
+                    _stateLoadFailed = false;
+                    Log.Info("自动发货队列从临时锁/存储故障中恢复：已重新载入持久队列并恢复后台调度。 pending="
+                        + (_state == null || _state.Pending == null ? 0 : _state.Pending.Count));
+                    return true;
+                }
+            }
         }
 
         public static bool IsOperational()
@@ -474,12 +508,21 @@ namespace Bot.ChromeNs
                                 Log.ErrorWithMaxCount("自动发货工作线程无法取得跨进程队列锁；暂停执行以避免重复领取任务。", 10);
                                 return;
                             }
-                            if (!ReloadStateForMutationLocked(false)) return;
+                            if (!ReloadStateForMutationLocked(false))
+                            {
+                                _stateLoadFailed = true;
+                                Log.ErrorWithMaxCount("自动发货工作线程无法可靠重载队列状态；暂停调度并交由后台恢复tick重试。", 10);
+                                return;
+                            }
                             CleanupExpiredLocked(now);
                             record = _state.Pending.Where(x => x != null && x.Snapshot != null && x.NextAttemptAt <= now).OrderBy(x => x.NextAttemptAt).FirstOrDefault();
                             if (record == null)
                             {
-                                if (!SaveStateLocked()) return;
+                                if (!SaveStateLocked())
+                                {
+                                    _stateLoadFailed = true;
+                                    Log.ErrorWithMaxCount("自动发货空闲队列状态无法持久化；暂停调度并交由后台恢复tick重试。", 10);
+                                }
                                 return;
                             }
                             // The claim is written under the same cross-process mutex as the
@@ -488,7 +531,12 @@ namespace Bot.ChromeNs
                             record.WorkerClaimId = Guid.NewGuid().ToString("N");
                             record.NextAttemptAt = now.Add(WorkerClaimLease);
                             record.Attempts++;
-                            if (!SaveStateLocked()) return;
+                            if (!SaveStateLocked())
+                            {
+                                _stateLoadFailed = true;
+                                Log.ErrorWithMaxCount("自动发货任务领取状态无法持久化；暂停调度并交由后台恢复tick重试。", 10);
+                                return;
+                            }
                         }
                     }
                     await ProcessRecordAsync(record).ConfigureAwait(false);

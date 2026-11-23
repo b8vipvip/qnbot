@@ -380,7 +380,12 @@ namespace Bot.ChromeNs
             if (firstReserved)
             {
                 var firstOk = await SendFixedAsync(
-                    qn, item, firstReply, "首条咨询固定回复", cancellationToken).ConfigureAwait(false);
+                    qn,
+                    item,
+                    firstReply,
+                    "首条咨询固定回复",
+                    cancellationToken,
+                    FirstInquiryFixedReplyService.GetDelaySeconds(item.SellerNick, item.ShopKey)).ConfigureAwait(false);
                 if (firstOk)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick, item.ShopKey);
@@ -431,7 +436,8 @@ namespace Bot.ChromeNs
             BuyerMessageBurstItem item,
             string answer,
             string source,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            int delaySeconds = 0)
         {
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
             if (string.IsNullOrWhiteSpace(answer)) return false;
@@ -456,6 +462,30 @@ namespace Bot.ChromeNs
                 BotRuntimeStats.RecordDisplayedAnswer(true);
                 Log.Info(source + "由统一买家生命周期在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
+                var boundedDelay = Math.Max(0, Math.Min(300, delaySeconds));
+                if (boundedDelay > 0)
+                {
+                    Log.Info(source + "等待独立发送延迟: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", delaySeconds=" + boundedDelay);
+                    await Task.Delay(TimeSpan.FromSeconds(boundedDelay), cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                        || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
+                        return false;
+                    }
+                    ShopContext verifiedShop;
+                    try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                    catch { verifiedShop = null; }
+                    if (verifiedShop == null
+                        || !string.Equals(verifiedShop.ShopKey, item.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(verifiedShop.SellerNick, item.SellerNick, StringComparison.Ordinal))
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间店铺身份发生变化");
+                        return false;
+                    }
+                }
                 cancellationToken.ThrowIfCancellationRequested();
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken).ConfigureAwait(false);

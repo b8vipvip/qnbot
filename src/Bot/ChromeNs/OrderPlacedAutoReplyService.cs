@@ -1615,18 +1615,34 @@ namespace Bot.ChromeNs
                         return;
                     }
 
-                    var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
+                    var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds(plan.Config);
                     if (delaySeconds > 0)
                     {
-                        Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
+                        Log.Info("下单自动回复等待独立延时发送: seller=" + plan.Seller
                             + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                             + ", delaySeconds=" + delaySeconds + ", manualReplyDoesNotSuppress=true");
-                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ConfigureAwait(false);
+                        ShopContext verifiedShop;
+                        try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+                        catch { verifiedShop = null; }
                         if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                         {
                             OrderPlacedAutoReplyService.Complete(plan, false);
                             OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
                             if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
+                            return;
+                        }
+                        if (verifiedShop == null
+                            || !string.Equals(verifiedShop.ShopKey, plan.ShopKey, StringComparison.Ordinal)
+                            || !string.Equals(verifiedShop.SellerNick, plan.Seller, StringComparison.Ordinal)
+                            || CDP == null || CDP.IsShopIdentityRetired)
+                        {
+                            OrderPlacedAutoReplyService.Complete(plan, false);
+                            OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                            if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间原订单店铺/CDP身份已失效或发生切换");
+                            Log.ErrorWithMaxCount("下单自动回复延迟后原ShopKey/CDP身份校验失败，已阻止发送: shopRef="
+                                + MyWebSocketServer.DiagnosticRef("shop", plan.ShopKey)
+                                + ", seller=" + plan.Seller + ", orderId=" + plan.OrderId, 20);
                             return;
                         }
                     }

@@ -33,6 +33,7 @@ namespace Bot.Options
         private TextBox _botMessageSuffix;
         private CheckBox _firstInquiryFixedReplyEnabled;
         private TextBox _firstInquiryFixedReplyAnswer;
+        private TextBox _firstInquiryFixedReplyDelaySeconds;
         private CheckBox _offHoursEnabled;
         private TextBox _offHoursStartTime;
         private TextBox _offHoursEndTime;
@@ -158,10 +159,14 @@ namespace Bot.Options
                 }
                 if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
                 {
+                    int firstInquiryDelay;
+                    if (!int.TryParse(_firstInquiryFixedReplyDelaySeconds == null ? "0" : _firstInquiryFixedReplyDelaySeconds.Text, out firstInquiryDelay))
+                        firstInquiryDelay = 0;
                     FirstInquiryFixedReplyService.Save(
                         effectiveSeller,
                         _firstInquiryFixedReplyEnabled.IsChecked == true,
-                        _firstInquiryFixedReplyAnswer.Text ?? string.Empty);
+                        _firstInquiryFixedReplyAnswer.Text ?? string.Empty,
+                        firstInquiryDelay);
                 }
             }
             catch (TargetInvocationException ex)
@@ -284,6 +289,13 @@ namespace Bot.Options
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Padding = new Thickness(8, 6, 8, 6)
             };
+            _firstInquiryFixedReplyDelaySeconds = new TextBox
+            {
+                Text = FirstInquiryFixedReplyService.ClampDelaySeconds(firstSettings.DelaySeconds).ToString(),
+                Width = 70,
+                Height = 26,
+                ToolTip = "只作用于首条咨询固定回复；0秒表示立即发送。"
+            };
 
             _offHoursEnabled = new CheckBox
             {
@@ -384,6 +396,10 @@ namespace Bot.Options
                 "固定答案",
                 _firstInquiryFixedReplyAnswer,
                 "新买家或超过 10 分钟未互动后再次来询可重新触发。真实发送成功后才记录本轮已回复。"));
+            result.Add(MakeLabeledControl(
+                "发送延迟(秒)",
+                _firstInquiryFixedReplyDelaySeconds,
+                "仅作用于首条咨询固定回复，与知识库直答和下单后自动回复的延迟独立；默认0秒。"));
 
             result.Add(MakeSectionTitle("下班自动回复"));
             result.Add(_offHoursEnabled);
