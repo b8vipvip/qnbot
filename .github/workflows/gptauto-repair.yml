@@ -317,15 +317,18 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
         shell: bash
         run: |
+          set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           marker="<!-- gptauto-executor-token-required:$TASK_ID:$HEAD_SHA -->"
           body="$marker
           GPTAuto USER ACTION REQUIRED: configure GPTAUTO_GITHUB_TOKEN (legacy GPTAUTO_EXECUTOR_TOKEN is also accepted). The generated repair patch passed targeted validation but is intentionally not pushed with GITHUB_TOKEN because bot-authored PR synchronize events can be placed into maintainer approval."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           if [[ -n "$comment_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$comment_id" "$body_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
 
       - name: Tier 3 - publish foreground recovery handoff
@@ -343,6 +346,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           reason="$FALLBACK_REASON"
           if [[ "$VALIDATION_PASSED" != "true" && "${{ needs.generate-fix.outputs.proposal-ready }}" == "true" ]]; then
             reason="generated repair patch failed targeted validation and was not pushed"
@@ -359,10 +363,11 @@ jobs:
           Foreground/host agent MUST resume existing PR #$PR_NUMBER, inspect failed Actions run $FAILED_RUN_ID, repair the same branch, push the fix, and continue until canonical Task State reaches terminal DONE."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          body_payload="$(jq -n --arg body "$body" '{body:$body}')"
           if [[ -n "$comment_id" ]]; then
-            gh api "repos/$REPOSITORY/issues/comments/$comment_id" --method PATCH -f body="$body" >/dev/null
+            github_api_write PATCH "repos/$REPOSITORY/issues/comments/$comment_id" "$body_payload" >/dev/null
           else
-            gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --method POST -f body="$body" >/dev/null
+            github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" "$body_payload" >/dev/null
           fi
           mkdir -p .gptauto/foreground-guards
           guard=".gptauto/foreground-guards/$TASK_ID.json"
