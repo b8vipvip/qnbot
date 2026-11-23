@@ -3,7 +3,7 @@
 更新时间：2026-11-23  
 仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
-当前正式客户端：`bot-v1.1.3111`  
+当前正式客户端：`bot-v1.1.3117`  
 统一未完成事项：Issue #366
 
 ## 1. 当前目标
@@ -31,8 +31,8 @@
 ## 3. Current release baseline
 
 - Latest stable release：`bot-v1.1.3111`
-- Release target：`3718607df7a01ee776c0aadceb63f331004c9aef`
-- x64 package SHA-256：`c51887a1699dc5a861cfd522e21eb1a9d605c51f87278cf86d82da2182359b4`
+- Release target：`ac17e76dae53d3318c208139efd46f8e7249b987`
+- x64 package SHA-256：`3c82b949a0d6896ad0b4445a0a36d7f2aab9f3c209f4269c4285327967855cf7`
 - 之后 master 上的源码修复必须通过精确 SHA CI/Windows build；Release target 之前的客户端不会自动包含后续提交。
 - Validated release-source SHA: `35f5ed0138eba56e3f341915b7e2a800c102007d`; API Full Gate passed (Fast Gate 1686 passed / 16 skipped, API package tests 141 passed, Windows Static Gate passed) and Windows x64 build run `44858618045` completed successfully. Post-release cleanup master SHA `5fce1c3869b19dd044cd4d39db31ae9456df1b64` also passed API Full Gate and Windows x64 build run `44859065309`.
 - Release `bot-v1.1.2481` includes the GPTAuto Reconcile recovery marker fix, Knowledge V2 full-corpus write gate, read-only auto-delivery manual-review escalation, bounded buyer alias cache, seller TargetId ingress validation and ambient ShopKey timeline guard. Automatic Knowledge V2 writes remain disabled and real Qianniu acceptance remains outstanding.
@@ -102,8 +102,8 @@ Qianniu renderer
 - The current master baseline remains dry-run. The new branch intentionally removes human approval and gray rollout for the narrow AI-generated FAQ auto-publish path; it still requires exact-SHA CI/build, shop isolation, evidence/PII/risk/dedup/version gates, atomic transaction, rollback history and immediate index refresh before merge/release.
 
 ### P1 — Reception Agent autonomous workflow publication (#346)
-- The workflow catalog is being upgraded from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
-- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision.
+- PR #442 has changed the workflow catalog from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
+- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision. Follow-up PR #443 pins each operation to one resolved ShopContext so active, legacy and history paths cannot drift across shops.
 - The catalog may orchestrate WAIT, ASK_EVIDENCE, HANDOFF, READ_ONLY_TOOL and reply intents; reply intents still pass through the canonical send pipeline.
 - Payment, recharge, refund, account mutation and actual fulfillment remain outside catalog authority and require their own authoritative evidence and idempotent execution guards.
 - The generic runtime state-machine adapter still needs to consume active catalog transitions against real message/image/OCR/order/account evidence; publication alone is not proof that the full Reception Agent is executing in production.
