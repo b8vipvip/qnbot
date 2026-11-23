@@ -286,6 +286,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowCatalogService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowCatalogService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowAgentService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowAgentService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowRuntimeService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReceptionWorkflowRuntimeService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2WorkflowDraftPage.cs" />
   </ItemGroup>
