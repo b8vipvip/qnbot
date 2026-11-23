@@ -221,7 +221,7 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert "FingerprintOrders(candidateOrders)" in runtime
     fingerprint = runtime[
         runtime.index("private static string FingerprintOrders"):
-        runtime.index("private static string RuntimePath")
+        runtime.index("private static List<OrderSnapshot> LoadRecentNonterminalOrders")
     ]
     assert "x.OrderId" in fingerprint and "x.ItemId" in fingerprint
     assert "x.SkuId" in fingerprint and "x.Quantity" in fingerprint
