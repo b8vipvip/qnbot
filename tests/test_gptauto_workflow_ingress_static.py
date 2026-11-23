@@ -423,3 +423,16 @@ def test_all_gptauto_workflow_dispatches_use_rest_json_payloads_not_cli_position
         assert "gh workflow run" not in workflow
         assert "--input -" in workflow
 
+
+
+
+def test_manual_reconcile_comment_ingress_is_owner_only_and_requires_exact_merged_task():
+    observer = read(".github/workflows/gptauto-observer.yml")
+    assert "issue_comment:" in observer
+    assert "COMMENT_AUTHOR == \"$REPOSITORY_OWNER\"" in observer
+    assert "COMMENT_BODY\" =~ ^/gptauto-reconcile[[:space:]]+(GA-[a-f0-9]{12})$" in observer
+    assert "github.event.issue.number" in observer
+    assert 'requested_task_id == "$TASK_ID"' in observer
+    assert 'PR_MERGED" == "true"' in observer
+    assert 'Manual Reconcile requires a merged pull request.' in observer
+    assert 'Manual Reconcile task ID does not match the PR-derived canonical task ID.' in observer
