@@ -85,7 +85,7 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'RELEASE_NAME: ${{ steps.validation-plan.outputs.release-name }}' in reconcile
     assert 'RELEASE_WORKFLOW_ID: ${{ steps.validation-plan.outputs.release-workflow-id }}' in reconcile
     assert 'release_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg source_sha "$MERGE_SHA"' in reconcile
-    assert 'actions/workflows/$RELEASE_WORKFLOW_ID/dispatches' in reconcile
+    assert 'actions/workflows/${workflow_ref}/dispatches' in read(".github/gptauto/dispatch_workflow.sh")
     assert 'dispatch_workflow "$REPOSITORY" "$RELEASE_WORKFLOW_ID" "$release_payload"' in reconcile
     assert 'select(.display_title == $title' in reconcile
     assert 'select(.name == $workflow and .display_title == $title' not in reconcile
@@ -267,7 +267,7 @@ def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_ev
     assert "no successful exact-SHA validation exists" in validation
     assert "reusing exact-SHA validation run" in validation
     assert 'primary_workflow_file="${primary_path##*/}"' in validation
-    assert 'actions/workflows/$primary_workflow_file/dispatches' in validation
+    assert 'actions/workflows/${workflow_ref}/dispatches' in read(".github/gptauto/dispatch_workflow.sh")
     assert 'dispatch_workflow "$REPOSITORY" "$primary_workflow_file" "$validation_payload"' in validation
     assert 'gh workflow run "$primary_path"' not in validation
 
@@ -324,7 +324,7 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert 'grep -Fq "Completion Lease is RELEASED"' in adoption
     assert 'grep -Fq "Terminal state: DONE"' in adoption
     assert 'grep -Fq "Merge SHA: $MERGE_SHA"' in adoption
-    assert 'actions/workflows/gptauto-reconcile.yml/dispatches' in adoption
+    assert 'actions/workflows/${workflow_ref}/dispatches' in read(".github/gptauto/dispatch_workflow.sh")
     assert 'dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"' in adoption
     assert "gh workflow run gptauto-reconcile.yml" not in adoption
     assert 'gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
@@ -389,7 +389,7 @@ def test_reconcile_adoption_debounces_recent_handoff_when_run_list_is_eventually
     assert "if (( handoff_age < 600 )); then" in adoption
     assert "deferring recovery dispatch to avoid an eventual-consistency duplicate" in adoption
     assert "Existing Reconcile handoff timestamp is unreadable; suppressing duplicate dispatch" in adoption
-    assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index("actions/workflows/gptauto-reconcile.yml/dispatches")
+    assert adoption.index("active_reconcile_run") < adoption.index("handoff_updated_at") < adoption.index('dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"')
 
 def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
     executor = read(".github/workflows/gptauto-executor.yml")
@@ -399,7 +399,7 @@ def test_reconcile_recovery_persists_dispatch_lease_before_workflow_dispatch():
     ]
 
     lease = adoption.index('recovery_body="$marker')
-    dispatch = adoption.index('actions/workflows/gptauto-reconcile.yml/dispatches')
+    dispatch = adoption.index('dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"')
     scheduled = adoption.index('scheduled_body="$marker')
     assert lease < adoption.index('gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"') < dispatch
     assert lease < adoption.index('gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"') < dispatch
@@ -411,11 +411,11 @@ def test_all_gptauto_workflow_dispatches_use_rest_json_payloads_not_cli_position
     executor = read(".github/workflows/gptauto-executor.yml")
     reconcile = read(".github/workflows/gptauto-reconcile.yml")
     observer = read(".github/workflows/gptauto-observer.yml")
-    assert "actions/workflows/gptauto-reconcile.yml/dispatches" in executor
-    assert "actions/workflows/gptauto-repair.yml/dispatches" in executor
-    assert "actions/workflows/gptauto-observer.yml/dispatches" in observer
-    assert "actions/workflows/$primary_workflow_file/dispatches" in reconcile
-    assert "actions/workflows/$RELEASE_WORKFLOW_ID/dispatches" in reconcile
+    assert 'dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"' in executor
+    assert 'dispatch_workflow "$REPOSITORY" "gptauto-repair.yml" "$repair_payload"' in executor
+    assert 'dispatch_workflow "$REPOSITORY" "gptauto-observer.yml" "$observer_payload"' in observer
+    assert 'dispatch_workflow "$REPOSITORY" "$primary_workflow_file" "$validation_payload"' in reconcile
+    assert 'dispatch_workflow "$REPOSITORY" "$RELEASE_WORKFLOW_ID" "$release_payload"' in reconcile
     helper = read(".github/gptauto/dispatch_workflow.sh")
     for workflow in (executor, reconcile, observer):
         assert "gh workflow run" not in workflow
