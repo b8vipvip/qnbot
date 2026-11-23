@@ -76,7 +76,7 @@ namespace Bot.ChromeNs
             @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex UnsafeReplyText = new Regex(
-            @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号|自动履约|确认收货|订单号|订单编号|快递单号|订单状态|收货人|收件人|收货地址|邮寄地址|金额|实付款",
+            @"退款|退货|赔偿|投诉|支付|付款|充值|发货|银行卡|验证码|密码|身份证|手机号|解封|改账号|自动履约|确认收货|订单|快递|价格|优惠|库存|收货人|收件人|姓名|地址|金额|实付款",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static string Digest(string value)
