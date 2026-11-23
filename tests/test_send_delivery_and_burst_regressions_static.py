@@ -339,10 +339,10 @@ def test_qn_rechecks_business_guard_after_send_lock_and_before_each_physical_att
     assert "await _sendGate.WaitAsync(cancellationToken)" in method
     assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)") < method.index(
         'IsPreSendGuardSatisfied(preSendGuard, "首次发送")'
-    ) < method.index("var ok = await SendTextAsync(buyer, text)")
+    ) < method.index("var ok = await SendTextAsync(buyer, text, preSendGuard)")
     assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)", method.index("var retry =")) < method.index(
         'IsPreSendGuardSatisfied(preSendGuard, "重试发送")'
-    ) < method.index("ok = await SendTextAsync(buyer, text)")
+    ) < method.index("ok = await SendTextAsync(buyer, text, preSendGuard)")
     assert "复核发生异常，已按安全策略阻止发送" in qn
 
 
