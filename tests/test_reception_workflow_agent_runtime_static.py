@@ -26,6 +26,10 @@ def test_ai_learning_proposals_are_bound_to_real_shop_scoped_evidence_and_auto_p
     assert "M1" in prompt and "O1" in prompt and "V1" in prompt
     assert "通过程序化证据绑定和目录校验后将自动发布，无需管理员审批" in prompt
     assert "PublishProposals(" in finalize
+    assert "workflowEvidenceContext = ReceptionWorkflowAgentService.BuildEvidenceContext(" in finalize
+    assert "workflowEvidenceContext);" in finalize
+    assert "HasNewerActiveSession(key, session)" in finalize
+    assert finalize.index("BuildEvidenceContext(") < finalize.index("AnalyzeAsync(") < finalize.index("PublishProposals(")
     assert finalize.index("PublishProposals(") < finalize.index("AnalyzeKnowledgeCorpusAsync(")
     assert "receptionWorkflowPublished" in finalize
     assert '"auto_published"' in learning
@@ -43,6 +47,9 @@ def test_agent_requires_buyer_human_order_evidence_and_configured_product_scope(
     assert 'config.ProductIds.Contains(x, StringComparer.Ordinal)' in agent
     assert 'replyEvidence.Kind != "manual_correction"' in agent
     assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
+    assert "人工回复必须发生在同一证据集中的买家原始问题之后" in agent
+    assert "replyTemplate.IndexOf(buyer, StringComparison.OrdinalIgnoreCase)" in agent
+    assert "订单|快递|价格|优惠|库存" in agent
     assert 'new[] { "WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY" }' in agent
     assert 'READ_ONLY_TOOL' not in agent
     actions = agent[agent.index("private static readonly HashSet<string> Actions"):agent.index("private static string Digest")]
