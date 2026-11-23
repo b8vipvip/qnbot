@@ -1085,10 +1085,36 @@ namespace Bot.ChromeNs
             if (!lease.IsCurrent)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：买家刚刚补充了新消息，正在重新组织回复");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "视觉回复generation已失效", burst.ShopKey);
+                return;
+            }
+
+            string visionRelevanceReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                out visionRelevanceReason, false, burst.ShopKey))
+            {
+                var suppressed = "发送前检测到人工接管或买家问题已变化，已阻止视觉旧回复：" + visionRelevanceReason;
+                lease.MarkCompleted("vision_final_relevance_suppressed");
+                if (ctl != null) ctl.SetSendResult(false, suppressed);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed, burst.ShopKey);
+                Log.Info("视觉自动回复最终发送门禁阻止迟到回复: buyer=" + burst.BuyerNick
+                    + ", reason=" + visionRelevanceReason);
+                return;
+            }
+            if (!lease.MarkSending("vision_send_started"))
+            {
+                const string invalidBeforeVisionSend = "未发送：视觉回复generation在发送前已失效";
+                if (ctl != null) ctl.SetSendResult(false, invalidBeforeVisionSend);
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, invalidBeforeVisionSend, burst.ShopKey);
                 return;
             }
 
             var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            if (sendOk) lease.MarkCompleted("vision_send_completed");
+            else lease.MarkFailed("vision_send_failed");
             if (sendOk)
             {
                 ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
