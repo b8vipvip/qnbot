@@ -293,6 +293,9 @@ namespace Bot.ChromeNs
                         ["flow_id"] = Convert.ToString(flow["flow_id"]),
                         ["flow_version"] = flow.Value<int>("flow_version"),
                         ["status"] = "active",
+                        ["flow_name"] = SafeMetadata(flow["flow_name"], 80),
+                        ["trigger_keywords"] = flow["trigger_keywords"] == null
+                            ? new JArray() : flow["trigger_keywords"].DeepClone(),
                         ["initial_state"] = SafeMetadata(flow["initial_state"], 80).Length > 0
                             ? SafeMetadata(flow["initial_state"], 80)
                             : Convert.ToString(((JObject)((JArray)flow["steps"])[0])["state"]),
