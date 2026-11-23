@@ -92,9 +92,21 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan MaxPendingAge = TimeSpan.FromHours(24);
         private static StateDocument _state;
         private static volatile bool _stateLoadFailed;
+        private static volatile bool _stateFileMustExistForRecovery;
         private static Timer _timer;
         private static int _initialized;
         private static int _workerRunning;
+
+        private static void MarkStateLoadFailed()
+        {
+            _stateLoadFailed = true;
+            try
+            {
+                if (_initialized != 0 || File.Exists(StatePath()))
+                    _stateFileMustExistForRecovery = true;
+            }
+            catch { _stateFileMustExistForRecovery = true; }
+        }
 
         public static void Initialize()
         {
@@ -110,14 +122,14 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         EnsureRecoveryTimerLocked();
                         Log.ErrorWithMaxCount("获取自动发货任务队列跨进程锁失败；保留原任务文件并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
                     }
                     if (!ReloadStateForMutationLocked(true))
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         EnsureRecoveryTimerLocked();
                         Log.ErrorWithMaxCount("自动发货任务队列读取失败；保留原状态文件并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
@@ -125,12 +137,13 @@ namespace Bot.ChromeNs
                     CleanupExpiredLocked(DateTime.Now);
                     if (!SaveStateLocked())
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         EnsureRecoveryTimerLocked();
                         Log.ErrorWithMaxCount("自动发货任务队列初始化持久化失败；保留原任务状态并暂停自动发货，后台将持续重试恢复。", 10);
                         return;
                     }
                     _stateLoadFailed = false;
+                    _stateFileMustExistForRecovery = true;
                     _initialized = 1;
                     EnsureRecoveryTimerLocked();
                 }
@@ -162,14 +175,16 @@ namespace Bot.ChromeNs
                     if (lease == null || !lease.Acquired) return false;
                     // Force a fresh disk read; never recover by treating an unreadable queue as empty.
                     _stateLoadFailed = false;
-                    if (!ReloadStateForMutationLocked(true))
+                    var allowMissing = !_stateFileMustExistForRecovery && _initialized == 0;
+                    if (!ReloadStateForMutationLocked(allowMissing))
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         return false;
                     }
                     CleanupExpiredLocked(DateTime.Now);
                     if (!SaveStateLocked()) return false;
                     _stateLoadFailed = false;
+                    _stateFileMustExistForRecovery = true;
                     _initialized = 1;
                     EnsureRecoveryTimerLocked();
                     Log.Info("自动发货队列从临时锁/存储故障中恢复：已重新载入持久队列并恢复后台调度。 pending="
@@ -241,7 +256,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货入队无法取得跨进程队列锁；暂停队列写入且不推进事件游标。", 10);
                         return false;
                     }
@@ -321,7 +336,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货重配置无法取得跨进程队列锁；暂停队列写入。", 10);
                         return;
                     }
@@ -387,7 +402,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.Error("自动发货无法取得跨进程队列锁，拒绝消费确认权限: seller=" + seller + ", orderId=" + orderId);
                         return false;
                     }
@@ -469,7 +484,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货续租无法取得跨进程队列锁；停止确认流程。", 10);
                         return false;
                     }
@@ -514,13 +529,13 @@ namespace Bot.ChromeNs
                         {
                             if (lease == null || !lease.Acquired)
                             {
-                                _stateLoadFailed = true;
+                                MarkStateLoadFailed();
                                 Log.ErrorWithMaxCount("自动发货工作线程无法取得跨进程队列锁；暂停执行以避免重复领取任务。", 10);
                                 return;
                             }
                             if (!ReloadStateForMutationLocked(false))
                             {
-                                _stateLoadFailed = true;
+                                MarkStateLoadFailed();
                                 Log.ErrorWithMaxCount("自动发货工作线程无法可靠重载队列状态；暂停调度并交由后台恢复tick重试。", 10);
                                 return;
                             }
@@ -530,7 +545,7 @@ namespace Bot.ChromeNs
                             {
                                 if (!SaveStateLocked())
                                 {
-                                    _stateLoadFailed = true;
+                                    MarkStateLoadFailed();
                                     Log.ErrorWithMaxCount("自动发货空闲队列状态无法持久化；暂停调度并交由后台恢复tick重试。", 10);
                                 }
                                 return;
@@ -592,7 +607,7 @@ namespace Bot.ChromeNs
                     {
                         if (lease == null || !lease.Acquired)
                         {
-                            _stateLoadFailed = true;
+                            MarkStateLoadFailed();
                             Log.ErrorWithMaxCount("旧版自动发货任务归属恢复无法取得跨进程队列锁；暂停队列执行。", 10);
                             return;
                         }
@@ -703,7 +718,7 @@ namespace Bot.ChromeNs
                         {
                             if (lease == null || !lease.Acquired)
                             {
-                                _stateLoadFailed = true;
+                                MarkStateLoadFailed();
                                 Log.ErrorWithMaxCount("自动发货不确定结果无法取得跨进程队列锁；保留长期确认屏障并暂停队列。", 10);
                                 return;
                             }
@@ -775,7 +790,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货批量退避无法取得跨进程队列锁；暂停队列写入。", 10);
                         return;
                     }
@@ -810,7 +825,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货暂缓任务无法取得跨进程队列锁；暂停后续自动执行。", 10);
                         return;
                     }
@@ -835,7 +850,7 @@ namespace Bot.ChromeNs
                 {
                     if (lease == null || !lease.Acquired)
                     {
-                        _stateLoadFailed = true;
+                        MarkStateLoadFailed();
                         Log.ErrorWithMaxCount("自动发货结束任务无法取得跨进程队列锁；保留任务和长期防重屏障。", 10);
                         return;
                     }
@@ -954,7 +969,7 @@ namespace Bot.ChromeNs
             {
                 if (!allowMissing)
                 {
-                    _stateLoadFailed = true;
+                    MarkStateLoadFailed();
                     Log.ErrorWithMaxCount("自动发货任务队列在运行期间丢失；拒绝以空队列覆盖原任务状态。", 10);
                     return false;
                 }
@@ -966,7 +981,7 @@ namespace Bot.ChromeNs
             var loaded = LoadState(out loadedSuccessfully);
             if (!loadedSuccessfully || loaded == null || loaded.Pending == null || !File.Exists(path))
             {
-                _stateLoadFailed = true;
+                MarkStateLoadFailed();
                 Log.ErrorWithMaxCount("自动发货任务队列跨进程重新读取失败；暂停队列操作并保留原状态文件。", 10);
                 return false;
             }
@@ -1044,7 +1059,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                _stateLoadFailed = true;
+                MarkStateLoadFailed();
                 Log.ErrorWithMaxCount("保存虚拟商品自动发货任务状态失败；已暂停自动发货并保留长期确认防重屏障：" + ex.Message, 10);
                 return false;
             }
