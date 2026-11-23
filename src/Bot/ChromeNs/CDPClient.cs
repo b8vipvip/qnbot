@@ -678,7 +678,28 @@ namespace Bot.ChromeNs
         private void SellerSwitched(string response)
         {
             var localUser = JsonConvert.DeserializeObject<ActiveLocalUser>(response);
-            if (localUser == null) return;
+            if (localUser == null || localUser.LoginID == null || IsInvalidated || IsShopIdentityRetired) return;
+
+            var sellerNick = (localUser.LoginID.Nick ?? string.Empty).Trim();
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(localUser.LoginID); }
+            catch { return; }
+            var server = MyWebSocketServer.WSocketSvrInst;
+            var boundShopKey = (ShopKey ?? string.Empty).Trim();
+            if (server == null || shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(boundShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shop.ShopKey, SessionId))
+            {
+                if (boundShopKey.Length > 0 && shop != null
+                    && !string.Equals(boundShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    IsShopIdentityRetired = true;
+                Log.Info("已拒绝非当前ShopKey权威CDP的SellerSwitched迟到事件: sellerRef="
+                    + MyWebSocketServer.DiagnosticRef("seller", sellerNick)
+                    + ", boundShopRef=" + MyWebSocketServer.DiagnosticRef("shop", boundShopKey)
+                    + ", eventShopRef=" + MyWebSocketServer.DiagnosticRef("shop", shop == null ? string.Empty : shop.ShopKey)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", SessionId));
+                return;
+            }
 
             if (EvSellerSwitched != null)
             {
