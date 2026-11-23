@@ -38,6 +38,8 @@ on:
   workflow_run:
     workflows: [CI, API control plane CI, Windows x64 release build]
     types: [completed]
+  issue_comment:
+    types: [created]
   release:
     types: [published]
 permissions:
@@ -120,11 +122,24 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.workflow_run.pull_requests[0].base.ref || '' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           ACTOR: ${{ github.actor }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          ISSUE_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         shell: bash
         run: |
           actionable=false
           case "$EVENT_NAME" in
             workflow_dispatch|release) actionable=true ;;
+            issue_comment)
+              # Manual recovery is restricted to the repository owner and an exact
+              # task-ID command on a PR thread. Ordinary comments remain no-op events.
+              if [[ "$ISSUE_IS_PR" == "true" \
+                && "$COMMENT_AUTHOR" == "$REPOSITORY_OWNER" \
+                && "$COMMENT_BODY" =~ ^/gptauto-reconcile[[:space:]]+(GA-[a-f0-9]{12})$ ]]; then
+                actionable=true
+              fi
+              ;;
             pull_request)
               [[ "$PR_BASE_REF" == "$DEFAULT_BRANCH" ]] && actionable=true
               ;;
@@ -187,7 +202,9 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           REF_NAME: ${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }}
           HEAD_SHA: ${{ inputs.head_sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
-          PR_NUMBER: ${{ inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || '' }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number || github.event.issue.number || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          ISSUE_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
           PR_TITLE: ${{ github.event.pull_request.title || '' }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           PR_STATE: ${{ github.event.pull_request.state || '' }}
@@ -305,6 +322,17 @@ jobs:
           fi
 
           TASK_ID="$(PYTHONPATH=.github python -c 'from gptauto.observer import observed_task_id; import os; print(observed_task_id(os.environ["REPOSITORY"], os.environ.get("PR_NUMBER",""), os.environ.get("HEAD_SHA",""), os.environ.get("MERGE_SHA","")))')"
+          if [[ "$EVENT_NAME" == "issue_comment" ]]; then
+            requested_task_id="$(sed -nE 's#^/gptauto-reconcile[[:space:]]+(GA-[a-f0-9]{12})$#\1#p' <<<"$COMMENT_BODY")"
+            [[ "$ISSUE_IS_PR" == "true" && "$PR_MERGED" == "true" ]] || {
+              echo "::error::Manual Reconcile requires a merged pull request."
+              exit 1
+            }
+            [[ -n "$requested_task_id" && "$requested_task_id" == "$TASK_ID" ]] || {
+              echo "::error::Manual Reconcile task ID does not match the PR-derived canonical task ID."
+              exit 1
+            }
+          fi
           previous_artifact_id="$(gh api "repos/$REPOSITORY/actions/artifacts?name=gptauto-$TASK_ID&per_page=10" \
             --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
           if [[ -n "$previous_artifact_id" ]]; then
