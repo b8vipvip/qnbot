@@ -84,6 +84,7 @@ def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
     knowledge_gate = decision.index("KnowledgeEngineV2Service.IsEnabled")
     assert ocr_call < knowledge_gate
     assert "task.ShopKey," in decision
+    assert "task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient" in decision
     assert "ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey)" in decision
     assert "LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)" in vision_gate
     assert "CanUseServerOcr" in vision_gate
@@ -93,7 +94,7 @@ def test_ai_first_multimodal_path_still_attaches_shop_scoped_server_ocr():
     vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
     resolver = read("src/Bot/ChromeNs/VisionImageResolver.cs")
     assert "image.LocalCachePath, task.SellerNick, task.ShopKey, cts.Token" in vision
-    assert "ResolveAsync(message, endpoint, cancellationToken, shopKey)" in resolver
+    assert "ResolveAsync(message, endpoint, cancellationToken, shopKey, browserClient)" in resolver
 
 
 
