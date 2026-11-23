@@ -32,6 +32,7 @@ def test_internal_english_reasoning_is_detected_before_qianniu_send():
 
 def test_manual_agent_fragments_are_combined_and_attached_to_visual_semantics():
     source = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+    visual_store = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
 
     assert "VisionImageCacheService.TryGetRecentReference" in source
     assert "pending.Fragments.Add" in source
@@ -39,7 +40,7 @@ def test_manual_agent_fragments_are_combined_and_attached_to_visual_semantics():
     assert "VisualKnowledgeObservationEntity" in source
     assert "VisualKnowledgeEntryEntity" in source
     assert 'SourceType = "视觉人工即时学习"' in source
-    assert 'observation.Status = "已通过人工即时回复学习"' in source
+    assert 'current.Status = "已通过人工即时回复学习"' in visual_store
     assert "MergeTags(observation.VisualTags, ExtractManualTags(answer))" in source
     assert "SendDeliveryWatchdog.IsKnownBotAnswer" in source
 
