@@ -156,10 +156,12 @@ def test_runtime_never_sends_directly_and_only_commits_state_after_canonical_del
     assert "EvaluateText(burst)" in text_pipeline
     assert "workflowDecision.ReplyText" in text_pipeline
     assert "CompleteDecision(workflowDecision, sendOk)" in text_pipeline
+    assert "IsDecisionCurrent(workflowDecision)" in text_pipeline
     assert "ParallelReplyRelevanceGate.ShouldSend(" in text_pipeline
     assert "BlockOutgoing(" in text_pipeline and "burst.ShopKey" in text_pipeline
     assert "EvaluateVision(" in vision_pipeline
     assert "CompleteDecision(workflowDecision, sendOk)" in vision_pipeline
+    assert "IsDecisionCurrent(workflowDecision)" in vision_pipeline
     assert "ParallelReplyRelevanceGate.ShouldSend(" in vision_pipeline
     assert 'lifecycleLease.MarkSending("vision_send_started")' in vision_pipeline
 
