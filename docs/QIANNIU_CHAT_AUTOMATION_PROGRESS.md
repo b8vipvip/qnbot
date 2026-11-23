@@ -1,6 +1,6 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-11-22
+Last updated / 最后更新：2026-11-23
 
 本文件记录当前生产基线、源码已完成项、尚需真实 Windows/千牛验收的项目，以及本轮新增的只读诊断工具。所有状态区分“源码实现”“CI/构建通过”“正式发布”“真实客户端验收”，不能互相替代。
 
@@ -9,9 +9,9 @@ Last updated / 最后更新：2026-11-22
 - Repository：`b8vipvip/qnbot`
 - Default branch：`master`
 - Current source baseline：以 GitHub `master` 当前 HEAD 为准；不要使用早期交接文档中的 2026-09 SHA。
-- Latest stable client：bot-v1.1.2832
-- Release target：a3d27378bbae032317d54ede848f9b316d769534
-- x64 package SHA-256：0b8dc64a614c7678549098e8d7417a4c7ac1dc3d0e447a2185663b920d3c76a7
+- Latest stable client：bot-v1.1.3111
+- Release target：3718607df7a01ee776c0aadceb63f331004c9aef
+- x64 package SHA-256：c51887a1699dc5a861cfd522e21eb1a9d605c51f87278cf86d82da2182359b4
 - master 后续源码修复不会自动等同于已发布客户端；以 Release target SHA 为准判断客户端包含哪些代码。
 
 ## 2. Completed source capabilities / 已实现的源码能力
@@ -83,10 +83,10 @@ Last updated / 最后更新：2026-11-22
 ### P1 — General reception workflow Agent
 关联原 Issue：原 Issue #346。
 
-- 当前流程模型以 ShopKey/商品/SKU/版本隔离的草稿和证据账本为基础。
-- 尚需可信审批主体、授权调度器、正式发布/回滚、只读订单工具和完整图文证据闭环。
-- 影子决策→人工复核→小流量灰度；高风险操作默认关闭。
-- 不得把草稿可保存等同于 Agent 已能安全执行生产流程。
+- Reception Agent 流程目录正在改为 ShopKey 隔离的 v2 active catalog；通过结构校验后由 Agent 直接发布，无需管理员审批或强制灰度。
+- 发布事务具备目录 revision CAS、单调 flow_version、不可变历史快照、自动回滚和旧 draft v1 文件迁移。
+- 流程动作限制为等待、补充证据、转人工、只读查询和受现有发送门控约束的回复意图；目录不能授予付款、充值、退款、账号修改或实际履约权限。
+- 完整通用状态机执行器尚未接入全部消息/OCR/订单/账号证据源；active catalog 可发布不等于所有流程转移已在真实千牛环境执行验收。
 
 ### P1 — GPTAuto Reconcile end-to-end
 - 在修复后的 master 上真实 dispatch 一次 Reconcile。
@@ -228,8 +228,18 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 
 ### Remaining runtime boundary
 - Issue #366 remains open. CI/build success does not prove real Qianniu behavior.
-- Still requires real 150+ message/full-corpus learning and restart recovery, two-device convergence/concurrent edits, multi-shop A→B→A and WS/CDP long-run stability, human takeover/withdrawal/retry races, real test-order delivery recovery, and Reception Agent trusted approval/authorization/publish/rollback.
-- Reception workflow catalog remains deliberately draft-only until a trusted approver identity and auditable authorization source exist. Do not enable publish/rollback by treating a UI click as approval.
+- Still requires real 150+ message/full-corpus learning and restart recovery, two-device convergence/concurrent edits, multi-shop A→B→A and WS/CDP long-run stability, human takeover/withdrawal/retry races, and real test-order delivery recovery.
+- Reception Agent autonomous publication and rollback are being implemented without administrator approval; the remaining boundary is the runtime state-machine/evidence adapter and real Windows/Qianniu acceptance, not an administrator approval identity.
+
+## 4.8 2026-11-23 Reception Agent autonomous publication policy
+
+- Branch `feat/reception-agent-autopublish` changes the generic workflow catalog from draft-only to a versioned active catalog.
+- A schema-valid publish immediately updates the active version; no administrator approval identity, approval token, or mandatory gray rollout is required.
+- The publish operation uses ShopKey-scoped storage, cross-process locking, revision CAS, monotonic per-flow versions, immutable published-history snapshots, and a rollback that creates a new revision.
+- Existing v1 draft files are migrated to active v2 only after validation; the original file is retained.
+- Catalog actions remain constrained. Workflow publication does not grant payment, recharge, refund, account mutation, or fulfillment authority. Reply intents still pass through the existing canonical send pipeline.
+- The runtime adapter that consumes the active catalog for every generic stage/evidence transition is not yet complete. Do not describe the workflow engine as fully live until that adapter and real Qianniu acceptance are complete.
+- This is a source branch under CI review, not yet a master merge or a new Windows release.
 
 ## 5. Validation and release rules / 验收与发布规则
 
@@ -247,4 +257,4 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 2. 完成同昵称多店铺 A→B→A、WebSocket/CDP 断线重连和长时间运行验收。
 3. 验证自动回复的人工接管、撤回、失败重试、并发与防重复发送。
 4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认。
-5. 完成接待流程 Agent 的审批、身份授权、发布、回滚及 GPTAuto Reconcile 真实终态验收。
+5. 完成 Reception Agent active catalog 的运行时状态机接入、图文/订单证据闭环、回滚恢复验收及 GPTAuto Reconcile 真实终态验收。
