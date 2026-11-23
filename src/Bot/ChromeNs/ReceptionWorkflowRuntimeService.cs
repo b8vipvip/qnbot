@@ -577,7 +577,9 @@ namespace Bot.ChromeNs
                             record["current_state"] = nextState;
                             record["last_source_key"] = sourceKey;
                             record["pending_source_key"] = string.Empty;
+                            record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, nextState, action, sourceKey,
