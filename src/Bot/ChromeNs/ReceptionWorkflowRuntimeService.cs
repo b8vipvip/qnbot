@@ -322,10 +322,18 @@ namespace Bot.ChromeNs
             question = (question ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0 || shopKey.Length == 0) return null;
 
-            ShopContext shop;
+            var sourceMaterial = string.IsNullOrWhiteSpace(messageKey)
+                ? DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture)
+                : messageKey;
+            var sourceKey = Digest(shopKey + "|" + sourceMaterial
+                + "|" + Digest(question) + "|" + (isImage ? "image" : "text"));
+            var buyerKey = Digest(shopKey + "|" + seller + "|" + buyer);
+
+            ShopContext shop = null;
             CatalogIndex catalog;
             List<OrderSnapshot> orders;
             KugouReceptionConfig config;
+            var workflowEnabled = false;
             try
             {
                 shop = ResolveShop(seller, shopKey);
@@ -335,24 +343,24 @@ namespace Bot.ChromeNs
                     if (config == null || !config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
                         return null;
                     if (!config.EnableAutoGuidance) return null;
+                    workflowEnabled = true;
                     catalog = LoadCatalog(seller, shopKey);
                     orders = LoadRecentNonterminalOrders(seller, buyer, shopKey);
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("Reception Agent运行时无法读取ShopKey目录或订单证据，已交回原回复管线：" + ex.Message, 10);
-                return null;
+                Log.ErrorWithMaxCount("Reception Agent运行时无法读取ShopKey目录或订单证据：" + ex.Message, 10);
+                if (!workflowEnabled || shop == null) return null;
+                var queued = QueueHandoff(shop, seller, buyer, question, shopKey, "runtime-bootstrap-error");
+                return Suppressed(seller, buyer, shopKey, "runtime-bootstrap-error", 1,
+                    0, string.Empty, string.Empty, queued ? "HANDOFF" : "WAIT", sourceKey,
+                    queued
+                        ? "已启用接待流程，但流程目录或订单证据暂时不可用；已阻止普通AI绕过流程并通知人工"
+                        : "已启用接待流程，但流程目录或订单证据暂时不可用；已阻止普通AI绕过流程，等待人工处理");
             }
             if (catalog == null || catalog.Flows == null || catalog.Flows.Count == 0 || orders.Count == 0)
                 return null;
-
-            var sourceMaterial = string.IsNullOrWhiteSpace(messageKey)
-                ? DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture)
-                : messageKey;
-            var sourceKey = Digest(shopKey + "|" + sourceMaterial
-                + "|" + Digest(question) + "|" + (isImage ? "image" : "text"));
-            var buyerKey = Digest(shopKey + "|" + seller + "|" + buyer);
             var matchingFlows = catalog.Flows.Where(flow =>
             {
                 var products = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
