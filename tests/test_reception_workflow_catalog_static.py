@@ -21,6 +21,11 @@ def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in scope
     assert "!shop.HasStableSellerId" in scope
     assert "ShopSettingsScope.Enter(shop)" in scope
+    assert "private static string PathForShop(ShopContext shop)" in service
+    assert "private static string LegacyPathForShop(ShopContext shop)" in service
+    assert "private static string HistoryDirectoryForShop(ShopContext shop)" in service
+    assert "private static void EnsureLegacyDraftMigrated(ShopContext shop)" in service
+    assert "private static void SaveHistorySnapshot(ShopContext shop, JObject catalog)" in service
 
 
 def test_legacy_drafts_migrate_to_active_catalog_without_admin_approval():
