@@ -134,7 +134,7 @@ def test_image_download_falls_back_to_authenticated_qianniu_browser_and_message_
     assert "credentials:'include'" in cache
     assert "im.singlemsg.GetRemoteHisMsg" in cache
     assert "window._db&&window._db.msgDataMap" in cache
-    assert "message.originalData.fileId" in cache
+    assert "fileId = original == null ? string.Empty : (original.fileId ?? string.Empty)" in cache
     assert "browserClient.ShopKey" in cache
     assert "IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)" in qn
     assert "IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)" in recovery
