@@ -111,7 +111,20 @@ namespace Bot.ChromeNs
             out string selectionReason)
         {
             selectionReason = "none";
-            var candidates = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12);
+            List<OrderSnapshot> candidates;
+            try
+            {
+                candidates = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12);
+            }
+            catch (Exception ex)
+            {
+                // Do not fabricate an empty order history on ledger I/O/corruption. Commerce
+                // falls back to conversational context, while the Reception Agent runtime
+                // receives the exception and blocks an active workflow from bypassing evidence.
+                selectionReason = "order_ledger_unavailable";
+                Log.ErrorWithMaxCount("Commerce订单账本不可用，当前回答不引用结构化订单事实：" + ex.Message, 10);
+                return null;
+            }
             if (candidates == null || candidates.Count == 0) return null;
 
             var current = Compact(currentQuestion);
