@@ -273,7 +273,9 @@ def test_delivery_echo_and_progress_ui_keys_use_explicit_shopkey():
     assert "server.IsAuthoritativeShopSession(bound, client.SessionId)" in send_guard
     assert "await client.GetCurrentUser().ConfigureAwait(false)" in send_guard
     assert "ResolveRuntimeBySellerIdentity(current.Result)" in send_guard
-    assert "TrySendTextNativeFirstAsync(\n            string buyer, string text, DateTime sendStart, string shopKey, Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native_send
+    assert "TrySendTextNativeFirstAsync(" in native_send
+    assert "string buyer, string text, DateTime sendStart, string shopKey," in native_send
+    assert "Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native_send
     assert "WaitForTextSubmissionAcceptedAsync(" in send_guard
     assert "string method, int timeoutMs, string shopKey" in send_guard
     assert "ArmLateServiceAttitudeContinuationWatch(buyer, text, method, shopKey)" in send_guard
