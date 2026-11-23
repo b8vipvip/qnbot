@@ -799,7 +799,7 @@ namespace Bot.ChromeNs
                 {
                     var retained = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
-                        "order by UpdatedAtTicks desc limit " + MaxTotalRecords);
+                        "where 1=1 order by UpdatedAtTicks desc limit " + MaxTotalRecords);
                     if (retained == null || retained.Count >= MaxTotalRecords)
                         return false;
 
