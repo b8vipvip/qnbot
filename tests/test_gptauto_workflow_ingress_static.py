@@ -437,3 +437,10 @@ def test_manual_reconcile_comment_ingress_is_owner_only_and_requires_exact_merge
     assert 'PR_MERGED" == "true"' in observer
     assert "Manual Reconcile requires a merged pull request." in observer
     assert "Manual Reconcile task ID does not match the PR-derived canonical task ID." in observer
+
+
+
+def test_manual_reconcile_comment_forces_executor_even_when_observation_is_unchanged():
+    observer = read(".github/gptauto/observer.py")
+    assert 'event in {"workflow_dispatch", "issue_comment"}' in observer
+    assert "and not (previous_terminal_done and authority[\"terminal_done\"])" in observer
