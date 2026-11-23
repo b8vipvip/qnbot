@@ -240,3 +240,21 @@ def test_message_mirror_preserves_last_good_timeline_only_for_same_identity_prob
     assert "BuyerIdentityAliasService.AreEquivalent(" in refresh
     assert "if (!preserveCurrentTimeline) RenderEmptyMessageMirror();" in refresh
     assert refresh.index("preserveCurrentTimeline") < refresh.index("RenderEmptyMessageMirror")
+
+
+def test_same_identity_empty_snapshot_does_not_erase_last_good_message_timeline():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    refresh = mirror.split("private void RefreshMessageMirror(bool force)", 1)[1].split(
+        "private static bool SameDisplayedTurn", 1
+    )[0]
+    empty_snapshot = refresh.split("var turns = LoadMessageMirrorTurns", 1)[1].split(
+        "var signature = BuildMessageMirrorSignature", 1
+    )[0]
+    assert "if (turns.Count == 0)" in empty_snapshot
+    assert "RequestMessageMirrorHistory(qn, seller, buyer, false);" in empty_snapshot
+    assert "if (!identityChanged && _messageMirrorRenderedTurns != null" in empty_snapshot
+    assert "_messageMirrorRenderedTurns.Count > 0" in empty_snapshot
+    assert "return;" in empty_snapshot
+    # A real buyer/shop switch still clears before attempting to render the new identity.
+    assert "if (identityChanged)" in refresh
+    assert refresh.index("stkDialog.Children.Clear();") < refresh.index("var turns = LoadMessageMirrorTurns")
