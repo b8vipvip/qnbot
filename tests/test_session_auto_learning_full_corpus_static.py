@@ -1016,3 +1016,24 @@ def test_live_learning_message_roles_accept_canonical_cntaobao_seller_and_buyer_
     assert "DirectOrderIdentityResolver.IdentityEquals(to, seller)" in classify
     assert "var isBuyer = fromIsBuyer && toIsSeller;" in classify
     assert "var isSeller = fromIsSeller && toIsBuyer;" in classify
+
+
+
+def test_legacy_pending_reports_without_shopkey_wait_for_reconnect_instead_of_becoming_terminal():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    recovery = service[
+        service.index("private static void ResumePending()"):
+        service.index("private static void CleanupReports()")
+    ]
+    assert "StartPendingRecoveryTimer();" in service
+    assert "PendingRecoveryInterval = TimeSpan.FromSeconds(30)" in service
+    assert "Interlocked.CompareExchange(ref _resumePendingRunning, 1, 0)" in recovery
+    assert "legacy_report_shop_scope_pending" in recovery
+    assert "report.CompletedAtTicks = 0;" in recovery
+    assert "店铺尚未连接或身份无法唯一解析，等待自动恢复" in recovery
+    assert "report.CompletedAtTicks = DateTime.Now.Ticks;" not in recovery[
+        recovery.index("if (string.IsNullOrWhiteSpace(report.ShopKey))"):
+        recovery.index("var key = Key(report.ShopKey")
+    ]
+    assert "Volatile.Read(ref _initialized) == 0" in service
+    assert "recoveryTimer.Dispose();" in service
