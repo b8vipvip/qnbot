@@ -163,7 +163,7 @@ namespace Bot.ChromeNs
                         Log.Info("服务端OCR真实图片上传开始: bytes=" + imageBytes.LongLength
                             + ", sha256=" + ShortHash(sha256)
                             + ", endpointSource=" + endpoint.Source
-                            + ", shopRef=" + Bot.ShopScope.ShopContextLocator.DiagnosticShopRef(shopKey));
+                            + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey));
 
                         using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false))
                         {
