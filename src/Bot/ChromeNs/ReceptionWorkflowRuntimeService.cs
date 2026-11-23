@@ -380,7 +380,30 @@ namespace Bot.ChromeNs
                             ? candidateInitial : Convert.ToString(candidateRecord["current_state"]);
                         var candidateStep = candidateSteps.OfType<JObject>().FirstOrDefault(x =>
                             string.Equals(Convert.ToString(x["state"]), candidateState, StringComparison.Ordinal));
-                        if (candidateStep != null && candidateStep.Value<bool?>("terminal") == true) continue;
+                        var terminalOrderChanged = false;
+                        if (candidateStep != null && candidateStep.Value<bool?>("terminal") == true)
+                        {
+                            var candidateProducts = (candidate["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                            var candidateSkus = (candidate["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
+                            var candidateOrders = orders.Where(x =>
+                                (candidateProducts.Count == 0 || candidateProducts.Contains(x.ItemId, StringComparer.Ordinal))
+                                && (candidateSkus.Count == 0 || candidateSkus.Contains(x.SkuId, StringComparer.Ordinal))
+                                && config.ProductIds.Contains(x.ItemId, StringComparer.Ordinal));
+                            var currentFingerprint = FingerprintOrders(candidateOrders);
+                            var completedAt = candidateRecord == null
+                                ? 0 : candidateRecord.Value<long?>("completed_utc_ticks") ?? 0;
+                            var completedFingerprint = candidateRecord == null
+                                ? string.Empty : Convert.ToString(candidateRecord["completed_order_fingerprint"]);
+                            terminalOrderChanged = !string.Equals(
+                                completedFingerprint, currentFingerprint, StringComparison.Ordinal);
+                            var canReenter = candidateRecord == null || completedAt <= 0
+                                || DateTime.UtcNow.Ticks - completedAt >= TimeSpan.FromHours(24).Ticks
+                                || terminalOrderChanged;
+                            if (!canReenter) continue;
+                            candidateState = candidateInitial;
+                            candidateStep = candidateSteps.OfType<JObject>().FirstOrDefault(x =>
+                                string.Equals(Convert.ToString(x["state"]), candidateInitial, StringComparison.Ordinal));
+                        }
                         if (candidateRecord != null
                             && (!string.Equals(candidateState, candidateInitial, StringComparison.Ordinal)
                                 || !string.IsNullOrWhiteSpace(Convert.ToString(candidateRecord["pending_source_key"]))
@@ -404,7 +427,8 @@ namespace Bot.ChromeNs
                             x != null && x.ObservedAtTicks >= DateTime.Now.AddMinutes(-candidateTimeout).Ticks);
                         var imageTrigger = (isImage || hasRecentImage)
                             && candidateRequired.Any(x => Convert.ToString(x) == "image_message");
-                        if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords)) || imageTrigger)
+                        if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords))
+                            || imageTrigger || terminalOrderChanged)
                             triggeredFlows.Add(candidate);
                     }
 
