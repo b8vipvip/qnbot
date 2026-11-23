@@ -239,6 +239,7 @@ namespace Bot.ChromeNs
             JObject proposal,
             ReceptionWorkflowEvidenceContext evidence,
             KugouReceptionConfig config,
+            bool handoffConfigured,
             string shopKey,
             out JObject flow,
             out string reason)
@@ -334,6 +335,12 @@ namespace Bot.ChromeNs
                         || Convert.ToString(x).Length > 40))
                 {
                     reason = "首步骤触发关键词缺失或超出范围";
+                    return false;
+                }
+
+                if (action == "HANDOFF" && !handoffConfigured)
+                {
+                    reason = "当前店铺未配置可用的转人工通知渠道";
                     return false;
                 }
 
@@ -494,12 +501,13 @@ namespace Bot.ChromeNs
                     return result;
                 }
 
+                var handoffConfigured = HandoffNotificationService.IsWorkflowHandoffConfigured();
                 var built = new List<JObject>();
                 foreach (var proposal in proposals.OfType<JObject>().Take(4))
                 {
                     JObject flow;
                     string reason;
-                    if (!TryBuildFlow(proposal, evidence, config, shopKey, out flow, out reason))
+                    if (!TryBuildFlow(proposal, evidence, config, handoffConfigured, shopKey, out flow, out reason))
                     {
                         result.SkippedCount++;
                         result.Items.Add(new ReceptionWorkflowPublishItem
