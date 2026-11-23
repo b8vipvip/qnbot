@@ -13,11 +13,15 @@
     orderText: "orderPlacedReplyText",
     orderTimeout: "orderPlacedApiTimeoutSeconds",
     orderDelay: "orderPlacedReplyDelaySeconds",
+    knowledgeDelay: "knowledgeDirectReplyDelaySeconds",
+    firstInquiryDelay: "firstInquiryFixedReplyDelaySeconds",
+    delayHint: "replyDelaySyncHint",
     orderHint: "orderPlacedReplySyncHint",
     save: "saveAutoReplyRulesBtn",
     hint: "autoReplyRulesHint"
   };
   const ORDER_CONTROL_IDS = [IDS.orderEnabled, IDS.orderMode, IDS.orderText, IDS.orderTimeout];
+  const DELAY_CONTROL_IDS = [IDS.knowledgeDelay, IDS.firstInquiryDelay, IDS.orderDelay];
   let rulesState = null;
   let rulesTimer = null;
   let loading = false;
@@ -61,9 +65,14 @@
       <label class="switch-row"><span><strong>启用下单后自动回复</strong><small>订单创建/付款事件确认后，按 Windows 现有订单规则优先发送。</small></span><input id="${IDS.orderEnabled}" type="checkbox"></label>
       <label class="rule-field"><span>下单回复方式</span><select id="${IDS.orderMode}"><option value="固定预设答案">固定预设答案</option><option value="调用HTTP接口">调用 HTTP 接口（使用 Windows 本机既有地址/Token）</option></select><small>手机端不会显示或修改 HTTP 地址、Bearer Token；切换到 HTTP 模式时只使用 Windows 本机已配置的接口。</small></label>
       <label class="rule-field"><span>固定预设 / HTTP 失败兜底文本</span><textarea id="${IDS.orderText}" maxlength="5000" placeholder="支持 Windows 现有订单模板占位符"></textarea><small>HTTP 模式接口失败时也会使用此文本兜底；接口地址和 Token 不会上传到 Web。</small></label>
+      <label class="rule-field"><span>HTTP 超时（秒）</span><input id="${IDS.orderTimeout}" type="number" min="3" max="60" step="1"><small>仅调整超时时间，不改变接口目标或认证信息。</small></label>
+
+      <h4 class="rule-subtitle">自动回复独立发送延迟</h4>
+      <div id="${IDS.delayHint}" class="rule-inline-hint">等待 Windows Bot 上报三项独立延迟配置。</div>
       <div class="rule-times">
-        <label class="rule-field"><span>HTTP 超时（秒）</span><input id="${IDS.orderTimeout}" type="number" min="3" max="60" step="1"><small>仅调整超时时间，不改变接口目标或认证信息。</small></label>
-        <label class="rule-field"><span>发送延迟（秒）</span><input id="${IDS.orderDelay}" type="number" value="0" disabled><small>当前 Windows 运行时强制为 0 秒，保证下单固定回复先于普通 AI 回复；旧版延时配置已废弃。</small></label>
+        <label class="rule-field"><span>Knowledge V2 知识库直答延迟（秒）</span><input id="${IDS.knowledgeDelay}" type="number" min="0" max="300" step="1" value="3"><small>仅本地知识库高置信直答生效；AI 生成回复不使用此延迟。</small></label>
+        <label class="rule-field"><span>首条咨询固定回复延迟（秒）</span><input id="${IDS.firstInquiryDelay}" type="number" min="0" max="300" step="1" value="0"><small>仅作用于首条咨询固定答案。</small></label>
+        <label class="rule-field"><span>下单后自动回复延迟（秒）</span><input id="${IDS.orderDelay}" type="number" min="0" max="300" step="1" value="0"><small>仅作用于下单后固定/HTTP回复，不改变订单事件防重。</small></label>
       </div>
 
       <button id="${IDS.save}" class="primary wide" type="button">保存并下发自动回复规则</button>
@@ -108,6 +117,21 @@
       : "等待支持本批字段的新版 Windows Bot 首次上报；在此之前不会用服务端默认值覆盖本机下单回复设置。";
   }
 
+  function delayRulesReady() {
+    return !!(rulesState && Number(rulesState.settings_schema_version || 0) >= 3 && rulesState.delay_rules_ready !== false);
+  }
+
+  function setDelayControlsReady(ready) {
+    DELAY_CONTROL_IDS.forEach(id => {
+      const el = $(id);
+      if (el) el.disabled = !ready;
+    });
+    const hint = $(IDS.delayHint);
+    if (!hint) return;
+    hint.textContent = ready
+      ? "三项发送延迟已由新版 Windows Bot 建立店铺级同步基线，范围均为 0-300 秒。"
+      : "等待支持三项独立延迟的新版本 Windows Bot 首次上报；在此之前不会用云端默认值覆盖本机设置。";
+  }
   function setForm(desired) {
     if (!desired) return;
     $(IDS.enabled).checked = desired.auto_reply_rules_enabled !== false;
@@ -122,7 +146,9 @@
     $(IDS.orderMode).value = desired.order_placed_reply_mode === "调用HTTP接口" ? "调用HTTP接口" : "固定预设答案";
     $(IDS.orderText).value = desired.order_placed_reply_text || "";
     $(IDS.orderTimeout).value = String(Number(desired.order_placed_api_timeout_seconds || 3));
-    $(IDS.orderDelay).value = "0";
+    $(IDS.knowledgeDelay).value = String(Number(desired.knowledge_direct_reply_delay_seconds ?? 3));
+    $(IDS.firstInquiryDelay).value = String(Number(desired.first_inquiry_fixed_reply_delay_seconds ?? 0));
+    $(IDS.orderDelay).value = String(Number(desired.order_placed_reply_delay_seconds ?? 0));
     renderMode();
     renderOrderMode();
   }
@@ -131,6 +157,7 @@
     ensurePanel();
     if (!rulesState || !$(IDS.hint)) return;
     setOrderControlsReady(orderRulesReady());
+    setDelayControlsReady(delayRulesReady());
     const save = $(IDS.save);
     if (!rulesState.initialized) {
       save.disabled = true;
@@ -200,10 +227,24 @@
       data.order_placed_reply_mode = $(IDS.orderMode).value;
       data.order_placed_reply_text = $(IDS.orderText).value.trim();
       data.order_placed_api_timeout_seconds = timeout;
-      data.order_placed_reply_delay_seconds = 0;
       if (data.order_placed_reply_enabled && data.order_placed_reply_mode === "固定预设答案" && !data.order_placed_reply_text) {
         toast("启用下单固定预设回复时，回复内容不能为空");
         return;
+      }
+    }
+    if (delayRulesReady()) {
+      const delays = [
+        ["knowledge_direct_reply_delay_seconds", IDS.knowledgeDelay, "知识库直答"],
+        ["first_inquiry_fixed_reply_delay_seconds", IDS.firstInquiryDelay, "首条咨询"],
+        ["order_placed_reply_delay_seconds", IDS.orderDelay, "下单后自动回复"]
+      ];
+      for (const [key, id, label] of delays) {
+        const value = Number($(id).value);
+        if (!Number.isInteger(value) || value < 0 || value > 300) {
+          toast(label + "延迟必须是 0-300 秒整数");
+          return;
+        }
+        data[key] = value;
       }
     }
     const button = $(IDS.save);
