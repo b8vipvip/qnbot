@@ -146,9 +146,9 @@ namespace Bot.ChromeNs
                 .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text)
                     && !string.IsNullOrWhiteSpace(GetNativeMessageId(x)))
                 .Where(x => x.Role == "user" || (x.Role == "assistant" && !IsBotTurn(x, cards)))
-                .OrderByDescending(x => x.Timestamp)
+                .OrderByDescending(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
                 .Take(40)
-                .OrderBy(x => x.Timestamp)
+                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
                 .ToList();
             foreach (var turn in evidenceTurns)
             {
@@ -166,8 +166,7 @@ namespace Bot.ChromeNs
                     MessageKey = nativeMessageId,
                     ReplyText = kind == "manual_correction" ? summary : string.Empty,
                     Summary = summary,
-                    ObservedAtUtcTicks = turn.Timestamp == DateTime.MinValue
-                        ? 0 : turn.Timestamp.ToUniversalTime().Ticks
+                    ObservedAtUtcTicks = GetTurnObservedAtUtcTicks(turn)
                 };
                 context.References[alias] = reference;
                 prompt.Append('[').Append(alias).Append("][").Append(kind).Append("] ")
@@ -293,6 +292,19 @@ namespace Bot.ChromeNs
         {
             if (turn == null || turn.NativeAliases == null) return string.Empty;
             return (turn.NativeAliases.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty).Trim();
+        }
+
+        private static long GetTurnObservedAtUtcTicks(ConversationContextTurn turn)
+        {
+            if (turn == null) return 0;
+            DateTime localTime;
+            if (turn.PreciseTimeTicks > DateTime.MinValue.Ticks)
+                localTime = new DateTime(turn.PreciseTimeTicks, DateTimeKind.Local);
+            else if (turn.Timestamp != DateTime.MinValue)
+                localTime = turn.Timestamp;
+            else
+                return 0;
+            return localTime.ToUniversalTime().Ticks;
         }
 
         private static bool HasUniqueHumanEvidencePair(
