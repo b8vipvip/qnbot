@@ -408,7 +408,7 @@ namespace Bot.ChromeNs
 
                         // If the buyer supplied the requested image in the same burst or a later
                         // image turn, do not ask for it again. Move to the evidence-consuming state.
-                        if (isImage && action == "ASK_EVIDENCE")
+                        if (hasImage && action == "ASK_EVIDENCE")
                         {
                             var nextStep = steps.OfType<JObject>().FirstOrDefault(x =>
                                 string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal));
