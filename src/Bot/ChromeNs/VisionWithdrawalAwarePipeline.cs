@@ -225,7 +225,7 @@ namespace Bot.ChromeNs
             }
 
             var workflowDecision = ReceptionWorkflowRuntimeService.EvaluateVision(
-                burst, visionItem.MessageKey, result.VisualSummary);
+                burst, visionItem.MessageKey, result.VisualSummary, withdrawn);
             if (workflowDecision != null && workflowDecision.SuppressReply)
             {
                 lifecycleLease.MarkCompleted("reception_workflow_" + (workflowDecision.Action ?? "wait").ToLowerInvariant());
