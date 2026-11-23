@@ -77,6 +77,26 @@ namespace Bot.ChromeNs
             return ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
         }
 
+        public static bool Applies(string seller, string shopKey)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0) return false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                using (ShopSettingsScope.Enter(shop)) return Applies(seller);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("按精确ShopKey检查接待策略失败，保持原流程：" + ex.Message, 5);
+                return false;
+            }
+        }
+
         public static bool Applies(string seller)
         {
             CleanupExpiredShopCache();
@@ -230,6 +250,36 @@ namespace Bot.ChromeNs
             if (reason.Length == 0) return false;
             Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "configured_outgoing_guard");
             return true;
+        }
+
+        public static bool BlockOutgoing(
+            string seller, string buyer, string question, string answer, out string reason, string shopKey)
+        {
+            reason = string.Empty;
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0)
+            {
+                reason = "缺少精确Seller/ShopKey身份，拒绝发送接待流程回复";
+                return true;
+            }
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "Seller/ShopKey身份不匹配，拒绝发送接待流程回复";
+                    return true;
+                }
+                using (ShopSettingsScope.Enter(shop))
+                    return BlockOutgoing(seller, buyer, question, answer, out reason);
+            }
+            catch (Exception ex)
+            {
+                reason = "无法验证精确店铺接待策略：" + ex.Message;
+                return true;
+            }
         }
 
         internal static bool IsScreenshotQuestion(string question, KugouReceptionConfig config)
