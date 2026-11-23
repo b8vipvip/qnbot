@@ -220,7 +220,7 @@ def test_event_cursor_read_or_write_failure_pauses_without_advancing_or_overwrit
     assert "private static void OnTimerTick()" in seed
     assert "TryRecoverCursorState()" in seed
     assert "private static volatile bool _cursorStateUnavailable;" in seed
-    assert "state == null || (state.Schema != 1 && state.Schema != 2) || state.Sellers == null" in loader
+    assert "state == null || (state.Schema != 1 && state.Schema != 2 && state.Schema != 3) || state.Sellers == null" in loader
     assert "loadedSuccessfully = false;" in loader
     assert "return new CursorState();" in loader
     assert "if (_cursorStateUnavailable) return;" in tick
@@ -282,7 +282,7 @@ def test_auto_delivery_queue_cursor_and_confirmation_ledger_are_shopkey_isolated
     assert "GetCursorLocked(string shopKey, string seller)" in seed
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in seed
     assert "x.Snapshot.ShopKey" in seed
-    assert "state.Schema = 2;" in seed
+    assert "state.Schema = 3;" in seed
 
     assert "HasIntent(string shopKey, string seller, string orderId)" in ledger
     assert "TryRecordIntent(string shopKey, string seller, string orderId" in ledger
@@ -541,10 +541,13 @@ def test_auto_delivery_cursor_uses_immutable_event_acceptance_time_not_duplicate
 
     assert "public DateTime AcceptedAt { get; set; }" in event
     assert "entry.AcceptedAt == DateTime.MinValue ? entry.SeenAt : entry.AcceptedAt" in helper
-    assert ".Where(x => GetAcceptedAt(x) > floor)" in tick
+    assert "return acceptedAt > floor" in tick
+    assert "(acceptedAt == floor && !lastSeenEventKeys.Contains(x.Key))" in tick
     assert ".OrderBy(x => GetAcceptedAt(x))" in tick
+    assert ".ThenBy(x => x.Key, StringComparer.Ordinal)" in tick
     assert "var acceptedAt = GetAcceptedAt(entry);" in tick
-    assert "if (acceptedAt > latest) latest = acceptedAt;" in tick
+    assert "if (acceptedAt > latest)" in tick
+    assert "latestEventKeys.Add(entry.Key)" in tick
     assert "existing.SeenAt = now;" in publish
     assert "existing.AcceptedAt" in publish
     assert ".Where(x => x.SeenAt > floor)" not in tick
