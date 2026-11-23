@@ -376,6 +376,38 @@ namespace Bot.ChromeNs
                             string.Equals(Convert.ToString(x["state"]), currentState, StringComparison.Ordinal));
                         if (step == null) continue;
 
+                        var updatedTicks = record == null ? 0 : record.Value<long?>("updated_utc_ticks") ?? 0;
+                        var timeoutMinutes = Math.Max(1, Math.Min(10080, step.Value<int?>("timeout_minutes") ?? 60));
+                        if (record != null && updatedTicks > 0
+                            && DateTime.UtcNow.Ticks - updatedTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks)
+                        {
+                            currentState = initial;
+                            record["current_state"] = initial;
+                            record["last_source_key"] = string.Empty;
+                            record["pending_source_key"] = string.Empty;
+                            record["delivery_uncertain"] = false;
+                            record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            step = steps.OfType<JObject>().FirstOrDefault(x =>
+                                string.Equals(Convert.ToString(x["state"]), currentState, StringComparison.Ordinal));
+                            if (step == null) continue;
+                        }
+
+                        if (step.Value<bool?>("terminal") == true)
+                        {
+                            if (record == null)
+                            {
+                                record = new JObject { ["buyer_key"] = buyerKey, ["flow_id"] = flowId };
+                                records.Add(record);
+                            }
+                            record["flow_version"] = flowVersion;
+                            record["current_state"] = currentState;
+                            record["last_source_key"] = sourceKey;
+                            record["pending_source_key"] = string.Empty;
+                            record["delivery_uncertain"] = false;
+                            record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            return null;
+                        }
+
                         var keywords = (step["trigger_keywords"] as JArray ?? new JArray()).Values<string>().ToList();
                         var required = step["required_evidence"] as JArray ?? new JArray();
                         var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
@@ -399,8 +431,7 @@ namespace Bot.ChromeNs
                         var action = Convert.ToString(step["action"]);
                         if (keywords.Count > 0 && !ContainsAny(question, keywords)
                             && !(hasImage && required.Any(x => Convert.ToString(x) == "image_message"))
-                            && !(isImage && action == "ASK_EVIDENCE")
-                            && initialState)
+                            && !(isImage && action == "ASK_EVIDENCE"))
                             continue;
 
                         var nextState = Convert.ToString(step["next_state"]);
