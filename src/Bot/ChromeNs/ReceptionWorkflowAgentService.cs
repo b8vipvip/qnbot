@@ -535,8 +535,21 @@ namespace Bot.ChromeNs
 
                 var handoffConfigured = HandoffNotificationService.IsWorkflowHandoffConfigured();
                 var built = new List<JObject>();
-                foreach (var proposal in proposals.OfType<JObject>().Take(4))
+                var boundedProposals = proposals.Take(4).ToList();
+                if (proposals.Count > boundedProposals.Count)
+                    result.SkippedCount += proposals.Count - boundedProposals.Count;
+                foreach (var token in boundedProposals)
                 {
+                    var proposal = token as JObject;
+                    if (proposal == null)
+                    {
+                        result.SkippedCount++;
+                        result.Items.Add(new ReceptionWorkflowPublishItem
+                        {
+                            Message = "流程候选结构无效，必须是JSON对象"
+                        });
+                        continue;
+                    }
                     JObject flow;
                     string reason;
                     if (!TryBuildFlow(proposal, evidence, config, handoffConfigured, shopKey, out flow, out reason))
