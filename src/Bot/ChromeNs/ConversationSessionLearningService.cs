@@ -3442,7 +3442,7 @@ namespace Bot.ChromeNs
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
-                        + "workflow_proposals最多4条，只能引用下方真实证据别名；必须同时引用买家原始消息、人工客服真实回复和同一买家的已核验订单快照。图片相关流程可引用V开头的视觉观察别名。每个步骤的required_evidence只能使用buyer_message、image_message、vision_observation、order_snapshot、manual_correction。ASK_EVIDENCE的reply_text只能请求补充截图或必要信息，不得承诺业务结果；REPLY必须提供reply_evidence_ref且只能引用真实人工客服回复。不得生成付款、充值、退款、账号修改、发货或履约动作。无足够证据、无当前店铺商品范围或无法构造完整状态转移时返回空数组。通过程序化证据绑定和目录校验后将自动发布，无需管理员审批。"
+                        + "workflow_proposals最多4条，只能引用下方真实证据别名；必须同时引用买家原始消息、人工客服真实回复和同一买家的已核验订单快照。图片相关流程可引用V开头的视觉观察别名。每个步骤的required_evidence只能使用buyer_message、image_message、vision_observation、order_snapshot、manual_correction；image_message表示当前新图片消息，vision_observation表示同一买家会话中已保存的OCR/视觉分析结果。ASK_EVIDENCE的reply_text只能请求补充截图或必要信息，不得承诺业务结果；REPLY必须提供reply_evidence_ref且只能引用真实人工客服回复。不得生成付款、充值、退款、账号修改、发货或履约动作。无足够证据、无当前店铺商品范围或无法构造完整状态转移时返回空数组。通过程序化证据绑定和目录校验后将自动发布，无需管理员审批。"
                 },
                 new JObject
                 {
