@@ -15,6 +15,9 @@ def test_order_reply_delay_is_configurable_and_shop_scoped():
     assert "return Clamp(config.OrderPlacedReplyDelaySeconds);" in settings
     assert "config.OrderPlacedReplyDelaySeconds = Clamp(seconds);" in settings
     assert "BotFeatureStore.SaveAutoReplyRules(config);" in settings
+    assert "_knowledgeDirectReplyDelaySeconds" in options
+    assert "知识库直答延迟(秒)" in options
+    assert "KnowledgeDirectReplyDelaySeconds = Math.Max(0, Math.Min(300, knowledgeDirectDelay))" in options
     assert "下单回复延迟(秒)" in options
     assert "OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay))" in options
     assert "OrderPlacedReplyDelaySettings.Initialize();" in read("src/Bot/App.xaml.cs")
