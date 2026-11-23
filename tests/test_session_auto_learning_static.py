@@ -236,7 +236,7 @@ def test_learning_runtime_is_scoped_by_exact_qn_identity_and_shop_key():
     assert "ResolveRuntimeByShopKey(string shopKey)" in locator
     assert "ShopKey = session.ShopKey" in service
     assert "ShopKey text" in history
-    assert "BotConversationHistoryStore.LoadRangeComplete(" in service
+    assert "BotConversationHistoryStore.TryLoadRangeComplete(" in service
     assert "session.ShopKey, session.Seller, session.Buyer, from, endAt" in service
     assert "LoadRecentBySeller(shopKey, seller, 5000)" in read(
         "src/Bot/Knowledge/ChatHistoryScanService.cs"
