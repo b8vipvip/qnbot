@@ -40,17 +40,19 @@ namespace Bot.ChromeNs
         {
             seller = (seller ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
-            if (seller.Length == 0 || shopKey.Length == 0)
-                throw new InvalidOperationException("卖家身份或ShopKey为空，拒绝读取或发布接待流程");
+            if (shopKey.Length == 0)
+                throw new InvalidOperationException("ShopKey为空，拒绝读取或发布接待流程");
 
             // The caller supplies the exact shop identity captured by the Knowledge Center
             // or message event. Never resolve a multi-shop seller nickname as the primary key.
             var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            var resolvedSeller = (shop == null ? string.Empty : shop.SellerNick ?? string.Empty).Trim();
             if (shop == null
                 || string.IsNullOrWhiteSpace(shop.ShopKey)
                 || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !shop.HasStableSellerId
-                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase))
+                || (seller.Length > 0 && resolvedSeller.Length > 0
+                    && !string.Equals(resolvedSeller, seller, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Seller/ShopKey 不匹配或店铺身份不稳定，拒绝读取或发布接待流程");
             return shop;
         }
