@@ -10,6 +10,7 @@ def read(rel):
 def test_server_ocr_reuses_shop_control_plane_credentials():
     text = read("src/Bot/ChromeNs/LocalOcrService.cs")
     assert "ShopControlPlaneConnectionStore" in text
+    assert "ResolveRuntimeByShopKey(shopKey)" in text
     assert "ResolveRuntimeBySellerNick" in text
     assert 'Source = "shop-control-plane"' in text
     assert "AiEndpointStore.GetEnabledEndpoints" in text  # compatibility fallback only
@@ -19,6 +20,7 @@ def test_server_ocr_reuses_shop_control_plane_credentials():
 def test_ocr_first_passes_seller_scope():
     text = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     assert "task.SellerNick," in text
+    assert "task.ShopKey," in text
     assert "LocalOcrService.TryRecognizeAsync" in text
 
 
