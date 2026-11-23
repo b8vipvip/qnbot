@@ -1100,4 +1100,9 @@ def test_incomplete_bot_echo_history_never_promotes_unknown_seller_turns_to_huma
     assert "if (!botCardsReliable) cards = null;" in finalize
     assert "cards == null" in classifier and "return true;" in classifier
     assert "客服来源未确认" in session
+    collector = session[
+        session.index("private static void CollectEvidenceMessageIds("):
+        session.index("private static List<Suggestion> RestoreSourceEvidenceMessageIds")
+    ]
+    assert 'turn.Role == "assistant" && cards == null' in collector
     assert "cards == null" in agent_classifier and "return true;" in agent_classifier
