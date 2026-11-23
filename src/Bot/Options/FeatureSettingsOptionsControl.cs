@@ -245,7 +245,7 @@ namespace Bot.Options
             if (autoReplyTab == null) return;
 
             var legacyContent = DetachLegacyScrollHost(autoReplyTab.Content as UIElement);
-            OrderPlacedReplyDelaySettings.ApplyForcedImmediateUi(legacyContent);
+            // The replacement page exposes an editable, shop-scoped order delay; do not reapply the legacy forced-zero UI.
             autoReplyTab.Content = null;
 
             var firstSettings = FirstInquiryFixedReplyService.Load(Seller)
