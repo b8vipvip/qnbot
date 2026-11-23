@@ -342,7 +342,7 @@ jobs:
           # Do not let an unresolved PR consume Actions indefinitely by
           # repeatedly generating a fresh head and failing the same product CI.
           # Limit all automatic repair generations for one PR/task, across SHAs.
-          comments="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate --jq '.[].body' 2>/dev/null || true)"
           if grep -Fq "$marker" <<<"$comments"; then
             echo "Three-tier repair already dispatched for $TASK_ID / $HEAD_SHA; keeping the same repair lease."
             exit 0
