@@ -459,7 +459,7 @@ namespace Bot.ChromeNs
             if (flowName.Length == 0) flowName = string.Join("、", trigger.Take(3));
             var normalizedName = Regex.Replace(flowName, @"[\s\p{P}\p{S}]+", string.Empty)
                 .ToLowerInvariant();
-            var idMaterial = shopKey + "|" + string.Join(",", productIds.OrderBy(x, StringComparer.Ordinal))
+            var idMaterial = shopKey + "|" + string.Join(",", productIds.OrderBy(x => x, StringComparer.Ordinal))
                 + "|" + normalizedName;
             var flowId = "wf-" + Digest(idMaterial).Substring(0, 24);
             var sourceEvidence = new JArray(selected.Take(12).Select(x => new JObject
