@@ -497,9 +497,7 @@ namespace Bot.ChromeNs
                             }
                         }
                         if (action == "READ_ONLY_TOOL")
-                            return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
-                                catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
-                                "流程请求只读工具，但当前运行时未接入对应工具，已交由人工处理");
+                            action = "HANDOFF";
 
                         if (action == "REPLY" || action == "REPLY_REVIEWED")
                         {
