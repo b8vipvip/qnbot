@@ -333,3 +333,37 @@ def test_visual_withdrawal_is_rechecked_against_exact_message_before_send():
     assert "internal static bool IsObservationWithdrawn(" in visual
     assert "BuyerIdentityAliasService.AreEquivalent(seller, observation.Buyer, buyer)" in visual
     assert "按撤回处理" in visual
+
+
+def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_withdrawal():
+    recent = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+
+    account_type = recent[
+        recent.index("internal sealed class KugouAccountEvidence"):
+        recent.index("internal static class RecentVisualContextService")
+    ]
+    account_builder = agent[
+        agent.index("// Account evidence is derived only"):
+        agent.index("context.PromptText = prompt.ToString().Trim();")
+    ]
+    runtime_current = runtime[
+        runtime.index("internal static bool IsDecisionCurrent("):
+        runtime.index("private static bool Mutate(")
+    ]
+
+    assert "public string MessageKey { get; set; }" in account_type
+    assert "MessageKey = item.MessageKey" in recent
+    assert '"account_evidence"' in agent
+    assert "RecentVisualContextService.TryGetRecentKugouAccountEvidence(" in account_builder
+    assert "Kind = \"account_evidence\"" in account_builder
+    assert "accountEvidence.UserId +" not in account_builder
+    assert "accountEvidence.Nickname +" not in account_builder
+    assert "AccountEvidenceMessageKey" in runtime
+    assert "TryGetRecentKugouAccountEvidence(" in runtime_current
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in runtime_current
+    assert "var accountTrigger = isImage" in runtime
+    assert "hasAccountEvidence" in runtime
+    assert "account_evidence" in session
