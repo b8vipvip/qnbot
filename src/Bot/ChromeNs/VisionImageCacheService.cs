@@ -1,6 +1,7 @@
 using Bot.ChatRecord;
 using Bot.ShopScope;
 using BotLib;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -37,6 +38,14 @@ namespace Bot.ChromeNs
             public string Error;
         }
 
+        private sealed class BrowserImageFetchResponse
+        {
+            public bool ok { get; set; }
+            public string base64 { get; set; }
+            public string mime { get; set; }
+            public string error { get; set; }
+        }
+
         private sealed class CacheRecord
         {
             public string Key;
@@ -48,6 +57,8 @@ namespace Bot.ChromeNs
             public QNChatMessage Message;
             public DateTime ObservedAt;
             public volatile bool Withdrawn;
+            public CDPClient BrowserClient;
+            public int DownloadAttempts;
             public Task<CacheDownloadResult> DownloadTask;
         }
 
@@ -89,13 +100,19 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static void Prime(QNChatMessage message, string messageText, string shopKey = null)
+        public static void Prime(
+            QNChatMessage message,
+            string messageText,
+            string shopKey = null,
+            CDPClient browserClient = null)
         {
             try
             {
                 if (message == null) return;
+                // fileId may be an opaque Qianniu media identifier rather than an HTTP URL.
+                // Keep the message record even without a URL so the authenticated browser session
+                // can resolve the actual image source from its own DOM/runtime.
                 var url = VisionImageResolver.ExtractUrl(message);
-                if (string.IsNullOrWhiteSpace(url)) return;
 
                 var seller = GetSellerNick(message, shopKey);
                 var buyer = GetBuyerNick(message, seller);
@@ -144,10 +161,29 @@ namespace Bot.ChromeNs
                             MessageKey = messageKey,
                             Url = url,
                             Message = message,
+                            BrowserClient = browserClient,
+                            DownloadAttempts = 1,
                             ObservedAt = GetObservedAt(message)
                         };
                         record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                         created = Records.TryAdd(key, record);
+                    }
+                    else
+                    {
+                        // A failed first attempt must not permanently poison the message key.
+                        // The vision pipeline calls Prime again with the authoritative CDP client;
+                        // use that opportunity for one bounded retry through the logged-in browser.
+                        if (record.BrowserClient == null && browserClient != null)
+                            record.BrowserClient = browserClient;
+                        if (record.Message == null) record.Message = message;
+                        if ((record.DownloadTask == null
+                                || (record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)))
+                            && record.DownloadAttempts < 2)
+                        {
+                            record.DownloadAttempts++;
+                            record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
+                            created = true;
+                        }
                     }
                 }
 
@@ -240,7 +276,6 @@ namespace Bot.ChromeNs
         {
             if (message == null) return Fail("图片消息为空");
             var url = VisionImageResolver.ExtractUrl(message);
-            if (string.IsNullOrWhiteSpace(url)) return Fail("图片 URL 不存在");
 
             var seller = GetSellerNick(message, shopKey);
             var shop = ResolveShop(seller, shopKey);
@@ -373,6 +408,183 @@ namespace Bot.ChromeNs
         }
 
         private static async Task<CacheDownloadResult> DownloadAndPersistAsync(
+            CacheRecord record,
+            AiEndpointConfig endpoint)
+        {
+            var direct = await DownloadAndPersistDirectAsync(record, endpoint).ConfigureAwait(false);
+            if (direct != null && direct.Success) return direct;
+
+            var configuredMb = endpoint == null ? DefaultMaxImageSizeMb : endpoint.MaxImageSizeMb;
+            var maxBytes = Math.Max(1, Math.Min(20, configuredMb)) * 1024L * 1024L;
+            var browser = await DownloadAndPersistFromBrowserAsync(
+                record, Math.Min(maxBytes, 8L * 1024L * 1024L)).ConfigureAwait(false);
+            if (browser != null && browser.Success)
+            {
+                Log.Info("买家图片已通过千牛登录态补全下载并缓存: seller=" + record.SellerNick
+                    + ", buyer=" + record.BuyerNick + ", bytes=" + browser.Bytes
+                    + ", directFailure=" + Short(direct == null ? string.Empty : direct.Error, 120));
+                return browser;
+            }
+
+            return new CacheDownloadResult
+            {
+                Error = "图片获取失败：直连下载="
+                    + Short(direct == null ? "无结果" : direct.Error, 180)
+                    + "；千牛登录态下载="
+                    + Short(browser == null ? "无结果" : browser.Error, 180)
+            };
+        }
+
+        private static async Task<CacheDownloadResult> DownloadAndPersistFromBrowserAsync(
+            CacheRecord record,
+            long maxBytes)
+        {
+            var result = new CacheDownloadResult();
+            var client = record == null ? null : record.BrowserClient;
+            if (client == null)
+            {
+                result.Error = "没有可用的千牛登录浏览器会话";
+                return result;
+            }
+            if (client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals((client.ShopKey ?? string.Empty).Trim(),
+                    (record.ShopKey ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                result.Error = "千牛浏览器会话已失效或ShopKey不匹配";
+                return result;
+            }
+
+            try
+            {
+                var message = record.Message;
+                var original = message == null ? null : message.originalData;
+                var args = new
+                {
+                    url = record.Url ?? string.Empty,
+                    fileId = original == null ? string.Empty : (original.fileId ?? string.Empty),
+                    messageId = message == null || message.mcode == null ? string.Empty : (message.mcode.messageId ?? string.Empty),
+                    clientId = message == null || message.mcode == null ? string.Empty : (message.mcode.clientId ?? string.Empty),
+                    wwMsgId = message == null || message.ext == null ? string.Empty : message.ext.ww_msgid.ToString(),
+                    maxBytes = Math.Max(1024L, maxBytes)
+                };
+                var expression = BuildBrowserImageFetchExpression(args);
+                var responseText = await client.EvaluateExpressionAsync(
+                    expression, "DownloadBuyerImageWithQianniuSession").ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(responseText))
+                {
+                    result.Error = "千牛浏览器没有返回图片数据";
+                    return result;
+                }
+
+                BrowserImageFetchResponse payload;
+                try { payload = JsonConvert.DeserializeObject<BrowserImageFetchResponse>(responseText); }
+                catch (Exception ex)
+                {
+                    result.Error = "千牛浏览器图片回执解析失败：" + ex.GetType().Name;
+                    return result;
+                }
+                if (payload == null || !payload.ok || string.IsNullOrWhiteSpace(payload.base64))
+                {
+                    result.Error = payload == null || string.IsNullOrWhiteSpace(payload.error)
+                        ? "千牛浏览器未能读取图片原始数据"
+                        : Short(payload.error, 180);
+                    return result;
+                }
+
+                byte[] bytes;
+                try { bytes = Convert.FromBase64String(payload.base64); }
+                catch
+                {
+                    result.Error = "千牛浏览器返回的图片编码无效";
+                    return result;
+                }
+                if (bytes == null || bytes.Length < 12 || bytes.LongLength > maxBytes)
+                {
+                    result.Error = "千牛浏览器返回的图片大小不符合限制";
+                    return result;
+                }
+
+                var detectedMime = VisionImageResolver.DetectMime(bytes);
+                if (string.IsNullOrWhiteSpace(detectedMime)
+                    || !AllowedMimeTypes.Contains(detectedMime, StringComparer.OrdinalIgnoreCase))
+                {
+                    result.Error = "千牛浏览器返回的数据不是受支持的图片";
+                    return result;
+                }
+                if (!string.IsNullOrWhiteSpace(payload.mime)
+                    && payload.mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(payload.mime, detectedMime, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Error = "千牛浏览器图片MIME与实际内容不一致";
+                    return result;
+                }
+
+                Directory.CreateDirectory(CacheDirectory);
+                var path = Path.Combine(
+                    CacheDirectory,
+                    Sha256(record.Key + "|" + record.Url + "|" + record.MessageKey) + ExtensionForMime(detectedMime));
+                var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+                File.WriteAllBytes(temp, bytes);
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(temp, path);
+
+                result.Success = true;
+                result.FilePath = path;
+                result.MimeType = detectedMime;
+                result.Bytes = bytes.LongLength;
+                Log.Info("买家图片已从当前千牛登录会话读取并缓存: seller=" + record.SellerNick
+                    + ", buyer=" + record.BuyerNick + ", bytes=" + result.Bytes
+                    + ", messageKey=" + Short(record.MessageKey, 90));
+                CleanupIfNeeded();
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Error = "千牛登录态图片读取异常：" + ex.GetType().Name + " " + Short(ex.Message, 160);
+                return result;
+            }
+        }
+
+        private static string BuildBrowserImageFetchExpression(object args)
+        {
+            var json = JsonConvert.SerializeObject(args);
+            return "(async function(a){"
+                + "const max=Number(a.maxBytes)||8388608;"
+                + "const tokens=[a.fileId,a.messageId,a.clientId,a.wwMsgId].filter(Boolean).map(String);"
+                + "const candidates=[];"
+                + "function add(u,img){if(!u)return;u=String(u).trim();"
+                + "try{if(!/^(https?:|blob:|data:)/i.test(u)){if(u.indexOf('//')===0)u=location.protocol+u;"
+                + "else if(u.charAt(0)==='/')u=new URL(u,location.href).href;else return;}}catch(e){return;}"
+                + "if(!candidates.some(x=>x.url===u))candidates.push({url:u,img:img||null});}"
+                + "add(a.url,null);"
+                + "try{const imgs=Array.from(document.querySelectorAll('img'));"
+                + "for(const img of imgs){const values=[img.currentSrc,img.src,img.getAttribute('data-src'),"
+                + "img.getAttribute('data-original'),img.getAttribute('data-url'),img.getAttribute('data-file-id')];"
+                + "let node=img;for(let depth=0;node&&depth<4;depth++,node=node.parentElement){"
+                + "for(const attr of ['data-message-id','data-msgid','data-mid','data-id','data-file-id'])"
+                + "values.push(node.getAttribute&&node.getAttribute(attr));}"
+                + "if(tokens.length&&tokens.some(t=>values.some(v=>v&&String(v).indexOf(t)>=0)))add(img.currentSrc||img.src,img);"
+                + "}}catch(e){}"
+                + "async function fromUrl(u){const response=await fetch(u,{method:'GET',credentials:'include',"
+                + "cache:'no-store',redirect:'follow'});if(!response.ok)throw new Error('http_'+response.status);"
+                + "const blob=await response.blob();if(!blob.size||blob.size>max)throw new Error('image_size');"
+                + "const buffer=await blob.arrayBuffer();const bytes=new Uint8Array(buffer);let binary='';"
+                + "for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode.apply(null,bytes.subarray(i,Math.min(i+0x8000,bytes.length)));"
+                + "return {ok:true,base64:btoa(binary),mime:blob.type||''};}"
+                + "function fromCanvas(img){try{if(!img||!img.complete||!img.naturalWidth||!img.naturalHeight)return null;"
+                + "const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;"
+                + "const ctx=canvas.getContext('2d');if(!ctx)return null;ctx.drawImage(img,0,0);"
+                + "const data=canvas.toDataURL('image/png');const b=data.substring(data.indexOf(',')+1);"
+                + "if(!b||b.length>Math.ceil(max*4/3)+8)return null;return {ok:true,base64:b,mime:'image/png'};"
+                + "}catch(e){return null;}}"
+                + "let last='no_matching_image_source';"
+                + "for(const item of candidates){try{return await fromUrl(item.url);}catch(e){last='browser_fetch_failed';"
+                + "const canvas=fromCanvas(item.img);if(canvas)return canvas;}}"
+                + "return {ok:false,error:last};"
+                + "})(" + json + ")";
+        }
+
+        private static async Task<CacheDownloadResult> DownloadAndPersistDirectAsync(
             CacheRecord record,
             AiEndpointConfig endpoint)
         {
