@@ -438,3 +438,16 @@ def test_reception_agent_requires_native_message_ids_and_unique_adjacent_human_e
     assert "turn.PreciseTimeTicks > DateTime.MinValue.Ticks" in agent
     assert "TimeSpan.FromMinutes(30).Ticks" in pair_gate
     assert "humanRepliesBetween.Count == 1" in pair_gate
+
+
+def test_image_only_upload_counts_as_buyer_message_for_ask_evidence():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    evaluate = runtime[
+        runtime.index("private static ReceptionWorkflowDecision Evaluate("):
+        runtime.index("internal static bool IsDecisionCurrent(")
+    ]
+
+    assert "var hasBuyer = question.Length > 0" in evaluate
+    assert "|| (isImage && !string.IsNullOrWhiteSpace(messageKey));" in evaluate
+    assert "var hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
+    assert "var hasVision = hasCurrentVisual || hasRecentVisual;" in evaluate
