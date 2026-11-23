@@ -154,7 +154,7 @@ def test_manual_takeover_auto_learning_requires_native_buyer_and_human_message_i
     ]
     assert "!IsBotAnswer(seller, buyer, x.Text, x.Timestamp, shopKey, botCards)" in resolver
     assert "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey)" in classifier
-    assert "catch { return true; }" in classifier
+    assert "catch { /* The reliable session-scoped Bot-card snapshot remains authoritative. */ }" in classifier
     assert "var humanReplyTurns = turns.Skip(questionIndex + 1)" in resolver
     assert "humanReplyTurns.Count != 1 || !ReferenceEquals(humanReplyTurns[0], answerTurn)" in resolver
     assert "buyerMessageId.Length == 0 || humanMessageId.Length == 0" in resolver
