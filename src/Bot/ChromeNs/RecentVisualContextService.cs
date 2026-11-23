@@ -62,6 +62,17 @@ namespace Bot.ChromeNs
             @"(?:酷狗|用户|账号)?(?:ID|id)\s*(?:[:：]|为)\s*([A-Za-z0-9_-]{3,64})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        private static bool IsWithdrawnObservation(
+            string shopKey, string seller, string buyer, VisualKnowledgeObservationEntity item)
+        {
+            if (item == null
+                || string.Equals(item.Status, "图片已撤回", StringComparison.Ordinal))
+                return true;
+            return !string.IsNullOrWhiteSpace(item.MessageKey)
+                && VisionImageCacheService.IsMessageKeyWithdrawn(
+                    seller, buyer, item.MessageKey, shopKey);
+        }
+
         public static string BuildPromptAddon(string seller, string buyer, string currentQuestion)
         {
             var shop = ResolveShop(string.Empty, seller);
@@ -73,6 +84,7 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(shopKey, seller);
             if (shop == null) return string.Empty;
             var items = LoadRecent(shop.ShopKey, seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
+                .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .Take(MaxPromptObservations)
                 .OrderBy(x => SafeTime(x.ObservedAtTicks))
@@ -111,7 +123,7 @@ namespace Bot.ChromeNs
                 .Where(x => x != null
                     && !string.IsNullOrWhiteSpace(x.MessageKey)
                     && !string.IsNullOrWhiteSpace(x.VisualSummary)
-                    && !string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal))
+                    && !IsWithdrawnObservation(shopKey, seller, buyer, x))
                 .OrderByDescending(x => x.ObservedAtTicks)
                 .Take(Math.Max(1, Math.Min(30, maxCount)))
                 .ToList();
@@ -143,6 +155,7 @@ namespace Bot.ChromeNs
                     DateTime.Now.AddMinutes(-PromptWindowMinutes),
                     DateTime.Now.AddMinutes(2),
                     20)
+                .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .ToList();
 
@@ -216,6 +229,7 @@ namespace Bot.ChromeNs
             // This is deliberately a read-only, non-blocking cache lookup. It never starts a
             // second vision request and never serializes order handling behind a slow AI task.
             var items = LoadRecent(shop.ShopKey, seller, buyer, since, until, 20)
+                .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .ToList();
             foreach (var item in items)
