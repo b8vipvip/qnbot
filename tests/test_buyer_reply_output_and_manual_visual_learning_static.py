@@ -135,3 +135,16 @@ def test_recent_visual_context_initializes_out_values_when_shop_resolution_fails
 
     assert account.index("evidence = null;") < account.index("ResolveShop")
     assert order_photo.index("evidence = string.Empty;") < order_photo.index("ResolveShop")
+
+
+def test_manual_visual_learning_never_binds_a_reply_to_a_different_recent_image():
+    source = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+    loader = source[
+        source.index("private static VisualKnowledgeObservationEntity LoadObservation("):
+        source.index("private static VisualKnowledgeEntryEntity UpsertVisualKnowledge(")
+    ]
+    fallback = loader[loader.index("var since ="):]
+
+    assert "pending.MessageKey" in loader
+    assert "string.Equals(x.MessageKey, pending.MessageKey, StringComparison.Ordinal)" in fallback
+    assert "SameBuyer(pending.Seller, x.Buyer, pending.Buyer)" in fallback
