@@ -16,10 +16,12 @@ def test_known_bot_seller_echo_is_rejected_before_manual_learning_side_effects()
     method_end = source.index("public static bool TryTakeSendBlock(", method_start)
     method = source[method_start:method_end]
 
-    guard = "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)"
+    guard = "IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards)"
     manual_source = 'RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")'
     comparison = "QueueManualAnswerComparison("
 
+    assert "BotConversationHistoryStore.TryLoadRangeComplete(" in method
+    assert "if (!BotConversationHistoryStore.TryLoadRangeComplete(" in method
     assert guard in method
     assert "ShopSettingsScope.Enter(shop)" in method
     assert manual_source in method
@@ -84,7 +86,7 @@ def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bo
         source.index("public static bool TryTakeSendBlock(")
     ]
 
-    bot_guard = method.index("SendDeliveryWatchdog.IsKnownBotAnswer")
+    bot_guard = method.index("IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards)")
     same_answer = method.index("var sameAsCandidate =")
     manual_mark = method.index("SendDeliveryWatchdog.MarkManualTakeover(seller, buyer, candidateAnswer, shopKey);")
     manual_register = method.index('RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复")')
@@ -97,3 +99,21 @@ def test_same_human_answer_as_bot_candidate_still_blocks_duplicate_send_after_bo
     assert "TryResolveManualEvidenceMessageIds(" in method
     assert "QueueManualAnswerComparison(" in method
     assert "if (!sameAsCandidate)" in method
+
+
+def test_manual_learning_uses_one_reliable_bot_history_snapshot_for_all_seller_turns():
+    source = _text(KNOWLEDGE)
+    resolver = source[
+        source.index("private static bool TryResolveManualEvidenceMessageIds("):
+        source.index("private static bool IsGreetingOnly(")
+    ]
+    bot_classifier = source[
+        source.index("private static bool IsBotAnswer("):
+        source.index("private static bool TryResolveManualEvidenceMessageIds(")
+    ]
+
+    assert "IList<BotConversationHistoryEntity> botCards" in resolver
+    assert "!IsBotAnswer(seller, buyer, x.Text, x.Timestamp, shopKey, botCards)" in resolver
+    assert "botCards == null || answerAt == DateTime.MinValue" in bot_classifier
+    assert "card.AnswerReadyAtTicks" in bot_classifier
+    assert "return true;" in bot_classifier
