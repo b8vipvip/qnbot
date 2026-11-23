@@ -95,12 +95,15 @@ namespace Bot.ChromeNs
 
         private static bool IsBotTurn(ConversationContextTurn turn, IList<BotConversationHistoryEntity> cards)
         {
-            if (turn == null) return false;
+            if (turn == null) return true;
             var text = (turn.Text ?? string.Empty).TrimEnd();
             if (text.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
                 || text.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) return true;
             var normalized = Regex.Replace(text, @"[\s\p{P}\p{S}]+", string.Empty).ToLowerInvariant();
-            if (normalized.Length == 0 || turn.Timestamp == DateTime.MinValue || cards == null) return false;
+            // A failed/truncated Bot-card read cannot prove that an unmarked seller
+            // message was written by a human. Exclude uncertain turns from workflow
+            // evidence; otherwise a delayed Bot echo could self-authorize publication.
+            if (normalized.Length == 0 || turn.Timestamp == DateTime.MinValue || cards == null) return true;
             return cards.Any(card =>
             {
                 if (card == null) return false;
