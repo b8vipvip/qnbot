@@ -89,7 +89,7 @@ def test_runtime_watchdogs_never_probe_or_repair_a_retired_or_non_authoritative_
     helper = monitor[monitor.index("private static bool IsCurrentShopAuthority"):monitor.index("private static void ScheduleConversationProbe")]
     probe = monitor[monitor.index("private static async Task ProbeCurrentConversationAsync"):monitor.index("private static bool RejectNonBuyerProbe")]
     assert "ReferenceEquals(qn.CDP, client)" in helper
-    assert "client.IsInvalidated &&" not in helper
+    assert "!client.IsInvalidated && !client.IsShopIdentityRetired" in helper
     assert "!client.IsInvalidated && !client.IsShopIdentityRetired" in helper
     assert "client.ShopKey, shopKey" in helper
     assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in helper
