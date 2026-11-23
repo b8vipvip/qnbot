@@ -458,7 +458,9 @@ namespace Bot.ChromeNs
                 if (card == null) return false;
                 var answer = NormalizeBotAnswer(card.Answer);
                 var cardTicks = card.AnswerReadyAtTicks > 0 ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
-                return answer == normalized && cardTicks > 0
+                return (string.Equals(answer, normalized, StringComparison.Ordinal)
+                        || (normalized.Length >= 8 && answer.Contains(normalized)))
+                    && cardTicks > 0
                     && Math.Abs((double)(cardTicks - replyAt.Ticks)) <= TimeSpan.FromMinutes(30).Ticks;
             });
         }
