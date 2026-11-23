@@ -864,9 +864,12 @@ namespace Bot.ChromeNs
 
                         localFirst = ReplyModeService.IsLocalFirst(session.Seller);
                         styleBefore = GetStyleProfile(session.Seller);
+                        workflowEvidenceContext = ReceptionWorkflowAgentService.BuildEvidenceContext(
+                            session.Seller, session.Buyer, session.ShopKey, turns, cards);
                         try
                         {
-                            analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
+                            analysis = await AnalyzeAsync(
+                                session, turns, cards, styleBefore, localFirst, workflowEvidenceContext);
                             RecordKnowledgeCorpusAiSuccess(session.ShopKey);
                         }
                         catch (Exception aiException)
@@ -878,11 +881,22 @@ namespace Bot.ChromeNs
 
                         // Publish evidence-backed Reception Agent flows immediately after the
                         // session analysis; the separate corpus-wide knowledge scan must not delay it.
-                        workflowEvidenceContext = ReceptionWorkflowAgentService.BuildEvidenceContext(
-                            session.Seller, session.Buyer, session.ShopKey, turns, cards);
-                        workflowPublishResult = ReceptionWorkflowAgentService.PublishProposals(
-                            session.Seller, session.Buyer, session.ShopKey,
-                            analysis["workflow_proposals"] as JArray, workflowEvidenceContext);
+                        var workflowProposals = analysis["workflow_proposals"] as JArray;
+                        if (HasNewerActiveSession(key, session))
+                        {
+                            workflowPublishResult.SkippedCount = workflowProposals == null ? 0 : workflowProposals.Count;
+                            if (workflowPublishResult.SkippedCount > 0)
+                                workflowPublishResult.Items.Add(new ReceptionWorkflowPublishItem
+                                {
+                                    Message = "买家已开启新一轮会话，旧会话流程候选不再发布"
+                                });
+                        }
+                        else
+                        {
+                            workflowPublishResult = ReceptionWorkflowAgentService.PublishProposals(
+                                session.Seller, session.Buyer, session.ShopKey,
+                                workflowProposals, workflowEvidenceContext);
+                        }
 
                         corpusAnalysis = await AnalyzeKnowledgeCorpusAsync(
                             session, turns, cards, styleBefore, localFirst,
@@ -3393,18 +3407,27 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool HasNewerActiveSession(string key, ActiveSession completedSession)
+        {
+            ActiveSession current;
+            return Active.TryGetValue(key, out current)
+                && current != null
+                && !ReferenceEquals(current, completedSession);
+        }
+
         private static async Task<JObject> AnalyzeAsync(
             ActiveSession session,
             List<ConversationContextTurn> turns,
             List<BotConversationHistoryEntity> cards,
             string styleBefore,
-            bool localFirst)
+            bool localFirst,
+            ReceptionWorkflowEvidenceContext workflowEvidenceContext)
         {
             var learningPolicy = localFirst
                 ? "当前店铺启用了本地优先模式。你必须阅读这一轮全部买家、Bot和人工客服消息，把可复用的真实问答整理成知识。人工客服最终有效回复优先级最高；若没有人工回复，只有当Bot答案与整轮对话不冲突、不包含无法从对话确认的新业务事实、且问题答案具有跨买家复用价值时，才可使用evidence_type=conversation_synthesis，confidence必须>=0.92。不要把寒暄、一次性订单状态、临时价格/库存或个性化承诺写成知识。"
                 : "当前店铺启用了AI优先模式。保持保守学习：没有可靠人工证据宁可skip；Bot自身回复不能作为新增事实的唯一证据。";
-            var workflowEvidence = ReceptionWorkflowAgentService.BuildEvidenceContext(
-                session.Seller, session.Buyer, session.ShopKey, turns, cards);
+            workflowEvidenceContext = workflowEvidenceContext
+                ?? new ReceptionWorkflowEvidenceContext();
 
             var messages = new JArray
             {
@@ -3430,7 +3453,7 @@ namespace Bot.ChromeNs
                         + "\n现有表达风格：" + (string.IsNullOrWhiteSpace(styleBefore) ? "（暂无）" : styleBefore)
                         + "\n\n聊天时间线（买家/Bot/人工客服全部消息）：\n" + BuildTranscript(turns, cards)
                         + "\n\nBot问答记录（辅助元数据，可能不完整）：\n" + BuildCards(cards)
-                        + "\n\n流程提案可引用的ShopKey隔离真实证据：\n" + workflowEvidence.PromptText
+                        + "\n\n流程提案可引用的ShopKey隔离真实证据：\n" + workflowEvidenceContext.PromptText
                 }
             };
             var lastRetryableError = string.Empty;
