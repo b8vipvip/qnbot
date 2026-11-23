@@ -52,7 +52,8 @@ namespace Bot.ChromeNs
             VisionImageResult image;
             try
             {
-                image = await new VisionImageResolver().ResolveAsync(task.Message, null, cancellationToken, task.ShopKey);
+                image = await new VisionImageResolver().ResolveAsync(
+                    task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient);
             }
             catch (Exception ex)
             {
