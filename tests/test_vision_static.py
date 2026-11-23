@@ -82,3 +82,19 @@ def test_image_resolver_downloads_caches_and_validates_every_image():
     ])
     assert 'Log.Info(dataUri' not in all_changed
     assert 'Log.Info(image.ImageUrl' not in all_changed
+
+
+
+def test_image_transfer_uses_authenticated_qianniu_session_when_direct_url_download_fails():
+    cache = read('src/Bot/ChromeNs/VisionImageCacheService.cs')
+    ocr = read('src/Bot/ChromeNs/LocalOcrService.cs')
+    qn = read('src/Bot/ChromeNs/QN.cs')
+    recovery = read('src/Bot/ChromeNs/QN.MessageRecovery.cs')
+    assert 'DownloadAndPersistFromBrowserAsync' in cache
+    assert 'credentials:'include'' in cache
+    assert 'im.singlemsg.GetRemoteHisMsg' in cache
+    assert 'Array.from(map.values?map.values():Object.values(map))' in cache
+    assert 'new ByteArrayContent(imageBytes)' in ocr
+    assert 'HttpMethod.Post, NormalizeOcrUrl(endpoint.BaseUrl)' in ocr
+    assert 'IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)' in qn
+    assert 'IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt, shopKey, CDP)' in recovery
