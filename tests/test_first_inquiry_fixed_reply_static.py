@@ -212,7 +212,7 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
     open_send = source[source.index("private async Task<bool> OpenAndSendText"):]
     assert "HasExpectedDraftFastAsync" in open_send
     assert "TrySendTextNativeFirstAsync" in open_send
-    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck)" in native
+    assert "TrySendTextViaUiaAsync(\n                buyer, text, sendStart, manualTakeoverCheck, preSendGuard)" in native
     assert "SetPlainText(text)" not in open_send
     assert "method=CDP页面按钮+HWND安全消息+UIA安全回退" in open_send
 
