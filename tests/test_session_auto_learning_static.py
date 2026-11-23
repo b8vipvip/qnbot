@@ -1069,3 +1069,35 @@ def test_manual_reply_optimization_distinguishes_empty_bot_history_from_storage_
     assert "BotConversationHistoryStore.TryLoadRecent(shopKey, seller, buyer, 30, out recent)" in bridge
     assert "return true; // Unknown history is not proof that this was a human-authored reply." in bridge
     assert "catch { return true; }" in bridge
+
+
+def test_incomplete_bot_echo_history_never_promotes_unknown_seller_turns_to_human_evidence():
+    history = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
+    session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+
+    loader = history[
+        history.index("public static bool TryLoadRangeComplete("):
+        history.index("public static void FlushNow()")
+    ]
+    finalize = session[
+        session.index("private static async Task FinalizeAsync("):
+        session.index("private static DateTime ResolveSessionWindowEnd")
+    ]
+    classifier = session[
+        session.index("private static bool IsBotTurn("):
+        session.index("private static bool HasBotEchoMarker(")
+    ]
+    agent_classifier = agent[
+        agent.index("private static bool IsBotTurn("):
+        agent.index("internal static ReceptionWorkflowEvidenceContext BuildEvidenceContext(")
+    ]
+
+    assert "retained.Count >= MaxTotalRecords" in loader
+    assert "fromTicks < DateTime.Now.AddDays(-RetentionDays).Ticks" in loader
+    assert "return false;" in loader
+    assert "TryLoadRangeComplete(" in finalize
+    assert "if (!botCardsReliable) cards = null;" in finalize
+    assert "cards == null" in classifier and "return true;" in classifier
+    assert "客服来源未确认" in session
+    assert "cards == null" in agent_classifier and "return true;" in agent_classifier
