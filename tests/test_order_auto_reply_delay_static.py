@@ -76,3 +76,16 @@ def test_legacy_settings_page_no_longer_forces_order_reply_delay_to_zero():
     assert "ApplyForcedImmediateUi(legacyContent)" not in feature
     assert "ForcedDelaySeconds" not in settings
     assert "OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay))" in read("src/Bot/Options/CtlRobotOptions.xaml.cs")
+
+
+def test_unified_auto_reply_settings_page_exposes_and_persists_three_independent_delays():
+    feature = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    assert "_knowledgeDirectReplyDelaySeconds" in feature
+    assert "_orderPlacedReplyDelaySeconds" in feature
+    assert '"知识库直答延迟(秒)"' in feature
+    assert '"下单后回复延迟(秒)"' in feature
+    assert '"发送延迟(秒)"' in feature
+    assert "KnowledgeDirectReplyDelaySeconds = Math.Max(0, Math.Min(300, knowledgeDelay))" in feature
+    assert "OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay))" in feature
+    assert "FirstInquiryFixedReplyService.Save(" in feature
+    assert "BotFeatureStore.SaveAutoReplyRules(autoReplyRules);" in feature
