@@ -67,11 +67,11 @@ def test_stale_answer_is_non_retryable_before_reliable_retry_loop():
     assert 'IndexOf("旧答案不会发送"' in reliable
     assert "LastSendWasCancelled = IsNonRetryableStaleAnswer" in reliable
     assert "可靠发送层必须立即停止重试" in reliable
-    send = qn.index("var ok = await SendTextAsync(buyer, text)")
+    send = qn.index("var ok = await SendTextAsync(buyer, text, preSendGuard)")
     cancel = qn.index("if (!ok && rpa.LastSendWasCancelled)", send)
     retry = qn.index("自动发送失败，准备重试第", cancel)
     assert send < cancel < retry
-    retry_action = qn.index("ok = await SendTextAsync(buyer, text)", retry)
+    retry_action = qn.index("ok = await SendTextAsync(buyer, text, preSendGuard)", retry)
     retry_cancel = qn.index("if (!ok && rpa.LastSendWasCancelled)", retry_action)
     assert retry < retry_action < retry_cancel
 
