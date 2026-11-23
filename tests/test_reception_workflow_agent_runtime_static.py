@@ -468,3 +468,24 @@ def test_initial_visual_observation_step_is_triggered_by_image_event_without_tex
     assert 'Convert.ToString(x) == "image_message"' in trigger
     assert 'Convert.ToString(x) == "vision_observation"' in trigger
     assert "var accountTrigger = isImage" in trigger
+
+
+def test_vision_ocr_failure_still_routes_through_active_workflow_evidence_requests():
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    failure = vision[
+        vision.index("ReceptionWorkflowDecision workflowDecision = null;"):
+        vision.index("result.Answer = ReplyTranscriptSanitizer.Sanitize(result.Answer);")
+    ]
+    later = vision[
+        vision.index("if (workflowDecision == null)"):
+        vision.index("// OCR-first direct knowledge")
+    ]
+
+    assert "if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))" in failure
+    assert "EvaluateVision(" in failure
+    assert "string.Empty, withdrawn" in failure
+    assert "workflowDecision.SuppressReply" in failure
+    assert "workflowDecision.RequiresSend" in failure
+    assert "result.Answer = workflowDecision.ReplyText" in failure
+    assert "if (workflowDecision == null)" in later
+    assert "EvaluateVision(" in later
