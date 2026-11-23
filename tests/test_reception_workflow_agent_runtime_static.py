@@ -368,3 +368,15 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     assert "if ((hasImage || hasAccountEvidence) && action == \"ASK_EVIDENCE\")" in runtime
     assert "hasAccountEvidence" in runtime
     assert "account_evidence" in session
+
+
+def test_ask_evidence_only_advances_after_every_required_evidence_is_satisfied():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    transition = runtime[
+        runtime.index("// Advance only when every evidence requirement for this ASK_EVIDENCE"):
+        runtime.index("if (step.Value<bool?>(\"terminal\") == true)", runtime.index("// Advance only when every evidence requirement for this ASK_EVIDENCE"))
+    ]
+
+    assert "if (evidenceReady && action == \"ASK_EVIDENCE\")" in transition
+    assert "hasImage || hasAccountEvidence" not in transition
+    assert "HasRequiredEvidence(" in runtime
