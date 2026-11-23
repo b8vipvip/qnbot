@@ -32,7 +32,7 @@ def test_invalid_ai_answer_fails_before_answer_ready_transition():
 def test_error_answer_is_not_completed_or_sent():
     source = _source()
     failure_gate = source.index('if (string.IsNullOrWhiteSpace(answer)\n                || answer.StartsWith("错误：", StringComparison.Ordinal))')
-    failure_block_end = source.index("var deduplication = ReplyDeduplicationService.EnsureDistinct", failure_gate)
+    failure_block_end = source.index("var deduplication =", failure_gate)
     failure_block = source[failure_gate:failure_block_end]
 
     assert "ResponseProgressTracker.Fail(" in failure_block
