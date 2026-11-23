@@ -351,7 +351,7 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     ]
     runtime_current = runtime[
         runtime.index("internal static bool IsDecisionCurrent("):
-        runtime.index("private static T Mutate<")
+        runtime.index("internal static void CompleteDecision(")
     ]
 
     assert "public string MessageKey { get; set; }" in account_type
