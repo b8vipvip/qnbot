@@ -395,11 +395,37 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
+                    return false;
+                var latestWithdrawn = VisionImageCacheService.IsWithdrawn(
+                    burst.SellerNick, burst.BuyerNick,
+                    visionItem.MessageKey, visionItem.Message, burst.ShopKey);
+                if (latestWithdrawn && !hasFollowUpText)
+                {
+                    Log.Info("图片回复等待发送资源期间收到撤回，已阻止仅基于撤回图片主动回复: messageId="
+                        + visionItem.MessageKey);
+                    return false;
+                }
+                string latestRelevanceReason;
+                if (!ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestRelevanceReason, trustedOcrKnowledge, burst.ShopKey))
+                {
+                    Log.Info("图片回复等待发送资源期间会话相关性发生变化，已阻止发送: reason="
+                        + latestRelevanceReason);
+                    return false;
+                }
+                return workflowDecision == null || !workflowDecision.RequiresSend
+                    || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+            };
+
             bool sendOk;
             try
             {
                 sendOk = await qn.SendTextWithRetryAsync(
-                    burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken);
+                    burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken, preSendGuard);
             }
             catch (OperationCanceledException)
             {
