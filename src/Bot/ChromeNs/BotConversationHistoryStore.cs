@@ -790,8 +790,10 @@ namespace Bot.ChromeNs
                     toTicks = swap;
                 }
 
-                // The session window must fit inside retention. When the global history
-                // table is at its cap, older Bot cards may already have been pruned.
+                // The session window must fit inside retention. If the global table
+                // is at its cap, only treat the index as truncated when the oldest retained
+                // Bot card is newer than this session window (meaning some in-window cards
+                // could have been pruned). Older pruned cards cannot affect this session.
                 if (fromTicks < DateTime.Now.AddDays(-RetentionDays).Ticks)
                     return false;
 
@@ -800,8 +802,16 @@ namespace Bot.ChromeNs
                     var retained = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
                         "where 1=1 order by UpdatedAtTicks desc limit " + MaxTotalRecords);
-                    if (retained == null || retained.Count >= MaxTotalRecords)
-                        return false;
+                    if (retained == null) return false;
+                    if (retained.Count >= MaxTotalRecords)
+                    {
+                        var retainedRows = retained.OfType<BotConversationHistoryEntity>()
+                            .Where(x => x != null && x.UpdatedAtTicks > 0)
+                            .ToList();
+                        if (retainedRows.Count < MaxTotalRecords
+                            || retainedRows.Min(x => x.UpdatedAtTicks) >= fromTicks)
+                            return false;
+                    }
 
                     var rows = DbHelper.Db.Select(
                         typeof(BotConversationHistoryEntity),
