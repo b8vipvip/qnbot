@@ -286,6 +286,7 @@ namespace Bot.ChromeNs
                             ["required_evidence"] = step["required_evidence"].DeepClone(),
                             ["action"] = Convert.ToString(step["action"]),
                             ["reply_template"] = SafeMetadata(step["reply_template"], 1200),
+                            ["terminal"] = step.Value<bool?>("terminal") ?? false,
                             ["next_state"] = Convert.ToString(step["next_state"]),
                             ["timeout_minutes"] = step.Value<int>("timeout_minutes")
                         }))
