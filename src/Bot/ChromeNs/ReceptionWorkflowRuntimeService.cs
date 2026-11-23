@@ -338,7 +338,79 @@ namespace Bot.ChromeNs
                 var decision = Mutate(shop, document =>
                 {
                     var records = document["records"] as JArray;
-                    foreach (var flow in matchingFlows)
+                    var progressedFlows = new List<JObject>();
+                    var triggeredFlows = new List<JObject>();
+                    foreach (var candidate in matchingFlows)
+                    {
+                        var candidateId = Convert.ToString(candidate["flow_id"]);
+                        var candidateSteps = candidate["steps"] as JArray ?? new JArray();
+                        var candidateInitial = InitialState(candidate);
+                        if (candidateSteps.Count == 0 || string.IsNullOrWhiteSpace(candidateInitial)) continue;
+                        var candidateRecord = FindRecord(records, buyerKey, candidateId);
+                        var candidateState = candidateRecord == null
+                            ? candidateInitial : Convert.ToString(candidateRecord["current_state"]);
+                        var candidateStep = candidateSteps.OfType<JObject>().FirstOrDefault(x =>
+                            string.Equals(Convert.ToString(x["state"]), candidateState, StringComparison.Ordinal));
+                        if (candidateStep != null && candidateStep.Value<bool?>("terminal") == true) continue;
+                        if (candidateRecord != null
+                            && !string.Equals(candidateState, candidateInitial, StringComparison.Ordinal))
+                        {
+                            progressedFlows.Add(candidate);
+                            continue;
+                        }
+                        var candidateKeywords = (candidateStep == null
+                                ? new JArray()
+                                : candidateStep["trigger_keywords"] as JArray ?? new JArray())
+                            .Values<string>().ToList();
+                        if (candidateKeywords.Count == 0)
+                            candidateKeywords = (candidate["trigger_keywords"] as JArray ?? new JArray())
+                                .Values<string>().ToList();
+                        var candidateRequired = candidateStep == null
+                            ? new JArray() : candidateStep["required_evidence"] as JArray ?? new JArray();
+                        var imageTrigger = isImage
+                            && candidateRequired.Any(x => Convert.ToString(x) == "image_message");
+                        if ((candidateKeywords.Count > 0 && ContainsAny(question, candidateKeywords)) || imageTrigger)
+                            triggeredFlows.Add(candidate);
+                    }
+
+                    List<JObject> selectedFlows;
+                    if (progressedFlows.Count == 1)
+                        selectedFlows = progressedFlows;
+                    else if (progressedFlows.Count > 1)
+                    {
+                        var queued = false;
+                        try
+                        {
+                            using (ShopSettingsScope.Enter(shop))
+                                queued = HandoffNotificationService.QueueReceptionWorkflowHandoff(
+                                    seller, buyer, question, shopKey, "ambiguous-active-flows");
+                        }
+                        catch { queued = false; }
+                        return Suppressed(seller, buyer, shopKey, "ambiguous", 1,
+                            catalog.Revision, string.Empty, string.Empty,
+                            queued ? "HANDOFF" : "WAIT", sourceKey,
+                            "同一买家存在多个已推进的接待流程，已停止自动选择以避免跨流程串线");
+                    }
+                    else if (triggeredFlows.Count == 1)
+                        selectedFlows = triggeredFlows;
+                    else if (triggeredFlows.Count > 1)
+                    {
+                        var queued = false;
+                        try
+                        {
+                            using (ShopSettingsScope.Enter(shop))
+                                queued = HandoffNotificationService.QueueReceptionWorkflowHandoff(
+                                    seller, buyer, question, shopKey, "ambiguous-trigger-flows");
+                        }
+                        catch { queued = false; }
+                        return Suppressed(seller, buyer, shopKey, "ambiguous", 1,
+                            catalog.Revision, string.Empty, string.Empty,
+                            queued ? "HANDOFF" : "WAIT", sourceKey,
+                            "当前消息同时匹配多个接待流程，已停止自动选择以避免错误执行");
+                    }
+                    else return null;
+
+                    foreach (var flow in selectedFlows)
                     {
                         var flowId = Convert.ToString(flow["flow_id"]);
                         var flowVersion = flow.Value<int?>("flow_version") ?? 1;
