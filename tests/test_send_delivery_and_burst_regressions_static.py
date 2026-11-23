@@ -325,3 +325,46 @@ def test_vision_reply_rechecks_human_takeover_and_records_send_terminal_state():
     assert "vision_final_relevance_suppressed" in method
     assert 'lease.MarkCompleted("vision_send_completed")' in method
     assert 'lease.MarkFailed("vision_send_failed")' in method
+
+
+def test_qn_rechecks_business_guard_after_send_lock_and_before_each_physical_attempt():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    start = qn.index("public async Task<bool> SendTextWithRetryAsync(")
+    end = qn.index("private bool IsPreSendGuardSatisfied", start)
+    method = qn[start:end]
+
+    assert "Func<bool> preSendGuard = null" in method
+    assert "SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)" in method
+    assert "await _sendGate.WaitAsync(cancellationToken)" in method
+    assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)") < method.index(
+        'IsPreSendGuardSatisfied(preSendGuard, "首次发送")'
+    ) < method.index("var ok = await SendTextAsync(buyer, text)")
+    assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)", method.index("var retry =")) < method.index(
+        'IsPreSendGuardSatisfied(preSendGuard, "重试发送")'
+    ) < method.index("ok = await SendTextAsync(buyer, text)")
+    assert "复核发生异常，已按安全策略阻止发送" in qn
+
+
+def test_text_and_vision_pipelines_pass_final_guards_into_the_serialized_send_path():
+    text_pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    vision_pipeline = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+
+    text_send = text_pipeline[
+        text_pipeline.index("Func<bool> preSendGuard = () =>"):
+        text_pipeline.index("bool sendOk;", text_pipeline.index("Func<bool> preSendGuard = () =>"))
+    ]
+    assert "lease.IsCurrent" in text_send
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in text_send
+    assert "ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision)" in text_send
+    assert "lease.CancellationToken, preSendGuard" in text_pipeline
+
+    vision_send = vision_pipeline[
+        vision_pipeline.index("Func<bool> preSendGuard = () =>"):
+        vision_pipeline.index("bool sendOk;", vision_pipeline.index("Func<bool> preSendGuard = () =>"))
+    ]
+    assert "lifecycleLease.IsCurrent" in vision_send
+    assert "VisionImageCacheService.IsWithdrawn(" in vision_send
+    assert "latestWithdrawn && !hasFollowUpText" in vision_send
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in vision_send
+    assert "ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision)" in vision_send
+    assert "lifecycleLease.CancellationToken, preSendGuard" in vision_pipeline
