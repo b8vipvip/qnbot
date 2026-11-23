@@ -78,7 +78,13 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
         learning.index("public static bool TryTakeSendBlock")
     ]
     assert "QueueManualAnswerComparison" in manual
-    assert "SendDeliveryWatchdog.IsKnownBotAnswer" in manual
+    assert "IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards)" in manual
+    classifier = learning[
+        learning.index("private static bool IsBotAnswer("):
+        learning.index("private static string NormalizeBotAnswer(")
+    ]
+    assert "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey)" in classifier
+    assert "catch { return true; }" in classifier
     assert "ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert "return true;" in manual
     assert 'SetSendCancellation("人工接管"' in read("src/Bot/ChromeNs/QNRpa.cs")
@@ -205,7 +211,7 @@ def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_gen
         learning.index("public static bool TryTakeSendBlock")
     ]
 
-    bot_guard = manual.index("SendDeliveryWatchdog.IsKnownBotAnswer")
+    bot_guard = manual.index("IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards)")
     same_answer = manual.index("var sameAsCandidate =")
     block = manual.index("return true;", same_answer)
     greeting = manual.index("ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)")
