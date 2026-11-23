@@ -223,3 +223,28 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert "NextStateTerminal" in runtime
     assert "IsDecisionCurrent" in runtime
     assert r'\"terminal\":true' in learning
+
+
+def test_handoff_notifications_are_exact_shop_scoped_bounded_and_retry_after_failure():
+    handoff = read("src/Bot/ChromeNs/HandoffNotificationService.cs")
+
+    assert "using (ShopSettingsScope.Enter(shop))" in handoff
+    assert "MaxRecentEntries = 4096" in handoff
+    assert "TryReserveRecent(" in handoff
+    assert "Recent.TryUpdate(key, expires, current)" in handoff
+    assert "Recent.TryAdd(key, expires)" in handoff
+    assert "RemoveRecentIfUnchanged(key, reservationExpires)" in handoff
+    assert "HasSuccessfulChannel(result)" in handoff
+    assert "Math.Min(10080, cooldownMinutes)" in handoff
+
+
+def test_stale_cancel_cannot_release_a_newer_workflow_version_reservation():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    cancel = runtime[
+        runtime.index("internal static void CancelDecision"):
+        runtime.index("private static bool RegisterFailure")
+    ]
+
+    assert "pending_source_key" in cancel
+    assert "record.Value<int?>(\"flow_version\")" in cancel
+    assert "decision.FlowVersion" in cancel
