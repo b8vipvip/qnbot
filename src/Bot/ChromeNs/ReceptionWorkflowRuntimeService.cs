@@ -340,6 +340,16 @@ namespace Bot.ChromeNs
                         var record = FindRecord(records, buyerKey, flowId);
                         var currentState = record == null ? initial : Convert.ToString(record["current_state"]);
                         var savedVersion = record == null ? flowVersion : record.Value<int?>("flow_version") ?? 0;
+                        var faults = document["faults"] as JArray;
+                        var faultKey = flowId + "|" + catalog.Revision.ToString(CultureInfo.InvariantCulture);
+                        var quarantinedFault = faults.OfType<JObject>().FirstOrDefault(x =>
+                            string.Equals(Convert.ToString(x["key"]), faultKey, StringComparison.Ordinal)
+                            && x.Value<bool?>("quarantined") == true);
+                        if (quarantinedFault != null)
+                            return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                "当前流程版本已隔离，等待修复或回滚，不再自动执行");
+
                         var deliveryUncertain = record != null && record.Value<bool?>("delivery_uncertain") == true;
                         if (deliveryUncertain)
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
@@ -450,7 +460,9 @@ namespace Bot.ChromeNs
                         var hasOrder = matchingOrders.Count > 0;
                         var recentVisual = RecentVisualContextService.GetRecentWorkflowEvidence(
                             shopKey, seller, buyer, 8);
-                        var hasRecentVisual = recentVisual != null && recentVisual.Count > 0;
+                        var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
+                        var hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
+                            x != null && x.ObservedAtTicks >= visualCutoffTicks);
                         var hasImage = isImage || hasRecentVisual;
                         var hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
@@ -484,11 +496,22 @@ namespace Bot.ChromeNs
                                     required, hasBuyer, hasImage, hasVision, hasOrder, hasManual);
                             }
                         }
-                        if (action == "READ_ONLY_TOOL" || action == "REPLY" || action == "REPLY_REVIEWED" && reply.Length == 0)
-                        {
+                        if (action == "READ_ONLY_TOOL")
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
-                                "runtime_failure:unsupported_action_or_missing_reply_template");
+                                "流程请求只读工具，但当前运行时未接入对应工具，已交由人工处理");
+
+                        if (action == "REPLY" || action == "REPLY_REVIEWED")
+                        {
+                            if (!hasManual || !required.Any(x => Convert.ToString(x) == "manual_correction"))
+                                return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                    catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                    "runtime_failure:reply_step_missing_human_evidence");
+                            if (reply.Length == 0)
+                                return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                    catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                    "runtime_failure:missing_reply_template");
+                            action = "REPLY_REVIEWED";
                         }
 
                         if (!evidenceReady)
