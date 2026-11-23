@@ -85,7 +85,8 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                     || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
                     return false;
                 using (ShopSettingsScope.Enter(shop)) return Applies(seller);
