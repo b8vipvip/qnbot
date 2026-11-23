@@ -695,9 +695,10 @@ namespace Bot.ChromeNs
                         var nextState = Convert.ToString(step["next_state"]);
                         var reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
 
-                        // If the buyer supplied the requested image in the same burst or a later
-                        // image turn, do not ask for it again. Move to the evidence-consuming state.
-                        if ((hasImage || hasAccountEvidence) && action == "ASK_EVIDENCE")
+                        // Advance only when every evidence requirement for this ASK_EVIDENCE
+                        // step is actually satisfied. An arbitrary image is not verified account
+                        // evidence, and an image alone must not skip a required vision/order proof.
+                        if (evidenceReady && action == "ASK_EVIDENCE")
                         {
                             var nextStep = steps.OfType<JObject>().FirstOrDefault(x =>
                                 string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal));
