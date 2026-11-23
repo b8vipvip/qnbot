@@ -177,6 +177,7 @@ def test_runtime_deduplicates_pending_messages_and_fails_closed_on_uncertain_del
     assert "pending_started_utc_ticks" in runtime
     assert "检测到重启或超时遗留的待发送流程" in runtime
     assert "上一条流程回复发送结果不确定" in runtime
+    assert "runtime_failure:unsupported_workflow_action" in runtime
     assert "同一来源消息已处理" in runtime
 
 
