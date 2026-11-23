@@ -15,8 +15,10 @@ def test_vision_routing_retains_placeholder_but_calls_ocr_or_multimodal():
     ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
     assert 'QuestionLabel = "[图片]"' in pre
-    assert 'return KnowledgeEngineV2Service.IsEnabled(sellerNick)' in pre
+    assert 'LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)' in pre
+    assert 'CanUseServerOcr(seller, shopKey)' in pre
     assert 'if (!KnowledgeEngineV2Service.IsEnabled(task.SellerNick)' in ocr
+    assert ocr.index('LocalOcrService.TryRecognizeAsync') < ocr.index('KnowledgeEngineV2Service.IsEnabled')
     assert 'ReplyModeService.IsLocalFirst(task.SellerNick)' not in ocr
     assert '[VisionRoute] route=local_ocr_knowledge' in vision
     assert '[VisionRoute] route=multimodal_ai' in vision
