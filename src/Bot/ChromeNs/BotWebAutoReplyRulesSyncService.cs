@@ -126,7 +126,7 @@ namespace Bot.ChromeNs
 
                 var payload = new JObject
                 {
-                    ["current_settings"] = BuildCurrentSettings(),
+                    ["current_settings"] = BuildCurrentSettings(state.Shop),
                     ["last_error"] = Safe(state.LastApplyError, 1000)
                 };
 
@@ -140,7 +140,7 @@ namespace Bot.ChromeNs
                     http.Timeout = TimeSpan.FromSeconds(25);
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                     request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-auto-reply-rules/2.0");
+                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-auto-reply-rules/3.0");
                     request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
                     request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
                     using (var response = await http.SendAsync(request))
@@ -185,7 +185,7 @@ namespace Bot.ChromeNs
                         if (desired == null) return;
                         try
                         {
-                            ApplyDesiredSettings(desired);
+                            ApplyDesiredSettings(desired, state.Shop);
                             state.LastApplyError = string.Empty;
                         }
                         catch (Exception ex)
@@ -210,9 +210,14 @@ namespace Bot.ChromeNs
             return delay;
         }
 
-        private static JObject BuildCurrentSettings()
+        private static JObject BuildCurrentSettings(ShopContext shop)
         {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey) || string.IsNullOrWhiteSpace(shop.SellerNick))
+                throw new InvalidOperationException("自动回复规则同步缺少稳定ShopKey。");
             var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
+            var firstInquiry = FirstInquiryFixedReplyService.Load(shop.SellerNick, shop.ShopKey);
+            if (firstInquiry == null)
+                throw new InvalidOperationException("无法读取当前ShopKey的首条咨询延迟配置。");
             // Reading current settings is side-effect free. Background polling
             // must not invoke AI or retry an unchanged optional paraphrase.
             return new JObject
@@ -229,12 +234,16 @@ namespace Bot.ChromeNs
                 ["order_placed_reply_mode"] = NormalizeOrderReplyMode(cfg.OrderPlacedReplyMode),
                 ["order_placed_reply_text"] = Clean(cfg.OrderPlacedReplyText, 5000),
                 ["order_placed_api_timeout_seconds"] = NormalizeOrderApiTimeout(cfg.OrderPlacedApiTimeoutSeconds),
+                ["knowledge_direct_reply_delay_seconds"] = NormalizeDelay(cfg.KnowledgeDirectReplyDelaySeconds),
+                ["first_inquiry_fixed_reply_delay_seconds"] = FirstInquiryFixedReplyService.ClampDelaySeconds(firstInquiry.DelaySeconds),
                 ["order_placed_reply_delay_seconds"] = OrderPlacedReplyDelaySettings.GetSeconds()
             };
         }
 
-        private static void ApplyDesiredSettings(JObject desired)
+        private static void ApplyDesiredSettings(JObject desired, ShopContext shop)
         {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey) || string.IsNullOrWhiteSpace(shop.SellerNick))
+                throw new InvalidOperationException("自动回复规则下发缺少稳定ShopKey。");
             var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
             var changed = false;
             var previousOffHoursText = cfg.OffHoursFixedText;
@@ -298,12 +307,20 @@ namespace Bot.ChromeNs
                     changed = true;
                 }
             }
-            if (desired["order_placed_reply_delay_seconds"] != null)
+            changed |= SetDelay(desired, "knowledge_direct_reply_delay_seconds",
+                cfg.KnowledgeDirectReplyDelaySeconds, v => cfg.KnowledgeDirectReplyDelaySeconds = v);
+            changed |= SetDelay(desired, "order_placed_reply_delay_seconds",
+                cfg.OrderPlacedReplyDelaySeconds, v => cfg.OrderPlacedReplyDelaySeconds = v);
+
+            if (desired["first_inquiry_fixed_reply_delay_seconds"] != null)
             {
-                var delay = desired.Value<int>("order_placed_reply_delay_seconds");
-                if (delay != 0)
-                    throw new InvalidOperationException("下单固定回复当前强制立即发送，delay 必须为 0。" );
-                // Runtime already hard-codes zero seconds. Do not write params.db every sync tick.
+                var firstInquiry = FirstInquiryFixedReplyService.Load(shop.SellerNick, shop.ShopKey);
+                if (firstInquiry == null)
+                    throw new InvalidOperationException("无法确认当前店铺的首条咨询配置，已拒绝应用云端延迟。");
+                var delay = NormalizeDelay(desired.Value<int>("first_inquiry_fixed_reply_delay_seconds"));
+                if (firstInquiry.DelaySeconds != delay)
+                    FirstInquiryFixedReplyService.Save(
+                        shop.SellerNick, firstInquiry.Enabled, firstInquiry.Answer, delay, shop.ShopKey);
             }
 
             // Only the explicitly whitelisted fields above are changed. Notification webhooks,
@@ -318,6 +335,22 @@ namespace Bot.ChromeNs
                     && !string.IsNullOrWhiteSpace(cfg.OffHoursFixedText))
                     FixedAutoReplyVariantService.Warmup("下班自动回复", cfg.OffHoursFixedText);
             }
+        }
+
+        private static bool SetDelay(JObject desired, string key, int current, Action<int> setter)
+        {
+            if (desired[key] == null || desired[key].Type == JTokenType.Null) return false;
+            if (desired[key].Type != JTokenType.Integer)
+                throw new InvalidOperationException(key + " 必须是整数秒。");
+            var value = NormalizeDelay(desired.Value<int>(key));
+            if (value == current) return false;
+            setter(value);
+            return true;
+        }
+
+        private static int NormalizeDelay(int value)
+        {
+            return Math.Max(0, Math.Min(300, value));
         }
 
         private static bool SetBool(JObject desired, string key, bool current, Action<bool> setter)
