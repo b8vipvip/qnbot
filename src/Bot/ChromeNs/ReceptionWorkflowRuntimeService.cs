@@ -679,12 +679,12 @@ namespace Bot.ChromeNs
                         // summary. A prior image may satisfy a later text follow-up, but must
                         // never be relabeled as the visual analysis of this new image.
                         var hasRecentVisual = !isImage && recentVisualEvidence != null;
-                        var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);
+                        var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary) && !string.IsNullOrWhiteSpace(messageKey);
                         var visualEvidenceMessageKey = hasCurrentVisual
                             ? messageKey
                             : (!isImage && recentVisualEvidence != null
                                 ? recentVisualEvidence.MessageKey : string.Empty);
-                        var hasImage = isImage;
+                        var hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);
                         var hasVision = hasCurrentVisual || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
                         var evidenceReady = HasRequiredEvidence(
@@ -721,12 +721,12 @@ namespace Bot.ChromeNs
                                     .OrderByDescending(x => x.ObservedAtTicks)
                                     .FirstOrDefault();
                                 hasRecentVisual = !isImage && recentVisualEvidence != null;
-                                hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);
+                                hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary) && !string.IsNullOrWhiteSpace(messageKey);
                                 visualEvidenceMessageKey = hasCurrentVisual
                                     ? messageKey
                                     : (!isImage && recentVisualEvidence != null
                                         ? recentVisualEvidence.MessageKey : string.Empty);
-                                hasImage = isImage;
+                                hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);
                                 hasVision = hasCurrentVisual || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
                                     required, hasBuyer, hasImage, hasVision, hasAccountEvidence, hasOrder, hasManual);
