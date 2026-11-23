@@ -103,6 +103,7 @@ namespace Bot.ChromeNs
     internal sealed class OrderPlacedReplyPlan
     {
         public string ShopKey { get; set; }
+        public string SourceSessionId { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
         public string OrderId { get; set; }
@@ -1539,6 +1540,20 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var sourceClient = CDP;
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            if (sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, plan.ShopKey, StringComparison.Ordinal)
+                || sourceServer == null
+                || !sourceServer.IsAuthoritativeShopSession(plan.ShopKey, sourceClient.SessionId))
+            {
+                Log.Info("下单自动回复已阻止：计划来源CDP不是当前ShopKey权威会话。");
+                OrderPlacedAutoReplyService.Complete(plan, false);
+                OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                return;
+            }
+            plan.SourceSessionId = sourceClient.SessionId;
+
             using (ShopSettingsScope.Enter(shop))
                 await ProcessOrderPlacedReplyInShopScopeAsync(plan).ConfigureAwait(false);
         }
@@ -1625,6 +1640,8 @@ namespace Bot.ChromeNs
                         ShopContext verifiedShop;
                         try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(this); }
                         catch { verifiedShop = null; }
+                        var currentClient = CDP;
+                        var currentServer = MyWebSocketServer.WSocketSvrInst;
                         if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                         {
                             OrderPlacedAutoReplyService.Complete(plan, false);
@@ -1635,7 +1652,12 @@ namespace Bot.ChromeNs
                         if (verifiedShop == null
                             || !string.Equals(verifiedShop.ShopKey, plan.ShopKey, StringComparison.Ordinal)
                             || !string.Equals(verifiedShop.SellerNick, plan.Seller, StringComparison.Ordinal)
-                            || CDP == null || CDP.IsShopIdentityRetired)
+                            || currentClient == null || currentClient.IsInvalidated || currentClient.IsShopIdentityRetired
+                            || !string.Equals(currentClient.ShopKey, plan.ShopKey, StringComparison.Ordinal)
+                            || !string.Equals(currentClient.SessionId, plan.SourceSessionId, StringComparison.Ordinal)
+                            || !ReferenceEquals(CDP, currentClient)
+                            || currentServer == null
+                            || !currentServer.IsAuthoritativeShopSession(plan.ShopKey, currentClient.SessionId))
                         {
                             OrderPlacedAutoReplyService.Complete(plan, false);
                             OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);

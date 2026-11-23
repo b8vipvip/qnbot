@@ -129,6 +129,20 @@ namespace Bot.ChromeNs
             if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
                 return false;
 
+            var sourceClient = qn.CDP;
+            var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            if (sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                || sourceSessionId.Length == 0 || sourceServer == null
+                || !sourceServer.IsAuthoritativeShopSession(burst.ShopKey, sourceSessionId))
+            {
+                Log.Info("Knowledge Engine V2拒绝使用非权威CDP会话生成或发送本地直答: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", burst.ShopKey)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", sourceSessionId));
+                return false;
+            }
+
             // Prepare each exact ShopKey once: never collapse two stores that share
             // the same seller nickname into one warm/initialization state.
             PrepareSeller(burst.ShopKey, burst.SellerNick);
@@ -245,7 +259,8 @@ namespace Bot.ChromeNs
                 answer,
                 sourceLabel,
                 detectedAt,
-                readyAt);
+                readyAt,
+                burst.ShopKey);
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
             Log.Info("Knowledge Engine V2本地答案已就绪: buyer=" + burst.BuyerNick
@@ -261,7 +276,7 @@ namespace Bot.ChromeNs
             {
                 lease.MarkCompleted("knowledge_v2_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Engine V2本地命中）", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return true;
             }
 
@@ -289,6 +304,20 @@ namespace Bot.ChromeNs
                     if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot或自动回复开关已关闭");
                     lease.MarkCompleted("knowledge_v2_direct_reply_disabled_during_delay");
                     ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    return true;
+                }
+                var currentClient = qn.CDP;
+                var currentServer = MyWebSocketServer.WSocketSvrInst;
+                if (currentClient == null || !ReferenceEquals(currentClient, sourceClient)
+                    || currentClient.IsInvalidated || currentClient.IsShopIdentityRetired
+                    || !string.Equals(currentClient.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                    || !string.Equals(currentClient.SessionId, sourceSessionId, StringComparison.Ordinal)
+                    || currentServer == null
+                    || !currentServer.IsAuthoritativeShopSession(burst.ShopKey, sourceSessionId))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间原店铺CDP会话已失效或被替换");
+                    ResponseProgressTracker.Cancel(
+                        burst.SellerNick, burst.BuyerNick, "Knowledge V2直答延迟后原CDP权威会话已变化", burst.ShopKey);
                     return true;
                 }
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
@@ -321,7 +350,7 @@ namespace Bot.ChromeNs
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在V2发送前已失效");
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效");
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前generation已失效", burst.ShopKey);
                 return true;
             }
 
@@ -335,7 +364,7 @@ namespace Bot.ChromeNs
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
                 ResponseProgressTracker.Cancel(
-                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效");
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效", burst.ShopKey);
                 Log.Info("Knowledge Engine V2发送期间generation硬失效，已停止后续UI发送副作用: buyer="
                     + burst.BuyerNick);
                 return true;
@@ -376,7 +405,7 @@ namespace Bot.ChromeNs
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
             return true;
         }
 

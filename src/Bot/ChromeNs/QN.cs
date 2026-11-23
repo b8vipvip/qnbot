@@ -690,17 +690,33 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvSellerSwitched(object sender, SellerSwitchedEventArgs e)
         {
-            if (e == null) return;
-            Seller = e.Seller;
-            CurQN = this;
+            if (e == null || e.Seller == null) return;
+            var client = sender as CDPClient;
+            var server = MyWebSocketServer.WSocketSvrInst;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerIdentity(e.Seller); }
+            catch { return; }
+            if (client == null || !ReferenceEquals(CDP, client)
+                || client.IsInvalidated || client.IsShopIdentityRetired
+                || server == null || shop == null
+                || !string.Equals(client.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId))
+            {
+                Log.Info("QN已拒绝非当前ShopKey权威CDP的SellerSwitched事件，不修改Seller/Buyer/CurQN: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shop == null ? string.Empty : shop.ShopKey)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client == null ? string.Empty : client.SessionId));
+                return;
+            }
             string nonBuyerReason;
             if (e.Buyer != null && NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
             {
                 Log.Info("卖家切换事件携带非买家会话，保留当前真实buyer: reason=" + nonBuyerReason);
                 return;
             }
+            Seller = e.Seller;
+            CurQN = this;
             Buyer = e.Buyer;
-            SetActiveConversationByNick(e.Seller == null ? string.Empty : e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "sellerSwitched");
+            SetActiveConversationByNick(e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "sellerSwitched");
 
             if (EvSellerSwitched != null)
             {

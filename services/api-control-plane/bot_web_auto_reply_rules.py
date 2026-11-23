@@ -12,7 +12,7 @@ router = APIRouter()
 _cp: Any = None
 _console: Any = None
 
-RULE_SCHEMA_VERSION = 2
+RULE_SCHEMA_VERSION = 3
 BASE_RULE_KEYS = (
     "auto_reply_rules_enabled",
     "manual_handoff_keywords",
@@ -30,7 +30,20 @@ ORDER_RULE_KEYS = (
     "order_placed_api_timeout_seconds",
     "order_placed_reply_delay_seconds",
 )
-RULE_KEYS = BASE_RULE_KEYS + ORDER_RULE_KEYS
+DELAY_RULE_KEYS = (
+    "knowledge_direct_reply_delay_seconds",
+    "first_inquiry_fixed_reply_delay_seconds",
+    "order_placed_reply_delay_seconds",
+)
+NEW_DELAY_RULE_KEYS = (
+    "knowledge_direct_reply_delay_seconds",
+    "first_inquiry_fixed_reply_delay_seconds",
+)
+# order_placed_reply_delay_seconds existed in schema v2 as a forced-zero field;
+# schema v3 changes its semantics to an independently configurable 0-300s delay.
+RULE_KEYS = BASE_RULE_KEYS + ORDER_RULE_KEYS + tuple(
+    key for key in DELAY_RULE_KEYS if key not in ORDER_RULE_KEYS
+)
 
 DEFAULT_RULE_SETTINGS: Dict[str, Any] = {
     "auto_reply_rules_enabled": True,
@@ -49,6 +62,8 @@ DEFAULT_RULE_SETTINGS: Dict[str, Any] = {
     "order_placed_reply_mode": "固定预设答案",
     "order_placed_reply_text": "",
     "order_placed_api_timeout_seconds": 3,
+    "knowledge_direct_reply_delay_seconds": 3,
+    "first_inquiry_fixed_reply_delay_seconds": 0,
     "order_placed_reply_delay_seconds": 0,
 }
 
@@ -70,7 +85,9 @@ class AutoReplyRuleSettingsInput(BaseModel):
     order_placed_reply_mode: Optional[str] = Field(default=None, max_length=40)
     order_placed_reply_text: Optional[str] = Field(default=None, max_length=5000)
     order_placed_api_timeout_seconds: Optional[int] = Field(default=None, ge=3, le=60)
-    order_placed_reply_delay_seconds: Optional[int] = Field(default=None, ge=0, le=0)
+    knowledge_direct_reply_delay_seconds: Optional[int] = Field(default=None, ge=0, le=300)
+    first_inquiry_fixed_reply_delay_seconds: Optional[int] = Field(default=None, ge=0, le=300)
+    order_placed_reply_delay_seconds: Optional[int] = Field(default=None, ge=0, le=300)
 
 
 class RuntimeAutoReplyRuleSyncInput(BaseModel):
@@ -136,7 +153,12 @@ def _clean_text(value: Any, limit: int) -> str:
 
 
 def _keys_for_version(schema_version: int) -> tuple[str, ...]:
-    return RULE_KEYS if int(schema_version or 0) >= 2 else BASE_RULE_KEYS
+    version = int(schema_version or 0)
+    if version >= 3:
+        return RULE_KEYS
+    if version >= 2:
+        return BASE_RULE_KEYS + ORDER_RULE_KEYS
+    return BASE_RULE_KEYS
 
 
 def _normalize(values: Dict[str, Any], *, fill_defaults: bool, schema_version: int = RULE_SCHEMA_VERSION) -> Dict[str, Any]:
@@ -180,14 +202,16 @@ def _normalize(values: Dict[str, Any], *, fill_defaults: bool, schema_version: i
             if timeout < 3 or timeout > 60:
                 raise ValueError("order_placed_api_timeout_seconds 必须在 3-60 秒之间")
             result[key] = timeout
-        elif key == "order_placed_reply_delay_seconds":
+        elif key in DELAY_RULE_KEYS:
             try:
                 delay = int(value)
             except (TypeError, ValueError):
-                raise ValueError("order_placed_reply_delay_seconds 必须是整数")
-            if delay != 0:
-                raise ValueError("下单固定回复当前强制立即发送，delay 必须为 0")
-            result[key] = 0
+                raise ValueError(f"{key} 必须是整数")
+            if delay < 0 or delay > 300:
+                raise ValueError(f"{key} 必须在 0-300 秒之间")
+            if key == "order_placed_reply_delay_seconds" and schema_version < 3 and delay != 0:
+                raise ValueError("旧版 schema v2 的下单回复延迟只能为 0 秒")
+            result[key] = delay
     return result
 
 
@@ -205,8 +229,6 @@ def _validate_for_web(values: Dict[str, Any], schema_version: int) -> Dict[str, 
             and not normalized["order_placed_reply_text"]
         ):
             raise HTTPException(status_code=422, detail="启用下单固定预设回复时，回复内容不能为空")
-        if normalized["order_placed_reply_delay_seconds"] != 0:
-            raise HTTPException(status_code=422, detail="下单固定回复当前只允许强制立即发送（0 秒）")
     return normalized
 
 
@@ -250,6 +272,7 @@ def _snapshot(client_id: int) -> Dict[str, Any]:
             "online": _online(client_id),
             "settings_schema_version": 0,
             "order_rules_ready": False,
+            "delay_rules_ready": False,
         }
     schema_version = _schema_version(row)
     desired = _normalize(_load(row["desired_settings_json"]), fill_defaults=True, schema_version=schema_version)
@@ -265,6 +288,7 @@ def _snapshot(client_id: int) -> Dict[str, Any]:
         "updated_at": row["updated_at"],
         "settings_schema_version": schema_version,
         "order_rules_ready": schema_version >= 2,
+        "delay_rules_ready": schema_version >= 3,
     }
 
 
@@ -286,6 +310,8 @@ def put_auto_reply_rules(
     raw_payload = {key: getattr(data, key) for key in RULE_KEYS if getattr(data, key) is not None}
     if schema_version < 2 and any(key in raw_payload for key in ORDER_RULE_KEYS):
         raise HTTPException(status_code=409, detail="请先等待新版 Windows Bot 上报下单回复规则")
+    if schema_version < 3 and any(key in raw_payload for key in NEW_DELAY_RULE_KEYS):
+        raise HTTPException(status_code=409, detail="请先等待新版 Windows Bot 上报独立发送延迟配置")
     allowed_keys = set(_keys_for_version(schema_version))
     payload = {key: value for key, value in raw_payload.items() if key in allowed_keys}
     base = _load(existing["desired_settings_json"])
@@ -328,7 +354,8 @@ def runtime_sync_auto_reply_rules(
     client_id = int(client["id"])
     raw_current = data.current_settings if isinstance(data.current_settings, dict) else {}
     supports_order_rules = all(key in raw_current for key in ORDER_RULE_KEYS)
-    incoming_schema_version = 2 if supports_order_rules else 1
+    supports_delay_rules = all(key in raw_current for key in DELAY_RULE_KEYS)
+    incoming_schema_version = 3 if supports_order_rules and supports_delay_rules else (2 if supports_order_rules else 1)
     try:
         current = _normalize(
             raw_current,
@@ -376,17 +403,22 @@ def runtime_sync_auto_reply_rules(
     applied_revision = int(existing["applied_revision"] or 0)
     last_error = _clean_text(data.last_error, 1000)
 
-    # Schema v2 adds the post-order fields. An existing v1 row must adopt those fields
-    # from the first v2 Windows report rather than filling server defaults and pushing
-    # them down. Existing desired v1 edits are preserved, including a pending revision.
-    if stored_schema_version < 2 and incoming_schema_version >= 2:
+    # A newer Windows schema adopts only fields newly introduced by that version.
+    # Pending Web edits in the older schema remain intact and are never replaced by defaults.
+    if stored_schema_version < incoming_schema_version:
         desired = _normalize(
             _load(existing["desired_settings_json"]),
             fill_defaults=True,
-            schema_version=1,
+            schema_version=stored_schema_version,
         )
-        for key in ORDER_RULE_KEYS:
-            desired[key] = current[key]
+        previous_keys = set(_keys_for_version(stored_schema_version))
+        for key in _keys_for_version(incoming_schema_version):
+            # The order delay key existed in v2 but was hard-forced to zero and could not
+            # be edited there. Adopt the Windows v3 value when its meaning becomes real.
+            if key not in previous_keys or (
+                stored_schema_version < 3 <= incoming_schema_version and key in DELAY_RULE_KEYS
+            ):
+                desired[key] = current[key]
         if current == desired:
             applied_revision = revision
             last_error = ""
@@ -395,7 +427,7 @@ def runtime_sync_auto_reply_rules(
                 """
                 UPDATE bot_web_auto_reply_rules
                 SET desired_settings_json=?,current_settings_json=?,applied_revision=?,
-                    last_error=?,settings_schema_version=2,updated_at=?
+                    last_error=?,settings_schema_version=?,updated_at=?
                 WHERE client_id=?
                 """,
                 (
@@ -403,6 +435,7 @@ def runtime_sync_auto_reply_rules(
                     _dump(current),
                     applied_revision,
                     last_error,
+                    incoming_schema_version,
                     now,
                     client_id,
                 ),
@@ -412,7 +445,7 @@ def runtime_sync_auto_reply_rules(
             "desired_settings": desired,
             "revision": revision,
             "applied_revision": applied_revision,
-            "settings_schema_version": 2,
+            "settings_schema_version": incoming_schema_version,
         }
 
     desired = _normalize(

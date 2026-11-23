@@ -36,7 +36,7 @@ def test_v2_cloud_conflicts_preserve_local_facts_as_disabled_review_candidates()
     assert 'candidate.Enabled=false;' in candidate
     assert 'candidate.Status="candidate";' in candidate
     assert "candidate.SourceId=originalId" in candidate
-    assert "AddCandidate(merged,mergedIds,local,id)" in merge
+    assert "AddCandidate(merged, mergedIds, local, id)" in merge
 
 
 def test_v2_cloud_replacement_uses_atomic_repository_compare_and_swap():
@@ -210,7 +210,7 @@ def test_v2_cloud_merge_compares_every_semantic_field_and_preserves_monotonic_me
         service.index("private static KnowledgeV2Record CloneRecord")
     ]
 
-    assert "MergeRecordMetadata(cloud,local)" in merge
+    assert "MergeRecordMetadata(cloud, local)" in merge
     for field in (
         "ShortAnswer", "Subject", "Predicate", "Entities", "Aliases",
         "Conditions", "Exclusions", "RequiredContext", "ProductIds",
@@ -244,3 +244,23 @@ def test_cloud_revision_reset_backs_up_local_corpus_and_restarts_safe_reconcilia
     assert 'state.LastStatus="cloud_revision_reset_reconcile"' in rollback
     assert "return;" in rollback
     assert "re-negotiate" in rollback or "重新协商" in rollback
+
+
+
+def test_verified_human_evidence_is_deduplicated_across_different_device_record_ids():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service[
+        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("private static void AddUnique")
+    ]
+    assert "recordsByHumanEvidence" in merge
+    assert "AutoPublishedEvidenceKey(record)" in merge
+    assert "AutoPublishedEvidenceKey(local)" in merge
+    assert "KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(record.SourceType)" in merge
+    assert "SameRecordContent(existingEvidence, record)" in merge
+    assert "SameRecordContent(evidenceRecord, local)" in merge
+    assert "AddCandidate(merged, mergedIds, record, record.Id)" in merge
+    assert "AddCandidate(merged, mergedIds, local, local.Id)" in merge
+    assert "if (preserveLocalOnly)" in merge
+    # The deterministic human-evidence SourceId, not a random record ID, is the cross-device dedupe key.
+    assert "return (record.SourceId ?? string.Empty).Trim();" in merge

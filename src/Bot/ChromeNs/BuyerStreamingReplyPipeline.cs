@@ -123,6 +123,8 @@ namespace Bot.ChromeNs
                 return;
 
             var burst = lease.Burst;
+            var sourceClient = qn.CDP;
+            var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var autoSend = Params.Robot.GetIsAutoReply();
             var conversationCtl = ResponseProgressTracker.BeginAnswer(
@@ -356,6 +358,17 @@ namespace Bot.ChromeNs
                     replyRules == null ? 3 : replyRules.KnowledgeDirectReplyDelaySeconds));
                 if (directDelaySeconds > 0)
                 {
+                    var sourceServer = MyWebSocketServer.WSocketSvrInst;
+                    if (sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                        || !string.Equals(sourceClient.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                        || sourceSessionId.Length == 0 || sourceServer == null
+                        || !sourceServer.IsAuthoritativeShopSession(burst.ShopKey, sourceSessionId))
+                    {
+                        const string invalidSourceSession = "未发送：本地知识直答来源CDP不是当前店铺权威会话";
+                        if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidSourceSession);
+                        ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidSourceSession, burst.ShopKey);
+                        return;
+                    }
                     if (conversationCtl != null)
                         conversationCtl.SetProcessing("本地知识直答已生成，等待" + directDelaySeconds + "秒发送");
                     Log.Info("Smart Reply本地知识直答等待配置延迟: seller=" + burst.SellerNick
@@ -377,6 +390,20 @@ namespace Bot.ChromeNs
                         if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：延迟期间Bot或自动回复开关已关闭");
                         lease.MarkCompleted("streaming_knowledge_direct_disabled_during_delay");
                         ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                        return;
+                    }
+                    var currentClient = qn.CDP;
+                    var currentServer = MyWebSocketServer.WSocketSvrInst;
+                    if (currentClient == null || !ReferenceEquals(currentClient, sourceClient)
+                        || currentClient.IsInvalidated || currentClient.IsShopIdentityRetired
+                        || !string.Equals(currentClient.ShopKey, burst.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(currentClient.SessionId, sourceSessionId, StringComparison.Ordinal)
+                        || currentServer == null
+                        || !currentServer.IsAuthoritativeShopSession(burst.ShopKey, sourceSessionId))
+                    {
+                        const string changedSourceSession = "未发送：延迟期间本地知识直答原CDP会话已失效或被替换";
+                        if (conversationCtl != null) conversationCtl.SetSendResult(false, changedSourceSession);
+                        ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, changedSourceSession, burst.ShopKey);
                         return;
                     }
                     if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested

@@ -74,17 +74,18 @@ namespace Bot.ChromeNs
                 if (!loadedSuccessfully)
                 {
                     _cursorStateUnavailable = true;
-                    Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，避免跳过未处理订单。", 10);
+                    EnsureRecoveryTimerLocked();
+                    Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，后台将持续重试恢复。", 10);
                     return;
                 }
                 if (_cursorStateDirty && !SaveCursorsLocked())
                 {
                     _cursorStateUnavailable = true;
+                    EnsureRecoveryTimerLocked();
                     return;
                 }
-                _timer = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
                 _initialized = 1;
-                _timer.Change(1200, 1800);
+                EnsureRecoveryTimerLocked();
             }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
         }
@@ -115,6 +116,42 @@ namespace Bot.ChromeNs
                     _cursorStateDirty = true;
                 }
                 if (_cursorStateDirty && !SaveCursorsLocked()) return;
+            }
+        }
+
+        private static void EnsureRecoveryTimerLocked()
+        {
+            if (_timer == null)
+                _timer = new Timer(_ => OnTimerTick(), null, Timeout.Infinite, Timeout.Infinite);
+            _timer.Change(1200, 1800);
+        }
+
+        private static void OnTimerTick()
+        {
+            if (_cursorStateUnavailable && !TryRecoverCursorState()) return;
+            if (!_cursorStateUnavailable) Tick();
+        }
+
+        private static bool TryRecoverCursorState()
+        {
+            lock (Sync)
+            {
+                if (!_cursorStateUnavailable) return true;
+                _cursorStateUnavailable = false;
+                bool loadedSuccessfully;
+                var recovered = LoadCursors(out loadedSuccessfully);
+                if (!loadedSuccessfully)
+                {
+                    _cursorStateUnavailable = true;
+                    return false;
+                }
+                _cursors = recovered;
+                if (_cursorStateDirty && !SaveCursorsLocked()) return false;
+                _cursorStateUnavailable = false;
+                _initialized = 1;
+                EnsureRecoveryTimerLocked();
+                Log.Info("自动发货事件游标从读取/存储故障中恢复：已重新载入持久游标并恢复事件消费。");
+                return true;
             }
         }
 
@@ -309,8 +346,16 @@ namespace Bot.ChromeNs
             try
             {
                 var path = CursorPath();
-                if (!File.Exists(path))
+                bool exists;
+                if (!TryGetFilePresence(path, out exists)) return new CursorState();
+                if (!exists)
                 {
+                    bool markerExists;
+                    if (!TryGetFilePresence(CursorMarkerPath(), out markerExists) || markerExists)
+                    {
+                        Log.ErrorWithMaxCount("自动发货事件游标文件缺失但持久化标记仍存在；拒绝重置游标并跳过历史订单。", 10);
+                        return new CursorState();
+                    }
                     loadedSuccessfully = true;
                     return new CursorState();
                 }
@@ -327,6 +372,7 @@ namespace Bot.ChromeNs
                     state.Schema = 2;
                     _cursorStateDirty = true;
                 }
+                if (!EnsureCursorMarkerLocked()) return new CursorState();
                 loadedSuccessfully = true;
                 return state;
             }
@@ -347,6 +393,8 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                     path, JsonConvert.SerializeObject(_cursors, Formatting.Indented), 3, 50, out error))
                     throw new IOException("原子保存失败：" + error);
+                if (!EnsureCursorMarkerLocked())
+                    throw new IOException("自动发货事件游标已保存，但无法持久化初始化标记。");
                 _cursorStateDirty = false;
                 return true;
             }
@@ -356,6 +404,40 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("保存自动发货订单事件游标失败；暂停事件消费以防丢失订单：" + ex.Message, 10);
                 return false;
             }
+        }
+
+        private static string CursorMarkerPath()
+        {
+            return CursorPath() + ".initialized";
+        }
+
+        private static bool TryGetFilePresence(string path, out bool exists)
+        {
+            exists = false;
+            try
+            {
+                File.GetAttributes(path);
+                exists = true;
+                return true;
+            }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("检查自动发货事件游标文件状态失败，按文件可能存在处理：" + ex.Message, 10);
+                exists = true;
+                return false;
+            }
+        }
+
+        private static bool EnsureCursorMarkerLocked()
+        {
+            bool exists;
+            if (!TryGetFilePresence(CursorMarkerPath(), out exists)) return false;
+            if (exists) return true;
+            string error;
+            return CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                CursorMarkerPath(), "schema=1", 3, 50, out error);
         }
 
         private static string DataRoot()

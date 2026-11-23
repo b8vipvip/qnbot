@@ -65,7 +65,7 @@ namespace Bot.ChromeNs
                 var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
-                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.Seller == null
+                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired || qn.Seller == null
                         || string.IsNullOrWhiteSpace(qn.Seller.Nick))
                         continue;
 
@@ -114,7 +114,8 @@ namespace Bot.ChromeNs
             var previous = Interlocked.Read(ref _lastQnStateSweepUtcTicks);
             if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
             if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
-            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>()).Where(x => x != null));
+            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>())
+                .Where(x => x != null && x.CDP != null && !x.CDP.IsInvalidated && !x.CDP.IsShopIdentityRetired));
             foreach (var qn in NextHistoryProbeAt.Keys)
             {
                 if (alive.Contains(qn)) continue;
@@ -188,14 +189,25 @@ try {
         internal async Task RepairBusinessInboundHookAsync()
         {
             var client = CDP;
-            if (client == null || client.IsInvalidated) return;
+            var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+            if (client == null || client.IsInvalidated || client.IsShopIdentityRetired || seller.Length == 0) return;
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeBySeller(this); }
+            catch { return; }
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || !string.Equals(client.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || server == null || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
             var result = await client.EvaluateExpressionAsync(
                 BusinessInboundHookRepairScript,
                 "BusinessInboundLivenessHookRepair").ConfigureAwait(false);
-            result = (result ?? string.Empty).Trim().Trim('"');
+            if (!ReferenceEquals(CDP, client) || client.IsInvalidated || client.IsShopIdentityRetired
+                || !string.Equals(client.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || !server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)) return;
+            result = (result ?? string.Empty).Trim().Trim('\"');
             if (string.Equals(result, "installed", StringComparison.Ordinal))
             {
-                var seller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
                 Log.Info("business-inbound-hook-repaired: seller=" + seller
                     + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client.SessionId)
                     + ", reason=imsdk_object_or_on_handler_replaced");

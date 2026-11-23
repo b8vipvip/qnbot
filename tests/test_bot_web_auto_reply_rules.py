@@ -121,12 +121,13 @@ def test_first_runtime_sync_adopts_windows_rules_without_overwrite(tmp_path):
 
     assert result["revision"] == 1
     assert result["applied_revision"] == 1
-    assert result["settings_schema_version"] == 2
+    assert result["settings_schema_version"] == 3
     assert result["desired_settings"] == current
     snapshot = module._snapshot(1)
     assert snapshot["desired"] == current
     assert snapshot["current"] == current
     assert snapshot["order_rules_ready"] is True
+    assert snapshot["delay_rules_ready"] is True
 
 
 @needs_server_deps
@@ -209,7 +210,7 @@ def test_v1_existing_row_adopts_new_order_fields_without_overwriting_pending_v1_
         client={"id": 1},
     )
 
-    assert migrated["settings_schema_version"] == 2
+    assert migrated["settings_schema_version"] == 3
     assert migrated["revision"] == 2
     assert migrated["applied_revision"] == 1
     desired = migrated["desired_settings"]
@@ -221,6 +222,8 @@ def test_v1_existing_row_adopts_new_order_fields_without_overwriting_pending_v1_
     assert desired["order_placed_reply_text"] == "接口失败兜底 {订单号}"
     assert desired["order_placed_api_timeout_seconds"] == 27
     assert desired["order_placed_reply_delay_seconds"] == 0
+    assert desired["knowledge_direct_reply_delay_seconds"] == upgraded_current["knowledge_direct_reply_delay_seconds"]
+    assert desired["first_inquiry_fixed_reply_delay_seconds"] == upgraded_current["first_inquiry_fixed_reply_delay_seconds"]
 
     applied = module.runtime_sync_auto_reply_rules(
         module.RuntimeAutoReplyRuleSyncInput(current_settings=desired),
@@ -228,6 +231,7 @@ def test_v1_existing_row_adopts_new_order_fields_without_overwriting_pending_v1_
     )
     assert applied["applied_revision"] == 2
     assert module._snapshot(1)["order_rules_ready"] is True
+    assert module._snapshot(1)["delay_rules_ready"] is True
 
 
 @needs_server_deps
@@ -290,7 +294,7 @@ def test_rule_state_is_isolated_by_client_id(tmp_path):
 
 
 @needs_server_deps
-def test_validation_rejects_bad_time_empty_fixed_reply_and_nonzero_order_delay(tmp_path):
+def test_validation_rejects_bad_time_empty_fixed_reply_and_out_of_range_delays(tmp_path):
     from fastapi import HTTPException
 
     module = load_module()
@@ -329,21 +333,34 @@ def test_validation_rejects_bad_time_empty_fixed_reply_and_nonzero_order_delay(t
     assert empty_order_reply.value.status_code == 422
 
     bad_delay = dict(current)
-    bad_delay["order_placed_reply_delay_seconds"] = 5
+    bad_delay["order_placed_reply_delay_seconds"] = 301
     with pytest.raises(HTTPException) as delay_error:
         module.runtime_sync_auto_reply_rules(
             module.RuntimeAutoReplyRuleSyncInput(current_settings=bad_delay),
             client={"id": 1},
         )
     assert delay_error.value.status_code == 422
-    assert "delay 必须为 0" in delay_error.value.detail
+    assert "0-300 秒之间" in delay_error.value.detail
+
+    accepted = module.put_auto_reply_rules(
+        module.AutoReplyRuleSettingsInput(
+            knowledge_direct_reply_delay_seconds=3,
+            first_inquiry_fixed_reply_delay_seconds=7,
+            order_placed_reply_delay_seconds=12,
+        ),
+        client={"id": 1},
+    )
+    assert accepted["desired"]["knowledge_direct_reply_delay_seconds"] == 3
+    assert accepted["desired"]["first_inquiry_fixed_reply_delay_seconds"] == 7
+    assert accepted["desired"]["order_placed_reply_delay_seconds"] == 12
 
 
 def test_windows_sync_only_mutates_whitelisted_non_secret_rule_fields():
     text = WINDOWS_SYNC_PATH.read_text(encoding="utf-8-sig")
     props = WINDOWS_PROPS_PATH.read_text(encoding="utf-8-sig")
     assert "/api/runtime/v1/bot-web/auto-reply-rules/sync" in text
-    assert "BuildCurrentSettings()" in text
+    assert "BuildCurrentSettings(state.Shop)" in text
+    assert "ApplyDesiredSettings(desired, state.Shop)" in text
     assert "BotFeatureStore.GetAutoReplyRules()" in text
     assert "BotFeatureStore.SaveAutoReplyRules(cfg)" in text
     assert "cfg.ManualKeywords =" in text
@@ -358,6 +375,12 @@ def test_windows_sync_only_mutates_whitelisted_non_secret_rule_fields():
     assert "cfg.OrderPlacedReplyText =" in text
     assert "cfg.OrderPlacedApiTimeoutSeconds =" in text
     assert "OrderPlacedReplyDelaySettings.GetSeconds()" in text
+    assert "cfg.KnowledgeDirectReplyDelaySeconds =" in text
+    assert "cfg.OrderPlacedReplyDelaySeconds =" in text
+    assert "FirstInquiryFixedReplyService.Load(shop.SellerNick, shop.ShopKey)" in text
+    assert "FirstInquiryFixedReplyService.Save(" in text
+    assert "first_inquiry_fixed_reply_delay_seconds" in text
+    assert "knowledge_direct_reply_delay_seconds" in text
     assert "OrderPlacedReplyDelaySettings.SaveSeconds(0)" not in text
     assert "var currentValue = NormalizeOrderApiTimeout(cfg.OrderPlacedApiTimeoutSeconds);" in text
     assert "return Math.Max(3, Math.Min(60, value));" in text
@@ -380,7 +403,12 @@ def test_mobile_ui_exposes_safe_order_rules_without_secret_inputs():
     assert "启用下单后自动回复" in text
     assert "固定预设 / HTTP 失败兜底文本" in text
     assert "HTTP 超时（秒）" in text
-    assert "强制为 0 秒" in text
+    assert "Knowledge V2 知识库直答延迟" in text
+    assert "首条咨询固定回复延迟" in text
+    assert "下单后自动回复延迟" in text
+    assert "delayRulesReady" in text
+    assert "max=\"300\"" in text
+    assert "强制为 0 秒" not in text
     assert "order_placed_reply_enabled" in text
     assert "order_placed_reply_mode" in text
     assert "order_placed_reply_text" in text
@@ -388,6 +416,9 @@ def test_mobile_ui_exposes_safe_order_rules_without_secret_inputs():
     assert "order_placed_reply_delay_seconds" in text
     assert "settings_schema_version" in text
     assert "order_rules_ready" in text
+    assert "delay_rules_ready" in text
+    assert "knowledge_direct_reply_delay_seconds" in text
+    assert "first_inquiry_fixed_reply_delay_seconds" in text
     assert "desired.order_placed_api_timeout_seconds || 3" in text
     assert "$(IDS.orderTimeout).value || 3" in text
     assert "/api/bot-web/auto-reply-rules" in text
@@ -407,12 +438,13 @@ def test_mobile_ui_exposes_safe_order_rules_without_secret_inputs():
         assert forbidden not in lowered
 
     loader = LOADER_JS_PATH.read_text(encoding="utf-8")
-    assert "/static/bot-web-auto-reply-rules.js?v=2" in loader
+    assert "/static/bot-web-auto-reply-rules.js?v=3" in loader
 
 
 def test_server_schema_versions_order_fields_and_never_exposes_order_secrets():
     text = MODULE_PATH.read_text(encoding="utf-8-sig")
-    assert "RULE_SCHEMA_VERSION = 2" in text
+    assert "RULE_SCHEMA_VERSION = 3" in text
+    assert "DELAY_RULE_KEYS" in text
     assert "settings_schema_version" in text
     assert "ORDER_RULE_KEYS" in text
     assert "order_placed_reply_enabled" in text
@@ -421,6 +453,8 @@ def test_server_schema_versions_order_fields_and_never_exposes_order_secrets():
     assert "order_placed_api_timeout_seconds" in text
     assert '"order_placed_api_timeout_seconds": 3' in text
     assert "order_placed_reply_delay_seconds" in text
+    assert "knowledge_direct_reply_delay_seconds" in text
+    assert "first_inquiry_fixed_reply_delay_seconds" in text
     assert "OrderPlacedApiUrl" not in text
     assert "OrderPlacedApiToken" not in text
 
@@ -432,3 +466,73 @@ def test_bootstrap_and_container_package_rule_service():
     assert "bot_web_auto_reply_rules.install(control_plane, bot_web_console)" in bootstrap
     assert "bot_web_auto_reply_rules.init_db()" in bootstrap
     assert "bot_web_auto_reply_rules.py" in dockerfile
+
+
+@needs_server_deps
+def test_v2_existing_row_adopts_v3_delays_without_overwriting_pending_v2_edits(tmp_path):
+    module = load_module()
+    prepare(module, tmp_path)
+    v2_current = {key: module.DEFAULT_RULE_SETTINGS[key] for key in module.BASE_RULE_KEYS + module.ORDER_RULE_KEYS}
+    first = module.runtime_sync_auto_reply_rules(
+        module.RuntimeAutoReplyRuleSyncInput(current_settings=v2_current),
+        client={"id": 1},
+    )
+    assert first["settings_schema_version"] == 2
+    pending = module.put_auto_reply_rules(
+        module.AutoReplyRuleSettingsInput(manual_handoff_keywords="退款,联系人工"),
+        client={"id": 1},
+    )
+    assert pending["revision"] == 2
+    v3_current = local_rules(
+        module,
+        manual_handoff_keywords="退款",
+        knowledge_direct_reply_delay_seconds=9,
+        first_inquiry_fixed_reply_delay_seconds=11,
+        order_placed_reply_delay_seconds=13,
+    )
+    migrated = module.runtime_sync_auto_reply_rules(
+        module.RuntimeAutoReplyRuleSyncInput(current_settings=v3_current),
+        client={"id": 1},
+    )
+    assert migrated["settings_schema_version"] == 3
+    assert migrated["revision"] == 2
+    assert migrated["applied_revision"] == 1
+    desired = migrated["desired_settings"]
+    assert desired["manual_handoff_keywords"] == "退款,联系人工"
+    assert desired["knowledge_direct_reply_delay_seconds"] == 9
+    assert desired["first_inquiry_fixed_reply_delay_seconds"] == 11
+    assert desired["order_placed_reply_delay_seconds"] == 13
+    applied = module.runtime_sync_auto_reply_rules(
+        module.RuntimeAutoReplyRuleSyncInput(current_settings=desired),
+        client={"id": 1},
+    )
+    assert applied["applied_revision"] == 2
+    assert module._snapshot(1)["delay_rules_ready"] is True
+
+@needs_server_deps
+def test_v2_web_client_cannot_set_delay_fields_before_windows_v3_adoption(tmp_path):
+    from fastapi import HTTPException
+    module = load_module()
+    prepare(module, tmp_path)
+    v2_current = {key: module.DEFAULT_RULE_SETTINGS[key] for key in module.BASE_RULE_KEYS + module.ORDER_RULE_KEYS}
+    module.runtime_sync_auto_reply_rules(
+        module.RuntimeAutoReplyRuleSyncInput(current_settings=v2_current),
+        client={"id": 1},
+    )
+    with pytest.raises(HTTPException) as blocked:
+        module.put_auto_reply_rules(
+            module.AutoReplyRuleSettingsInput(knowledge_direct_reply_delay_seconds=8),
+            client={"id": 1},
+        )
+    assert blocked.value.status_code == 409
+    assert "独立发送延迟" in blocked.value.detail
+
+    # The order-delay field existed in schema v2, but old Windows clients could only
+    # execute zero seconds. Keep that contract until the v3 client adopts real delays.
+    with pytest.raises(HTTPException) as legacy_order_delay:
+        module.put_auto_reply_rules(
+            module.AutoReplyRuleSettingsInput(order_placed_reply_delay_seconds=8),
+            client={"id": 1},
+        )
+    assert legacy_order_delay.value.status_code == 422
+    assert "只能为 0 秒" in legacy_order_delay.value.detail

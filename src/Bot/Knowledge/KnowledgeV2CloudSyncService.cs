@@ -315,36 +315,84 @@ namespace Bot.Knowledge
             IEnumerable<KnowledgeV2Record> localRecords,
             bool preserveLocalOnly)
         {
-            var merged=(cloudRecords??Enumerable.Empty<KnowledgeV2Record>())
-                .Where(x=>x!=null).Select(CloneRecord).ToList();
-            var cloudById=merged.Where(x=>!string.IsNullOrWhiteSpace(x.Id))
-                .GroupBy(x=>x.Id,StringComparer.Ordinal)
-                .ToDictionary(x=>x.Key,x=>x.First(),StringComparer.Ordinal);
-            var mergedIds=new HashSet<string>(merged.Where(x=>!string.IsNullOrWhiteSpace(x.Id))
-                .Select(x=>x.Id),StringComparer.Ordinal);
+            var merged = new List<KnowledgeV2Record>();
+            var cloudById = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
+            var recordsByHumanEvidence = new Dictionary<string, KnowledgeV2Record>(StringComparer.Ordinal);
+            var mergedIds = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach(var local in localRecords??Enumerable.Empty<KnowledgeV2Record>())
+            // A verified FAQ source ID is a deterministic hash of shop + session +
+            // original buyer message ID + original human reply ID. Two devices can
+            // independently synthesize the same evidence into different random record
+            // IDs. Keep one production record for that evidence; conflicting AI outputs
+            // are preserved as disabled review candidates, never active duplicates.
+            foreach (var raw in cloudRecords ?? Enumerable.Empty<KnowledgeV2Record>())
             {
-                if(local==null) continue;
-                KnowledgeV2Record cloud;
-                var id=(local.Id??string.Empty).Trim();
-                if(id.Length>0 && cloudById.TryGetValue(id,out cloud))
+                if (raw == null) continue;
+                var record = CloneRecord(raw);
+                var evidenceId = AutoPublishedEvidenceKey(record);
+                KnowledgeV2Record existingEvidence;
+                if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out existingEvidence))
                 {
-                    if(SameRecordContent(cloud,local))
-                    {
-                        MergeRecordMetadata(cloud,local);
-                        continue;
-                    }
-                    AddCandidate(merged,mergedIds,local,id);
+                    if (SameRecordContent(existingEvidence, record))
+                        MergeRecordMetadata(existingEvidence, record);
+                    else
+                        AddCandidate(merged, mergedIds, record, record.Id);
                     continue;
                 }
 
-                if(preserveLocalOnly)
-                    AddUnique(merged,mergedIds,CloneRecord(local));
+                AddUnique(merged, mergedIds, record);
+                var id = (record.Id ?? string.Empty).Trim();
+                if (id.Length > 0 && !cloudById.ContainsKey(id)) cloudById[id] = record;
+                if (evidenceId.Length > 0) recordsByHumanEvidence[evidenceId] = record;
+            }
+
+            foreach (var local in localRecords ?? Enumerable.Empty<KnowledgeV2Record>())
+            {
+                if (local == null) continue;
+                var evidenceId = AutoPublishedEvidenceKey(local);
+                KnowledgeV2Record evidenceRecord;
+                if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))
+                {
+                    if (SameRecordContent(evidenceRecord, local))
+                        MergeRecordMetadata(evidenceRecord, local);
+                    else
+                        AddCandidate(merged, mergedIds, local, local.Id);
+                    continue;
+                }
+
+                KnowledgeV2Record cloud;
+                var id = (local.Id ?? string.Empty).Trim();
+                if (id.Length > 0 && cloudById.TryGetValue(id, out cloud))
+                {
+                    if (SameRecordContent(cloud, local))
+                    {
+                        MergeRecordMetadata(cloud, local);
+                        continue;
+                    }
+                    AddCandidate(merged, mergedIds, local, id);
+                    continue;
+                }
+
+                if (preserveLocalOnly)
+                {
+                    var copy = CloneRecord(local);
+                    AddUnique(merged, mergedIds, copy);
+                    if (evidenceId.Length > 0) recordsByHumanEvidence[evidenceId] = copy;
+                }
                 else
-                    AddCandidate(merged,mergedIds,local,id);
+                {
+                    AddCandidate(merged, mergedIds, local, id);
+                }
             }
             return merged;
+        }
+
+        private static string AutoPublishedEvidenceKey(KnowledgeV2Record record)
+        {
+            if (record == null
+                || !KnowledgeV2AuthorityPolicy.IsAutoPublishedHumanEvidenceSource(record.SourceType))
+                return string.Empty;
+            return (record.SourceId ?? string.Empty).Trim();
         }
 
         private static void AddCandidate(List<KnowledgeV2Record> merged,HashSet<string> ids,

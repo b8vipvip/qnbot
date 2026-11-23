@@ -302,3 +302,22 @@ def test_first_inquiry_runtime_state_is_isolated_by_shopkey_and_scope_fail_close
     assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in returning
     assert "using (ShopSettingsScope.Enter(shop))" in returning
     assert "FirstInquiryFixedReplyService.HasPending(seller, buyer, shop.ShopKey)" in returning
+
+
+
+def test_first_inquiry_delay_is_shop_scoped_persisted_and_verified_before_cloud_ack():
+    service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    options = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    sync = read("src/Bot/ChromeNs/BotWebAutoReplyRulesSyncService.cs")
+    assert 'DelayKey = "FirstInquiryFixedReplyDelaySeconds"' in service
+    assert "public static int ClampDelaySeconds(int seconds)" in service
+    assert "public static int GetDelaySeconds(string seller, string shopKey = null)" in service
+    assert 'GetParam2Key(DelayKey, SettingsScope, "0")' in service
+    save = service[service.index("public static void Save(string seller, bool enabled, string answer, int delaySeconds") : service.index("public static bool TryPrepare(")]
+    assert "TrySaveParam2Key(DelayKey" in save
+    assert "GetParam2Key(DelayKey" in save
+    assert "Read back all three" in save
+    assert "_firstInquiryFixedReplyDelaySeconds" in options
+    assert "FirstInquiryFixedReplyService.Save(" in options
+    assert "FirstInquiryFixedReplyService.Load(shop.SellerNick, shop.ShopKey)" in sync
+    assert '"first_inquiry_fixed_reply_delay_seconds"' in sync

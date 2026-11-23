@@ -81,3 +81,25 @@ def test_runtime_session_snapshot_consumers_match_the_list_contract():
 
     monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
     assert '", monitoredQn=" + QN.GetRuntimeSafetySnapshot().Count' in monitor
+
+
+
+def test_runtime_watchdogs_never_probe_or_repair_a_retired_or_non_authoritative_cdp_session():
+    monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    helper = monitor[monitor.index("private static bool IsCurrentShopAuthority"):monitor.index("private static void ScheduleConversationProbe")]
+    probe = monitor[monitor.index("private static async Task ProbeCurrentConversationAsync"):monitor.index("private static bool RejectNonBuyerProbe")]
+    assert "ReferenceEquals(qn.CDP, client)" in helper
+    assert "!client.IsInvalidated && !client.IsShopIdentityRetired" in helper
+    assert "!client.IsInvalidated && !client.IsShopIdentityRetired" in helper
+    assert "client.ShopKey, shopKey" in helper
+    assert "server.IsAuthoritativeShopSession(shopKey, sessionId)" in helper
+    assert probe.count("IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)") >= 5
+    assert probe.index("IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)") < probe.index("await qn.GetCurrentConversationID()")
+    assert probe.index("await qn.GetCurrentConversationID()") < probe.index("IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)", probe.index("await qn.GetCurrentConversationID()"))
+
+    recovery = text("src/Bot/ChromeNs/BusinessInboundLivenessRecoveryBridge.cs")
+    assert "qn.CDP.IsShopIdentityRetired" in recovery
+    repair = recovery[recovery.index("internal async Task RepairBusinessInboundHookAsync"):recovery.index("internal async Task ProbeActiveConversationForMissedInboundAsync")]
+    assert "client.IsShopIdentityRetired" in repair
+    assert "server.IsAuthoritativeShopSession(shop.ShopKey, client.SessionId)" in repair
+    assert "ReferenceEquals(CDP, client)" in repair

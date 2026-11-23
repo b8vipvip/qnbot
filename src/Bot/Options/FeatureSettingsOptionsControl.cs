@@ -34,6 +34,8 @@ namespace Bot.Options
         private CheckBox _firstInquiryFixedReplyEnabled;
         private TextBox _firstInquiryFixedReplyAnswer;
         private TextBox _firstInquiryFixedReplyDelaySeconds;
+        private TextBox _knowledgeDirectReplyDelaySeconds;
+        private TextBox _orderPlacedReplyDelaySeconds;
         private CheckBox _offHoursEnabled;
         private TextBox _offHoursStartTime;
         private TextBox _offHoursEndTime;
@@ -168,6 +170,16 @@ namespace Bot.Options
                         _firstInquiryFixedReplyAnswer.Text ?? string.Empty,
                         firstInquiryDelay);
                 }
+                var autoReplyRules = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
+                int knowledgeDelay;
+                if (!int.TryParse(_knowledgeDirectReplyDelaySeconds == null ? "3" : _knowledgeDirectReplyDelaySeconds.Text, out knowledgeDelay))
+                    knowledgeDelay = 3;
+                int orderReplyDelay;
+                if (!int.TryParse(_orderPlacedReplyDelaySeconds == null ? "0" : _orderPlacedReplyDelaySeconds.Text, out orderReplyDelay))
+                    orderReplyDelay = 0;
+                autoReplyRules.KnowledgeDirectReplyDelaySeconds = Math.Max(0, Math.Min(300, knowledgeDelay));
+                autoReplyRules.OrderPlacedReplyDelaySeconds = Math.Max(0, Math.Min(300, orderReplyDelay));
+                BotFeatureStore.SaveAutoReplyRules(autoReplyRules);
             }
             catch (TargetInvocationException ex)
             {
@@ -245,12 +257,12 @@ namespace Bot.Options
             if (autoReplyTab == null) return;
 
             var legacyContent = DetachLegacyScrollHost(autoReplyTab.Content as UIElement);
-            OrderPlacedReplyDelaySettings.ApplyForcedImmediateUi(legacyContent);
+            // The replacement page exposes an editable, shop-scoped order delay; do not reapply the legacy forced-zero UI.
             autoReplyTab.Content = null;
 
             var firstSettings = FirstInquiryFixedReplyService.Load(Seller)
                 ?? new FirstInquiryFixedReplySettings();
-            var cfg = BotFeatureStore.GetAutoReplyRules();
+            var cfg = BotFeatureStore.GetAutoReplyRules() ?? AutoReplyRuleConfig.Default();
             var replyMode = ReplyModeService.GetMode(Seller);
 
             _replyMode = new ComboBox
@@ -296,6 +308,20 @@ namespace Bot.Options
                 Width = 70,
                 Height = 26,
                 ToolTip = "只作用于首条咨询固定回复；0秒表示立即发送。"
+            };
+            _knowledgeDirectReplyDelaySeconds = new TextBox
+            {
+                Text = Math.Max(0, Math.Min(300, cfg.KnowledgeDirectReplyDelaySeconds)).ToString(),
+                Width = 70,
+                Height = 26,
+                ToolTip = "仅本地知识库高置信直答生效；调用AI生成答案时不使用此延迟。默认3秒。"
+            };
+            _orderPlacedReplyDelaySeconds = new TextBox
+            {
+                Text = Math.Max(0, Math.Min(300, cfg.OrderPlacedReplyDelaySeconds)).ToString(),
+                Width = 70,
+                Height = 26,
+                ToolTip = "仅作用于下单后自动回复；与知识库直答、首条咨询延迟独立。默认0秒。"
             };
 
             _offHoursEnabled = new CheckBox
@@ -390,6 +416,16 @@ namespace Bot.Options
                 Background = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
                 Margin = new Thickness(0, 6, 0, 14)
             });
+
+            result.Add(MakeSectionTitle("自动回复独立发送延迟"));
+            result.Add(MakeLabeledControl(
+                "知识库直答延迟(秒)",
+                _knowledgeDirectReplyDelaySeconds,
+                "仅本地 Knowledge V2 高置信直答使用；调用AI生成的答案不使用此延迟。默认3秒，范围0-300秒。"));
+            result.Add(MakeLabeledControl(
+                "下单后回复延迟(秒)",
+                _orderPlacedReplyDelaySeconds,
+                "仅作用于下单后自动回复，与知识库直答和首条咨询固定回复独立。默认0秒，范围0-300秒。"));
 
             result.Add(MakeSectionTitle("首条咨询固定回复"));
             result.Add(_firstInquiryFixedReplyEnabled);
