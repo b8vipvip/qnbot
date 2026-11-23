@@ -312,13 +312,18 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                var keywords = step["trigger_keywords"] as JArray
-                    ?? proposal["trigger_keywords"] as JArray;
-                if (keywords == null || keywords.Count < 1 || keywords.Count > 8
+                var stepIndex = stepTokens.IndexOf(token);
+                var keywords = step["trigger_keywords"] as JArray;
+                if (keywords == null)
+                    keywords = stepIndex == 0
+                        ? proposal["trigger_keywords"] as JArray
+                        : new JArray();
+                if ((stepIndex == 0 && (keywords == null || keywords.Count < 1))
+                    || keywords.Count > 8
                     || keywords.Any(x => string.IsNullOrWhiteSpace(Convert.ToString(x))
                         || Convert.ToString(x).Length > 40))
                 {
-                    reason = "步骤触发关键词缺失或超出范围";
+                    reason = "首步骤触发关键词缺失或超出范围";
                     return false;
                 }
 
@@ -349,6 +354,7 @@ namespace Bot.ChromeNs
                         reason = "回复步骤必须引用同一会话中的真实人工回复";
                         return false;
                     }
+                    if (!selected.Any(x => x.Digest == replyEvidence.Digest)) selected.Add(replyEvidence);
                     replyTemplate = BuyerMessageArchiveService.Redact(Clean(replyEvidence.ReplyText, 1200));
                     if (replyTemplate.Length < 2)
                     {
@@ -404,6 +410,7 @@ namespace Bot.ChromeNs
                 ["status"] = "active",
                 ["product_ids"] = new JArray(productIds),
                 ["sku_ids"] = new JArray(skuIds),
+                ["initial_state"] = Convert.ToString(steps[0]["state"]),
                 ["confidence"] = confidence,
                 ["source_evidence"] = sourceEvidence,
                 ["updated_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
