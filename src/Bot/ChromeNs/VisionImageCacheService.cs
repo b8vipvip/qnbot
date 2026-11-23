@@ -44,6 +44,7 @@ namespace Bot.ChromeNs
             public string base64 { get; set; }
             public string mime { get; set; }
             public string error { get; set; }
+            public string resolvedUrl { get; set; }
         }
 
         private sealed class CacheRecord
@@ -422,7 +423,7 @@ namespace Bot.ChromeNs
             var configuredMb = endpoint == null ? DefaultMaxImageSizeMb : endpoint.MaxImageSizeMb;
             var maxBytes = Math.Max(1, Math.Min(20, configuredMb)) * 1024L * 1024L;
             var browser = await DownloadAndPersistFromBrowserAsync(
-                record, Math.Min(maxBytes, 8L * 1024L * 1024L)).ConfigureAwait(false);
+                record, Math.Min(maxBytes, 8L * 1024L * 1024L), endpoint).ConfigureAwait(false);
             if (browser != null && browser.Success)
             {
                 Log.Info("买家图片已通过千牛登录态补全下载并缓存: seller=" + record.SellerNick
@@ -442,7 +443,8 @@ namespace Bot.ChromeNs
 
         private static async Task<CacheDownloadResult> DownloadAndPersistFromBrowserAsync(
             CacheRecord record,
-            long maxBytes)
+            long maxBytes,
+            AiEndpointConfig endpoint)
         {
             var result = new CacheDownloadResult();
             var client = record == null ? null : record.BrowserClient;
@@ -491,6 +493,29 @@ namespace Bot.ChromeNs
                 }
                 if (payload == null || !payload.ok || string.IsNullOrWhiteSpace(payload.base64))
                 {
+                    // A message-history lookup may have recovered the signed image URL even
+                    // when page fetch is blocked by cross-origin policy. Retry that exact URL
+                    // from the desktop process before declaring the image unavailable.
+                    if (payload != null && IsHttpImageUrl(payload.resolvedUrl))
+                    {
+                        var originalUrl = record.Url;
+                        record.Url = payload.resolvedUrl;
+                        try
+                        {
+                            var resolvedDownload = await DownloadAndPersistDirectAsync(record, endpoint).ConfigureAwait(false);
+                            if (resolvedDownload != null && resolvedDownload.Success)
+                            {
+                                Log.Info("千牛历史消息补全的签名图片URL已由客户端直连下载成功: seller="
+                                    + record.SellerNick + ", buyer=" + record.BuyerNick
+                                    + ", bytes=" + resolvedDownload.Bytes);
+                                return resolvedDownload;
+                            }
+                        }
+                        finally
+                        {
+                            record.Url = originalUrl;
+                        }
+                    }
                     result.Error = payload == null || string.IsNullOrWhiteSpace(payload.error)
                         ? "千牛浏览器未能读取图片原始数据"
                         : Short(payload.error, 180);
@@ -551,6 +576,14 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool IsHttpImageUrl(string value)
+        {
+            Uri uri;
+            return !string.IsNullOrWhiteSpace(value)
+                && Uri.TryCreate(value.Trim(), UriKind.Absolute, out uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+        }
+
         private static string BuildBrowserImageFetchExpression(object args)
         {
             var json = JsonConvert.SerializeObject(args);
@@ -600,7 +633,7 @@ namespace Bot.ChromeNs
                 + "let last='no_matching_image_source';"
                 + "for(const item of candidates){try{return await fromUrl(item.url);}catch(e){last='browser_fetch_failed';"
                 + "const canvas=fromCanvas(item.img);if(canvas)return canvas;}}"
-                + "return {ok:false,error:last};"
+                + "return {ok:false,error:last,resolvedUrl:candidates.length?candidates[0].url:''};"
                 + "})(" + json + ")";
         }
 
