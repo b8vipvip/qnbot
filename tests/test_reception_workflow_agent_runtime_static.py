@@ -395,9 +395,11 @@ def test_new_image_cannot_borrow_a_prior_images_visual_summary_or_message_key():
     ]
 
     assert "var hasRecentVisual = !isImage && recentVisualEvidence != null;" in evaluate
-    assert "var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);" in evaluate
+    assert "var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary) && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
+    assert "var hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
     assert "hasRecentVisual = !isImage && recentVisualEvidence != null;" in evaluate
-    assert "hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);" in evaluate
+    assert "hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary) && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
+    assert "hasImage = isImage && !string.IsNullOrWhiteSpace(messageKey);" in evaluate
     assert "hasVision = hasCurrentVisual || hasRecentVisual;" in evaluate
     assert "visualEvidenceMessageKey = hasCurrentVisual" in evaluate
     assert "recentVisualEvidence.MessageKey" in evaluate
