@@ -266,6 +266,15 @@ namespace Bot.ChromeNs
                 }
 
                 candidate.Withdrawn = true;
+                try
+                {
+                    VisualKnowledgeLearningService.MarkObservationWithdrawn(
+                        shop.ShopKey, seller, buyer, candidate.MessageKey);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("同步图片撤回状态到视觉学习候选失败：" + ex.Message, 10);
+                }
                 Log.Info("已标记买家图片撤回，视觉分析仍将继续: seller=" + seller
                     + ", buyer=" + buyer
                     + ", messageKey=" + Short(candidate.MessageKey, 100)
@@ -355,6 +364,18 @@ namespace Bot.ChromeNs
                 .OrderByDescending(x => x.ObservedAt)
                 .Take(1)
                 .Any();
+        }
+
+        internal static bool IsMessageKeyWithdrawn(
+            string seller, string buyer, string messageKey, string shopKey)
+        {
+            if (string.IsNullOrWhiteSpace(messageKey)) return false;
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                return true;
+            var record = FindRecord(messageKey, string.Empty, shop.ShopKey);
+            return record != null && record.Withdrawn
+                && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick);
         }
 
         public static bool HasCompleteCache(string messageKey, QNChatMessage message, string shopKey = null)
