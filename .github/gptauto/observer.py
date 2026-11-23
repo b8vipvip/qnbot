@@ -420,7 +420,7 @@ def capture(
     # Explicit manual dispatch always permits recovery. Repeated automatic
     # wakeups for unchanged task/head/CI-run/phase evidence are no-ops.
     dispatch_required = (
-        event == "workflow_dispatch"
+        event in {"workflow_dispatch", "issue_comment"}
         or (
             dispatch_key != previous_dispatch_key
             and not (previous_terminal_done and authority["terminal_done"])
