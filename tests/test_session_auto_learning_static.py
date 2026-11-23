@@ -19,7 +19,8 @@ def test_session_learning_waits_five_minutes_and_keeps_audit_records():
     assert 'EnableVerifiedCorpusCorrectionWrites = true' in source
     assert '自动新增' in source
     assert '自动修订' in source
-    assert '通用AI建议仍待人工审核' in source
+    assert 'Reception Agent自动发布=' in source
+    assert 'receptionWorkflowWriteMode' in source
     assert "ResumePending" in source
 
 
@@ -134,7 +135,8 @@ def test_idle_learning_resolves_shop_before_structured_ai_call():
     assert "ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey)" in analysis
     assert "var shop = ShopContextLocator.ResolveBySellerNick(session.Seller);" not in analysis
     assert "using (ShopSettingsScope.Enter(shop))" in analysis
-    assert "analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);" in analysis
+    assert "analysis = await AnalyzeAsync(" in analysis
+    assert "styleBefore, localFirst, workflowEvidenceContext);" in analysis
     assert analysis.index("using (ShopSettingsScope.Enter(shop))") < analysis.index("analysis = await AnalyzeAsync")
     assert analysis.index("analysis = await AnalyzeAsync") < analysis.index("ReviewedKnowledgeLearningService.ApplyReviewedKnowledge")
 

@@ -237,9 +237,22 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - A schema-valid publish immediately updates the active version; no administrator approval identity, approval token, or mandatory gray rollout is required.
 - The publish operation uses ShopKey-scoped storage, cross-process locking, revision CAS, monotonic per-flow versions, immutable published-history snapshots, and a rollback that creates a new revision.
 - Existing v1 draft files are migrated to active v2 only after validation; the original file is retained.
-- Follow-up PR #443 fixes a multi-shop race by requiring the exact ShopKey from the Knowledge Center/event, verifying seller↔ShopKey identity, and reusing one resolved ShopContext for active catalog, legacy migration, history snapshots and rollback paths; it is under exact-SHA CI/Windows build validation.
+- Follow-up PR #443 merged the exact-ShopKey multi-shop fix: each catalog operation resolves one ShopContext once and reuses it for active catalog, legacy migration, history snapshots and rollback paths.
 - Catalog actions remain constrained. Workflow publication does not grant payment, recharge, refund, account mutation, or fulfillment authority. Reply intents still pass through the existing canonical send pipeline.
-- The runtime adapter that consumes the active catalog for every generic stage/evidence transition is not yet complete. Do not describe the workflow engine as fully live until that adapter and real Qianniu acceptance are complete.
+- At this checkpoint the AI workflow generation/runtime adapter had not yet landed; see section 4.9 for the follow-up implementation and the remaining real Qianniu acceptance.
+
+
+
+## 4.9 2026-11-23 Reception Agent AI auto-publish and runtime execution
+
+- The follow-up branch `feat/reception-agent-auto-publish-runtime` connects `ConversationSessionLearningService` workflow proposals to `ReceptionWorkflowCatalogService.Publish`; no administrator approval or manual activation is involved.
+- The AI receives alias-only evidence context: buyer messages (`M*`), recent image/visual/OCR observations (`V*`), and same-buyer ShopKey-scoped latest nonterminal order snapshots (`O*`). Raw message IDs and order IDs are not sent to the model.
+- Publication requires confidence >= 0.90, exact Seller/ShopKey, a real buyer message, a real human correction, a verified order snapshot, and a configured product ID. REPLY steps must point to an actual human reply; ASK_EVIDENCE is limited to safe evidence requests. Payment, recharge, refund, account changes and fulfillment are not publishable actions.
+- Runtime executes through the canonical text and vision pipelines. It does not send directly; existing manual takeover, relevance, identity, deduplication, business output and pre-send guards remain in force. State transitions commit only after canonical send success.
+- A per-ShopKey durable runtime file stores buyer/message hashes, flow version/state, pending-send and delivery-uncertainty markers, and fault counters. It restores after restart, repairs stale flow versions and expired states, and avoids automatic resend after uncertain delivery.
+- Publish/rollback invalidate the local runtime index; other processes detect catalog revision changes. Three deterministic runtime faults for the same flow/revision within ten minutes trigger expected-revision CAS rollback if a valid prior snapshot exists.
+- HANDOFF is publishable only when a shop notification channel is configured and queues a ShopKey-bound notification. READ_ONLY_TOOL remains fail-closed and is not auto-generated.
+- This is code-level implementation pending exact-SHA CI and Windows build; it is not evidence of real Windows/Qianniu acceptance. Live same-nickname multi-shop A→B→A, restart, image/OCR progression, handoff notification, long-running operation and test-buyer workflows remain required.
 
 ## 5. Validation and release rules / 验收与发布规则
 
@@ -257,4 +270,4 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 2. 完成同昵称多店铺 A→B→A、WebSocket/CDP 断线重连和长时间运行验收。
 3. 验证自动回复的人工接管、撤回、失败重试、并发与防重复发送。
 4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认。
-5. 完成 Reception Agent active catalog 的运行时状态机接入、图文/订单证据闭环、回滚恢复验收及 GPTAuto Reconcile 真实终态验收。
+5. 对 Reception Agent 已实现的状态机进行真实千牛图文/订单流程、同昵称多店铺、重启、转人工通知、异常回滚和长期运行验收；另行完成 GPTAuto Reconcile 真实终态验收。

@@ -211,6 +211,55 @@ namespace Bot.ChromeNs
             return result;
         }
 
+        internal static ReplyDeduplicationResult EnsureWorkflowReplyDistinct(
+            string seller,
+            string buyer,
+            string question,
+            string candidateAnswer,
+            string shopKey,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            }
+            catch
+            {
+                return BuildBlockedResult("无法按精确ShopKey验证接待流程回复，已阻止发送。");
+            }
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, (shopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+                return BuildBlockedResult("接待流程回复的Seller/ShopKey身份不匹配，已阻止发送。");
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                string previousAnswer;
+                DateTime previousAt;
+                if (TryGetLastDelivered(seller, buyer, out previousAnswer, out previousAt)
+                    && SameAnswer(previousAnswer, candidateAnswer))
+                    return BuildBlockedResult("接待流程回复与上一条有效回复重复，已停止自动重发。");
+
+                return EnsureDistinct(
+                    seller, buyer, question, candidateAnswer, cancellationToken, true);
+            }
+        }
+
+        internal static void RememberDelivered(
+            string seller, string buyer, string answer, string shopKey)
+        {
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+            catch { return; }
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, (shopKey ?? string.Empty).Trim(), StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+                return;
+            using (ShopSettingsScope.Enter(shop)) RememberDelivered(seller, buyer, answer);
+        }
+
         public static void RememberDelivered(string seller, string buyer, string answer)
         {
             if (string.IsNullOrWhiteSpace(answer)

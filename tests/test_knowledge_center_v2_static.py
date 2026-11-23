@@ -120,7 +120,7 @@ def test_v2_is_called_explicitly_by_the_canonical_streaming_handler_not_a_racing
     generating = streaming.index('lease.MarkGenerating("streaming_answer_started")', plan)
     ai = streaming.index("StreamingBuyerAnswerService.GetAnswerAsync(", plan)
     assert v2 < generating < ai
-    assert "if (await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))" in streaming
+    assert "if (workflowDecision == null && await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))" in streaming
 
 
 def test_learning_candidates_require_explicit_approval_before_direct_reply():

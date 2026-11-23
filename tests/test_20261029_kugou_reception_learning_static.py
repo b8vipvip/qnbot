@@ -1,4 +1,4 @@
-"""Workflow learning must be review-only; generated policy must never auto-publish."""
+"""Workflow learning may auto-publish only after exact-shop evidence and action validation."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,30 +8,38 @@ POLICY = "src/Bot/ChromeNs/KugouReceptionPolicy.cs"
 def text(p):
     return (ROOT / p).read_text(encoding="utf-8-sig")
 
-def test_five_minute_learning_keeps_original_timing_and_review_only_flows():
+def test_five_minute_learning_keeps_original_timing_and_auto_publishes_verified_flows():
     source = text(LEARNING)
+    finalize = source[
+        source.index("private static async Task FinalizeAsync"):
+        source.index("private static async Task<JObject> AnalyzeAsync")
+    ]
     assert "TimeSpan.FromMinutes(InactivityMinutes)" in source
     assert '["workflow_proposals"]' in source
     assert '"workflow_proposals"' in source or r'\\"workflow_proposals\\"' in source
     assert "SerializeSuggestionsWithWorkflowReview(" in source
     assert "RequiresWorkflowReview(suggestion)" in source
     assert "未写入生产知识库" in source
-    assert '["kind"] = "reception_workflow_proposal"' in source
-    assert '["action"] = "manual_review"' in source
-    assert '["applied"] = false' in source
+    assert '"auto_published"' in source
+    assert "ReceptionWorkflowAgentService.PublishProposals(" in finalize
+    assert "receptionWorkflowPublished" in finalize
     assert "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(" in source
     assert source.index("RequiresWorkflowReview(suggestion)") < source.index(
         "ReviewedKnowledgeLearningService.ApplyReviewedKnowledge("
     )
 
-def test_workflow_candidates_require_evidence_and_are_never_sent_as_answers():
-    source = text(LEARNING)
-    assert "var allowed = new HashSet<string>" in source
-    assert '"WAIT", "ASK_EVIDENCE", "REPLY", "SEND_VERIFIED_GUIDE", "HANDOFF"' in source
-    assert "evidence.Length == 0 || requiredEvidence.Length == 0" in source
-    assert '["apply_message"] = "流程候选仅供审核：未修改生产流程与知识库"' in source
-    assert "proposedFlows.Take(4)" in source
 
+def test_workflow_candidates_require_real_evidence_and_are_not_general_answers():
+    agent = text("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
+    assert 'confidence < 0.90' in agent
+    assert '"buyer_message"' in agent
+    assert '"manual_correction"' in agent
+    assert '"order_snapshot"' in agent
+    assert 'replyEvidence.Kind != "manual_correction"' in agent
+    assert '"WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY"' in agent
+    assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
+    assert "var boundedProposals = proposals.Take(4).ToList();" in agent
+    assert "var proposal = token as JObject;" in agent
 def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
     policy = text(POLICY)
     assert "GetRecentStage(string seller, string buyer)" in policy

@@ -77,6 +77,27 @@ namespace Bot.ChromeNs
             return ShopContextLocator.ResolveCurrentOrBySellerNick(seller);
         }
 
+        public static bool Applies(string seller, string shopKey)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0) return false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                using (ShopSettingsScope.Enter(shop)) return Applies(seller);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("按精确ShopKey检查接待策略失败，保持原流程：" + ex.Message, 5);
+                return false;
+            }
+        }
+
         public static bool Applies(string seller)
         {
             CleanupExpiredShopCache();
@@ -230,6 +251,65 @@ namespace Bot.ChromeNs
             if (reason.Length == 0) return false;
             Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "configured_outgoing_guard");
             return true;
+        }
+
+        public static bool BlockOutgoing(
+            string seller, string buyer, string question, string answer, out string reason, string shopKey)
+        {
+            return BlockOutgoing(seller, buyer, question, answer, out reason, shopKey, true);
+        }
+
+        internal static bool BlockOutgoing(
+            string seller, string buyer, string question, string answer,
+            out string reason, string shopKey, bool requireEnabled)
+        {
+            reason = string.Empty;
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0)
+            {
+                reason = "缺少精确Seller/ShopKey身份，拒绝发送接待流程回复";
+                return true;
+            }
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "Seller/ShopKey身份不匹配，拒绝发送接待流程回复";
+                    return true;
+                }
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var config = KugouReceptionConfigService.GetConfig(shop);
+                    var output = answer ?? string.Empty;
+                    if (config == null || !config.Enabled)
+                    {
+                        if (!requireEnabled) return false;
+                        reason = "当前店铺已关闭Reception Agent，拒绝发送旧流程回复";
+                        return true;
+                    }
+                    if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
+                        && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
+                        reason = "当前店铺已关闭自动设备指导";
+                    else if (config.BlockedOutgoingPatterns.Any(pattern => SafeIsMatch(output, pattern)))
+                        reason = "命中当前店铺配置的禁止发送规则";
+                    else if (IsScreenshotQuestion(question, config)
+                        && !string.IsNullOrWhiteSpace(config.ScreenshotReplyPattern)
+                        && SafeIsMatch(output, config.ScreenshotReplyPattern))
+                        reason = "当前问题与店铺配置的截图答复校验规则冲突";
+                    if (reason.Length == 0) return false;
+                    Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "configured_outgoing_guard");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = "无法验证精确店铺接待策略：" + ex.Message;
+                return true;
+            }
         }
 
         internal static bool IsScreenshotQuestion(string question, KugouReceptionConfig config)

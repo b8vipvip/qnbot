@@ -1,5 +1,6 @@
 using Bot.AssistWindow.Widget.Robot;
 using BotLib;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -223,46 +224,84 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var workflowDecision = ReceptionWorkflowRuntimeService.EvaluateVision(
+                burst, visionItem.MessageKey, result.VisualSummary, withdrawn);
+            if (workflowDecision != null && workflowDecision.SuppressReply)
+            {
+                lifecycleLease.MarkCompleted("reception_workflow_" + (workflowDecision.Action ?? "wait").ToLowerInvariant());
+                if (ctl != null) ctl.SetSkipped(workflowDecision.Reason);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                Log.Info("Reception Agent视觉状态机抑制普通视觉回复: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick + ", flow=" + workflowDecision.FlowId
+                    + ", action=" + workflowDecision.Action);
+                return;
+            }
+            if (workflowDecision != null && workflowDecision.RequiresSend)
+                result.Answer = workflowDecision.ReplyText;
+
             // OCR-first direct knowledge has already passed Knowledge Engine V2's production
             // authority gate. Running the generic dedupe/validator without preserveTrustedAnswer
             // can launch a hidden structured-AI repair and turn a ~250ms local answer into a 20s+
             // generation. Preserve that authoritative answer while still applying the common AI
-            // marker and generation cancellation contract.
-            var trustedOcrKnowledge = string.Equals(
+            // marker and generation cancellation contract. A workflow reply is separately grounded
+            // in a published human-reply template and must not be treated as an OCR direct answer.
+            var trustedOcrKnowledge = workflowDecision == null && string.Equals(
                 result.MatchedVisualKnowledgeId,
                 "ocr-direct-knowledge-v2",
                 StringComparison.Ordinal);
-            var deduplication = trustedOcrKnowledge
-                ? ReplyDeduplicationService.EnsureDistinct(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    result.Answer,
-                    lifecycleLease.CancellationToken,
-                    true)
-                : ReplyDeduplicationService.EnsureDistinct(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    result.Answer);
+            var deduplication = workflowDecision != null && workflowDecision.RequiresSend
+                ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                    result.Answer, burst.ShopKey, lifecycleLease.CancellationToken)
+                : (trustedOcrKnowledge
+                    ? ReplyDeduplicationService.EnsureDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        result.Answer, lifecycleLease.CancellationToken, true)
+                    : ReplyDeduplicationService.EnsureDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, result.Answer));
             if (trustedOcrKnowledge)
             {
                 Log.Info("OCR-first权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
-            if (KugouReceptionPolicy.Applies(burst.SellerNick)
-                && !KugouReceptionConfigService.GetConfig(burst.SellerNick).EnableAutoGuidance)
+            if (string.IsNullOrWhiteSpace(answer)
+                || answer.StartsWith("错误：", StringComparison.Ordinal))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lifecycleLease.MarkFailed("vision_pre_send_validation_failed");
+                if (ctl != null) ctl.SetStatus("发送前答案校验未通过，已阻止自动发送", false);
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick, burst.BuyerNick,
+                    "发送前答案校验未通过，已阻止自动发送", burst.ShopKey);
+                return;
+            }
+            ShopContext visionShop = null;
+            KugouReceptionConfig visionConfig = null;
+            try
+            {
+                visionShop = ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
+                if (visionShop != null
+                    && string.Equals(visionShop.SellerNick, burst.SellerNick, StringComparison.OrdinalIgnoreCase))
+                    visionConfig = KugouReceptionConfigService.GetConfig(visionShop);
+            }
+            catch { }
+            if (visionConfig != null && visionConfig.Enabled && !visionConfig.EnableAutoGuidance)
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkCompleted("vision_auto_guidance_disabled");
                 if (ctl != null) ctl.SetSkipped("本店已关闭自动视觉设备引导，图片仍可供人工核验");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
                 return;
             }
             string receptionBlock;
-            if (KugouReceptionPolicy.BlockOutgoing(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out receptionBlock))
+            var receptionBlocked = KugouReceptionPolicy.BlockOutgoing(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
+                out receptionBlock, burst.ShopKey,
+                workflowDecision != null && workflowDecision.RequiresSend);
+            if (receptionBlocked)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkCompleted("vision_business_guard_suppressed");
                 if (ctl != null) ctl.SetSkipped(receptionBlock);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -271,8 +310,9 @@ namespace Bot.ChromeNs
             string humanReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
-                out humanReason, trustedOcrKnowledge))
+                out humanReason, trustedOcrKnowledge, burst.ShopKey))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 Log.Info("图片OCR知识回复抑制: seller=" + burst.SellerNick
                     + ", buyer=" + burst.BuyerNick + ", reviewedOcr=" + trustedOcrKnowledge
                     + ", reason=" + humanReason);
@@ -283,21 +323,25 @@ namespace Bot.ChromeNs
             }
             if (!await lifecycleLease.ConfirmStableAsync(220))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (ctl != null) ctl.SetStatus("未发送：分析结果已缓存，但买家刚刚补充了新消息", false);
                 return;
             }
 
             if (!lifecycleLease.MarkReady("vision_answer_materialized"))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 Log.Info("视觉答案已生成但generation无法进入Ready，已阻止迟到视觉答案发布: buyer=" + burst.BuyerNick);
                 return;
             }
 
-            var source = !string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
+            var source = workflowDecision != null && workflowDecision.RequiresSend
+                ? "Reception Agent"
+                : (!string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
                 ? "视觉知识"
                 : (deduplication.Regenerated && !string.IsNullOrWhiteSpace(deduplication.Source)
                     ? deduplication.Source
-                    : "AI生成");
+                    : "AI生成"));
             var answerReadyAt = DateTime.Now;
             ctl = ResponseProgressTracker.SetAnswerReady(
                 burst.SellerNick,
@@ -312,6 +356,7 @@ namespace Bot.ChromeNs
 
             if (!autoSend)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkCompleted("vision_answer_generated_only");
                 if (ctl != null) ctl.SetStatus("仅生成答案；图片语义已缓存", true);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -319,6 +364,7 @@ namespace Bot.ChromeNs
             }
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkFailed("vision_answer_invalid");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：AI错误");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -326,11 +372,25 @@ namespace Bot.ChromeNs
             }
             if (!lifecycleLease.IsCurrent)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (ctl != null) ctl.SetSendResult(false, "未发送：最新买家消息或人工回复已接管");
                 return;
             }
+            if (workflowDecision != null && workflowDecision.RequiresSend
+                && !ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision))
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lifecycleLease.MarkCompleted("reception_workflow_revision_changed_before_vision_send");
+                if (ctl != null) ctl.SetSendResult(false, "未发送：接待流程在发送前已更新或回滚，旧版本图片回复已取消");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "未发送：接待流程在发送前已更新或回滚，旧版本图片回复已取消", burst.ShopKey);
+                return;
+            }
+
             if (!lifecycleLease.MarkSending("vision_send_started"))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation在发送前已失效");
                 return;
             }
@@ -343,14 +403,20 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
                 return;
             }
+            ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
-                if (string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
+                if (workflowDecision != null && workflowDecision.RequiresSend)
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+                else
+                    ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                if (workflowDecision == null && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                 {
                     KnowledgeLearningService.QueueLearn(
                         burst.CombinedQuestion,

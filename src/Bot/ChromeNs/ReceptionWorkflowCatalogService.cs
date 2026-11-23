@@ -156,6 +156,22 @@ namespace Bot.ChromeNs
                 CheckKeys(flow["product_ids"] as JArray, "product_ids");
                 CheckKeys(flow["sku_ids"] as JArray, "sku_ids");
 
+                var flowKeywords = flow["trigger_keywords"] as JArray;
+                if (flowKeywords != null)
+                {
+                    if (flowKeywords.Count > 8)
+                        throw new InvalidDataException("流程触发关键词数量超出范围");
+                    var uniqueFlowKeywords = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var keyword in flowKeywords)
+                    {
+                        var value = Convert.ToString(keyword);
+                        if (keyword == null || keyword.Type != JTokenType.String
+                            || string.IsNullOrWhiteSpace(value) || value.Length > 40
+                            || !uniqueFlowKeywords.Add(value))
+                            throw new InvalidDataException("流程触发关键词无效或重复");
+                    }
+                }
+
                 var steps = flow["steps"] as JArray;
                 if (steps == null || steps.Count < 1 || steps.Count > 30)
                     throw new InvalidDataException("流程步骤数量无效");
@@ -193,6 +209,33 @@ namespace Bot.ChromeNs
 
                     if (!ValidKey(Convert.ToString(step["next_state"])))
                         throw new InvalidDataException("下一状态无效");
+
+                    var triggerKeywords = step["trigger_keywords"] as JArray;
+                    if (triggerKeywords != null)
+                    {
+                        if (triggerKeywords.Count > 8)
+                            throw new InvalidDataException("触发关键词数量超出范围");
+                        var uniqueKeywords = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (var keyword in triggerKeywords)
+                        {
+                            var value = Convert.ToString(keyword);
+                            if (keyword == null || keyword.Type != JTokenType.String
+                                || string.IsNullOrWhiteSpace(value) || value.Length > 40
+                                || !uniqueKeywords.Add(value))
+                                throw new InvalidDataException("触发关键词无效或重复");
+                        }
+                    }
+
+                    var replyTemplate = Convert.ToString(step["reply_template"]);
+                    if (replyTemplate != null && replyTemplate.Length > 1200)
+                        throw new InvalidDataException("流程回复模板超过1200字符");
+                    var action = Convert.ToString(step["action"]);
+                    if ((action == "ASK_EVIDENCE" || action == "REPLY" || action == "REPLY_REVIEWED")
+                        && string.IsNullOrWhiteSpace(replyTemplate))
+                        throw new InvalidDataException("索证或人工证据回复步骤必须包含回复模板");
+                    if ((action == "REPLY" || action == "REPLY_REVIEWED")
+                        && !evidenceKinds.Contains("manual_correction"))
+                        throw new InvalidDataException("人工回复步骤必须声明manual_correction必要证据");
                 }
 
                 foreach (var step in steps.Cast<JObject>())
@@ -200,6 +243,37 @@ namespace Bot.ChromeNs
                     var next = Convert.ToString(step["next_state"]);
                     if (!stages.Contains(next))
                         throw new InvalidDataException("下一状态在当前流程中不存在：" + next);
+                }
+                var initialState = Convert.ToString(flow["initial_state"]);
+                if (!string.IsNullOrWhiteSpace(initialState) && !stages.Contains(initialState))
+                    throw new InvalidDataException("流程初始状态未在步骤中定义");
+
+                var sourceEvidence = flow["source_evidence"] as JArray;
+                if (sourceEvidence != null)
+                {
+                    if (sourceEvidence.Count > 12)
+                        throw new InvalidDataException("流程来源证据数量超出范围");
+                    foreach (var source in sourceEvidence.OfType<JObject>())
+                    {
+                        var kind = Convert.ToString(source["kind"]);
+                        var digest = Convert.ToString(source["digest"]);
+                        if (!AllowedEvidence.Contains(kind)
+                            || string.IsNullOrWhiteSpace(digest) || digest.Length != 64
+                            || !digest.All(Uri.IsHexDigit))
+                            throw new InvalidDataException("流程来源证据引用无效");
+                    }
+                    if (sourceEvidence.Any(x => !(x is JObject)))
+                        throw new InvalidDataException("流程来源证据必须是对象");
+                }
+
+                var confidenceToken = flow["confidence"];
+                if (confidenceToken != null)
+                {
+                    var confidence = flow.Value<double?>("confidence");
+                    if (!confidence.HasValue || double.IsNaN(confidence.Value)
+                        || double.IsInfinity(confidence.Value) || confidence.Value < 0
+                        || confidence.Value > 1)
+                        throw new InvalidDataException("流程置信度无效");
                 }
             }
 
@@ -219,12 +293,26 @@ namespace Bot.ChromeNs
                         ["flow_id"] = Convert.ToString(flow["flow_id"]),
                         ["flow_version"] = flow.Value<int>("flow_version"),
                         ["status"] = "active",
+                        ["flow_name"] = SafeMetadata(flow["flow_name"], 80),
+                        ["trigger_keywords"] = flow["trigger_keywords"] == null
+                            ? new JArray() : flow["trigger_keywords"].DeepClone(),
+                        ["initial_state"] = SafeMetadata(flow["initial_state"], 80).Length > 0
+                            ? SafeMetadata(flow["initial_state"], 80)
+                            : Convert.ToString(((JObject)((JArray)flow["steps"])[0])["state"]),
                         ["product_ids"] = flow["product_ids"].DeepClone(),
                         ["sku_ids"] = flow["sku_ids"].DeepClone(),
+                        ["confidence"] = flow.Value<double?>("confidence") ?? 0,
+                        ["source_evidence"] = flow["source_evidence"] == null
+                            ? new JArray() : flow["source_evidence"].DeepClone(),
+                        ["updated_at_utc"] = SafeMetadata(flow["updated_at_utc"], 64),
                         ["steps"] = new JArray(((JArray)flow["steps"]).Cast<JObject>().Select(step => new JObject {
                             ["state"] = Convert.ToString(step["state"]),
+                            ["trigger_keywords"] = step["trigger_keywords"] == null
+                                ? new JArray() : step["trigger_keywords"].DeepClone(),
                             ["required_evidence"] = step["required_evidence"].DeepClone(),
                             ["action"] = Convert.ToString(step["action"]),
+                            ["reply_template"] = SafeMetadata(step["reply_template"], 1200),
+                            ["terminal"] = step.Value<bool?>("terminal") ?? false,
                             ["next_state"] = Convert.ToString(step["next_state"]),
                             ["timeout_minutes"] = step.Value<int>("timeout_minutes")
                         }))
@@ -438,6 +526,7 @@ namespace Bot.ChromeNs
                 WriteCatalog(path, candidate);
             }
 
+            ReceptionWorkflowRuntimeService.InvalidateShop(shopKey);
             return "接待流程已通过结构校验并自动发布；新版本已立即生效，无需管理员审批。";
         }
 
@@ -446,6 +535,12 @@ namespace Bot.ChromeNs
         /// The rollback itself is immediate and does not require administrator approval.
         /// </summary>
         public static string RollbackToPreviousPublished(string seller, string shopKey)
+        {
+            return RollbackToPreviousPublished(seller, shopKey, null);
+        }
+
+        internal static string RollbackToPreviousPublished(
+            string seller, string shopKey, long? expectedCurrentRevision)
         {
             var shop = ResolveShopContext(seller, shopKey);
             EnsureLegacyDraftMigrated(shop);
@@ -462,6 +557,9 @@ namespace Bot.ChromeNs
 
                 var current = ReadCatalog(path);
                 var currentRevision = current.Value<long>("catalog_revision");
+                if (expectedCurrentRevision.HasValue
+                    && currentRevision != expectedCurrentRevision.Value)
+                    throw new InvalidOperationException("自动回滚CAS失败：当前目录已被其他发布更新，未回滚新版本");
                 if (currentRevision <= 0)
                     throw new InvalidOperationException("当前没有已发布版本可供回滚");
                 if (currentRevision == long.MaxValue)
@@ -525,6 +623,7 @@ namespace Bot.ChromeNs
                 WriteCatalog(path, restored);
             }
 
+            ReceptionWorkflowRuntimeService.InvalidateShop(shopKey);
             return "已自动回滚到上一有效发布版本的内容，并以新修订版本 "
                 + restoredRevision.ToString(CultureInfo.InvariantCulture) + " 立即生效。";
         }

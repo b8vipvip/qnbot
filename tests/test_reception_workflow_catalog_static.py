@@ -159,4 +159,4 @@ def test_status_document_distinguishes_autonomous_publication_from_business_auth
     assert "active-version pointer" in status
     assert "atomic rollback" in status
     assert "high-risk business actions" in status
-    assert "runtime execution adapter" in status
+    assert "runtime state recovery" in status

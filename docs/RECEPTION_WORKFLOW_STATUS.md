@@ -19,8 +19,8 @@ Allowed catalog actions are limited to:
 - `WAIT` — wait for a later event or required evidence.
 - `ASK_EVIDENCE` — request missing or clearer evidence.
 - `HANDOFF` — hand the conversation to a human.
-- `READ_ONLY_TOOL` — request a read-only lookup.
-- `REPLY` / `REPLY_REVIEWED` — express a reply intent; outgoing text must still pass the existing canonical send pipeline and its takeover, relevance, identity, deduplication, and pre-send checks.
+- `READ_ONLY_TOOL` — reserved for a future read-only tool adapter; AI auto-publishing currently rejects it and runtime fails closed if a legacy flow requests it.
+- `REPLY` / `REPLY_REVIEWED` — the AI may publish a reply step only when it points to a real human reply in the same evidence-bound session; outgoing text still passes the canonical send pipeline and its takeover, relevance, identity, deduplication, and pre-send checks.
 
 The catalog cannot grant arbitrary code execution, payment, recharge, refund, account modification, or actual fulfillment actions. These high-risk business actions remain outside autonomous workflow publication.
 
@@ -45,11 +45,21 @@ The existing application still owns the actual conversation and business side ef
 - Order created, payment confirmed, device eligibility, personal account binding, final fulfillment authorization, and delivery completion are separate assertions. No one stage implies the next.
 - The evidence ledger is never an order/payment authority and cannot authorize an irreversible operation.
 
+## AI generation and runtime execution
+
+- Session learning now supplies alias-only evidence context for real buyer messages (`M`), recent visual/OCR observations (`V`), and exact ShopKey-scoped nonterminal order snapshots (`O`). Raw message IDs and order IDs are not sent to the model or stored in the active flow.
+- AI flow proposals are automatically published only after deterministic checks: confidence >= 0.90, buyer message + real human correction + current configured product/order evidence, supported state transitions, safe evidence requests, and human-sourced reply templates. No administrator approval is required.
+- `ASK_EVIDENCE` text is constrained to evidence requests. `REPLY` must reference a real human reply from the same session; high-risk payment, refund, account, delivery, and fulfillment claims are rejected.
+- The runtime index is invalidated on publish/rollback and checks catalog revision on subsequent events so another process's publication is observed without restart. Multiple matching or already-progressed flows are detected as an ambiguity and handed off rather than selecting the first catalog entry.
+- runtime state recovery is ShopKey-isolated and durable: the per-shop file stores only buyer/message hashes, flow versions, state cursors, pending-send markers, and anomaly counters. State is restored after restart; stale flow versions and expired states are automatically reset. A pending send older than two minutes is treated as delivery-uncertain and handed off instead of being retried. Completed flows can re-enter when a new matching order appears or after a 24-hour completion window.
+- Text and vision decisions return to the existing canonical send pipelines. The workflow runtime never sends directly. It commits a state transition only after the canonical send reports success; uncertain delivery is not retried automatically.
+- `HANDOFF` requires a configured shop notification channel and queues a ShopKey-bound handoff notification. Repeated deterministic runtime faults are counted durably; three faults for the same flow/catalog revision within ten minutes trigger a revision-CAS rollback when a valid previous snapshot exists.
+
 ## Remaining implementation and acceptance boundary
 
-- The active catalog read API is available to the Reception Agent runtime execution adapter. The complete generic state-machine executor still needs to be connected to real message, OCR, order, and account evidence sources; publishing a catalog does not by itself prove that every flow transition is executing.
-- Trusted external order/account truth and guarded, idempotent execution of irreversible operations remain separate integrations. The workflow catalog must not enable these operations.
-- UI/runtime review of active state transitions, full migration of legacy knowledge, and field acceptance of real client sessions, customer images, manual takeover, and process restart recovery remain open.
+- The code-level AI generation → evidence binding → immediate publish → text/image runtime execution → durable state recovery → anomaly rollback path is now implemented. This is not a claim that every merchant workflow has passed live acceptance.
+- The current runtime consumes buyer messages, recent visual/OCR observations, and verified nonterminal order snapshots. It does not grant account-state, payment, recharge, refund, or fulfillment authority; trusted external order/account truth and idempotent irreversible-operation adapters remain separate integrations.
+- Real Windows/Qianniu acceptance remains open: multi-shop A→B→A, same-nickname shops, restart recovery, long-running sessions, handoff notification delivery, image/OCR state progression, and test-buyer end-to-end workflow execution.
 - CI/build success does not replace real Windows/Qianniu acceptance.
 
 ## Public repository privacy

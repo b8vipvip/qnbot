@@ -102,11 +102,12 @@ Qianniu renderer
 - The current master baseline remains dry-run. The new branch intentionally removes human approval and gray rollout for the narrow AI-generated FAQ auto-publish path; it still requires exact-SHA CI/build, shop isolation, evidence/PII/risk/dedup/version gates, atomic transaction, rollback history and immediate index refresh before merge/release.
 
 ### P1 — Reception Agent autonomous workflow publication (#346)
-- PR #442 has changed the workflow catalog from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
-- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision. Follow-up PR #443 requires the exact ShopKey from the Knowledge Center/event, verifies seller↔ShopKey identity, and pins active, legacy and history paths to one resolved ShopContext.
-- The catalog may orchestrate WAIT, ASK_EVIDENCE, HANDOFF, READ_ONLY_TOOL and reply intents; reply intents still pass through the canonical send pipeline.
-- Payment, recharge, refund, account mutation and actual fulfillment remain outside catalog authority and require their own authoritative evidence and idempotent execution guards.
-- The generic runtime state-machine adapter still needs to consume active catalog transitions against real message/image/OCR/order/account evidence; publication alone is not proof that the full Reception Agent is executing in production.
+- PR #442 changed the workflow catalog from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
+- PR #443 requires the exact ShopKey from the Knowledge Center/event, verifies seller↔ShopKey identity, and pins active, legacy and history paths to one resolved ShopContext. Publish/rollback use cross-process locking, revision CAS, monotonic per-flow versions, immutable history and legacy migration.
+- The current branch adds AI workflow generation to session learning, alias-bound buyer/human-reply/visual/order evidence, immediate active-catalog publication, runtime-index invalidation/revision refresh, and a durable per-shop state machine integrated with canonical text and vision reply pipelines.
+- Runtime state is restored after restart; stale versions/expired cursors are repaired; uncertain sends are not retried; repeated deterministic faults trigger revision-CAS rollback. HANDOFF requires a configured shop notification channel. READ_ONLY_TOOL remains fail-closed and is not auto-generated.
+- Payment, recharge, refund, account mutation and actual fulfillment remain outside catalog authority and require separate authoritative evidence and idempotent execution guards.
+- Remaining acceptance is real Windows/Qianniu execution: same-nickname multi-shop isolation, A→B→A, restart, long-running sessions, image/OCR progression, notification delivery, and end-to-end test-buyer workflows. CI/build success is not field acceptance.
 
 ### P1 — GPTAuto Reconcile regression maintenance
 - Keep exact source SHA, Windows build association, task-aware run title and terminal Completion Lease checks covered by regression tests.
