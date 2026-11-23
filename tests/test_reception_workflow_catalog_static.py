@@ -107,13 +107,17 @@ def test_rollback_restores_previous_valid_published_snapshot_as_new_revision():
 
 def test_history_snapshots_are_immutable_and_keep_revision_identity():
     service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
+    history_path = service[
+        service.index("private static string HistoryPath"):
+        service.index("private static void SaveHistorySnapshot")
+    ]
     history = service[
         service.index("private static void SaveHistorySnapshot"):
         service.index("private static void WriteCatalog")
     ]
 
+    assert '"revision-" + revision.ToString("D10"' in history_path
     assert "HistoryDirectoryForShop(seller)" in history
-    assert '"revision-" + revision.ToString("D10"' in history
     assert "if (!IsMissing(path)) return;" in history
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in history
 
