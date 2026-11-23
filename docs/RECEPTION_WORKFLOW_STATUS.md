@@ -47,7 +47,7 @@ The existing application still owns the actual conversation and business side ef
 
 ## Remaining implementation and acceptance boundary
 
-- The active catalog read API is available to the Reception Agent/runtime adapter. The complete generic state-machine executor still needs to be connected to real message, OCR, order, and account evidence sources; publishing a catalog does not by itself prove that every flow transition is executing.
+- The active catalog read API is available to the Reception Agent runtime execution adapter. The complete generic state-machine executor still needs to be connected to real message, OCR, order, and account evidence sources; publishing a catalog does not by itself prove that every flow transition is executing.
 - Trusted external order/account truth and guarded, idempotent execution of irreversible operations remain separate integrations. The workflow catalog must not enable these operations.
 - UI/runtime review of active state transitions, full migration of legacy knowledge, and field acceptance of real client sessions, customer images, manual takeover, and process restart recovery remain open.
 - CI/build success does not replace real Windows/Qianniu acceptance.
