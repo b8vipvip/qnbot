@@ -306,6 +306,17 @@ namespace Bot.AssistWindow.Widget.Robot
                 if (turns.Count == 0)
                 {
                     RequestMessageMirrorHistory(qn, seller, buyer, false);
+                    // A transient empty local snapshot is not proof that the current
+                    // conversation has no messages. This can happen while a history
+                    // backfill is being applied or the mirror store is momentarily
+                    // unavailable; never replace a populated same-identity timeline
+                    // with the "暂无聊天消息" placeholder on a refresh.
+                    if (!identityChanged && _messageMirrorRenderedTurns != null
+                        && _messageMirrorRenderedTurns.Count > 0)
+                    {
+                        Log.Info("千牛镜像聊天区收到空的临时快照，保留同一ShopKey/买家最后一次有效消息列表并等待历史恢复。");
+                        return;
+                    }
                 }
 
                 var signature = BuildMessageMirrorSignature(seller, buyer, turns);
