@@ -370,7 +370,7 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     assert "TryGetRecentKugouAccountEvidence(" in runtime_current
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in runtime_current
     assert "var accountTrigger = isImage" in runtime
-    assert "if ((hasImage || hasAccountEvidence) && action == \"ASK_EVIDENCE\")" in runtime
+    assert "if (evidenceReady && action == \"ASK_EVIDENCE\")" in runtime
     assert "hasAccountEvidence" in runtime
     assert "account_evidence" in session
 
