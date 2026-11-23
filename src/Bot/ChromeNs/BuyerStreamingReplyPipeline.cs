@@ -483,6 +483,17 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (workflowDecision != null && workflowDecision.RequiresSend
+                && !ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision))
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lease.MarkCompleted("reception_workflow_revision_changed_before_send");
+                const string staleWorkflow = "未发送：接待流程在发送前已更新或回滚，旧版本回复已取消";
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, staleWorkflow);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, staleWorkflow, burst.ShopKey);
+                return;
+            }
+
             if (!lease.MarkSending("streaming_send_started"))
             {
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
