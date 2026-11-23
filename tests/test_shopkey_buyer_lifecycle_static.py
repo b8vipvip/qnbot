@@ -217,7 +217,12 @@ def test_seller_echo_runtime_monitor_and_learning_are_shopkey_scoped():
     assert "TryConfirmBotDelivery(seller, buyer, texts, shopKey)" in monitor
     assert "BuyerOrderKey(seller, buyer, shopKey)" in monitor
     assert "return shopKey + \"#\" + seller.ToLowerInvariant()" in monitor
-    assert "IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey)" in learning
+    assert "IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards)" in learning
+    classifier = learning[
+        learning.index("private static bool IsBotAnswer("):
+        learning.index("private static string NormalizeBotAnswer(")
+    ]
+    assert "SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey)" in classifier
     assert "RecordObservedSellerMessage(" in mirror
     assert "ResolveShop(seller, shopKey)" in mirror
     assert "ResolveRuntimeByShopKey(shopKey)" in mirror
