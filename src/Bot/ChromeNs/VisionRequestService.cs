@@ -270,7 +270,8 @@ namespace Bot.ChromeNs
             {
                 var textEndpoints = AiEndpointStore.GetEnabledEndpoints();
                 if (textEndpoints == null || textEndpoints.Count == 0) return null;
-                var image = await _resolver.ResolveAsync(task.Message, null, cancellationToken, task.ShopKey);
+                var image = await _resolver.ResolveAsync(
+                    task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient);
                 if (image == null || !image.Success) return null;
                 var ocr = LocalOcrService.TryGetCachedRecognition(image.LocalCachePath);
                 if (ocr == null || !ocr.Success || ocr.Confidence < 0.88
