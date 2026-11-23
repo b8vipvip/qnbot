@@ -69,6 +69,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
           gh api "repos/$REPOSITORY/pulls?state=open&base=$DEFAULT_BRANCH&per_page=100" --paginate \
             --jq '.[] | [.number,.head.sha] | @tsv' | while IFS=$'\t' read -r pr head; do
               task_id="$(PYTHONPATH=.github python -c 'from gptauto.observer import observed_task_id; import os,sys; print(observed_task_id(os.environ["REPOSITORY"], sys.argv[1], sys.argv[2]))' "$pr" "$head")"
@@ -102,8 +103,7 @@ jobs:
               echo "Watchdog recovering stalled task=$task_id pr=$pr head=$head ci_status=$ci_status"
               observer_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg pr_number "$pr" --arg head_sha "$head" \
                 '{ref:$ref,inputs:{pr_number:$pr_number,head_sha:$head_sha}}')"
-              printf '%s' "$observer_payload" | gh api --method POST \
-                "repos/$REPOSITORY/actions/workflows/gptauto-observer.yml/dispatches" --input -
+              dispatch_workflow "$REPOSITORY" "gptauto-observer.yml" "$observer_payload"
             done
 
   observe:
