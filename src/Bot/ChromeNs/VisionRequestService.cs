@@ -110,7 +110,7 @@ namespace Bot.ChromeNs
                     using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                     {
                         cts.CancelAfter(TimeSpan.FromSeconds(endpoint.VisionTimeoutSeconds));
-                        var image = await _resolver.ResolveAsync(task.Message, endpoint, cts.Token, task.ShopKey);
+                        var image = await _resolver.ResolveAsync(task.Message, endpoint, cts.Token, task.ShopKey, task.BrowserClient);
                         if (!image.Success)
                         {
                             last = Fail(image.Error);
