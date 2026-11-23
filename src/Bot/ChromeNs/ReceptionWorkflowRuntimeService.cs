@@ -44,6 +44,7 @@ namespace Bot.ChromeNs
         private const int MaxFaultRecords = 500;
         private const int AutoRollbackFailureThreshold = 3;
         private static readonly TimeSpan FaultWindow = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan PendingDeliveryUncertainAfter = TimeSpan.FromMinutes(2);
         private static readonly ConcurrentDictionary<string, CatalogIndex> CatalogCache =
             new ConcurrentDictionary<string, CatalogIndex>(StringComparer.Ordinal);
 
@@ -345,12 +346,33 @@ namespace Bot.ChromeNs
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
                                 "上一条流程回复发送结果不确定，已停止自动重发并等待人工确认");
 
-                        if (record != null
-                            && (string.Equals(Convert.ToString(record["last_source_key"]), sourceKey, StringComparison.Ordinal)
-                                || string.Equals(Convert.ToString(record["pending_source_key"]), sourceKey, StringComparison.Ordinal)))
+                        var pendingSourceKey = record == null ? string.Empty : Convert.ToString(record["pending_source_key"]);
+                        if (!string.IsNullOrWhiteSpace(pendingSourceKey))
+                        {
+                            var pendingStarted = record.Value<long?>("pending_started_utc_ticks") ?? 0;
+                            var pendingAge = pendingStarted <= 0
+                                ? PendingDeliveryUncertainAfter
+                                : TimeSpan.FromTicks(Math.Max(0, DateTime.UtcNow.Ticks - pendingStarted));
+                            if (pendingAge >= PendingDeliveryUncertainAfter)
+                            {
+                                record["delivery_uncertain"] = true;
+                                record["pending_source_key"] = string.Empty;
+                                record["pending_started_utc_ticks"] = 0;
+                                record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                    catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                    "检测到重启或超时遗留的待发送流程，交由人工确认，禁止重复发送");
+                            }
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "WAIT", sourceKey,
-                                "同一来源消息已处理或正在发送，防止流程重复执行");
+                                "上一条流程回复仍在发送或等待提交，本轮暂缓避免并发重复");
+                        }
+
+                        if (record != null
+                            && string.Equals(Convert.ToString(record["last_source_key"]), sourceKey, StringComparison.Ordinal))
+                            return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                catalog.Revision, currentState, currentState, "WAIT", sourceKey,
+                                "同一来源消息已处理，防止流程重复执行");
 
                         // Automatic repair: after a new flow version or an invalid persisted state,
                         // reset only this buyer+flow cursor to the first valid state.
@@ -368,7 +390,9 @@ namespace Bot.ChromeNs
                             record["current_state"] = currentState;
                             record["last_source_key"] = string.Empty;
                             record["pending_source_key"] = string.Empty;
+                            record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                         }
 
@@ -376,16 +400,19 @@ namespace Bot.ChromeNs
                             string.Equals(Convert.ToString(x["state"]), currentState, StringComparison.Ordinal));
                         if (step == null) continue;
 
-                        var updatedTicks = record == null ? 0 : record.Value<long?>("updated_utc_ticks") ?? 0;
+                        var stateEnteredTicks = record == null
+                            ? 0 : record.Value<long?>("state_entered_utc_ticks") ?? record.Value<long?>("updated_utc_ticks") ?? 0;
                         var timeoutMinutes = Math.Max(1, Math.Min(10080, step.Value<int?>("timeout_minutes") ?? 60));
-                        if (record != null && updatedTicks > 0
-                            && DateTime.UtcNow.Ticks - updatedTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks)
+                        if (record != null && stateEnteredTicks > 0
+                            && DateTime.UtcNow.Ticks - stateEnteredTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks)
                         {
                             currentState = initial;
                             record["current_state"] = initial;
                             record["last_source_key"] = string.Empty;
                             record["pending_source_key"] = string.Empty;
+                            record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             step = steps.OfType<JObject>().FirstOrDefault(x =>
                                 string.Equals(Convert.ToString(x["state"]), currentState, StringComparison.Ordinal));
@@ -403,7 +430,9 @@ namespace Bot.ChromeNs
                             record["current_state"] = currentState;
                             record["last_source_key"] = sourceKey;
                             record["pending_source_key"] = string.Empty;
+                            record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return null;
                         }
@@ -474,6 +503,9 @@ namespace Bot.ChromeNs
                                 record["flow_version"] = flowVersion;
                                 record["current_state"] = currentState;
                                 record["pending_source_key"] = sourceKey;
+                                record["pending_started_utc_ticks"] = DateTime.UtcNow.Ticks;
+                                record["state_entered_utc_ticks"] = record.Value<long?>("state_entered_utc_ticks")
+                                    ?? DateTime.UtcNow.Ticks;
                                 record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                                 return new ReceptionWorkflowDecision
                                 {
@@ -547,6 +579,9 @@ namespace Bot.ChromeNs
                             record["flow_version"] = flowVersion;
                             record["current_state"] = currentState;
                             record["pending_source_key"] = sourceKey;
+                            record["pending_started_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            record["state_entered_utc_ticks"] = record.Value<long?>("state_entered_utc_ticks")
+                                ?? DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return new ReceptionWorkflowDecision
                             {
@@ -605,6 +640,7 @@ namespace Bot.ChromeNs
                         record["current_state"] = decision.NextState;
                         record["last_source_key"] = decision.SourceKey;
                         record["delivery_uncertain"] = false;
+                        record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                     }
                     else
                     {
@@ -614,6 +650,7 @@ namespace Bot.ChromeNs
                         record["delivery_uncertain"] = true;
                     }
                     record["pending_source_key"] = string.Empty;
+                    record["pending_started_utc_ticks"] = 0;
                     record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                     return true;
                 });
@@ -641,6 +678,7 @@ namespace Bot.ChromeNs
                         || !string.Equals(Convert.ToString(record["pending_source_key"]), decision.SourceKey, StringComparison.Ordinal))
                         return false;
                     record["pending_source_key"] = string.Empty;
+                    record["pending_started_utc_ticks"] = 0;
                     record["last_source_key"] = decision.SourceKey;
                     record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                     return true;
