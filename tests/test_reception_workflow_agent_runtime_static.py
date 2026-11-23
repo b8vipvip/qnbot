@@ -279,3 +279,20 @@ def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
     assert "!config.Enabled || !config.EnableAutoGuidance" in current
     assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
     assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
+
+
+def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    visual_learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    recent = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    manual_learning = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+
+    assert "IsMessageKeyWithdrawn(" in cache
+    assert "FindRecord(messageKey, string.Empty, shop.ShopKey)" in cache
+    assert "VisualKnowledgeLearningService.MarkObservationWithdrawn(" in cache
+    assert 'Status = withdrawn ? "图片已撤回" : "等待人工接待结束"' in visual_learning
+    assert 'observation.Status = "图片已撤回"' in visual_learning
+    assert "IsWithdrawnObservation(" in recent
+    assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in recent
+    assert "IsMessageKeyWithdrawn(" in manual_learning
+    assert 'observation.Status, "图片已撤回"' in manual_learning
