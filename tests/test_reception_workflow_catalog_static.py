@@ -11,8 +11,8 @@ def source(path):
 def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     service = source("src/Bot/ChromeNs/ReceptionWorkflowCatalogService.cs")
     scope = service[
-        service.index("private static string ShopDirectoryForSeller"):
-        service.index("private static JObject Default")
+        service.index("private static ShopContext ResolveShopForSeller"):
+        service.index("private static string PathForShop")
     ]
 
     assert 'qnbot.reception-workflows.v2' in service
@@ -80,7 +80,7 @@ def test_publish_uses_shop_scoped_cas_and_monotonic_flow_versions():
     assert 'CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowPublish", 3000)' in publish
     assert "expectedRevision != currentRevision" in publish
     assert "currentRevision == long.MaxValue" in publish
-    assert "SaveHistorySnapshot(seller, current)" in publish
+    assert "SaveHistorySnapshot(shop, current)" in publish
     assert "BumpFlowVersions(candidate, current)" in publish
     assert 'candidate["catalog_revision"] = nextRevision' in publish
     assert "WriteCatalog(path, candidate)" in publish
@@ -97,7 +97,7 @@ def test_rollback_restores_previous_valid_published_snapshot_as_new_revision():
     assert '"revision-*.json"' in rollback
     assert "OrderByDescending(item => item.Revision)" in rollback
     assert "Validate(contents)" in rollback
-    assert "SaveHistorySnapshot(seller, current)" in rollback
+    assert "SaveHistorySnapshot(shop, current)" in rollback
     assert "BumpFlowVersions(restored, current)" in rollback
     assert 'restored["catalog_revision"] = restoredRevision' in rollback
     assert 'restored["publication_mode"] = "autonomous-rollback"' in rollback
@@ -117,7 +117,7 @@ def test_history_snapshots_are_immutable_and_keep_revision_identity():
     ]
 
     assert '"revision-" + revision.ToString("D10"' in history_path
-    assert "HistoryDirectoryForShop(seller)" in history
+    assert "HistoryDirectoryForShop(shop)" in history
     assert "if (!IsMissing(path)) return;" in history
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic" in history
 
