@@ -23,13 +23,23 @@ def test_history_is_persisted_in_bot_sqlite_with_bounded_retention():
 
 def test_complete_session_card_loader_is_unbounded_while_recent_ui_reads_remain_paged():
     source = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
-    complete = source[
+    wrapper = source[
         source.index("public static List<BotConversationHistoryEntity> LoadRangeComplete"):
+        source.index("public static bool TryLoadRangeComplete")
+    ]
+    complete = source[
+        source.index("public static bool TryLoadRangeComplete"):
         source.index("public static void FlushNow")
     ]
+    session_query = complete[
+        complete.index("var rows = DbHelper.Db.Select"):
+        complete.index("var unscoped = DbHelper.Db.Select")
+    ]
 
-    assert "order by CreatedAtTicks asc" in complete
-    assert "limit " not in complete.lower()
+    assert "TryLoadRangeComplete(" in wrapper
+    assert "order by CreatedAtTicks asc" in session_query
+    assert "limit " not in session_query.lower()
+    assert "retained.Count >= MaxTotalRecords" in complete
     assert "TrimConversationUnsafe" not in source
     assert "MaxTotalRecords = 10000" in source
 
