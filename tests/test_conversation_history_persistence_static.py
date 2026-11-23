@@ -21,7 +21,7 @@ def test_history_is_persisted_in_bot_sqlite_with_bounded_retention():
     assert "order by UpdatedAtTicks desc limit" in source
 
 
-def test_complete_session_card_loader_is_unbounded_while_recent_ui_reads_remain_paged():
+def test_complete_session_card_loader_detects_overflow_instead_of_silently_truncating():
     source = read("src/Bot/ChromeNs/BotConversationHistoryStore.cs")
     wrapper = source[
         source.index("public static List<BotConversationHistoryEntity> LoadRangeComplete"):
@@ -37,8 +37,9 @@ def test_complete_session_card_loader_is_unbounded_while_recent_ui_reads_remain_
     ]
 
     assert "TryLoadRangeComplete(" in wrapper
-    assert "order by CreatedAtTicks asc" in session_query
-    assert "limit " not in session_query.lower()
+    assert "order by CreatedAtTicks asc limit " in session_query
+    assert '" + (MaxTotalRecords + 1)' in session_query
+    assert "rows == null || rows.Count > MaxTotalRecords" in complete
     assert "retained.Count >= MaxTotalRecords" in complete
     assert "TrimConversationUnsafe" not in source
     assert "MaxTotalRecords = 10000" in source
