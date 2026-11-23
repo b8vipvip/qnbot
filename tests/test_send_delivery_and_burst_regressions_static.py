@@ -335,6 +335,7 @@ def test_qn_rechecks_business_guard_after_send_lock_and_before_each_physical_att
 
     assert "Func<bool> preSendGuard = null" in method
     assert "SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)" in method
+    assert method.count("SendTextAsync(buyer, text, preSendGuard)") >= 2
     assert "await _sendGate.WaitAsync(cancellationToken)" in method
     assert method.index("EnsureActiveBuyerForSendAsync(buyer, cancellationToken)") < method.index(
         'IsPreSendGuardSatisfied(preSendGuard, "首次发送")'
@@ -389,5 +390,6 @@ def test_final_guard_is_carried_to_the_last_moment_of_each_qianniu_physical_send
     assert "Func<bool> manualTakeoverCheck, Func<bool> preSendGuard)" in native
     assert "IsPreSendGuardSatisfied(preSendGuard, \"CDP页面发送\")" in native
     assert "IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")" in native
+    assert native.index("IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")") < native.index("var moved = PostMessage(target, WmMouseMove")
     assert "IsPreSendGuardSatisfied(preSendGuard, \"安全UIA发送\")" in native
     assert "manualTakeoverCheck, preSendGuard).ConfigureAwait(false)" in native
