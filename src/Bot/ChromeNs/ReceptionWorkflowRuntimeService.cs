@@ -333,7 +333,6 @@ namespace Bot.ChromeNs
             CatalogIndex catalog;
             List<OrderSnapshot> orders;
             KugouReceptionConfig config;
-            var workflowEnabled = false;
             try
             {
                 shop = ResolveShop(seller, shopKey);
@@ -343,15 +342,14 @@ namespace Bot.ChromeNs
                     if (config == null || !config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
                         return null;
                     if (!config.EnableAutoGuidance) return null;
-                    workflowEnabled = true;
                     catalog = LoadCatalog(seller, shopKey);
                     orders = LoadRecentNonterminalOrders(seller, buyer, shopKey);
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("Reception Agent运行时无法读取ShopKey目录或订单证据：" + ex.Message, 10);
-                if (!workflowEnabled || shop == null) return null;
+                Log.ErrorWithMaxCount("Reception Agent运行时无法确认本店策略、流程目录或订单证据：" + ex.Message, 10);
+                if (shop == null) return null;
                 var queued = QueueHandoff(shop, seller, buyer, question, shopKey, "runtime-bootstrap-error");
                 return Suppressed(seller, buyer, shopKey, "runtime-bootstrap-error", 1,
                     0, string.Empty, string.Empty, queued ? "HANDOFF" : "WAIT", sourceKey,
