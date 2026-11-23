@@ -1353,8 +1353,11 @@ namespace Bot.ChromeNs
                     ? current.ShopKey
                     : "unresolved:" + Guid.NewGuid().ToString("N");
             var resolved = ResolveShop(seller);
+            // A missing or ambiguous seller nickname must never fall back to a shared
+            // seller-only key: two shops with the same nickname could then read each
+            // other's buyer timeline. Without a proven ShopKey, isolate this access.
             return resolved == null
-                ? "legacy-" + StableHash((seller ?? string.Empty).Trim()).ToString(CultureInfo.InvariantCulture)
+                ? "unresolved:" + Guid.NewGuid().ToString("N")
                 : resolved.ShopKey;
         }
 
