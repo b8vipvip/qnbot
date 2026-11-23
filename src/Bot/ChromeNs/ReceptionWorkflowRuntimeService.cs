@@ -716,6 +716,12 @@ namespace Bot.ChromeNs
                             action = "REPLY_REVIEWED";
                         }
 
+                        if (action != "WAIT" && action != "HANDOFF"
+                            && action != "ASK_EVIDENCE" && action != "REPLY_REVIEWED")
+                            return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
+                                catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
+                                "runtime_failure:unsupported_workflow_action");
+
                         if (!evidenceReady)
                         {
                             if (action == "ASK_EVIDENCE" && hasBuyer && reply.Length > 0)
