@@ -1,4 +1,4 @@
-"""Workflow learning must be review-only; generated policy must never auto-publish."""
+"""Workflow learning may auto-publish only after exact-shop evidence and action validation."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
