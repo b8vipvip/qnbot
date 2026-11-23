@@ -664,6 +664,8 @@ namespace Bot.ChromeNs
                             record["pending_source_key"] = string.Empty;
                             record["pending_started_utc_ticks"] = 0;
                             record["delivery_uncertain"] = false;
+                            record["completed_utc_ticks"] = DateTime.UtcNow.Ticks;
+                            record["completed_order_fingerprint"] = orderFingerprint;
                             record["state_entered_utc_ticks"] = DateTime.UtcNow.Ticks;
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return null;
