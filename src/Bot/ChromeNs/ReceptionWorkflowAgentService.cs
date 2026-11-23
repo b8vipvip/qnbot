@@ -382,7 +382,11 @@ namespace Bot.ChromeNs
                         reason = "回复步骤必须引用同一会话中的真实人工回复";
                         return false;
                     }
-                    if (!selected.Any(x => x.Digest == replyEvidence.Digest)) selected.Add(replyEvidence);
+                    if (!selected.Any(x => x.Digest == replyEvidence.Digest))
+                    {
+                        reason = "真实人工回复别名必须同时出现在evidence_refs中，确保来源审计完整";
+                        return false;
+                    }
                     replyTemplate = BuyerMessageArchiveService.Redact(Clean(replyEvidence.ReplyText, 1200));
                     if (replyTemplate.Length < 2 || UnsafeReplyText.IsMatch(replyTemplate))
                     {
