@@ -314,7 +314,6 @@ namespace Bot.AssistWindow.Widget.Robot
                     if (!identityChanged && _messageMirrorRenderedTurns != null
                         && _messageMirrorRenderedTurns.Count > 0)
                     {
-                        Log.Info("千牛镜像聊天区收到空的临时快照，保留同一ShopKey/买家最后一次有效消息列表并等待历史恢复。");
                         return;
                     }
                 }
