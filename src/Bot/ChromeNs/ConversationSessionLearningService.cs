@@ -651,6 +651,7 @@ namespace Bot.ChromeNs
                 ConversationHistoryRefreshResult historyCoverage;
                 List<ConversationContextTurn> turns;
                 List<BotConversationHistoryEntity> cards;
+                bool botCardsReliable;
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(session.ShopKey);
                 using (ShopSettingsScope.Enter(shop))
                 {
@@ -670,11 +671,13 @@ namespace Bot.ChromeNs
                     }
 
                     // Timeline lookup and Bot-card lookup must use the same exact
-                    // ShopKey scope as the remote CDP request.
+                    // ShopKey scope as the remote CDP request. A failed or truncated
+                    // Bot-card read is unknown provenance, never proof of a human reply.
                     turns = ConversationSessionLearningRuntimeBridge.GetTurnsBetween(
                         session.Seller, session.Buyer, from, endAt, 0, true);
-                    cards = BotConversationHistoryStore.LoadRangeComplete(
-                        session.ShopKey, session.Seller, session.Buyer, from, endAt);
+                    botCardsReliable = BotConversationHistoryStore.TryLoadRangeComplete(
+                        session.ShopKey, session.Seller, session.Buyer, from, endAt, out cards);
+                    if (!botCardsReliable) cards = null;
                 }
                 if (historyCoverage != null && historyCoverage.IsComplete
                     && historyCoverage.MessagesInWindow != turns.Count)
@@ -699,11 +702,10 @@ namespace Bot.ChromeNs
                     ["historyMessagesInWindow"] = historyCoverage == null ? 0 : historyCoverage.MessagesInWindow,
                     ["unknownTimestampCount"] = historyCoverage == null ? 0 : historyCoverage.UnknownTimestampCount,
                     ["timelineTurns"] = turns.Count,
-                    ["botCards"] = cards.Count,
-                    // The global 90-day/10k-card retention policy does not expose
-                    // per-session truncation markers; cards are auxiliary evidence,
-                    // never the authoritative completeness source.
-                    ["botCardsComplete"] = false,
+                    ["botCards"] = cards == null ? 0 : cards.Count,
+                    // True only when the exact session-range Bot echo index was read
+                    // successfully and is not known to be truncated or ambiguously scoped.
+                    ["botCardsComplete"] = botCardsReliable,
                     ["historyStopReason"] = historyCoverage == null ? string.Empty : historyCoverage.StopReason,
                     ["historyErrorCode"] = historyCoverage == null ? "history_refresh_unavailable" : historyCoverage.ErrorCode,
                     ["knowledgeCorpusComplete"] = false,
@@ -3503,7 +3505,9 @@ namespace Bot.ChromeNs
                 if (turn == null || string.IsNullOrWhiteSpace(turn.Text)) continue;
                 var role = turn.Role == "user"
                     ? "买家"
-                    : (turn.Withdrawn ? "客服-已撤回" : (IsBotTurn(turn, cards) ? "Bot" : "人工客服"));
+                    : (turn.Withdrawn ? "客服-已撤回"
+                        : (HasBotEchoMarker(turn.Text) ? "Bot"
+                            : (cards == null ? "客服来源未确认" : (IsBotTurn(turn, cards) ? "Bot" : "人工客服"))));
                 var time = turn.Timestamp == DateTime.MinValue ? "时间未知" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
                 sb.Append('[').Append(time).Append(' ').Append(role).Append("] ").AppendLine(Redact(turn.Text));
             }
@@ -3537,8 +3541,11 @@ namespace Bot.ChromeNs
             if (HasBotEchoMarker(text)) return true;
 
             var normalized = Normalize(StripAi(text));
+            // If the Bot echo index is unavailable, an unmarked seller turn has
+            // unknown authorship. Exclude it from human-evidence learning rather than
+            // treating a missing Bot card as proof that a person wrote the reply.
             if (normalized.Length == 0 || cards == null || turn == null
-                || turn.Timestamp == DateTime.MinValue) return false;
+                || turn.Timestamp == DateTime.MinValue) return true;
 
             var targetTicks = turn.Timestamp.Ticks;
             return cards.Any(card =>
