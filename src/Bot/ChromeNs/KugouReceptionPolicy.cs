@@ -256,6 +256,13 @@ namespace Bot.ChromeNs
         public static bool BlockOutgoing(
             string seller, string buyer, string question, string answer, out string reason, string shopKey)
         {
+            return BlockOutgoing(seller, buyer, question, answer, out reason, shopKey, true);
+        }
+
+        internal static bool BlockOutgoing(
+            string seller, string buyer, string question, string answer,
+            out string reason, string shopKey, bool requireEnabled)
+        {
             reason = string.Empty;
             seller = (seller ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
@@ -267,7 +274,8 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                     || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
                 {
                     reason = "Seller/ShopKey身份不匹配，拒绝发送接待流程回复";
@@ -277,7 +285,12 @@ namespace Bot.ChromeNs
                 {
                     var config = KugouReceptionConfigService.GetConfig(shop);
                     var output = answer ?? string.Empty;
-                    if (!config.Enabled) return false;
+                    if (config == null || !config.Enabled)
+                    {
+                        if (!requireEnabled) return false;
+                        reason = "当前店铺已关闭Reception Agent，拒绝发送旧流程回复";
+                        return true;
+                    }
                     if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
                         && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
                         reason = "当前店铺已关闭自动设备指导";
