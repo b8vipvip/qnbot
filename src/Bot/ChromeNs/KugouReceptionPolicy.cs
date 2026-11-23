@@ -291,6 +291,11 @@ namespace Bot.ChromeNs
                         reason = "当前店铺已关闭Reception Agent，拒绝发送旧流程回复";
                         return true;
                     }
+                    if (requireEnabled && !config.EnableAutoGuidance)
+                    {
+                        reason = "当前店铺已关闭自动接待流程，拒绝发送旧流程回复";
+                        return true;
+                    }
                     if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
                         && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
                         reason = "当前店铺已关闭自动设备指导";
