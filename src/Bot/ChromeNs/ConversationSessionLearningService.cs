@@ -2083,7 +2083,9 @@ namespace Bot.ChromeNs
             {
                 if (string.IsNullOrWhiteSpace(turn.Text)) continue;
                 var role = turn.Role == "user" ? "买家"
-                    : (turn.Withdrawn ? "客服-已撤回" : (IsBotTurn(turn, cards) ? "Bot" : "人工客服"));
+                    : (turn.Withdrawn ? "客服-已撤回"
+                        : (HasBotEchoMarker(turn.Text) ? "Bot"
+                            : (cards == null ? "客服来源未确认" : (IsBotTurn(turn, cards) ? "Bot" : "人工客服"))));
                 var ids = new List<string>();
                 if (!string.IsNullOrWhiteSpace(turn.MessageKey))
                 {
