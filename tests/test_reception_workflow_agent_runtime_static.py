@@ -92,6 +92,7 @@ def test_catalog_preserves_runtime_metadata_and_uses_expected_revision_for_auto_
     assert '["source_evidence"]' in catalog
     assert '["confidence"]' in catalog
     assert "expectedCurrentRevision" in catalog
+    assert '["flow_name"] = SafeMetadata(flow["flow_name"], 80)' in catalog
     assert "自动回滚CAS失败" in catalog
     assert catalog.count("ReceptionWorkflowRuntimeService.InvalidateShop(shopKey)") >= 2
 
@@ -118,7 +119,13 @@ def test_runtime_auto_repairs_stale_state_and_auto_rolls_back_repeated_faults_wi
 
     assert "Automatic repair" in runtime
     assert "savedVersion != flowVersion" in runtime
+    assert "progressedFlows.Count > 1" in runtime
+    assert "triggeredFlows.Count > 1" in runtime
+    assert "ambiguous-active-flows" in runtime
+    assert "QueueHandoff(shop, seller, buyer, question, shopKey, flowId)" in runtime
     assert "currentState = initial" in runtime
+    assert "state_entered_utc_ticks" in runtime
+    assert "PendingDeliveryUncertainAfter" in runtime
     assert "AutoRollbackFailureThreshold = 3" in runtime
     assert "FaultWindow = TimeSpan.FromMinutes(10)" in runtime
     assert 'fault["failure_count"] = count' in runtime
