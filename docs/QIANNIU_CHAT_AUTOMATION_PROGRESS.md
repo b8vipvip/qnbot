@@ -237,7 +237,7 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - A schema-valid publish immediately updates the active version; no administrator approval identity, approval token, or mandatory gray rollout is required.
 - The publish operation uses ShopKey-scoped storage, cross-process locking, revision CAS, monotonic per-flow versions, immutable published-history snapshots, and a rollback that creates a new revision.
 - Existing v1 draft files are migrated to active v2 only after validation; the original file is retained.
-- Follow-up PR #443 fixes a multi-shop race by resolving one ShopContext once and reusing it for active catalog, legacy migration, history snapshots and rollback paths; it is under exact-SHA CI/Windows build validation.
+- Follow-up PR #443 fixes a multi-shop race by requiring the exact ShopKey from the Knowledge Center/event, verifying seller↔ShopKey identity, and reusing one resolved ShopContext for active catalog, legacy migration, history snapshots and rollback paths; it is under exact-SHA CI/Windows build validation.
 - Catalog actions remain constrained. Workflow publication does not grant payment, recharge, refund, account mutation, or fulfillment authority. Reply intents still pass through the existing canonical send pipeline.
 - The runtime adapter that consumes the active catalog for every generic stage/evidence transition is not yet complete. Do not describe the workflow engine as fully live until that adapter and real Qianniu acceptance are complete.
 
