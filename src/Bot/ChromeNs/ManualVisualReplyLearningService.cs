@@ -137,8 +137,7 @@ namespace Bot.ChromeNs
             var text = ExtractMessageText(message);
             if (string.IsNullOrWhiteSpace(text)
                 || ConversationContextStore.IsWithdrawalNotice(message, text)
-                || ConversationContextStore.IsPlatformSystemTip(message, text)
-                || IsBotReply(seller, buyer, text))
+                || ConversationContextStore.IsPlatformSystemTip(message, text))
             {
                 return;
             }
@@ -162,6 +161,7 @@ namespace Bot.ChromeNs
             var replyAt = GetMessageTime(message);
             if (replyAt == DateTime.MinValue) replyAt = DateTime.Now;
             if (replyAt < recent.ObservedAt.AddSeconds(-2) || replyAt > recent.ObservedAt.AddMinutes(10)) return;
+            if (IsBotReply(seller, buyer, text, shopKey, replyAt)) return;
 
             var stateKey = Key(shopKey, seller, buyer, recent.MessageKey);
             var pending = Pending.GetOrAdd(stateKey, _ => new PendingReply
@@ -425,14 +425,61 @@ namespace Bot.ChromeNs
                 && answer != "在的";
         }
 
-        private static bool IsBotReply(string seller, string buyer, string text)
+        private static bool IsBotReply(
+            string seller, string buyer, string text, string shopKey, DateTime replyAt)
         {
             var compact = Regex.Replace(text ?? string.Empty, @"\s+", string.Empty);
-            if (compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+            if (compact.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
                 || compact.EndsWith("【AI】", StringComparison.OrdinalIgnoreCase)
                 || compact.EndsWith("［AI］", StringComparison.OrdinalIgnoreCase)) return true;
-            try { return SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, text); }
-            catch { return false; }
+            try
+            {
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, text, shopKey))
+                    return true;
+            }
+            catch
+            {
+                // If Bot-origin lookup fails, authorship is unknown and must not become
+                // automatic human visual-learning evidence.
+                return true;
+            }
+
+            if (replyAt == DateTime.MinValue) return true;
+            List<BotConversationHistoryEntity> cards;
+            if (!BotConversationHistoryStore.TryLoadRangeComplete(
+                shopKey, seller, buyer, replyAt.AddMinutes(-30), replyAt.AddMinutes(30), out cards))
+                return true;
+
+            var normalized = NormalizeBotAnswer(text);
+            if (normalized.Length == 0) return true;
+            return (cards ?? new List<BotConversationHistoryEntity>()).Any(card =>
+            {
+                if (card == null) return false;
+                var answer = NormalizeBotAnswer(card.Answer);
+                var cardTicks = card.AnswerReadyAtTicks > 0 ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
+                return answer == normalized && cardTicks > 0
+                    && Math.Abs((double)(cardTicks - replyAt.Ticks)) <= TimeSpan.FromMinutes(30).Ticks;
+            });
+        }
+
+        private static string NormalizeBotAnswer(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            try
+            {
+                var suffix = BotMessageSuffixService.GetCurrentSuffix();
+                if (!string.IsNullOrWhiteSpace(suffix)
+                    && value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - suffix.Length).TrimEnd();
+            }
+            catch { }
+            foreach (var marker in new[] { "[A]", "[AI]", "【AI】", "［AI］" })
+            {
+                if (value.EndsWith(marker, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - marker.Length).TrimEnd();
+            }
+            return Normalize(value);
         }
 
         private static double Similarity(
