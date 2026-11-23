@@ -777,3 +777,27 @@ def test_auto_delivery_event_cursor_retries_startup_recovery_before_consuming_ev
     assert "if (_cursorStateDirty && !SaveCursorsLocked()) return false;" in recover
     assert "_initialized = 1;" in recover
     assert "EnsureRecoveryTimerLocked();" in recover
+
+
+
+def test_auto_delivery_queue_loss_after_restart_is_detected_by_durable_marker():
+    runtime = text("src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs")
+    marker = runtime[runtime.index("private static string StateMarkerPath"):runtime.index("public static void Initialize")]
+    reload = runtime[
+        runtime.index("private static bool ReloadStateForMutationLocked"):
+        runtime.index("private static StateDocument LoadState")
+    ]
+    save = runtime[
+        runtime.index("private static bool EnsureStateMarkerLocked"):
+        runtime.index("private static bool SaveStateLocked")
+    ]
+    assert 'return StatePath() + ".initialized";' in marker
+    assert "private static bool TryGetFilePresence" in marker
+    assert "File.GetAttributes(path);" in marker
+    assert "catch (FileNotFoundException)" in marker
+    assert "catch (DirectoryNotFoundException)" in marker
+    assert "StateMarkerPath(), \"schema=1\"" in save
+    missing = reload[reload.index("if (!queueExists)"):reload.index("bool loadedSuccessfully;")]
+    assert "TryGetFilePresence(StateMarkerPath(), out markerExists)" in missing
+    assert "if (!TryGetFilePresence(StateMarkerPath(), out markerExists) || markerExists)" in missing
+    assert missing.index("markerExists") < missing.index("_state = new StateDocument();")
