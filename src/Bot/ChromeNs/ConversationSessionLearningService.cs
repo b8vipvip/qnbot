@@ -2120,6 +2120,9 @@ namespace Bot.ChromeNs
             foreach (var turn in turns ?? new List<ConversationContextTurn>())
             {
                 if (turn == null || turn.Withdrawn) continue;
+                // Unknown seller turns are neither human proof nor safe Bot-only
+                // synthesis evidence when the persisted Bot echo index is unavailable.
+                if (turn.Role == "assistant" && cards == null) continue;
                 var ids = new List<string>();
                 if (!string.IsNullOrWhiteSpace(turn.MessageKey)) ids.Add(turn.MessageKey.Trim());
                 foreach (var alias in turn.NativeAliases ?? new string[0])
