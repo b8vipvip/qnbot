@@ -69,9 +69,14 @@ namespace Bot.ChromeNs
             if (item == null
                 || string.Equals(item.Status, "图片已撤回", StringComparison.Ordinal))
                 return true;
-            return !string.IsNullOrWhiteSpace(item.MessageKey)
-                && VisionImageCacheService.IsMessageKeyWithdrawn(
-                    seller, buyer, item.MessageKey, shopKey);
+            if (string.IsNullOrWhiteSpace(item.MessageKey)) return false;
+            // The cache is an immediate in-memory signal, while the visual-learning
+            // store is the durable tombstone authority after restart or a failed cache
+            // persistence path. Either source must exclude the observation.
+            return VisionImageCacheService.IsMessageKeyWithdrawn(
+                    seller, buyer, item.MessageKey, shopKey)
+                || VisualKnowledgeLearningService.IsObservationWithdrawn(
+                    shopKey, seller, buyer, item.MessageKey);
         }
 
         private static bool ExplicitlyReferencesWithdrawnImage(string question)
