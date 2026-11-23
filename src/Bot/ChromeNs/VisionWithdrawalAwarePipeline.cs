@@ -138,7 +138,7 @@ namespace Bot.ChromeNs
 
             // Calling Prime again is idempotent. It guarantees a cache task exists even for a
             // recovered/background image that bypassed the normal incoming-message hook.
-            VisionImageCacheService.Prime(visionItem.Message, visionItem.DisplayText, burst.ShopKey);
+            VisionImageCacheService.Prime(visionItem.Message, visionItem.DisplayText, burst.ShopKey, qn.CDP);
             var task = new VisionReplyTask
             {
                 ShopKey = burst.ShopKey,
