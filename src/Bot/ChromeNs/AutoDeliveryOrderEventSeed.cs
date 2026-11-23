@@ -74,17 +74,18 @@ namespace Bot.ChromeNs
                 if (!loadedSuccessfully)
                 {
                     _cursorStateUnavailable = true;
-                    Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，避免跳过未处理订单。", 10);
+                    EnsureRecoveryTimerLocked();
+                    Log.ErrorWithMaxCount("自动发货订单事件游标读取失败；保留原文件并暂停事件消费，后台将持续重试恢复。", 10);
                     return;
                 }
                 if (_cursorStateDirty && !SaveCursorsLocked())
                 {
                     _cursorStateUnavailable = true;
+                    EnsureRecoveryTimerLocked();
                     return;
                 }
-                _timer = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
                 _initialized = 1;
-                _timer.Change(1200, 1800);
+                EnsureRecoveryTimerLocked();
             }
             Log.Info("自动发货订单事件桥已启动：仅消费 OrderEventHub 已确认的新订单/付款事件；首次启用不会追溯历史订单。");
         }
@@ -115,6 +116,42 @@ namespace Bot.ChromeNs
                     _cursorStateDirty = true;
                 }
                 if (_cursorStateDirty && !SaveCursorsLocked()) return;
+            }
+        }
+
+        private static void EnsureRecoveryTimerLocked()
+        {
+            if (_timer == null)
+                _timer = new Timer(_ => OnTimerTick(), null, Timeout.Infinite, Timeout.Infinite);
+            _timer.Change(1200, 1800);
+        }
+
+        private static void OnTimerTick()
+        {
+            if (_cursorStateUnavailable && !TryRecoverCursorState()) return;
+            if (!_cursorStateUnavailable) Tick();
+        }
+
+        private static bool TryRecoverCursorState()
+        {
+            lock (Sync)
+            {
+                if (!_cursorStateUnavailable) return true;
+                _cursorStateUnavailable = false;
+                bool loadedSuccessfully;
+                var recovered = LoadCursors(out loadedSuccessfully);
+                if (!loadedSuccessfully)
+                {
+                    _cursorStateUnavailable = true;
+                    return false;
+                }
+                _cursors = recovered;
+                if (_cursorStateDirty && !SaveCursorsLocked()) return false;
+                _cursorStateUnavailable = false;
+                _initialized = 1;
+                EnsureRecoveryTimerLocked();
+                Log.Info("自动发货事件游标从读取/存储故障中恢复：已重新载入持久游标并恢复事件消费。");
+                return true;
             }
         }
 
