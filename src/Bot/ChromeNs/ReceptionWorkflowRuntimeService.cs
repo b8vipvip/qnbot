@@ -67,7 +67,9 @@ namespace Bot.ChromeNs
         {
             var ids = (orders ?? Enumerable.Empty<OrderSnapshot>())
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.OrderId))
-                .Select(x => x.OrderId)
+                .Select(x => x.OrderId + "|" + x.ItemId + "|" + x.SkuId + "|"
+                    + x.Quantity.ToString(CultureInfo.InvariantCulture) + "|" + x.TradeStatus
+                    + "|" + (x.IsPaid.HasValue ? x.IsPaid.Value.ToString() : "unknown"))
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(x => x, StringComparer.Ordinal);
             return Digest(string.Join("|", ids));
