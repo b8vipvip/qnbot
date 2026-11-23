@@ -115,10 +115,13 @@ namespace Bot.ChromeNs
             document["updated_at_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             var records = document["records"] as JArray ?? new JArray();
             var faults = document["faults"] as JArray ?? new JArray();
+            var cutoff = DateTime.UtcNow.AddDays(-30).Ticks;
             document["records"] = new JArray(records.OfType<JObject>()
+                .Where(x => (x.Value<long?>("updated_utc_ticks") ?? 0) >= cutoff)
                 .OrderByDescending(x => x.Value<long?>("updated_utc_ticks") ?? 0)
                 .Take(MaxRuntimeRecords));
             document["faults"] = new JArray(faults.OfType<JObject>()
+                .Where(x => (x.Value<long?>("last_failure_utc_ticks") ?? 0) >= cutoff)
                 .OrderByDescending(x => x.Value<long?>("last_failure_utc_ticks") ?? 0)
                 .Take(MaxFaultRecords));
             string error;
@@ -541,6 +544,34 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("Reception Agent状态提交失败，后续事件将按未确认发送处理：" + ex.Message, 10);
+            }
+        }
+
+        internal static void CancelDecision(ReceptionWorkflowDecision decision)
+        {
+            if (decision == null || !decision.RequiresSend || string.IsNullOrWhiteSpace(decision.ShopKey)
+                || string.IsNullOrWhiteSpace(decision.FlowId)) return;
+            ShopContext shop;
+            try { shop = ResolveShop(decision.Seller, decision.ShopKey); }
+            catch { return; }
+            try
+            {
+                Mutate(shop, document =>
+                {
+                    var buyerKey = Digest(decision.ShopKey + "|" + decision.Seller + "|" + decision.Buyer);
+                    var record = FindRecord(document["records"] as JArray, buyerKey, decision.FlowId);
+                    if (record == null
+                        || !string.Equals(Convert.ToString(record["pending_source_key"]), decision.SourceKey, StringComparison.Ordinal))
+                        return false;
+                    record["pending_source_key"] = string.Empty;
+                    record["last_source_key"] = decision.SourceKey;
+                    record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
+                    return true;
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent取消待发送决策失败：" + ex.Message, 10);
             }
         }
 
