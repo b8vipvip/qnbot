@@ -263,22 +263,6 @@ namespace Bot.ChromeNs
                                 current.Seller, current.Buyer, observation.Buyer))
                         || !string.Equals(knowledge.ShopKey, current.ShopKey, StringComparison.Ordinal)
                         || !string.Equals(knowledge.Seller, current.Seller, StringComparison.OrdinalIgnoreCase)
-                        || !VisionImageCacheService.IsMessageKeyWithdrawn(
-                            current.Seller, current.Buyer, current.MessageKey, current.ShopKey))
-                    {
-                        // A missing cache record is not itself a withdrawal; the explicit
-                        // tombstone is authoritative. Keep the second check below separate.
-                    }
-                    if (current == null
-                        || string.Equals(current.Status, "图片已撤回", StringComparison.Ordinal)
-                        || !string.Equals(current.ShopKey, observation.ShopKey, StringComparison.Ordinal)
-                        || !string.Equals(current.Seller, observation.Seller, StringComparison.Ordinal)
-                        || !string.Equals(current.MessageKey, observation.MessageKey, StringComparison.Ordinal)
-                        || (!string.Equals(current.Buyer, observation.Buyer, StringComparison.OrdinalIgnoreCase)
-                            && !BuyerIdentityAliasService.AreEquivalent(
-                                current.Seller, current.Buyer, observation.Buyer))
-                        || !string.Equals(knowledge.ShopKey, current.ShopKey, StringComparison.Ordinal)
-                        || !string.Equals(knowledge.Seller, current.Seller, StringComparison.OrdinalIgnoreCase)
                         || VisionImageCacheService.IsMessageKeyWithdrawn(
                             current.Seller, current.Buyer, current.MessageKey, current.ShopKey))
                         return false;
