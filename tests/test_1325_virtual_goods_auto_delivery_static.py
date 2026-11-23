@@ -801,3 +801,20 @@ def test_auto_delivery_queue_loss_after_restart_is_detected_by_durable_marker():
     assert "TryGetFilePresence(StateMarkerPath(), out markerExists)" in missing
     assert "if (!TryGetFilePresence(StateMarkerPath(), out markerExists) || markerExists)" in missing
     assert missing.index("markerExists") < missing.index("_state = new StateDocument();")
+
+
+
+def test_auto_delivery_event_cursor_loss_after_restart_does_not_skip_pending_orders():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    loader = seed[seed.index("private static CursorState LoadCursors"):seed.index("private static bool SaveCursorsLocked")]
+    save = seed[seed.index("private static bool SaveCursorsLocked"):seed.index("private static string CursorMarkerPath")]
+    marker = seed[seed.index("private static string CursorMarkerPath"):seed.index("private static string DataRoot")]
+    missing = loader[loader.index("if (!exists)"):loader.index("var state = JsonConvert.DeserializeObject")]
+    assert 'return CursorPath() + ".initialized";' in marker
+    assert "File.GetAttributes(path);" in marker
+    assert "catch (FileNotFoundException)" in marker
+    assert "TryGetFilePresence(CursorMarkerPath(), out markerExists)" in missing
+    assert "if (!TryGetFilePresence(CursorMarkerPath(), out markerExists) || markerExists)" in missing
+    assert "loadedSuccessfully = true;" in missing
+    assert "EnsureCursorMarkerLocked()) return new CursorState();" in loader
+    assert "EnsureCursorMarkerLocked()" in save
