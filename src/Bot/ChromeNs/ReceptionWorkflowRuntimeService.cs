@@ -28,6 +28,7 @@ namespace Bot.ChromeNs
         public string ReplyText { get; set; }
         public string SourceKey { get; set; }
         public string OrderFingerprint { get; set; }
+        public string VisualEvidenceMessageKey { get; set; }
         public bool NextStateTerminal { get; set; }
         public bool SuppressReply { get; set; }
         public bool RequiresSend { get; set; }
@@ -644,8 +645,13 @@ namespace Bot.ChromeNs
                         var hasBuyer = question.Length > 0;
                         var hasOrder = matchingOrders.Count > 0;
                         var visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
-                        var hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
-                            x != null && x.ObservedAtTicks >= visualCutoffTicks);
+                        var recentVisualEvidence = (recentVisual ?? new List<VisualKnowledgeObservationEntity>())
+                            .Where(x => x != null && x.ObservedAtTicks >= visualCutoffTicks)
+                            .OrderByDescending(x => x.ObservedAtTicks)
+                            .FirstOrDefault();
+                        var hasRecentVisual = recentVisualEvidence != null;
+                        var visualEvidenceMessageKey = isImage && !string.IsNullOrWhiteSpace(messageKey)
+                            ? messageKey : (recentVisualEvidence == null ? string.Empty : recentVisualEvidence.MessageKey);
                         // image_message means a new image in this event; vision_observation may
                         // use an already-persisted observation from the same buyer conversation.
                         var hasImage = isImage;
@@ -679,8 +685,13 @@ namespace Bot.ChromeNs
                                 reply = ReplyTranscriptSanitizer.Sanitize(Convert.ToString(step["reply_template"]));
                                 timeoutMinutes = Math.Max(1, Math.Min(10080, step.Value<int?>("timeout_minutes") ?? 60));
                                 visualCutoffTicks = DateTime.Now.AddMinutes(-timeoutMinutes).Ticks;
-                                hasRecentVisual = recentVisual != null && recentVisual.Any(x =>
-                                    x != null && x.ObservedAtTicks >= visualCutoffTicks);
+                                recentVisualEvidence = (recentVisual ?? new List<VisualKnowledgeObservationEntity>())
+                                    .Where(x => x != null && x.ObservedAtTicks >= visualCutoffTicks)
+                                    .OrderByDescending(x => x.ObservedAtTicks)
+                                    .FirstOrDefault();
+                                hasRecentVisual = recentVisualEvidence != null;
+                                visualEvidenceMessageKey = isImage && !string.IsNullOrWhiteSpace(messageKey)
+                                    ? messageKey : (recentVisualEvidence == null ? string.Empty : recentVisualEvidence.MessageKey);
                                 hasImage = isImage;
                                 hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
@@ -846,6 +857,9 @@ namespace Bot.ChromeNs
                                 FlowId = flowId, FlowVersion = flowVersion, CatalogRevision = catalog.Revision,
                                 State = currentState, NextState = nextState, Action = action,
                                 ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
+                                VisualEvidenceMessageKey = required.Any(x =>
+                                    Convert.ToString(x) == "image_message" || Convert.ToString(x) == "vision_observation")
+                                    ? visualEvidenceMessageKey : string.Empty,
                                 NextStateTerminal = steps.OfType<JObject>().Any(x =>
                                     string.Equals(Convert.ToString(x["state"]), nextState, StringComparison.Ordinal)
                                     && x.Value<bool?>("terminal") == true),
@@ -911,6 +925,12 @@ namespace Bot.ChromeNs
                 var flowProducts = (flow["product_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                 if (flowProducts.Count == 0
                     || flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal)))
+                    return false;
+                if (!string.IsNullOrWhiteSpace(decision.VisualEvidenceMessageKey)
+                    && (VisionImageCacheService.IsMessageKeyWithdrawn(
+                            decision.Seller, decision.Buyer, decision.VisualEvidenceMessageKey, decision.ShopKey)
+                        || VisualKnowledgeLearningService.IsObservationWithdrawn(
+                            decision.ShopKey, decision.Seller, decision.Buyer, decision.VisualEvidenceMessageKey)))
                     return false;
                 var flowSkus = (flow["sku_ids"] as JArray ?? new JArray()).Values<string>().ToList();
                 var currentMatchingOrders = currentOrders.Where(x =>
