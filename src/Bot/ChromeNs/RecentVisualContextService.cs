@@ -105,7 +105,7 @@ namespace Bot.ChromeNs
                 return new List<VisualKnowledgeObservationEntity>();
             var items = LoadRecent(
                 shopKey, seller, buyer,
-                DateTime.Now.AddDays(-7), DateTime.Now.AddMinutes(2),
+                DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2),
                 Math.Max(1, Math.Min(30, maxCount)));
             return items
                 .Where(x => x != null
