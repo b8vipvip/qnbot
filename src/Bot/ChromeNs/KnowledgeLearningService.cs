@@ -250,10 +250,18 @@ namespace Bot.ChromeNs
                 if (string.IsNullOrWhiteSpace(echoText)) return false;
 
                 var sellerEcho = echoText.Trim();
-                // The seller-echo fields contain both human messages and Bot messages.
-                // Check the authoritative Bot-delivery ledger before comparing text: a
-                // human may intentionally send exactly the same answer as the candidate.
-                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, sellerEcho, shopKey))
+                // Seller echoes include both human messages and Bot messages. Read the
+                // exact ShopKey/session Bot-card range before treating an unmarked echo
+                // as human evidence; an unavailable/truncated index is not proof of a human.
+                List<BotConversationHistoryEntity> botCards;
+                if (!BotConversationHistoryStore.TryLoadRangeComplete(
+                    shopKey, seller, buyer, questionTime.AddMinutes(-1), echoTime.AddMinutes(1), out botCards))
+                {
+                    Log.Info("Bot回显历史不可可靠读取，本轮不将客服消息作为人工纠正证据: seller="
+                        + seller + ", buyer=" + buyer);
+                    return false;
+                }
+                if (IsBotAnswer(seller, buyer, sellerEcho, echoTime, shopKey, botCards))
                 {
                     Log.Info("学习层忽略已确认Bot卖家回显，不作为人工纠正: seller="
                         + seller + ", buyer=" + buyer);
@@ -277,7 +285,7 @@ namespace Bot.ChromeNs
                             string humanMessageId;
                             if (TryResolveManualEvidenceMessageIds(
                                 seller, buyer, question, questionTime, manualAnswer, echoTime,
-                                shopKey, out buyerMessageId, out humanMessageId))
+                                shopKey, botCards, out buyerMessageId, out humanMessageId))
                             {
                                 QueueManualAnswerComparison(
                                     question, candidateAnswer, manualAnswer, seller, buyer,
@@ -339,6 +347,55 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private static bool IsBotAnswer(
+            string seller, string buyer, string answer, DateTime answerAt,
+            string shopKey, IList<BotConversationHistoryEntity> botCards)
+        {
+            var compact = Regex.Replace(answer ?? string.Empty, @"\\s+", string.Empty);
+            if (compact.EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("【AI】", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("［AI］", StringComparison.OrdinalIgnoreCase)) return true;
+            try
+            {
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, answer, shopKey))
+                    return true;
+            }
+            catch { return true; }
+            if (botCards == null || answerAt == DateTime.MinValue) return true;
+
+            var normalized = NormalizeBotAnswer(answer);
+            if (normalized.Length == 0) return true;
+            return botCards.Any(card =>
+            {
+                if (card == null) return false;
+                var cardAnswer = NormalizeBotAnswer(card.Answer);
+                var cardTicks = card.AnswerReadyAtTicks > 0 ? card.AnswerReadyAtTicks : card.CreatedAtTicks;
+                return cardAnswer.Length >= 4 && cardAnswer.Contains(normalized)
+                    && cardTicks > 0
+                    && Math.Abs((double)(cardTicks - answerAt.Ticks)) <= TimeSpan.FromMinutes(30).Ticks;
+            });
+        }
+
+        private static string NormalizeBotAnswer(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            try
+            {
+                var suffix = BotMessageSuffixService.GetCurrentSuffix();
+                if (!string.IsNullOrWhiteSpace(suffix)
+                    && value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - suffix.Length).TrimEnd();
+            }
+            catch { }
+            foreach (var marker in new[] { "[A]", "[AI]", "【AI】", "［AI］" })
+            {
+                if (value.EndsWith(marker, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - marker.Length).TrimEnd();
+            }
+            return Normalize(value);
+        }
+
         private static bool TryResolveManualEvidenceMessageIds(
             string seller,
             string buyer,
@@ -347,6 +404,7 @@ namespace Bot.ChromeNs
             string manualAnswer,
             DateTime answerTime,
             string shopKey,
+            IList<BotConversationHistoryEntity> botCards,
             out string buyerMessageId,
             out string humanMessageId)
         {
@@ -374,7 +432,7 @@ namespace Bot.ChromeNs
                 && Math.Abs((x.Timestamp - answerTime).TotalSeconds) <= 5
                 && string.Equals(Normalize(x.Text), normalizedAnswer, StringComparison.Ordinal)
                 && x.NativeAliases != null && x.NativeAliases.Any(y => !string.IsNullOrWhiteSpace(y))
-                && !SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, x.Text, shopKey))
+                && !IsBotAnswer(seller, buyer, x.Text, x.Timestamp, shopKey, botCards))
                 .ToList();
             if (questionMatches.Count != 1 || answerMatches.Count != 1) return false;
 
@@ -389,7 +447,7 @@ namespace Bot.ChromeNs
             var humanReplyTurns = turns.Skip(questionIndex + 1)
                 .Take(answerIndex - questionIndex)
                 .Where(x => x.Role == "assistant"
-                    && !SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, x.Text, shopKey))
+                    && !IsBotAnswer(seller, buyer, x.Text, x.Timestamp, shopKey, botCards))
                 .ToList();
             if (humanReplyTurns.Count != 1 || !ReferenceEquals(humanReplyTurns[0], answerTurn))
                 return false;
