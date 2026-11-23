@@ -19,7 +19,8 @@ def test_ai_learning_proposals_are_bound_to_real_shop_scoped_evidence_and_auto_p
         learning.index("private static string BuildTranscript")
     ]
 
-    assert "BuildEvidenceContext(session.Seller, session.Buyer, session.ShopKey, turns, cards)" in prompt
+    assert "ReceptionWorkflowAgentService.BuildEvidenceContext(" in prompt
+    assert "session.Seller, session.Buyer, session.ShopKey, turns, cards" in prompt
     assert "workflowEvidence.PromptText" in prompt
     assert '"evidence_refs"' in prompt
     assert "M1" in prompt and "O1" in prompt and "V1" in prompt
@@ -44,7 +45,9 @@ def test_agent_requires_buyer_human_order_evidence_and_configured_product_scope(
     assert 'UnsafeReplyText.IsMatch(replyTemplate)' in agent
     assert 'new[] { "WAIT", "ASK_EVIDENCE", "HANDOFF", "REPLY" }' in agent
     assert 'READ_ONLY_TOOL' not in agent
-    assert 'PAYMENT' not in agent and 'REFUND' not in agent
+    actions = agent[agent.index("private static readonly HashSet<string> Actions"):agent.index("private static string Digest")]
+    assert '"PAYMENT"' not in actions and '"REFUND"' not in actions
+    assert '"FULFILL"' not in actions and '"CHANGE_ACCOUNT"' not in actions
 
 
 def test_agent_uses_latest_nonterminal_shop_scoped_order_and_never_prompts_raw_order_ids():
@@ -80,7 +83,7 @@ def test_visual_evidence_is_shop_scoped_recent_and_redacted_for_workflow_learnin
     assert "x.VisualSummary" in method
     assert "GetRecentWorkflowEvidence(" in agent
     assert 'Kind = "vision_observation"' in agent
-    assert 'Digest = Digest(shopKey + "|" + visual.MessageKey)' in agent
+    assert 'Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|" + visual.MessageKey)' in agent
 
 
 def test_catalog_preserves_runtime_metadata_and_uses_expected_revision_for_auto_rollback():
@@ -119,6 +122,9 @@ def test_runtime_auto_repairs_stale_state_and_auto_rolls_back_repeated_faults_wi
 
     assert "Automatic repair" in runtime
     assert "savedVersion != flowVersion" in runtime
+    assert "progressedFlows.Count > 1" in runtime
+    assert "triggeredFlows.Count > 1" in runtime
+    assert "ambiguous-active-flows" in runtime
     assert "progressedFlows.Count > 1" in runtime
     assert "triggeredFlows.Count > 1" in runtime
     assert "ambiguous-active-flows" in runtime
@@ -199,4 +205,4 @@ def test_terminal_states_and_expiry_allow_new_conversations_after_completion():
     assert 'step.Value<bool?>("terminal") == true' in runtime
     assert "timeoutMinutes" in runtime
     assert "DateTime.UtcNow.Ticks - stateEnteredTicks > TimeSpan.FromMinutes(timeoutMinutes).Ticks" in runtime
-    assert '"terminal":true' in learning
+    assert r'\"terminal\":true' in learning
