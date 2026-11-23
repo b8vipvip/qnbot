@@ -38,9 +38,17 @@ namespace Bot.ChromeNs
             return string.Equals((priority ?? string.Empty).Trim(), AiFirst, StringComparison.OrdinalIgnoreCase);
         }
 
-        public static async Task<string> ResolveAsync(string sellerNick, CancellationToken cancellationToken)
+        public static Task<string> ResolveAsync(string sellerNick, CancellationToken cancellationToken)
         {
-            var endpoint = ResolveControlPlaneEndpoint(sellerNick);
+            return ResolveAsync(sellerNick, null, cancellationToken);
+        }
+
+        public static async Task<string> ResolveAsync(
+            string sellerNick,
+            string shopKey,
+            CancellationToken cancellationToken)
+        {
+            var endpoint = ResolveControlPlaneEndpoint(sellerNick, shopKey);
             if (endpoint == null) return OcrFirst;
 
             try
@@ -85,52 +93,82 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static ControlPlaneEndpoint ResolveControlPlaneEndpoint(string sellerNick)
+        private static ControlPlaneEndpoint ResolveControlPlaneEndpoint(string sellerNick, string shopKey)
         {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
             try
             {
-                var shop = ShopSettingsScope.Current;
-                if (shop == null && !string.IsNullOrWhiteSpace(sellerNick))
+                var current = ShopSettingsScope.Current;
+                ShopContext shop = null;
+                if (shopKey.Length > 0)
                 {
-                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick.Trim());
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null
+                        || (current != null && !string.Equals(current.ShopKey, shopKey, StringComparison.Ordinal)))
+                        return null;
                 }
-                if (shop != null)
+                else if (current != null)
                 {
-                    var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
-                    string token;
-                    string error;
-                    var serverUrl = connection.GetServerUrl();
-                    if (!string.IsNullOrWhiteSpace(serverUrl)
-                        && connection.TryGetToken(out token, out error)
-                        && !string.IsNullOrWhiteSpace(token))
+                    shop = current;
+                }
+                else if (sellerNick.Length > 0)
+                {
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                }
+
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || (sellerNick.Length > 0
+                        && !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                    || (shopKey.Length > 0
+                        && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)))
+                    return null;
+
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    try
                     {
-                        return new ControlPlaneEndpoint
+                        var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
+                        string token;
+                        string error;
+                        var serverUrl = connection.GetServerUrl();
+                        if (!string.IsNullOrWhiteSpace(serverUrl)
+                            && connection.TryGetToken(out token, out error)
+                            && !string.IsNullOrWhiteSpace(token))
                         {
-                            BaseUrl = serverUrl,
-                            ApiKey = token.Trim(),
-                            Source = "shop-control-plane"
-                        };
+                            return new ControlPlaneEndpoint
+                            {
+                                BaseUrl = serverUrl,
+                                ApiKey = token.Trim(),
+                                Source = "shop-control-plane"
+                            };
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        Log.Info("读取视觉优先级控制面连接失败，尝试店铺隔离的兼容端点: " + Limit(ex.Message));
+                    }
+
+                    var endpoints = AiEndpointStore.GetEnabledEndpoints();
+                    if (endpoints == null || endpoints.Count == 0) return null;
+                    var endpoint = endpoints.FirstOrDefault(x => x != null
+                        && x.Type == "服务端控制面"
+                        && !string.IsNullOrWhiteSpace(x.BaseUrl)
+                        && !string.IsNullOrWhiteSpace(x.ApiKey));
+                    if (endpoint == null) return null;
+                    return new ControlPlaneEndpoint
+                    {
+                        BaseUrl = endpoint.BaseUrl,
+                        ApiKey = endpoint.ApiKey,
+                        Source = "legacy-ai-endpoint"
+                    };
                 }
             }
             catch (Exception ex)
             {
-                Log.Info("读取视觉优先级控制面连接失败，尝试兼容AI端点: " + Limit(ex.Message));
+                Log.Info("读取视觉优先级控制面连接失败，已fail-closed: " + Limit(ex.Message));
+                return null;
             }
-
-            var endpoints = AiEndpointStore.GetEnabledEndpoints();
-            if (endpoints == null || endpoints.Count == 0) return null;
-            var endpoint = endpoints.FirstOrDefault(x => x != null
-                && x.Type == "服务端控制面"
-                && !string.IsNullOrWhiteSpace(x.BaseUrl)
-                && !string.IsNullOrWhiteSpace(x.ApiKey));
-            if (endpoint == null) return null;
-            return new ControlPlaneEndpoint
-            {
-                BaseUrl = endpoint.BaseUrl,
-                ApiKey = endpoint.ApiKey,
-                Source = "legacy-ai-endpoint"
-            };
         }
 
         private static string NormalizePriorityUrl(string baseUrl)
