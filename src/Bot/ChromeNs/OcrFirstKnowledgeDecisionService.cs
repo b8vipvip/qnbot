@@ -129,10 +129,10 @@ namespace Bot.ChromeNs
                 task.BuyerNick,
                 task.CombinedQuestion,
                 answer,
-                "本地OCR+知识库V2");
+                "服务端OCR+知识库V2");
 
             sw.Stop();
-            Log.Info("OCR-first本地知识直答命中，未调用视觉API: seller=" + task.SellerNick
+            Log.Info("OCR-first服务端OCR知识直答命中，未调用视觉API: seller=" + task.SellerNick
                 + ", buyer=" + task.BuyerNick
                 + ", confidence=" + ocr.Confidence.ToString("0.00")
                 + ", cacheHit=" + ocr.CacheHit
