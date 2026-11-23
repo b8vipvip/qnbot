@@ -70,6 +70,10 @@ def test_visual_learning_links_source_atomically_and_revokes_entry_when_source_i
     ]
 
     assert "observation.LearnedKnowledgeId" in mark
+    assert "where ShopKey = ? and Seller = ? and MessageKey = ? order by UpdatedAtTicks desc" in mark
+    assert "SameBuyerForWithdrawal(seller, x.Buyer, buyer)" in mark
+    assert "foreach (var observation in matching)" in mark
+    assert "disabledKnowledgeIds" in mark
     assert "SelectKnowledge(" in mark
     assert "learned.Enabled = false" in mark
     assert "DbHelper.Db.SaveRecordsInTransaction(updates)" in mark
