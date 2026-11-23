@@ -470,6 +470,8 @@ namespace Bot.ChromeNs
             if (flowName.Length == 0) flowName = string.Join("、", trigger.Take(3));
             var normalizedName = Regex.Replace(flowName, @"[\s\p{P}\p{S}]+", string.Empty)
                 .ToLowerInvariant();
+            if (normalizedName.Length == 0)
+                normalizedName = string.Join(",", trigger);
             var idMaterial = shopKey + "|" + string.Join(",", productIds.OrderBy(x => x, StringComparer.Ordinal))
                 + "|" + normalizedName;
             var flowId = "wf-" + Digest(idMaterial).Substring(0, 24);
