@@ -46,6 +46,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          source .github/gptauto/dispatch_workflow.sh
 
           # Task Protocol v2: Reconcile is the explicit post-merge scheduler.
           # A merge performed with GITHUB_TOKEN does not necessarily emit another
@@ -100,8 +101,7 @@ jobs:
             }
             primary_workflow_file="${primary_path##*/}"
             validation_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" '{ref:$ref}')"
-            printf '%s' "$validation_payload" | gh api --method POST \
-              "repos/$REPOSITORY/actions/workflows/$primary_workflow_file/dispatches" --input -
+            dispatch_workflow "$REPOSITORY" "$primary_workflow_file" "$validation_payload"
             echo "Dispatched canonical post-merge validation for merge $MERGE_SHA."
 
             registration_deadline=$((SECONDS + 90))
@@ -285,8 +285,7 @@ jobs:
               }
               baseline="$(jq -r '[.workflow_runs[].id] | max // 0' <<<"$runs")"
               release_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg source_sha "$MERGE_SHA" '{ref:$ref,inputs:{source_sha:$source_sha}}')"
-              printf '%s' "$release_payload" | gh api --method POST \
-                "repos/$REPOSITORY/actions/workflows/$RELEASE_WORKFLOW_ID/dispatches" --input -
+              dispatch_workflow "$REPOSITORY" "$RELEASE_WORKFLOW_ID" "$release_payload"
               echo "Dispatched exact-SHA release workflow $RELEASE_PATH for $MERGE_SHA."
 
               registration_deadline=$((SECONDS + 90))
