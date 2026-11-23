@@ -505,11 +505,28 @@ namespace Bot.ChromeNs
             }
             if (!lifecycleLease.MarkSending("vision_cache_miss_fallback_send_started")) return;
 
+            // The fallback is still an automatic buyer-facing send. Recheck the exact
+            // conversation immediately before every transport attempt so a human reply,
+            // newer buyer message, or expired generation cannot be overwritten.
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
+                    return false;
+                string latestRelevanceReason;
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestRelevanceReason, false, burst.ShopKey);
+                if (!shouldSend)
+                    Log.Info("图片缓存兜底发送前会话相关性已变化，阻止旧兜底回复: reason="
+                        + latestRelevanceReason + ", buyer=" + burst.BuyerNick);
+                return shouldSend;
+            };
+
             bool sent;
             try
             {
                 sent = await qn.SendTextWithRetryAsync(
-                    burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken);
+                    burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken, preSendGuard);
             }
             catch (OperationCanceledException)
             {
