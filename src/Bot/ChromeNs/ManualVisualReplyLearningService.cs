@@ -361,10 +361,8 @@ namespace Bot.ChromeNs
                     target.UpdatedAtTicks = now;
                 }
 
-                observation.Status = "已通过人工即时回复学习";
-                observation.LearnedKnowledgeId = target.EntityId;
-                observation.UpdatedAtTicks = now;
-                DbHelper.Db.SaveRecordsInTransaction(new List<object> { target, observation });
+                if (!VisualKnowledgeLearningService.TrySaveManualVisualKnowledge(observation, target))
+                    return null;
                 DbHelper.Db.Execute(
                     "delete from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? and EntityId not in "
                     + "(select EntityId from VisualKnowledgeEntryEntity where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit 500)",
