@@ -37,10 +37,9 @@ namespace Bot.ChromeNs
             var cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey, browserClient);
             if (cached != null && cached.Success) return cached;
 
-            // This fallback is retained for compatibility with callers that reach the resolver
-            // before the incoming-message cache hook has run. Prime still writes the complete file
-            // locally before returning a data URI to the model.
-            VisionImageCacheService.Prime(message, string.Empty, shopKey, browserClient);
+            // ResolveAsync has already primed the message with the canonical message text and
+            // authenticated browser session. A second identical resolution is a bounded retry;
+            // never rebuild the cache key with an empty message string.
             cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey, browserClient);
             return cached ?? Fail("图片未能完整缓存到本地");
         }
