@@ -71,12 +71,22 @@ namespace Bot.ChromeNs
             CancellationToken cancellationToken,
             int timeoutMs = DefaultTimeoutMs)
         {
-            return TryRecognizeAsync(imagePath, null, cancellationToken, timeoutMs);
+            return TryRecognizeAsync(imagePath, null, null, cancellationToken, timeoutMs);
+        }
+
+        public static Task<LocalOcrResult> TryRecognizeAsync(
+            string imagePath,
+            string sellerNick,
+            CancellationToken cancellationToken,
+            int timeoutMs = DefaultTimeoutMs)
+        {
+            return TryRecognizeAsync(imagePath, sellerNick, null, cancellationToken, timeoutMs);
         }
 
         public static async Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
             string sellerNick,
+            string shopKey,
             CancellationToken cancellationToken,
             int timeoutMs = DefaultTimeoutMs)
         {
@@ -127,7 +137,7 @@ namespace Bot.ChromeNs
                 };
             }
 
-            var endpoint = ResolveControlPlaneEndpoint(sellerNick);
+            var endpoint = ResolveControlPlaneEndpoint(sellerNick, shopKey);
             if (endpoint == null)
             {
                 return Failure("未找到当前店铺可用的服务端控制面连接或令牌", startedAt, sha256);
@@ -248,57 +258,94 @@ namespace Bot.ChromeNs
                 + ", 引擎=" + (result.Engine ?? "server") + "]";
         }
 
-        private static ServerOcrEndpoint ResolveControlPlaneEndpoint(string sellerNick)
+        internal static bool IsServerOcrConfigured(string sellerNick, string shopKey)
         {
-            // OCR is a control-plane capability, not an AI provider. Reuse the same
-            // per-shop connection/token that Web sync, rules and update channels use.
-            // This avoids requiring users to create a fake "服务端控制面" AI endpoint.
+            return ResolveControlPlaneEndpoint(sellerNick, shopKey) != null;
+        }
+
+        private static ServerOcrEndpoint ResolveControlPlaneEndpoint(string sellerNick, string shopKey)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
             try
             {
-                var shop = ShopSettingsScope.Current;
-                if (shop == null && !string.IsNullOrWhiteSpace(sellerNick))
+                var current = ShopSettingsScope.Current;
+                ShopContext shop = null;
+                if (shopKey.Length > 0)
                 {
-                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick.Trim());
+                    shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    if (shop == null
+                        || (current != null && !string.Equals(current.ShopKey, shopKey, StringComparison.Ordinal)))
+                        return null;
                 }
-                if (shop != null)
+                else if (current != null)
                 {
-                    var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
-                    string token;
-                    string error;
-                    var serverUrl = connection.GetServerUrl();
-                    if (!string.IsNullOrWhiteSpace(serverUrl)
-                        && connection.TryGetToken(out token, out error)
-                        && !string.IsNullOrWhiteSpace(token))
+                    shop = current;
+                }
+                else if (sellerNick.Length > 0)
+                {
+                    // Seller nickname is only a compatibility lookup. Ambiguous nicknames
+                    // must fail closed; runtime OCR callers pass the authoritative ShopKey.
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                }
+
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                    || (sellerNick.Length > 0
+                        && !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                    || (shopKey.Length > 0
+                        && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)))
+                    return null;
+
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    // OCR is a control-plane capability, not an AI provider. Reuse the same
+                    // per-shop connection/token that Web sync, rules and update channels use.
+                    // This avoids requiring a fake "服务端控制面" AI endpoint.
+                    try
                     {
-                        return new ServerOcrEndpoint
+                        var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
+                        string token;
+                        string error;
+                        var serverUrl = connection.GetServerUrl();
+                        if (!string.IsNullOrWhiteSpace(serverUrl)
+                            && connection.TryGetToken(out token, out error)
+                            && !string.IsNullOrWhiteSpace(token))
                         {
-                            BaseUrl = serverUrl,
-                            ApiKey = token.Trim(),
-                            Source = "shop-control-plane"
-                        };
+                            return new ServerOcrEndpoint
+                            {
+                                BaseUrl = serverUrl,
+                                ApiKey = token.Trim(),
+                                Source = "shop-control-plane"
+                            };
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        Log.Info("服务端OCR读取店铺控制面连接失败，尝试店铺隔离的兼容端点: " + LimitError(ex.Message));
+                    }
+
+                    // Backward compatibility remains shop-scoped; never fall back to another
+                    // shop's ambient/global endpoint when identity cannot be resolved.
+                    var endpoints = AiEndpointStore.GetEnabledEndpoints();
+                    if (endpoints == null || endpoints.Count == 0) return null;
+                    var endpoint = endpoints.FirstOrDefault(x => x != null
+                        && x.Type == "服务端控制面"
+                        && !string.IsNullOrWhiteSpace(x.BaseUrl)
+                        && !string.IsNullOrWhiteSpace(x.ApiKey));
+                    if (endpoint == null) return null;
+                    return new ServerOcrEndpoint
+                    {
+                        BaseUrl = endpoint.BaseUrl,
+                        ApiKey = endpoint.ApiKey,
+                        Source = "legacy-ai-endpoint"
+                    };
                 }
             }
             catch (Exception ex)
             {
-                Log.Info("服务端OCR读取店铺控制面连接失败，尝试兼容AI端点: " + LimitError(ex.Message));
+                Log.Info("服务端OCR读取店铺控制面连接失败，已fail-closed: " + LimitError(ex.Message));
+                return null;
             }
-
-            // Backward compatibility for installations that previously configured a
-            // dedicated control-plane entry in the AI endpoint list.
-            var endpoints = AiEndpointStore.GetEnabledEndpoints();
-            if (endpoints == null || endpoints.Count == 0) return null;
-            var endpoint = endpoints.FirstOrDefault(x => x != null
-                && x.Type == "服务端控制面"
-                && !string.IsNullOrWhiteSpace(x.BaseUrl)
-                && !string.IsNullOrWhiteSpace(x.ApiKey));
-            if (endpoint == null) return null;
-            return new ServerOcrEndpoint
-            {
-                BaseUrl = endpoint.BaseUrl,
-                ApiKey = endpoint.ApiKey,
-                Source = "legacy-ai-endpoint"
-            };
         }
 
         private static string NormalizeOcrUrl(string baseUrl)
