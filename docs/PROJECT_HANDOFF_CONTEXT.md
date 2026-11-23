@@ -103,7 +103,7 @@ Qianniu renderer
 
 ### P1 — Reception Agent autonomous workflow publication (#346)
 - PR #442 has changed the workflow catalog from draft-only to a ShopKey-scoped active catalog; validated Agent publications take effect immediately without administrator approval or mandatory gray rollout.
-- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision. Follow-up PR #443 pins each operation to one resolved ShopContext so active, legacy and history paths cannot drift across shops.
+- Publish uses cross-process locking, revision CAS, monotonic per-flow versions, immutable history snapshots, legacy draft migration and immediate rollback as a new revision. Follow-up PR #443 requires the exact ShopKey from the Knowledge Center/event, verifies seller↔ShopKey identity, and pins active, legacy and history paths to one resolved ShopContext.
 - The catalog may orchestrate WAIT, ASK_EVIDENCE, HANDOFF, READ_ONLY_TOOL and reply intents; reply intents still pass through the canonical send pipeline.
 - Payment, recharge, refund, account mutation and actual fulfillment remain outside catalog authority and require their own authoritative evidence and idempotent execution guards.
 - The generic runtime state-machine adapter still needs to consume active catalog transitions against real message/image/OCR/order/account evidence; publication alone is not proof that the full Reception Agent is executing in production.
