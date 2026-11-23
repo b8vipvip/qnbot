@@ -12,7 +12,7 @@ def test_text_send_routes_through_native_first_pipeline_before_legacy_uia():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
 
     assert "sendResult = await TrySendTextNativeFirstAsync(" in qnrpa
-    assert "buyer, text, sendStart, shopKey, manualTakeoverCheck" in qnrpa
+    assert "buyer, text, sendStart, shopKey, manualTakeoverCheck, preSendGuard" in qnrpa
     assert "sendResult = await TrySendTextViaUiaAsync(buyer, text, sendStart)" not in qnrpa
     assert "TryTriggerSendViaCdpDomAsync" in native
     assert "TryPostSafeMainSendMouseMessage" in native
