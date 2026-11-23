@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ChromeNs;
 using Bot.Options;
 using Bot.ShopScope;
 using BotLib;
