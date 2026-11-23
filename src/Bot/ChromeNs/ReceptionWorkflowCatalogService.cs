@@ -196,7 +196,26 @@ namespace Bot.ChromeNs
 
         private static long ReadCurrentRevision(string path)
         {
-            if (!File.Exists(path)) return 0;
+            try
+            {
+                // File.Exists reports false for access errors too. Treat only an explicit
+                // not-found result as a new draft; an unreadable existing draft must not
+                // be mistaken for revision zero and overwritten by a stale editor.
+                File.GetAttributes(path);
+            }
+            catch (FileNotFoundException)
+            {
+                return 0;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                throw new IOException("无法确认现有流程草稿的文件状态；拒绝覆盖：" + ex.Message, ex);
+            }
+
             string error;
             var contents = CrossProcessAtomicStateFile.ReadAllTextShared(path, 3, 30, out error);
             if (!string.IsNullOrWhiteSpace(error)) throw new IOException(error);
