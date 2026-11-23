@@ -148,3 +148,22 @@ def test_manual_visual_learning_never_binds_a_reply_to_a_different_recent_image(
     assert "pending.MessageKey" in loader
     assert "string.Equals(x.MessageKey, pending.MessageKey, StringComparison.Ordinal)" in fallback
     assert "SameBuyer(pending.Seller, x.Buyer, pending.Buyer)" in fallback
+
+
+def test_manual_visual_learning_fails_closed_when_bot_echo_provenance_is_unavailable():
+    source = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
+    classifier = source[
+        source.index("private static bool IsBotReply("):
+        source.index("private static double Similarity(")
+    ]
+    observe = source[
+        source.index("private static void ObserveSellerReplyScoped("):
+        source.index("private static async Task LearnWhenReadyAsync(")
+    ]
+
+    assert "IsBotReply(seller, buyer, text, shopKey, replyAt)" in observe
+    assert "BotConversationHistoryStore.TryLoadRangeComplete(" in classifier
+    assert "if (!BotConversationHistoryStore.TryLoadRangeComplete(" in classifier
+    assert "return true;" in classifier
+    assert "NormalizeBotAnswer(card.Answer)" in classifier
+    assert "card.AnswerReadyAtTicks" in classifier
