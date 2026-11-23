@@ -147,6 +147,7 @@ namespace Bot.ChromeNs
                 burst.ShopKey);
             if (!lease.MarkGenerating("streaming_answer_started"))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick,
                     "generation已失效，未进入答案生成", burst.ShopKey);
                 return;
