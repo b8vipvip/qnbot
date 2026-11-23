@@ -36,7 +36,7 @@ namespace Bot.ChromeNs
             // before the incoming-message cache hook has run. Prime still writes the complete file
             // locally before returning a data URI to the model.
             VisionImageCacheService.Prime(message, string.Empty, shopKey);
-            cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken);
+            cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey);
             return cached ?? Fail("图片未能完整缓存到本地");
         }
 
