@@ -821,3 +821,24 @@ def test_auto_delivery_event_cursor_loss_after_restart_does_not_skip_pending_ord
     assert "loadedSuccessfully = true;" in missing
     assert "EnsureCursorMarkerLocked()) return new CursorState();" in loader
     assert "EnsureCursorMarkerLocked()" in save
+
+
+
+def test_auto_delivery_cursor_tracks_same_tick_event_keys_and_fails_closed_on_hub_read_errors():
+    seed = text("src/Bot/ChromeNs/AutoDeliveryOrderEventSeed.cs")
+    tick = seed[seed.index("private static void Tick"):seed.index("private static SellerCursor GetCursorLocked")]
+    loader = seed[seed.index("private static HubState LoadHubState"):seed.index("private static CursorState LoadCursors")]
+    cursor_loader = seed[seed.index("private static CursorState LoadCursors"):seed.index("private static bool SaveCursorsLocked")]
+
+    assert "public List<string> LastSeenEventKeys { get; set; }" in seed
+    assert "Schema = 3;" in seed
+    assert "state.Schema != 3" in cursor_loader
+    assert "acceptedAt == floor && !lastSeenEventKeys.Contains(x.Key)" in tick
+    assert ".ThenBy(x => x.Key, StringComparer.Ordinal)" in tick
+    assert "latestEventKeys.Add(entry.Key)" in tick
+    assert "liveKeys.SetEquals(lastSeenEventKeys)" in tick
+    assert "if (hub == null) continue;" in tick
+    assert "File.GetAttributes(path);" in loader
+    assert "catch (FileNotFoundException)" in loader
+    assert "catch (DirectoryNotFoundException)" in loader
+    assert "按不可读处理并暂停游标推进" in loader
