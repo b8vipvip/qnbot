@@ -213,6 +213,15 @@ namespace Bot.ChromeNs
                     await Task.Delay(2000);
                 }
 
+                if (observation != null
+                    && (string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal)
+                        || VisionImageCacheService.IsMessageKeyWithdrawn(
+                            pending.Seller, pending.Buyer, observation.MessageKey, pending.ShopKey)))
+                {
+                    Log.Info("图片已撤回，阻止将其作为人工视觉学习证据: seller="
+                        + pending.Seller + ", buyer=" + pending.Buyer);
+                    return;
+                }
                 if (observation == null || string.IsNullOrWhiteSpace(observation.VisualSummary))
                 {
                     Log.Info("人工视觉回复等待两分钟仍未取得图片语义，保留普通文本接待学习: seller="
@@ -264,7 +273,9 @@ namespace Bot.ChromeNs
                     pending.MessageKey) ?? new List<object>())
                     .OfType<VisualKnowledgeObservationEntity>()
                     .FirstOrDefault();
-                if (byMessage != null && SameBuyer(pending.Seller, byMessage.Buyer, pending.Buyer)) return byMessage;
+                if (byMessage != null && SameBuyer(pending.Seller, byMessage.Buyer, pending.Buyer))
+                    return string.Equals(byMessage.Status, "图片已撤回", StringComparison.Ordinal)
+                        ? null : byMessage;
 
                 var since = pending.ImageObservedAt.AddMinutes(-1).Ticks;
                 var until = pending.ImageObservedAt.AddMinutes(5).Ticks;
@@ -276,7 +287,9 @@ namespace Bot.ChromeNs
                     since,
                     until) ?? new List<object>())
                     .OfType<VisualKnowledgeObservationEntity>()
-                    .FirstOrDefault(x => x != null && SameBuyer(pending.Seller, x.Buyer, pending.Buyer));
+                    .FirstOrDefault(x => x != null
+                        && !string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal)
+                        && SameBuyer(pending.Seller, x.Buyer, pending.Buyer));
             }
             catch
             {
@@ -290,6 +303,11 @@ namespace Bot.ChromeNs
         {
             try
             {
+                if (observation == null
+                    || string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal)
+                    || VisionImageCacheService.IsMessageKeyWithdrawn(
+                        observation.Seller, observation.Buyer, observation.MessageKey, observation.ShopKey))
+                    return null;
                 VisualKnowledgeEntryEntity target = null;
                 var entries = (DbHelper.Db.Select(
                     typeof(VisualKnowledgeEntryEntity),
