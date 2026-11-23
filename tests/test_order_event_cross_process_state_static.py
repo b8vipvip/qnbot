@@ -59,3 +59,20 @@ def test_first_accept_timestamp_is_immutable_across_duplicate_observations_and_p
     publish = publish.split("private static StateMutexLease AcquireStateMutex", 1)[0]
     duplicate = publish.split("if (existing != null)", 1)[1].split("_state.Events.Add", 1)[0]
     assert duplicate.index("existing.AcceptedAt") < duplicate.index("existing.SeenAt = now")
+
+
+
+def test_order_event_publish_never_accepts_non_durable_events():
+    code = read("src/Bot/ChromeNs/OrderEventHub.cs")
+    publish = code.split("public static OrderEventPublishResult Publish", 1)[1]
+    publish = publish.split("private static StateMutexLease AcquireStateMutex", 1)[0]
+    lock_failure = publish.split("if (lease.Acquired)", 1)[1].split("var now = DateTime.Now;", 1)[0]
+    assert "order_event_state_lock_unavailable_fail_closed" in lock_failure
+    assert "Accepted = false" in lock_failure
+    assert "EnsureLoaded();" not in lock_failure
+    assert "持久化订单触发回复或发货" in lock_failure
+    persist_failure = publish.split("var persisted = SaveInternal(path);", 1)[1].split("Log.Info(\"识别到结构化订单事件", 1)[0]
+    assert "if (!persisted)" in persist_failure
+    assert "_state.Events.RemoveAll" in persist_failure
+    assert "order_event_persistence_failed_fail_closed" in persist_failure
+    assert "Accepted = true" not in persist_failure
