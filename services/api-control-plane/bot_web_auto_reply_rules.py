@@ -35,7 +35,15 @@ DELAY_RULE_KEYS = (
     "first_inquiry_fixed_reply_delay_seconds",
     "order_placed_reply_delay_seconds",
 )
-RULE_KEYS = BASE_RULE_KEYS + ORDER_RULE_KEYS + DELAY_RULE_KEYS
+NEW_DELAY_RULE_KEYS = (
+    "knowledge_direct_reply_delay_seconds",
+    "first_inquiry_fixed_reply_delay_seconds",
+)
+# order_placed_reply_delay_seconds existed in schema v2 as a forced-zero field;
+# schema v3 changes its semantics to an independently configurable 0-300s delay.
+RULE_KEYS = BASE_RULE_KEYS + ORDER_RULE_KEYS + tuple(
+    key for key in DELAY_RULE_KEYS if key not in ORDER_RULE_KEYS
+)
 
 DEFAULT_RULE_SETTINGS: Dict[str, Any] = {
     "auto_reply_rules_enabled": True,
@@ -300,7 +308,7 @@ def put_auto_reply_rules(
     raw_payload = {key: getattr(data, key) for key in RULE_KEYS if getattr(data, key) is not None}
     if schema_version < 2 and any(key in raw_payload for key in ORDER_RULE_KEYS):
         raise HTTPException(status_code=409, detail="请先等待新版 Windows Bot 上报下单回复规则")
-    if schema_version < 3 and any(key in raw_payload for key in DELAY_RULE_KEYS):
+    if schema_version < 3 and any(key in raw_payload for key in NEW_DELAY_RULE_KEYS):
         raise HTTPException(status_code=409, detail="请先等待新版 Windows Bot 上报独立发送延迟配置")
     allowed_keys = set(_keys_for_version(schema_version))
     payload = {key: value for key, value in raw_payload.items() if key in allowed_keys}
@@ -403,7 +411,11 @@ def runtime_sync_auto_reply_rules(
         )
         previous_keys = set(_keys_for_version(stored_schema_version))
         for key in _keys_for_version(incoming_schema_version):
-            if key not in previous_keys:
+            # The order delay key existed in v2 but was hard-forced to zero and could not
+            # be edited there. Adopt the Windows v3 value when its meaning becomes real.
+            if key not in previous_keys or (
+                stored_schema_version < 3 <= incoming_schema_version and key in DELAY_RULE_KEYS
+            ):
                 desired[key] = current[key]
         if current == desired:
             applied_revision = revision
