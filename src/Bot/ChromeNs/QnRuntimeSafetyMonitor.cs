@@ -76,7 +76,7 @@ namespace Bot.ChromeNs
                 var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
-                    if (qn == null) continue;
+                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired) continue;
                     NormalizeUnknownVersion(qn);
                     lock (QnMarkerSync)
                     {
@@ -105,7 +105,8 @@ namespace Bot.ChromeNs
             if (previous > 0 && now.Ticks - previous < QnStateSweepInterval.Ticks) return;
             if (Interlocked.CompareExchange(ref _lastQnStateSweepUtcTicks, now.Ticks, previous) != previous) return;
 
-            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>()).Where(x => x != null));
+            var alive = new HashSet<QN>((sessions ?? Enumerable.Empty<QN>())
+                .Where(x => x != null && x.CDP != null && !x.CDP.IsInvalidated && !x.CDP.IsShopIdentityRetired));
             foreach (var qn in NextConversationProbeAt.Keys)
             {
                 if (alive.Contains(qn)) continue;
@@ -120,10 +121,20 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool IsCurrentShopAuthority(QN qn, string shopKey, CDPClient client, string sessionId)
+        {
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return qn != null && client != null && ReferenceEquals(qn.CDP, client)
+                && !client.IsInvalidated && !client.IsShopIdentityRetired
+                && string.Equals(client.ShopKey, shopKey, StringComparison.Ordinal)
+                && string.Equals(client.SessionId, sessionId, StringComparison.Ordinal)
+                && server != null && server.IsAuthoritativeShopSession(shopKey, sessionId);
+        }
+
         private static void ScheduleConversationProbe(QN qn)
         {
-            if (qn == null || qn.CDP == null || qn.Seller == null
-                || string.IsNullOrWhiteSpace(qn.Seller.Nick))
+            if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired
+                || qn.Seller == null || string.IsNullOrWhiteSpace(qn.Seller.Nick))
             {
                 return;
             }
@@ -139,6 +150,9 @@ namespace Bot.ChromeNs
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
                 return;
+            var sourceClient = qn.CDP;
+            var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
+            if (!IsCurrentShopAuthority(qn, shop.ShopKey, sourceClient, sourceSessionId)) return;
             if (!HasVerifiedReceptionDesk(seller, shop.ShopKey))
             {
                 RecordNoActiveChat(qn, seller, "未检测到当前ShopKey对应的千牛接待聊天窗口，暂停买家探测");
@@ -155,7 +169,7 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    await ProbeCurrentConversationAsync(qn, shop.ShopKey);
+                    await ProbeCurrentConversationAsync(qn, shop.ShopKey, sourceClient, sourceSessionId);
                 }
                 catch (Exception ex)
                 {
@@ -169,10 +183,11 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static async Task ProbeCurrentConversationAsync(QN qn, string expectedShopKey)
+        private static async Task ProbeCurrentConversationAsync(
+            QN qn, string expectedShopKey, CDPClient sourceClient, string sourceSessionId)
         {
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-            if (seller.Length == 0 || qn.CDP == null) return;
+            if (seller.Length == 0 || !IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)) return;
 
             ShopContext shop;
             try { shop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
@@ -183,7 +198,8 @@ namespace Bot.ChromeNs
             }
             if (shop == null
                 || !string.Equals(shop.ShopKey, expectedShopKey, StringComparison.Ordinal)
-                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || !IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId))
                 return;
 
             // Alias resolution must use this QN's exact ShopKey. Seller nickname alone is
@@ -196,7 +212,9 @@ namespace Bot.ChromeNs
                     return;
                 }
 
+                if (!IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)) return;
                 var first = await qn.GetCurrentConversationID();
+                if (!IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)) return;
                 var firstNick = ReadConversationNick(first);
                 if (firstNick.Length == 0)
                 {
@@ -213,7 +231,9 @@ namespace Bot.ChromeNs
                 }
 
                 await Task.Delay(220);
+                if (!IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)) return;
                 var second = await qn.GetCurrentConversationID();
+                if (!IsCurrentShopAuthority(qn, expectedShopKey, sourceClient, sourceSessionId)) return;
                 var secondNick = ReadConversationNick(second);
                 if (secondNick.Length == 0)
                 {
