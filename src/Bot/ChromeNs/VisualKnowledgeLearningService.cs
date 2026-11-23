@@ -238,6 +238,68 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static bool TrySaveManualVisualKnowledge(
+            VisualKnowledgeObservationEntity observation,
+            VisualKnowledgeEntryEntity knowledge)
+        {
+            if (observation == null || knowledge == null
+                || string.IsNullOrWhiteSpace(observation.EntityId)
+                || string.IsNullOrWhiteSpace(observation.MessageKey))
+                return false;
+            try
+            {
+                EnsureInitialized();
+                lock (DbSync)
+                {
+                    var current = SelectObservations(
+                        "where EntityId = ? limit 1", observation.EntityId).FirstOrDefault();
+                    if (current == null
+                        || string.Equals(current.Status, "图片已撤回", StringComparison.Ordinal)
+                        || !string.Equals(current.ShopKey, observation.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(current.Seller, observation.Seller, StringComparison.Ordinal)
+                        || !string.Equals(current.MessageKey, observation.MessageKey, StringComparison.Ordinal)
+                        || (!string.Equals(current.Buyer, observation.Buyer, StringComparison.OrdinalIgnoreCase)
+                            && !BuyerIdentityAliasService.AreEquivalent(
+                                current.Seller, current.Buyer, observation.Buyer))
+                        || !string.Equals(knowledge.ShopKey, current.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(knowledge.Seller, current.Seller, StringComparison.OrdinalIgnoreCase)
+                        || !VisionImageCacheService.IsMessageKeyWithdrawn(
+                            current.Seller, current.Buyer, current.MessageKey, current.ShopKey))
+                    {
+                        // A missing cache record is not itself a withdrawal; the explicit
+                        // tombstone is authoritative. Keep the second check below separate.
+                    }
+                    if (current == null
+                        || string.Equals(current.Status, "图片已撤回", StringComparison.Ordinal)
+                        || !string.Equals(current.ShopKey, observation.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(current.Seller, observation.Seller, StringComparison.Ordinal)
+                        || !string.Equals(current.MessageKey, observation.MessageKey, StringComparison.Ordinal)
+                        || (!string.Equals(current.Buyer, observation.Buyer, StringComparison.OrdinalIgnoreCase)
+                            && !BuyerIdentityAliasService.AreEquivalent(
+                                current.Seller, current.Buyer, observation.Buyer))
+                        || !string.Equals(knowledge.ShopKey, current.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(knowledge.Seller, current.Seller, StringComparison.OrdinalIgnoreCase)
+                        || VisionImageCacheService.IsMessageKeyWithdrawn(
+                            current.Seller, current.Buyer, current.MessageKey, current.ShopKey))
+                        return false;
+
+                    var now = DateTime.Now.Ticks;
+                    current.Status = "已通过人工即时回复学习";
+                    current.LearnedKnowledgeId = knowledge.EntityId;
+                    current.UpdatedAtTicks = now;
+                    knowledge.Enabled = true;
+                    knowledge.UpdatedAtTicks = now;
+                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { knowledge, current });
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("人工视觉知识最终撤回复核失败，已阻止写入：" + ex.Message, 10);
+                return false;
+            }
+        }
+
         public static bool TryFindMatch(
             string shopKey,
             string seller,
