@@ -4190,9 +4190,23 @@ namespace Bot.ChromeNs
                             report.UpdatedAtTicks = DateTime.Now.Ticks;
                             SaveReport(report);
                         }
+                        catch (AmbiguousShopIdentityException)
+                        {
+                            // A proven nickname collision is not a transient startup
+                            // outage. Keep it visible as a manual-review terminal row rather
+                            // than retrying the same ambiguous mapping every 30 seconds.
+                            report.Status = "店铺身份存在歧义，待人工复核";
+                            report.Error = "legacy_report_shop_scope_unavailable";
+                            report.CompletedAtTicks = DateTime.Now.Ticks;
+                            report.UpdatedAtTicks = DateTime.Now.Ticks;
+                            SaveReport(report);
+                            continue;
+                        }
                         catch
                         {
-                            const string pendingStatus = "店铺尚未连接或身份无法唯一解析，等待自动恢复";
+                            // No connected/registered runtime identity is transient.
+                            // Keep this report eligible for the next reconnect sweep.
+                            const string pendingStatus = "店铺尚未连接，等待自动恢复";
                             const string pendingError = "legacy_report_shop_scope_pending";
                             if (!string.Equals(report.Status, pendingStatus, StringComparison.Ordinal)
                                 || !string.Equals(report.Error, pendingError, StringComparison.Ordinal))
