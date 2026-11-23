@@ -386,6 +386,12 @@ namespace Bot.ChromeNs
                         reason = "索证步骤必须以真实买家消息为触发依据";
                         return false;
                     }
+                    if (!required.Values<string>().Any(x =>
+                        x == "image_message" || x == "vision_observation"))
+                    {
+                        reason = "当前自动索证步骤必须等待真实图片或视觉证据，不能把已存在的买家消息当作缺失证据";
+                        return false;
+                    }
                 }
                 else if (action == "REPLY")
                 {
