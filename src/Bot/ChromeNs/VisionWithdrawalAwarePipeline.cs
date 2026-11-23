@@ -364,6 +364,7 @@ namespace Bot.ChromeNs
             }
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 lifecycleLease.MarkFailed("vision_answer_invalid");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：AI错误");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
@@ -375,6 +376,18 @@ namespace Bot.ChromeNs
                 if (ctl != null) ctl.SetSendResult(false, "未发送：最新买家消息或人工回复已接管");
                 return;
             }
+            if (workflowDecision != null && workflowDecision.RequiresSend
+                && !ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision))
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lifecycleLease.MarkCompleted("reception_workflow_revision_changed_before_vision_send");
+                if (ctl != null) ctl.SetSendResult(false, "未发送：接待流程在发送前已更新或回滚，旧版本图片回复已取消");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick,
+                    "未发送：接待流程在发送前已更新或回滚，旧版本图片回复已取消", burst.ShopKey);
+                return;
+            }
+
             if (!lifecycleLease.MarkSending("vision_send_started"))
             {
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
