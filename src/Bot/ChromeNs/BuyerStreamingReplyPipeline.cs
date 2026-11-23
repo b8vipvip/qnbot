@@ -229,6 +229,7 @@ namespace Bot.ChromeNs
 
             if (!lease.IsCurrent)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 const string stale = "当前回复任务已被显式失效，AI结果已丢弃";
                 if (conversationCtl != null)
                 {
@@ -286,21 +287,33 @@ namespace Bot.ChromeNs
 
             try
             {
-                var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    answer,
-                    lease.CancellationToken,
-                    false);
+                var deduplication = workflowDecision != null && workflowDecision.RequiresSend
+                    ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        answer, burst.ShopKey, lease.CancellationToken)
+                    : ReplyDeduplicationService.EnsureDistinct(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
+                        answer, lease.CancellationToken, false);
                 answer = deduplication.Answer;
             }
             catch (OperationCanceledException)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 const string cancelledDuringValidation = "generation在发送前答案校验/去重期间已失效";
                 if (conversationCtl != null) conversationCtl.SetStatus(cancelledDuringValidation, false);
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, cancelledDuringValidation, burst.ShopKey);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(answer)
+                || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                const string invalidAfterValidation = "发送前答案校验未通过，已阻止自动发送";
+                lease.MarkFailed("streaming_pre_send_validation_failed");
+                if (conversationCtl != null) conversationCtl.SetStatus(invalidAfterValidation, false);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, invalidAfterValidation, burst.ShopKey);
                 return;
             }
 
@@ -495,8 +508,12 @@ namespace Bot.ChromeNs
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
-                if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
+                if (workflowDecision != null && workflowDecision.RequiresSend)
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+                else
+                    ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                if (workflowDecision == null && string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
                 {
                     KnowledgeLearningService.QueueLearn(
                         burst.CombinedQuestion,
