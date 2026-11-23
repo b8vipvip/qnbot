@@ -245,6 +245,7 @@ namespace Bot.Options
             if (autoReplyTab == null) return;
 
             var legacyContent = DetachLegacyScrollHost(autoReplyTab.Content as UIElement);
+            OrderPlacedReplyDelaySettings.ApplyForcedImmediateUi(legacyContent);
             autoReplyTab.Content = null;
 
             var firstSettings = FirstInquiryFixedReplyService.Load(Seller)

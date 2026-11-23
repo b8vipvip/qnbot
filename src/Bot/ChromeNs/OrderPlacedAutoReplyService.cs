@@ -1615,7 +1615,7 @@ namespace Bot.ChromeNs
                         return;
                     }
 
-                    var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds(plan.Config);
+                    var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
                     if (delaySeconds > 0)
                     {
                         Log.Info("下单自动回复等待独立延时发送: seller=" + plan.Seller
