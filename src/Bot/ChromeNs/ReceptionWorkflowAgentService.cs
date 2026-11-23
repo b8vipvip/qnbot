@@ -149,7 +149,7 @@ namespace Bot.ChromeNs
                 {
                     Alias = alias,
                     Kind = kind,
-                    Digest = Digest(shopKey + "|" + turn.MessageKey),
+                    Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|" + turn.MessageKey),
                     MessageKey = turn.MessageKey,
                     ReplyText = kind == "manual_correction" ? summary : string.Empty,
                     Summary = summary,
@@ -185,7 +185,7 @@ namespace Bot.ChromeNs
                 {
                     Alias = alias,
                     Kind = "vision_observation",
-                    Digest = Digest(shopKey + "|" + visual.MessageKey),
+                    Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|" + visual.MessageKey),
                     MessageKey = visual.MessageKey,
                     Summary = summary,
                     ObservedAtUtcTicks = visual.ObservedAtTicks <= 0 ? 0
