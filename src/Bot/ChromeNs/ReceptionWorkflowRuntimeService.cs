@@ -18,6 +18,7 @@ namespace Bot.ChromeNs
         public string ShopKey { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
+        public string Question { get; set; }
         public string FlowId { get; set; }
         public int FlowVersion { get; set; }
         public long CatalogRevision { get; set; }
@@ -735,7 +736,7 @@ namespace Bot.ChromeNs
                                 record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                                 return new ReceptionWorkflowDecision
                                 {
-                                    Seller = seller, Buyer = buyer, ShopKey = shopKey,
+                                    Seller = seller, Buyer = buyer, Question = question, ShopKey = shopKey,
                                     FlowId = flowId, FlowVersion = flowVersion, CatalogRevision = catalog.Revision,
                                     State = currentState, NextState = nextState, Action = action,
                                     ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
@@ -828,7 +829,7 @@ namespace Bot.ChromeNs
                             record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                             return new ReceptionWorkflowDecision
                             {
-                                Seller = seller, Buyer = buyer, ShopKey = shopKey,
+                                Seller = seller, Buyer = buyer, Question = question, ShopKey = shopKey,
                                 FlowId = flowId, FlowVersion = flowVersion, CatalogRevision = catalog.Revision,
                                 State = currentState, NextState = nextState, Action = action,
                                 ReplyText = reply, SourceKey = sourceKey, OrderFingerprint = orderFingerprint,
@@ -951,7 +952,7 @@ namespace Bot.ChromeNs
                     return true;
                 });
                 if (!sendSucceeded && committed)
-                    QueueHandoff(shop, decision.Seller, decision.Buyer, string.Empty,
+                    QueueHandoff(shop, decision.Seller, decision.Buyer, decision.Question,
                         decision.ShopKey, decision.FlowId);
             }
             catch (Exception ex)
