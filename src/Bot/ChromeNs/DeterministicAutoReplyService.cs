@@ -546,6 +546,21 @@ namespace Bot.ChromeNs
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
                         return false;
                     }
+                    ShopContext verifiedShop;
+                    try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
+                    catch { verifiedShop = null; }
+                    if (verifiedShop == null
+                        || !string.Equals(verifiedShop.ShopKey, item.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(verifiedShop.SellerNick, item.SellerNick, StringComparison.Ordinal)
+                        || !string.Equals(qn.CDP.ShopKey, item.ShopKey, StringComparison.Ordinal)
+                        || qn.CDP.IsShopIdentityRetired)
+                    {
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间原店铺ShopKey/CDP身份已变化");
+                        Log.ErrorWithMaxCount(source + "延迟后店铺身份复核失败，已阻止跨店发送: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
+                            + ", seller=" + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
+                        return false;
+                    }
                 }
                 if (item.SessionGeneration > 0
                     && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey))
