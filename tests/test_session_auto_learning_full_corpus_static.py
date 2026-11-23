@@ -1060,6 +1060,7 @@ def test_legacy_shop_resolution_retries_offline_but_terminally_marks_ambiguous_i
     transient = branch[branch.index("catch\n                        {"):]
     assert 'report.Error = "legacy_report_shop_scope_unavailable";' in ambiguous
     assert "report.CompletedAtTicks = DateTime.Now.Ticks;" in ambiguous
-    assert 'report.Error = "legacy_report_shop_scope_pending";' in transient
+    assert 'const string pendingError = "legacy_report_shop_scope_pending";' in transient
+    assert "report.Error = pendingError;" in transient
     assert "report.CompletedAtTicks = 0;" in transient
     assert "StartPendingRecoveryTimer();" in service
