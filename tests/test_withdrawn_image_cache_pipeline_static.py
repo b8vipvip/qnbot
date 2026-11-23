@@ -34,7 +34,7 @@ def test_raw_images_are_persisted_under_permanent_user_data_with_atomic_write_an
 def test_vision_resolver_uses_local_complete_copy_instead_of_remote_url():
     source = read("src/Bot/ChromeNs/VisionImageResolver.cs")
 
-    assert "VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey)" in source
+    assert "VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken, shopKey, browserClient)" in source
     assert "FromLocalCache" in source
     assert "CacheComplete" in source
     assert "http.GetAsync" not in source
