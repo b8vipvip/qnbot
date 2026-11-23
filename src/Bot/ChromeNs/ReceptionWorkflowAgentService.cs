@@ -140,11 +140,13 @@ namespace Bot.ChromeNs
             var messageIndex = 0;
             foreach (var turn in (turns ?? new ConversationContextTurn[0])
                 .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text)
-                    && !string.IsNullOrWhiteSpace(x.MessageKey))
+                    && !string.IsNullOrWhiteSpace(GetNativeMessageId(x)))
                 .Where(x => x.Role == "user" || (x.Role == "assistant" && !IsBotTurn(x, cards)))
                 .OrderBy(x => x.Timestamp).Take(40))
             {
                 var kind = turn.Role == "user" ? "buyer_message" : "manual_correction";
+                var nativeMessageId = GetNativeMessageId(turn);
+                if (nativeMessageId.Length == 0) continue;
                 var alias = "M" + (++messageIndex).ToString(CultureInfo.InvariantCulture);
                 var summary = BuyerMessageArchiveService.Redact(Clean(turn.Text, 900));
                 if (summary.Length == 0) continue;
@@ -152,8 +154,8 @@ namespace Bot.ChromeNs
                 {
                     Alias = alias,
                     Kind = kind,
-                    Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|" + turn.MessageKey),
-                    MessageKey = turn.MessageKey,
+                    Digest = Digest(shopKey + "|" + seller + "|" + buyer + "|" + nativeMessageId),
+                    MessageKey = nativeMessageId,
                     ReplyText = kind == "manual_correction" ? summary : string.Empty,
                     Summary = summary,
                     ObservedAtUtcTicks = turn.Timestamp == DateTime.MinValue
@@ -279,6 +281,53 @@ namespace Bot.ChromeNs
             return context;
         }
 
+        private static string GetNativeMessageId(ConversationContextTurn turn)
+        {
+            if (turn == null || turn.NativeAliases == null) return string.Empty;
+            return (turn.NativeAliases.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty).Trim();
+        }
+
+        private static bool HasUniqueHumanEvidencePair(
+            ReceptionWorkflowEvidenceContext evidence,
+            IList<ReceptionWorkflowEvidenceReference> selected)
+        {
+            return (selected ?? new List<ReceptionWorkflowEvidenceReference>())
+                .Where(x => x != null && x.Kind == "manual_correction")
+                .Any(reply => IsValidHumanEvidencePair(evidence, selected, reply));
+        }
+
+        private static bool IsValidHumanEvidencePair(
+            ReceptionWorkflowEvidenceContext evidence,
+            IList<ReceptionWorkflowEvidenceReference> selected,
+            ReceptionWorkflowEvidenceReference reply)
+        {
+            if (evidence == null || reply == null || reply.ObservedAtUtcTicks <= 0) return false;
+            var all = evidence.References == null
+                ? new List<ReceptionWorkflowEvidenceReference>()
+                : evidence.References.Values.Where(x => x != null).ToList();
+            var buyerQuestion = all
+                .Where(x => x.Kind == "buyer_message" && x.ObservedAtUtcTicks > 0
+                    && x.ObservedAtUtcTicks < reply.ObservedAtUtcTicks)
+                .OrderByDescending(x => x.ObservedAtUtcTicks)
+                .FirstOrDefault();
+            if (buyerQuestion == null
+                || !(selected ?? new List<ReceptionWorkflowEvidenceReference>())
+                    .Any(x => x != null && x.Kind == "buyer_message"
+                        && string.Equals(x.Digest, buyerQuestion.Digest, StringComparison.Ordinal)))
+                return false;
+
+            var elapsed = reply.ObservedAtUtcTicks - buyerQuestion.ObservedAtUtcTicks;
+            if (elapsed <= 0 || elapsed > TimeSpan.FromMinutes(30).Ticks) return false;
+
+            var humanRepliesBetween = all
+                .Where(x => x.Kind == "manual_correction"
+                    && x.ObservedAtUtcTicks > buyerQuestion.ObservedAtUtcTicks
+                    && x.ObservedAtUtcTicks <= reply.ObservedAtUtcTicks)
+                .ToList();
+            return humanRepliesBetween.Count == 1
+                && string.Equals(humanRepliesBetween[0].Digest, reply.Digest, StringComparison.Ordinal);
+        }
+
         private static bool IsSafeKey(string value)
         {
             return !string.IsNullOrWhiteSpace(value)
@@ -329,6 +378,11 @@ namespace Bot.ChromeNs
                 || !selected.Any(x => x.Kind == "order_snapshot"))
             {
                 reason = "缺少买家原始消息、人工实际回复或已核验订单证据";
+                return false;
+            }
+            if (!HasUniqueHumanEvidencePair(evidence, selected))
+            {
+                reason = "买家问题与人工回复缺少唯一、连续且在30分钟内的原始消息证据对";
                 return false;
             }
             var requiresVisualEvidence = (proposal["steps"] as JArray ?? new JArray())
@@ -459,12 +513,9 @@ namespace Bot.ChromeNs
                         reason = "真实人工回复别名必须同时出现在evidence_refs中，确保来源审计完整";
                         return false;
                     }
-                    if (replyEvidence.ObservedAtUtcTicks <= 0
-                        || !selected.Any(x => x.Kind == "buyer_message"
-                            && x.ObservedAtUtcTicks > 0
-                            && x.ObservedAtUtcTicks <= replyEvidence.ObservedAtUtcTicks))
+                    if (!IsValidHumanEvidencePair(evidence, selected, replyEvidence))
                     {
-                        reason = "人工回复必须发生在同一证据集中的买家原始问题之后";
+                        reason = "人工回复必须与同一证据集中的最近买家原始问题构成唯一、连续且30分钟内的证据对";
                         return false;
                     }
                     replyTemplate = BuyerMessageArchiveService.Redact(Clean(replyEvidence.ReplyText, 1200));
