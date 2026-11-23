@@ -128,7 +128,8 @@ namespace Bot.ChromeNs
             ShopContext shop;
             try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
             catch { return context; }
-            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+            if (shop == null || !shop.HasStableSellerId
+                || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
                 || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase)) return context;
 
             var prompt = new StringBuilder();
@@ -161,8 +162,18 @@ namespace Bot.ChromeNs
             }
 
             var visualIndex = 0;
-            foreach (var visual in RecentVisualContextService.GetRecentWorkflowEvidence(
-                shopKey, seller, buyer, 12))
+            List<VisualKnowledgeObservationEntity> visualEvidence;
+            try
+            {
+                visualEvidence = RecentVisualContextService.GetRecentWorkflowEvidence(
+                    shopKey, seller, buyer, 12);
+            }
+            catch (Exception ex)
+            {
+                visualEvidence = new List<VisualKnowledgeObservationEntity>();
+                Log.ErrorWithMaxCount("Reception Agent读取图片证据失败，本轮不使用视觉候选：" + ex.Message, 5);
+            }
+            foreach (var visual in visualEvidence ?? new List<VisualKnowledgeObservationEntity>())
             {
                 if (visual == null || string.IsNullOrWhiteSpace(visual.MessageKey)
                     || string.IsNullOrWhiteSpace(visual.VisualSummary)) continue;
