@@ -208,6 +208,16 @@ namespace Bot.ChromeNs
                 for (var attempt = 0; attempt < 60; attempt++)
                 {
                     if (!IsCurrent(pending, capturedVersion)) return;
+                    // The in-memory image cache is the immediate withdrawal authority.
+                    // Check it on every poll as well as the durable observation tombstone:
+                    // persistence can fail while the cache has already marked the image withdrawn.
+                    if (VisionImageCacheService.IsMessageKeyWithdrawn(
+                        pending.Seller, pending.Buyer, pending.MessageKey, pending.ShopKey))
+                    {
+                        Log.Info("图片已撤回，立即停止等待人工视觉学习证据: seller="
+                            + pending.Seller + ", buyer=" + pending.Buyer);
+                        return;
+                    }
                     observation = LoadObservation(pending);
                     if (observation != null
                         && (string.Equals(observation.Status, "图片已撤回", StringComparison.Ordinal)
