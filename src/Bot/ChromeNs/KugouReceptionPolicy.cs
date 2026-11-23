@@ -273,7 +273,23 @@ namespace Bot.ChromeNs
                     return true;
                 }
                 using (ShopSettingsScope.Enter(shop))
-                    return BlockOutgoing(seller, buyer, question, answer, out reason);
+                {
+                    var config = KugouReceptionConfigService.GetConfig(shop);
+                    var output = answer ?? string.Empty;
+                    if (!config.Enabled) return false;
+                    if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
+                        && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
+                        reason = "当前店铺已关闭自动设备指导";
+                    else if (config.BlockedOutgoingPatterns.Any(pattern => SafeIsMatch(output, pattern)))
+                        reason = "命中当前店铺配置的禁止发送规则";
+                    else if (IsScreenshotQuestion(question, config)
+                        && !string.IsNullOrWhiteSpace(config.ScreenshotReplyPattern)
+                        && SafeIsMatch(output, config.ScreenshotReplyPattern))
+                        reason = "当前问题与店铺配置的截图答复校验规则冲突";
+                    if (reason.Length == 0) return false;
+                    Audit(seller, buyer, "SUPPRESS", "reply_validation", reason, "configured_outgoing_guard");
+                    return true;
+                }
             }
             catch (Exception ex)
             {
