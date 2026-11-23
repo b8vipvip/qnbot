@@ -292,6 +292,8 @@ def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning()
     assert "VisualKnowledgeLearningService.MarkObservationWithdrawn(" in cache
     assert 'Status = withdrawn ? "图片已撤回" : "等待人工接待结束"' in visual_learning
     assert 'observation.Status = "图片已撤回"' in visual_learning
+    assert 'EntityId = Guid.NewGuid().ToString("N")' in visual_learning
+    assert "MarkObservationWithdrawn(" in visual_learning
     assert "IsWithdrawnObservation(" in recent
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in recent
     assert "IsMessageKeyWithdrawn(" in manual_learning
