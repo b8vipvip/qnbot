@@ -33,15 +33,15 @@ def test_invalid_work_hours_never_fall_back_to_0900_1800():
     assert 'new TimeSpan(18, 0, 0)' not in runtime_offhours
 
 
-def test_local_ocr_knowledge_can_route_images_without_external_vision_api():
-    assert 'var localUsable = CanUseLocalOcrKnowledge(seller, shopKey);' in VISION
+def test_server_ocr_can_route_images_without_external_vision_api_or_ready_knowledge():
+    assert 'var localUsable = CanUseServerOcr(seller, shopKey);' in VISION
     assert 'var usable = localUsable || externalUsable;' in VISION
     assert 'Kind = VisionDecisionKind.Vision' in VISION
-    assert '使用本地OCR+Knowledge V2图片理解；无需外部视觉模型。' in VISION
-    assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' in VISION
+    assert '使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。' in VISION
+    assert 'LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)' in VISION
+    assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' not in VISION
+    assert 'KnowledgeEngineV2Service.IsSnapshotReady(sellerNick)' not in VISION
     assert 'ReplyModeService.IsLocalFirst(sellerNick)' not in VISION
-    assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' in VISION
-    assert 'KnowledgeEngineV2Service.IsSnapshotReady(sellerNick)' in VISION
 
 
 def test_manual_ai_optimization_is_idempotent_per_buyer_turn_for_ten_minutes():
