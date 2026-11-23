@@ -461,16 +461,16 @@ namespace Bot.ChromeNs
                     var bestScore = 0.0;
                     foreach (var entry in entries)
                     {
-                        var score = Similarity(observation.VisualQuestion, observation.VisualSummary, observation.VisualTags,
+                        var score = Similarity(currentObservation.VisualQuestion, currentObservation.VisualSummary, currentObservation.VisualTags,
                             entry.VisualQuestion, entry.VisualSummary, entry.VisualTags);
                         if (score > bestScore) { bestScore = score; best = entry; }
                     }
                     var now = DateTime.Now.Ticks;
                     if (best != null && bestScore >= 0.70)
                     {
-                        best.VisualQuestion = PreferLonger(best.VisualQuestion, observation.VisualQuestion);
-                        best.VisualSummary = PreferLonger(best.VisualSummary, observation.VisualSummary);
-                        best.VisualTags = MergeTags(best.VisualTags, observation.VisualTags);
+                        best.VisualQuestion = PreferLonger(best.VisualQuestion, currentObservation.VisualQuestion);
+                        best.VisualSummary = PreferLonger(best.VisualSummary, currentObservation.VisualSummary);
+                        best.VisualTags = MergeTags(best.VisualTags, currentObservation.VisualTags);
                         best.Answer = answer;
                         best.SourceType = "视觉人工学习";
                         best.Confirmations = Math.Max(1, best.Confirmations) + 1;
@@ -491,9 +491,9 @@ namespace Bot.ChromeNs
                         EntityId = Guid.NewGuid().ToString("N"),
                         ShopKey = observation.ShopKey,
                         Seller = observation.Seller,
-                        VisualQuestion = observation.VisualQuestion,
-                        VisualSummary = observation.VisualSummary,
-                        VisualTags = observation.VisualTags,
+                        VisualQuestion = currentObservation.VisualQuestion,
+                        VisualSummary = currentObservation.VisualSummary,
+                        VisualTags = currentObservation.VisualTags,
                         Answer = answer,
                         SourceType = "视觉人工学习",
                         Confirmations = 1,
