@@ -385,3 +385,19 @@ def test_ask_evidence_only_advances_after_every_required_evidence_is_satisfied()
     assert "if (evidenceReady && action == \"ASK_EVIDENCE\")" in transition
     assert "hasImage || hasAccountEvidence" not in transition
     assert "HasRequiredEvidence(" in runtime
+
+
+def test_new_image_cannot_borrow_a_prior_images_visual_summary_or_message_key():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    evaluate = runtime[
+        runtime.index("private static ReceptionWorkflowDecision Evaluate("):
+        runtime.index("private static bool HasRequiredEvidence(")
+    ]
+
+    assert "var hasRecentVisual = !isImage && recentVisualEvidence != null;" in evaluate
+    assert "var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);" in evaluate
+    assert "hasRecentVisual = !isImage && recentVisualEvidence != null;" in evaluate
+    assert "hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);" in evaluate
+    assert "hasVision = hasCurrentVisual || hasRecentVisual;" in evaluate
+    assert "visualEvidenceMessageKey = hasCurrentVisual" in evaluate
+    assert "recentVisualEvidence.MessageKey" in evaluate
