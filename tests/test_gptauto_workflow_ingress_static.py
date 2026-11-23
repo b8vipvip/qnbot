@@ -86,8 +86,7 @@ def test_reconcile_discovers_the_actual_release_workflow_and_pins_the_merge_sha(
     assert 'RELEASE_WORKFLOW_ID: ${{ steps.validation-plan.outputs.release-workflow-id }}' in reconcile
     assert 'release_payload="$(jq -n --arg ref "$DEFAULT_BRANCH" --arg source_sha "$MERGE_SHA"' in reconcile
     assert 'actions/workflows/$RELEASE_WORKFLOW_ID/dispatches' in reconcile
-    assert 'printf \'%s\' "$release_payload" | gh api --method POST' in reconcile
-    assert "--input -" in reconcile
+    assert 'dispatch_workflow "$REPOSITORY" "$RELEASE_WORKFLOW_ID" "$release_payload"' in reconcile
     assert 'select(.display_title == $title' in reconcile
     assert 'select(.name == $workflow and .display_title == $title' not in reconcile
     assert 'baseline="$(jq -r \'[.workflow_runs[].id] | max // 0\' <<<"$runs")"' in reconcile
@@ -269,8 +268,7 @@ def test_reconcile_can_recover_a_historical_merge_only_with_exact_sha_success_ev
     assert "reusing exact-SHA validation run" in validation
     assert 'primary_workflow_file="${primary_path##*/}"' in validation
     assert 'actions/workflows/$primary_workflow_file/dispatches' in validation
-    assert 'printf \'%s\' "$validation_payload" | gh api --method POST' in validation
-    assert "--input -" in validation
+    assert 'dispatch_workflow "$REPOSITORY" "$primary_workflow_file" "$validation_payload"' in validation
     assert 'gh workflow run "$primary_path"' not in validation
 
 
@@ -327,8 +325,7 @@ def test_failed_reconcile_dispatch_marker_does_not_block_terminal_recovery():
     assert 'grep -Fq "Terminal state: DONE"' in adoption
     assert 'grep -Fq "Merge SHA: $MERGE_SHA"' in adoption
     assert 'actions/workflows/gptauto-reconcile.yml/dispatches' in adoption
-    assert 'printf \'%s\' "$reconcile_payload" | gh api --method POST' in adoption
-    assert "--input -" in adoption
+    assert 'dispatch_workflow "$REPOSITORY" "gptauto-reconcile.yml" "$reconcile_payload"' in adoption
     assert "gh workflow run gptauto-reconcile.yml" not in adoption
     assert 'gh api --method PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in adoption
     assert 'if grep -Fq "$marker" <<<"$existing"; then' not in adoption
@@ -419,9 +416,15 @@ def test_all_gptauto_workflow_dispatches_use_rest_json_payloads_not_cli_position
     assert "actions/workflows/gptauto-observer.yml/dispatches" in observer
     assert "actions/workflows/$primary_workflow_file/dispatches" in reconcile
     assert "actions/workflows/$RELEASE_WORKFLOW_ID/dispatches" in reconcile
+    helper = read(".github/gptauto/dispatch_workflow.sh")
     for workflow in (executor, reconcile, observer):
         assert "gh workflow run" not in workflow
-        assert "--input -" in workflow
+        assert "--input -" not in workflow
+        assert "dispatch_workflow" in workflow
+    assert "curl --silent --show-error" in helper
+    assert 'Authorization: Bearer $token' in helper
+    assert 'if [[ "$status" != "204" ]]' in helper
+    assert 'GITHUB_API_URL:-https://api.github.com' in helper
 
 
 
