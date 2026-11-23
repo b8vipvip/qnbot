@@ -84,6 +84,77 @@ namespace Bot.ChromeNs
             });
         }
 
+        internal static bool IsWorkflowHandoffConfigured()
+        {
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            if (cfg == null || !cfg.EnableHandoffNotification) return false;
+            return cfg.NotifyWeChat || cfg.NotifyQQ || cfg.NotifyFeishu
+                || cfg.NotifyDingTalk || cfg.NotifyEmail || WeComAppBridgeClient.IsConfigured();
+        }
+
+        internal static bool QueueReceptionWorkflowHandoff(
+            string seller, string buyer, string question, string shopKey, string flowId)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            question = question ?? string.Empty;
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || shopKey.Length == 0) return false;
+
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey); }
+            catch { return false; }
+            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            if (cfg == null || !cfg.EnableHandoffNotification
+                || !(cfg.NotifyWeChat || cfg.NotifyQQ || cfg.NotifyFeishu
+                    || cfg.NotifyDingTalk || cfg.NotifyEmail || WeComAppBridgeClient.IsConfigured()))
+                return false;
+
+            var key = shopKey + "#" + Normalize(seller) + "#" + Normalize(buyer)
+                + "#workflow#" + Normalize(flowId);
+            var now = DateTime.Now;
+            DateTime until;
+            if (Recent.TryGetValue(key, out until) && until > now) return true;
+            Recent[key] = now.AddMinutes(Math.Max(1, cfg.NotificationCooldownMinutes));
+
+            var decision = new AutoReplyRuleDecision
+            {
+                Matched = true,
+                AllowAutoReply = false,
+                UseAiReply = false,
+                IsOffHours = false,
+                HitKeyword = "Reception Agent",
+                Reason = "Reception Agent流程转人工，flow=" + Short(flowId, 80)
+            };
+            Task.Run(async () =>
+            {
+                IDisposable scope = null;
+                try
+                {
+                    scope = ShopSettingsScope.Enter(shop);
+                    var scopedConfig = BotFeatureStore.GetAutoReplyRules() ?? cfg;
+                    var result = await SendAsync(
+                        scopedConfig,
+                        BuildMessage(seller, buyer, question, decision),
+                        seller, buyer, question, decision, false);
+                    Log.Info("Reception Agent转人工通知结果：shop=" + shopKey + ", flow=" + flowId + ", " + result);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("Reception Agent转人工通知异常：shop=" + shopKey + ", flow=" + flowId + ", " + ex.Message);
+                }
+                finally
+                {
+                    if (scope != null) scope.Dispose();
+                }
+            });
+            return true;
+        }
+
         public static async Task<string> TestAsync(AutoReplyRuleConfig cfg)
         {
             cfg = cfg ?? AutoReplyRuleConfig.Default();
