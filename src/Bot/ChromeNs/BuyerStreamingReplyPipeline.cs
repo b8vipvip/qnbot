@@ -191,6 +191,7 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (lease.IsCurrent)
                 {
                     var timeout = "错误：AI接口在" + TotalAiBudgetSeconds + "秒总超时预算内未返回有效答案。";
@@ -219,6 +220,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 answer = "错误：流式AI调用失败：" + ex.Message;
                 Log.Info("流式AI调用失败: buyer=" + burst.BuyerNick + ", error=" + ex.Message);
             }
@@ -266,6 +268,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(answer)
                 || answer.StartsWith("错误：", StringComparison.Ordinal))
             {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 var failure = string.IsNullOrWhiteSpace(answer)
                     ? "错误：AI未返回有效答案。"
                     : answer;
