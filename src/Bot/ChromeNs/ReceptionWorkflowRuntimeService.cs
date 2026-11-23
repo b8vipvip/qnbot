@@ -911,7 +911,7 @@ namespace Bot.ChromeNs
             catch { return; }
             try
             {
-                Mutate(shop, document =>
+                var committed = Mutate(shop, document =>
                 {
                     var buyerKey = Digest(decision.ShopKey + "|" + decision.Seller + "|" + decision.Buyer);
                     var records = document["records"] as JArray;
@@ -950,6 +950,9 @@ namespace Bot.ChromeNs
                     record["updated_utc_ticks"] = DateTime.UtcNow.Ticks;
                     return true;
                 });
+                if (!sendSucceeded && committed)
+                    QueueHandoff(shop, decision.Seller, decision.Buyer, string.Empty,
+                        decision.ShopKey, decision.FlowId);
             }
             catch (Exception ex)
             {
