@@ -675,13 +675,17 @@ namespace Bot.ChromeNs
                             .Where(x => x != null && x.ObservedAtTicks >= visualCutoffTicks)
                             .OrderByDescending(x => x.ObservedAtTicks)
                             .FirstOrDefault();
-                        var hasRecentVisual = recentVisualEvidence != null;
-                        var visualEvidenceMessageKey = isImage && !string.IsNullOrWhiteSpace(messageKey)
-                            ? messageKey : (recentVisualEvidence == null ? string.Empty : recentVisualEvidence.MessageKey);
-                        // image_message means a new image in this event; vision_observation may
-                        // use an already-persisted observation from the same buyer conversation.
+                        // A new image event must be paired with its own successful visual
+                        // summary. A prior image may satisfy a later text follow-up, but must
+                        // never be relabeled as the visual analysis of this new image.
+                        var hasRecentVisual = !isImage && recentVisualEvidence != null;
+                        var hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);
+                        var visualEvidenceMessageKey = hasCurrentVisual
+                            ? messageKey
+                            : (!isImage && recentVisualEvidence != null
+                                ? recentVisualEvidence.MessageKey : string.Empty);
                         var hasImage = isImage;
-                        var hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
+                        var hasVision = hasCurrentVisual || hasRecentVisual;
                         var hasManual = HasHumanCorrectionEvidence(flow);
                         var evidenceReady = HasRequiredEvidence(
                             required, hasBuyer, hasImage, hasVision, hasAccountEvidence, hasOrder, hasManual);
@@ -716,11 +720,14 @@ namespace Bot.ChromeNs
                                     .Where(x => x != null && x.ObservedAtTicks >= visualCutoffTicks)
                                     .OrderByDescending(x => x.ObservedAtTicks)
                                     .FirstOrDefault();
-                                hasRecentVisual = recentVisualEvidence != null;
-                                visualEvidenceMessageKey = isImage && !string.IsNullOrWhiteSpace(messageKey)
-                                    ? messageKey : (recentVisualEvidence == null ? string.Empty : recentVisualEvidence.MessageKey);
+                                hasRecentVisual = !isImage && recentVisualEvidence != null;
+                                hasCurrentVisual = isImage && !string.IsNullOrWhiteSpace(visualSummary);
+                                visualEvidenceMessageKey = hasCurrentVisual
+                                    ? messageKey
+                                    : (!isImage && recentVisualEvidence != null
+                                        ? recentVisualEvidence.MessageKey : string.Empty);
                                 hasImage = isImage;
-                                hasVision = !string.IsNullOrWhiteSpace(visualSummary) || hasRecentVisual;
+                                hasVision = hasCurrentVisual || hasRecentVisual;
                                 evidenceReady = HasRequiredEvidence(
                                     required, hasBuyer, hasImage, hasVision, hasAccountEvidence, hasOrder, hasManual);
                             }
