@@ -312,7 +312,7 @@ namespace Bot.ChromeNs
                     config = KugouReceptionConfigService.GetConfig(shop);
                     if (config == null || !config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
                         return null;
-                    if (isImage && !config.EnableAutoGuidance) return null;
+                    if (!config.EnableAutoGuidance) return null;
                     catalog = LoadCatalog(seller, shopKey);
                     orders = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12, shopKey)
                         .Where(x => x != null
