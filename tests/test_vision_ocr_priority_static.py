@@ -105,3 +105,10 @@ def test_server_ocr_result_is_visible_in_question_card_without_mutating_source_q
     assert "服务端OCR识别" in pipeline
     assert "control.SetQuestion(question + Environment.NewLine + label + \"：\" + recognizedText, detectedAt)" in pipeline
     assert "UI-only annotation" in pipeline
+
+
+
+def test_knowledge_source_label_identifies_server_ocr_not_local_ocr():
+    decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    assert '"服务端OCR+知识库V2"' in decision
+    assert '"本地OCR+知识库V2"' not in decision
