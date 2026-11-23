@@ -200,7 +200,7 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
 def test_vision_model_selection_uses_exact_shopkey_and_never_global_fallback():
     source = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     assert "ResolveShopVisionEndpoints(message, shopKey)" in source
-    assert "CanUseLocalOcrKnowledge(seller, shopKey)" in source
+    assert "CanUseServerOcr(seller, shopKey)" in source
     assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in source
     assert "using (ShopSettingsScope.Enter(shop))" in source
     assert "AiEndpointStore.GetVisionEnabledEndpoints" in source
