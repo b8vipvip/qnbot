@@ -266,3 +266,16 @@ def test_workflow_send_is_blocked_if_auto_guidance_is_disabled_after_generation(
 
     assert "requireEnabled && !config.EnableAutoGuidance" in guard
     assert "当前店铺已关闭自动接待流程，拒绝发送旧流程回复" in guard
+
+
+def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    current = runtime[
+        runtime.index("internal static bool IsDecisionCurrent"):
+        runtime.index("internal static void CompleteDecision")
+    ]
+
+    assert "KugouReceptionConfigService.GetConfig(shop)" in current
+    assert "!config.Enabled || !config.EnableAutoGuidance" in current
+    assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
+    assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
