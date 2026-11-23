@@ -468,8 +468,7 @@ def test_github_cli_mutations_put_endpoint_before_method_flags():
     reconcile = read(".github/workflows/gptauto-reconcile.yml")
     repair = read(".github/workflows/gptauto-repair.yml")
     for workflow in (executor, observer, reconcile, repair):
-        assert "gh api --method " not in workflow
-        assert "gh api --paginate " not in workflow
+        assert "gh api --" not in workflow
         assert "gh api --jq --arg " not in workflow
     assert 'github_api_write PATCH "repos/$REPOSITORY/issues/comments/$handoff_id"' in executor
     assert 'github_api_write POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments"' in reconcile
