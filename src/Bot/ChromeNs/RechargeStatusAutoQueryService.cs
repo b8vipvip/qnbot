@@ -171,12 +171,13 @@ namespace Bot.ChromeNs
 
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, question);
             if (string.IsNullOrWhiteSpace(messageKey)) return;
+            var scopedMessageKey = shop.ShopKey + "|" + messageKey;
             var entry = new GateEntry
             {
                 Until = DateTime.Now.AddMinutes(3),
                 Note = "充值进度问题已由兑换码状态查询服务接管，未调用普通AI。"
             };
-            if (!HandledMessages.TryAdd(messageKey, entry)) return;
+            if (!HandledMessages.TryAdd(scopedMessageKey, entry)) return;
 
             Log.Info("充值进度问题已接管: seller=" + seller
                 + ", buyer=" + from
@@ -192,11 +193,15 @@ namespace Bot.ChromeNs
         public static bool TryConsumeHandled(
             QNChatMessage message,
             string messageText,
-            out string note)
+            out string note,
+            string shopKey = null)
         {
             note = string.Empty;
             Cleanup();
-            var key = IncomingMessageSafety.BuildMessageKey(message, messageText);
+            var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return false;
+            var key = shopKey + "|" + messageKey;
             GateEntry entry;
             if (string.IsNullOrWhiteSpace(key) || !HandledMessages.TryGetValue(key, out entry) || entry == null)
             {
@@ -338,6 +343,7 @@ namespace Bot.ChromeNs
             if (notifyHuman)
             {
                 await NotifyHumanAsync(
+                    shopKey,
                     seller,
                     buyer,
                     question,
@@ -405,6 +411,7 @@ namespace Bot.ChromeNs
         }
 
         private static async Task NotifyHumanAsync(
+            string shopKey,
             string seller,
             string buyer,
             string question,
@@ -413,7 +420,8 @@ namespace Bot.ChromeNs
             string category,
             string failure)
         {
-            var dedupKey = Normalize(seller) + "#" + Normalize(buyer) + "#" + Hash(code) + "#" + Normalize(status + category);
+            var dedupKey = (shopKey ?? string.Empty).Trim() + "#" + Normalize(seller) + "#" + Normalize(buyer)
+                + "#" + Hash(code) + "#" + Normalize(status + category);
             DateTime until;
             if (HumanNotifyDedup.TryGetValue(dedupKey, out until) && until > DateTime.Now) return;
             HumanNotifyDedup[dedupKey] = DateTime.Now.AddMinutes(15);
