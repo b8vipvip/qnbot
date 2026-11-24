@@ -60,3 +60,12 @@ def test_existing_vision_flow_receives_image_text_and_timeline_together():
     assert "图片和这些文字属于同一轮，请合并理解后只回复一次" in vision
     assert "ConversationContextStore.BuildTimelineText" in vision
     assert "买家发送的图片可能是在回答最近一条客服问题" in vision
+
+
+def test_image_followup_preserves_shop_scope_and_recognizes_workflow_continuations():
+    pipeline = text("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
+    assert "Key(burst.ShopKey, burst.SellerNick, burst.BuyerNick)" in pipeline
+    assert "ShopKey = source.ShopKey" in pipeline
+    assert "IsSequentialWorkflowFollowUp(compact)" in pipeline
+    assert '"然后怎么弄"' in pipeline
+    assert '"接下来怎么办"' in pipeline
