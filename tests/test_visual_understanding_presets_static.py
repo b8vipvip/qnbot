@@ -34,7 +34,7 @@ def test_visual_understanding_requires_all_required_ocr_keywords_and_honors_excl
     )[0]
     assert "required.Any" in match
     assert "excluded.Any" in match
-    assert "rule.Enabled" in match
+    assert ".Where(x => x.Enabled)" in match
     assert "Extract(best.FieldPatterns, ocrText)" in match
 
 
@@ -48,7 +48,7 @@ def test_ocr_visual_preset_precedes_knowledge_v2_and_ai_receives_extracted_facts
     assert "BuildVisualFallback(visualMatch, ocr" in decision
     assert "KnowledgeV2ContextPromptAddon = visualMatch.ContextText" in decision
     assert "knowledgeV2ContextAddon" in vision
-    assert "result.LocalOcrText" in vision
+    assert "requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr)" in vision
 
 
 def test_kugou_account_preset_extracts_unmasked_id_nickname_and_vip_expiry():
