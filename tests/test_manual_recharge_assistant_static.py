@@ -166,3 +166,29 @@ def test_recharge_claim_and_human_notification_dedup_are_shop_scoped():
     assert "out rechargeQueryNote,\n                shopKey)" in incoming
     assert "var dedupKey = (shopKey ?? string.Empty).Trim() + \"#\" + Normalize(seller)" in service
 
+def test_manual_recharge_uses_exact_shop_scope_and_guards_sms_charge_and_reply_side_effects():
+    service = read(SERVICE)
+    start = service[
+        service.index("public static async Task<bool> TryHandleAsync"):
+        service.index("private static async Task SubmitFinalAsync")
+    ]
+    submit = service[
+        service.index("private static async Task SubmitFinalAsync"):
+        service.index("private static List<AccountCandidate> ParseAccounts")
+    ]
+    send = service[
+        service.index("private static async Task SendAsync"):
+        service.index("private static async Task StopAndHandoffAsync")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey)" in start
+    assert "sourceServer.IsAuthoritativeShopSession(shop.ShopKey, sourceClient.SessionId)" in start
+    assert "TryFindRecentRedeemCode(seller, buyer, shop.ShopKey, out orderId)" in start
+    assert "GetRecentTurns(seller, buyer, string.Empty, 24, shopKey)" in service
+    assert 'EnsureSendContextCurrent(qn, sendContext, cancellationToken, "发送验证码前")' in start
+    assert 'EnsureSendContextCurrent(qn, sendContext, cancellationToken, "最终充值提交前")' in submit
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in send
+    assert "out reason, false, context.ShopKey" in send
+    assert "target, answer, 1, cancellationToken, preSendGuard" in send
+    assert "answer,\n                sendContext == null ? string.Empty : sendContext.ShopKey" in send
+
