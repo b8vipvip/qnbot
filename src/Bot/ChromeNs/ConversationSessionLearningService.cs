@@ -1025,7 +1025,7 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
-                        if (KugouReceptionPolicy.Applies(session.Seller)
+                        if (ShopReceptionPolicy.Applies(session.Seller)
                             && RequiresWorkflowReview(suggestion))
                         {
                             // An AI-extracted device/eligibility/account/payment rule is only a
@@ -1514,7 +1514,7 @@ namespace Bot.ChromeNs
             if (ContainsHighRisk(candidate.Question + " " + candidate.Answer)
                 || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Question + " " + candidate.Answer))
                 return false;
-            if (KugouReceptionPolicy.Applies(seller) && RequiresWorkflowReview(candidate))
+            if (ShopReceptionPolicy.Applies(seller) && RequiresWorkflowReview(candidate))
                 return false;
             return true;
         }
