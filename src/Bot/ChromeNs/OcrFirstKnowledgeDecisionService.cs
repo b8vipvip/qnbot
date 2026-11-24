@@ -36,16 +36,10 @@ namespace Bot.ChromeNs
                 task.SellerNick, task.ShopKey, cancellationToken).ConfigureAwait(false);
             if (VisionOcrPriorityService.IsAiFirst(priority))
             {
-                var visionEndpoints = AiEndpointStore.GetVisionEnabledEndpoints();
-                if (visionEndpoints != null && visionEndpoints.Count > 0)
-                {
-                    Log.Info("视觉理解优先级=AI接口优先，跳过OCR+知识库提前直答: seller=" + task.SellerNick
-                        + ", buyer=" + task.BuyerNick
-                        + ", visionEndpoints=" + visionEndpoints.Count);
-                    return null;
-                }
-
-                Log.Info("视觉理解优先级=AI接口优先，但未配置可用视觉模型，允许OCR+知识库兜底: seller="
+                // The configured AI-first preference remains the fallback route, but it must
+                // not bypass an explicitly configured deterministic visual-understanding rule.
+                // OCR + preset matching runs first; only a preset miss proceeds to upstream AI.
+                Log.Info("视觉理解优先级=AI优先；先执行本店视觉理解预设，未命中再调用上游AI: seller="
                     + task.SellerNick + ", buyer=" + task.BuyerNick);
             }
 
@@ -118,9 +112,23 @@ namespace Bot.ChromeNs
 
             if (shop == null || knowledgeSeller.Length == 0)
             {
-                Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析Knowledge V2店铺，禁止跨店检索。", 20);
+                Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析视觉理解/Knowledge V2店铺，禁止跨店检索。", 20);
                 return null;
             }
+
+            VisualUnderstandingMatch visualMatch;
+            string visualMatchReason;
+            if (!VisualUnderstandingRuleService.TryMatch(
+                task.ShopKey, knowledgeSeller, ocr.Text, out visualMatch, out visualMatchReason))
+            {
+                Log.Info("图片未命中本店视觉理解预设，交给上游AI: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                    + ", reason=" + visualMatchReason);
+                return null;
+            }
+            var visualContext = visualMatch.BuildContextText();
+            Log.Info("图片已命中本店视觉理解预设，开始结合当前买家上下文检索知识: ruleId="
+                + visualMatch.RuleId + ", fields=" + (visualMatch.Fields == null ? 0 : visualMatch.Fields.Count));
 
             KnowledgeV2Decision decision;
             try
@@ -131,12 +139,12 @@ namespace Bot.ChromeNs
                 {
                     var timeline = ConversationContextStore.BuildTimelineText(
                         knowledgeSeller, task.BuyerNick, task.CombinedQuestion, 12);
-                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
+                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text, visualContext);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
-                        Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
+                        Log.Info("视觉理解预设已命中，但本店Knowledge V2未启用；将结构化字段交给上游AI: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
-                        return null;
+                        return BuildVisualFallback(task, ocr, visualMatch, visualContext, string.Empty);
                     }
 
                     if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
@@ -161,10 +169,10 @@ namespace Bot.ChromeNs
 
                     if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
                     {
-                        Log.Info("服务端OCR已完成，但Knowledge V2索引在等待窗口内仍未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
+                        Log.Info("视觉理解预设已命中，但Knowledge V2索引等待超时；保留结构化字段并交给上游AI: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
                             + ", buyer=" + task.BuyerNick);
-                        return null;
+                        return BuildVisualFallback(task, ocr, visualMatch, visualContext, string.Empty);
                     }
 
                     decision = KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question);
@@ -182,21 +190,11 @@ namespace Bot.ChromeNs
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextAddon = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
-                Log.Info("OCR-first知识库未达到安全直答条件，继续视觉模型链路: seller=" + task.SellerNick
+                Log.Info("视觉理解规则已命中，但Knowledge V2未达到安全直答条件，继续上游AI: seller=" + task.SellerNick
                     + ", buyer=" + task.BuyerNick
-                    + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
+                    + ", knowledgeContextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                if (string.IsNullOrWhiteSpace(contextAddon)) return null;
-                return new VisionRequestResult
-                {
-                    Success = false,
-                    KnowledgeV2ContextPromptAddon = contextAddon,
-                    LocalOcrText = ocr.Text,
-                    LocalOcrConfidence = ocr.Confidence,
-                    LocalOcrLatencyMs = ocr.ElapsedMs,
-                    LocalOcrCacheHit = ocr.CacheHit,
-                    LocalOcrEngine = ocr.Engine
-                };
+                return BuildVisualFallback(task, ocr, visualMatch, visualContext, contextAddon);
             }
 
             var answer = BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer);
@@ -224,15 +222,43 @@ namespace Bot.ChromeNs
                 VisionModel = "none",
                 LatencyMs = sw.ElapsedMilliseconds,
                 VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
-                VisualSummary = string.Empty,
-                VisualTags = "server-ocr,knowledge-v2",
-                MatchedVisualKnowledgeId = "ocr-direct-knowledge-v2",
+                VisualSummary = visualMatch.VisualSummary,
+                VisualTags = visualMatch.VisualTags,
+                MatchedVisualKnowledgeId = "visual-rule:" + visualMatch.RuleId,
                 VisualKnowledgeScore = decision.Matches == null || decision.Matches.Count < 1 ? 0d : decision.Matches.Max(x => x.Score),
                 LocalOcrText = ocr.Text,
                 LocalOcrConfidence = ocr.Confidence,
                 LocalOcrLatencyMs = ocr.ElapsedMs,
                 LocalOcrCacheHit = ocr.CacheHit,
                 LocalOcrEngine = ocr.Engine
+            };
+        }
+
+        private static VisionRequestResult BuildVisualFallback(
+            VisionReplyTask task,
+            LocalOcrResult ocr,
+            VisualUnderstandingMatch visualMatch,
+            string visualContext,
+            string knowledgeContext)
+        {
+            var addon = (visualContext ?? string.Empty).Trim();
+            knowledgeContext = (knowledgeContext ?? string.Empty).Trim();
+            if (knowledgeContext.Length > 0)
+                addon = addon + Environment.NewLine + Environment.NewLine + knowledgeContext;
+            return new VisionRequestResult
+            {
+                Success = false,
+                KnowledgeV2ContextPromptAddon = addon,
+                VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片]" : task.CombinedQuestion,
+                VisualSummary = visualMatch == null ? string.Empty : visualMatch.VisualSummary,
+                VisualTags = visualMatch == null ? string.Empty : visualMatch.VisualTags,
+                MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : "visual-rule:" + visualMatch.RuleId,
+                VisualKnowledgeScore = visualMatch == null ? 0d : visualMatch.Score,
+                LocalOcrText = ocr == null ? string.Empty : ocr.Text,
+                LocalOcrConfidence = ocr == null ? 0d : ocr.Confidence,
+                LocalOcrLatencyMs = ocr == null ? 0L : ocr.ElapsedMs,
+                LocalOcrCacheHit = ocr != null && ocr.CacheHit,
+                LocalOcrEngine = ocr == null ? string.Empty : ocr.Engine
             };
         }
 
@@ -245,7 +271,7 @@ namespace Bot.ChromeNs
             return semanticChars >= 2;
         }
 
-        private static string BuildKnowledgeQuestion(string combinedQuestion, string timeline, string ocrText)
+        private static string BuildKnowledgeQuestion(string combinedQuestion, string timeline, string ocrText, string visualContext)
         {
             var sb = new StringBuilder();
             var question = (combinedQuestion ?? string.Empty).Trim();
@@ -260,6 +286,12 @@ namespace Bot.ChromeNs
             {
                 sb.AppendLine("最近客服与买家对话（用于理解图片提交原因）：")
                     .AppendLine(timeline);
+            }
+
+            if (!string.IsNullOrWhiteSpace(visualContext))
+            {
+                sb.AppendLine("本店视觉理解预设提取的结构化结果（当前买家专属）：")
+                    .AppendLine(visualContext);
             }
 
             sb.AppendLine("图片OCR文字（仅为文字证据）：")
