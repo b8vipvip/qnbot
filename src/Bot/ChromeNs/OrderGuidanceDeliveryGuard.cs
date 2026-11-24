@@ -424,7 +424,7 @@ namespace Bot.ChromeNs
                 var since = plan.IsBuyerFollowUp
                     ? plan.TriggerTime.AddSeconds(-5)
                     : plan.EventTime.AddSeconds(-20);
-                if (FindEquivalentSellerReply(plan.Seller, plan.Buyer, answer, since, out matched))
+                if (FindEquivalentSellerReply(plan.ShopKey, plan.Seller, plan.Buyer, answer, since, out matched))
                 {
                     MarkDeliveredInternal(record, plan, "人工客服/已有卖家消息");
                     SaveInternal();
@@ -526,6 +526,7 @@ namespace Bot.ChromeNs
         }
 
         private static bool FindEquivalentSellerReply(
+            string shopKey,
             string seller,
             string buyer,
             string expected,
@@ -533,7 +534,7 @@ namespace Bot.ChromeNs
             out string matched)
         {
             matched = string.Empty;
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24);
             foreach (var turn in turns
                 .Where(x => x != null && x.Role == "assistant" && !x.Withdrawn)
                 .OrderByDescending(x => x.Timestamp))
