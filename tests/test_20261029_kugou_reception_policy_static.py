@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def src(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
-POLICY = "src/Bot/ChromeNs/KugouReceptionPolicy.cs"
+POLICY = "src/Bot/ChromeNs/ShopReceptionPolicy.cs"
 TEXT = "src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs"
 VISION = "src/Bot/ChromeNs/VisionRequestService.cs"
 SENDER = "src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs"
@@ -85,7 +85,7 @@ def test_decision_audit_is_bounded_and_anonymizes_buyer():
 
 def test_uncertain_or_negated_image_evidence_cannot_authorize_device():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "visual_evidence_uncertain" in policy
     assert "ASK_EVIDENCE" in policy
     assert "need_resource_confirmation" in policy
@@ -119,7 +119,7 @@ def test_reception_policy_cache_and_knowledge_detection_are_shopkey_scoped():
 
 def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
 
     assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in config
     assert policy.count("var shop = ResolveShopForSeller(seller);") >= 3
@@ -128,7 +128,7 @@ def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
 
 
 def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     policy = src(POLICY)
     assert 'qnbot.shop.reception-rules.v3' in config
     assert '["enabled"] = false' in config
@@ -143,7 +143,7 @@ def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default(
 
 
 def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     migration = config[
         config.index("private static JObject MigrateLegacyV1"):
         config.index("private static bool IsHttpsUrl")
@@ -158,7 +158,7 @@ def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review()
 
 def test_store_visual_facts_and_reply_templates_are_data_driven_not_public_constants():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "ShopVisualRule" in config
     assert "all_cue_groups" in config
     assert "positive_cue_groups" in config
@@ -184,7 +184,7 @@ def test_high_risk_learning_review_is_global_and_not_disabled_by_optional_shop_p
 
 def test_private_config_regex_patterns_have_a_runtime_timeout_and_fail_closed():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "SafeIsMatch" in policy
     assert "return true;" in policy[policy.index("private static bool SafeIsMatch"):policy.index("private static bool MatchesVisualRule")]
     assert "TimeSpan.FromMilliseconds(100)" in policy
@@ -208,7 +208,7 @@ def test_private_profile_schema_documentation_covers_fail_closed_enablement_and_
 def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers_or_urls():
     paths = [
         POLICY,
-        "src/Bot/ChromeNs/KugouReceptionConfigService.cs",
+        "src/Bot/ChromeNs/ShopReceptionConfigService.cs",
         "docs/SHOPKEY_RECEPTION_PROFILE_V2.md",
         "tests/test_20261029_kugou_reception_learning_static.py",
     ]
@@ -232,7 +232,7 @@ def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
     assert "catch { entries = new List<ReceptionAuditEntry>(); }" not in audit
 
 def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriting_current_config():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     restore = config[
         config.index("public static string RestoreLatestBackup"):
         config.index("\n    }\n}")
@@ -245,7 +245,7 @@ def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriti
     assert "Guid.NewGuid().ToString(\"N\")" in restore
 
 def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     save = config[
         config.index("public static string SaveJson"):
         config.index("public static string RestoreLatestBackup")
@@ -258,7 +258,7 @@ def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
 
 
 def test_private_profile_string_fields_and_visual_rule_ids_are_strictly_bounded():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "private static string ReadStringField(JObject obj, string name, int maxLength, bool required)" in config
     assert 'ReadStringField(obj, "policy_prompt", 12000, true)' in config
     assert 'ReadStringField(obj, "visual_uncertain_reply", 2000, true)' in config
@@ -306,7 +306,7 @@ def test_expired_shop_detection_cache_entries_are_pruned_without_racing_refreshe
 
 def test_cross_process_shop_profile_changes_invalidate_cached_detection_immediately():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     applies = policy[
         policy.index("public static bool Applies"):
         policy.index("internal static bool RequiresManualKnowledgeReview")
