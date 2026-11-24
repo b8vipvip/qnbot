@@ -59,7 +59,7 @@ namespace Bot.ChromeNs
                 // records the concrete endpoint/auth failure in the server task ledger and local log.
                 var shopScopeUsable = HasAuthoritativeShopScope(shopKey);
                 var localUsable = CanUseServerOcr(shopKey);
-                var selectedEndpoints = ResolveShopVisionEndpoints(shopKey);
+                var selectedEndpoints = (ResolveShopVisionEndpoints(shopKey) ?? new AiEndpointConfig[0]).ToList();
                 var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
                     e => e != null
                         && e.Enabled
@@ -71,13 +71,12 @@ namespace Bot.ChromeNs
                     + MyWebSocketServer.DiagnosticRef("shop", shopKey)
                     + ", shopScope=" + shopScopeUsable
                     + ", serverOcrConfigured=" + localUsable
-                    + ", visionEndpoints=" + (selectedEndpoints == null ? 0 : selectedEndpoints.Count())
+                    + ", visionEndpoints=" + selectedEndpoints.Count
                     + ", policy=attempt_and_record");
 
-                // BuyerMessageBurstCoordinator runs DeterministicAutoReplyService before merge.
-                // Images are intentionally marked replyable here only when a first greeting was
-                // reserved, so that sender can deliver the greeting first; VisionDecisionKind stays
-                // Vision and the same image is analysed immediately afterwards.
+                // BuyerMessageBurstCoordinator runs deterministic pre-merge rules before merge.
+                // A valid ShopKey keeps this image replyable even if preflight cannot read the OCR
+                // token; the actual OCR/vision request records the failure instead of dropping it.
                 if (!shopScopeUsable)
                 {
                     if (firstPrepared)
