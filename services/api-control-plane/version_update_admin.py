@@ -128,12 +128,29 @@ def _fetch_server_github(force: bool = False) -> Dict[str, Any]:
 
 def _agent_status() -> Dict[str, Any]:
     item = _read_json(SERVER_UPDATE_AGENT)
+    exists = SERVER_UPDATE_AGENT.is_file()
     try:
         age = max(0.0, time.time() - SERVER_UPDATE_AGENT.stat().st_mtime)
     except Exception:
         age = 999999.0
-    item["online"] = bool(item and age <= SERVER_UPDATE_AGENT_STALE_SECONDS)
+    online = bool(exists and item and age <= SERVER_UPDATE_AGENT_STALE_SECONDS)
+    if online:
+        reason = "online"
+        message = "主机更新代理心跳正常。"
+    elif not exists:
+        reason = "missing"
+        message = "未收到主机更新代理心跳文件；代理可能尚未安装，或主机与容器的数据目录挂载不一致。"
+    elif not item:
+        reason = "invalid"
+        message = "主机更新代理心跳文件存在但无法解析；请检查代理服务日志。"
+    else:
+        reason = "stale"
+        message = f"主机更新代理心跳已过期（{int(age)} 秒）；服务可能已停止，或代理正在写入其他数据目录。"
+    item["online"] = online
+    item["status_reason"] = reason
+    item["status_message"] = message
     item["age_seconds"] = int(age) if age < 999999 else None
+    item["heartbeat_path"] = "/data/server-update/agent.json"
     item.setdefault("git_transport", "ssh-443")
     return item
 
@@ -163,8 +180,10 @@ def _server_update_status() -> Dict[str, Any]:
     silent = status["log_age_seconds"]
     status["build_suspected_stalled"] = bool(building and silent is not None and silent >= 300)
     status["build_phase_not_percentage"] = building
-    if state in {"queued", "running"} and not status["agent"].get("online"):
-        status["diagnostic"] = "更新代理离线，请检查 systemd 服务；不可据此推断旧服务已经停止。"
+    if not status["agent"].get("online"):
+        status["diagnostic"] = str(status["agent"].get("status_message") or "未收到主机更新代理心跳。")
+        if state in {"queued", "running"}:
+            status["diagnostic"] += " 当前更新请求不会被主机代理执行；不要据此推断旧服务已经停止。"
     elif status["build_suspected_stalled"]:
         status["diagnostic"] = "构建日志已超过 5 分钟无输出，检查网络/磁盘/BuildKit 或构建超时；旧服务在构建阶段继续运行。"
     elif building:
@@ -283,7 +302,9 @@ def version_update_sync(request: Request, _: str = Depends(_admin)) -> JSONRespo
 def version_update_server_start(request: Request, _: str = Depends(_admin)) -> JSONResponse:
     agent = _agent_status()
     if not agent.get("online"):
-        raise HTTPException(status_code=409, detail="主机更新代理未运行。首次启用请在服务器执行 scripts/install-api-control-plane-update-agent.sh")
+        detail = str(agent.get("status_message") or "未收到主机更新代理心跳。")
+        detail += " 若代理尚未安装，请执行 sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh；若已安装，请检查 sudo systemctl status qianniu-api-update-agent.service 和 sudo journalctl -u qianniu-api-update-agent.service -n 80。"
+        raise HTTPException(status_code=409, detail=detail)
     current_status = _server_update_status()
     if str(current_status.get("state") or "") in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="服务端更新任务正在执行")

@@ -59,3 +59,15 @@ def test_runtime_image_contains_version_update_modules():
     assert "version_update_admin.py" in dockerfile
     assert "bot_update_progress.install()" in bootstrap
     assert "version_update_admin.install(control_plane)" in bootstrap
+
+
+
+def test_offline_host_update_agent_reports_actionable_diagnostics():
+    api = read(SERVICE / "version_update_admin.py")
+    js = read(SERVICE / "static" / "version-update.js")
+
+    assert '"status_reason"' in api
+    assert '"status_message"' in api
+    assert "未收到主机更新代理心跳" in api
+    assert "agent.status_message" in js
+    assert "首次启用服务端网页更新" not in js

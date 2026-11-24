@@ -114,7 +114,7 @@ function renderVersionUpdate(data){
     (runtimeUnverified?badge("运行镜像版本未验证","warn"):
      (!server.current_commit?badge("等待识别当前版本","gray"):
       (server.update_available?badge("发现新版本","warn"):badge("已是最新","good"))));
-  const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
+  const agentHint=agent.online?"":`<p class="hint">${esc(agent.status_message||"未收到主机更新代理心跳；代理可能未安装、已停止或数据目录不一致。")}</p><p class="hint">如果代理尚未安装，请执行：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code>。如果以前安装过，请检查：<code>sudo systemctl status qianniu-api-update-agent.service</code>；查看日志：<code>sudo journalctl -u qianniu-api-update-agent.service -n 80 --no-pager</code>。</p>`;
   const gitTransport=(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
   $("serverVersionCard").innerHTML=`
     <div class="provider-card">

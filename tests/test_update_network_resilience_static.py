@@ -78,3 +78,17 @@ def test_host_agent_reports_git_network_transport():
     assert "Environment=GITHUB_SSH_PORT=" in installer
     assert "Environment=GIT_FETCH_RETRIES=" in installer
     assert "flock timeout" in installer
+
+
+
+def test_server_updater_bootstraps_host_agent_after_successful_deploy():
+    script = read(ROOT / "scripts" / "update-api-control-plane.sh")
+    installer = read(ROOT / "scripts" / "install-api-control-plane-update-agent.sh")
+
+    assert "ensure_host_update_agent()" in script
+    assert "install-api-control-plane-update-agent.sh" in script
+    assert 'ensure_host_update_agent\n\nif [[ -z "$VERIFY_URL" ]]' in script
+    assert 'if [[ "$OLD_DEPLOY_KIND" == "repo" ]]; then ensure_host_update_agent; fi' in script
+    assert "HEARTBEAT_FILE" in installer
+    assert "systemctl is-active --quiet" in installer
+    assert "journalctl -u" in installer
