@@ -405,7 +405,7 @@ def test_final_guard_is_carried_to_the_last_moment_of_each_qianniu_physical_send
 def test_premerge_fixed_replies_recheck_manual_takeover_and_turn_relevance_on_every_send_attempt():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     method = source[
-        source.index("private static async Task<bool> SendFixedAsync"):
+        source.index("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync"):
         source.index("private static bool TryResolveOffHours")
     ]
 
@@ -440,8 +440,10 @@ def test_fixed_reply_guard_cancellation_is_not_reported_as_transport_failure():
         coordinator.index("private static async Task<bool> SendFixedAsync"):
         coordinator.index("private static bool TryResolveOffHours")
     ]
-    assert "var sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;" in method
+    assert "sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;" in method
     assert "item.SellerNick, item.BuyerNick, answer, item.ShopKey" in method
     assert "固定回复发送前会话门禁取消" in method
     assert "CanonicalPreMergeOutcome.Cancelled" in coordinator
+    assert "return ok" not in method
+    assert "return ok\n                    ? CanonicalPreMergeOutcome.Consumed" in method
 
