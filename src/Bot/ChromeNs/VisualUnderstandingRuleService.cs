@@ -71,6 +71,8 @@ namespace Bot.ChromeNs
             rule.Description = Clean(rule.Description, 1200);
             if (rule.Name.Length == 0 || rule.RequiredKeywords.Length == 0)
                 throw new InvalidOperationException("规则名称和必需 OCR 关键词不能为空。");
+            if (rule.Enabled && IsApplicationNamePlaceholder(rule.AppName))
+                throw new InvalidOperationException("启用视觉理解规则前必须填写真实应用名称，不能使用占位符。");
             ValidatePatterns(rule.FieldPatterns);
             EnsureSchema();
             lock (Sync)
@@ -114,10 +116,17 @@ namespace Bot.ChromeNs
             ocrText = (ocrText ?? string.Empty).Trim();
             if (ocrText.Length < 4) return false;
             var rules = Load(shopKey, seller).Where(x => x.Enabled).ToList();
+            var normalizedOcrText = NormalizeApplicationText(ocrText);
             VisualUnderstandingRuleEntity best = null;
             double bestScore = 0;
             foreach (var rule in rules)
             {
+                if (IsApplicationNamePlaceholder(rule.AppName)) continue;
+                var configuredNames = SplitApplicationNames(rule.AppName).ToList();
+                if (configuredNames.Count > 0 && !configuredNames.Any(name =>
+                    normalizedOcrText.IndexOf(NormalizeApplicationText(name), StringComparison.OrdinalIgnoreCase) >= 0))
+                    continue;
+
                 var required = Split(rule.RequiredKeywords);
                 if (required.Count == 0 || required.Any(x => ocrText.IndexOf(x, StringComparison.OrdinalIgnoreCase) < 0))
                     continue;
@@ -163,17 +172,8 @@ namespace Bot.ChromeNs
 
             foreach (var rule in Load(shopKey, seller).Where(x => x != null && x.Enabled))
             {
-                foreach (var candidate in (rule.AppName ?? string.Empty)
-                    .Split(new[] { '\r', '\n', ',', '，', ';', '；', '|' },
-                        StringSplitOptions.RemoveEmptyEntries))
+                foreach (var name in SplitApplicationNames(rule.AppName))
                 {
-                    var name = (candidate ?? string.Empty).Trim();
-                    if (name.Length < 2
-                        || string.Equals(name, "{应用名称}", StringComparison.Ordinal)
-                        || string.Equals(name, "{品牌名称}", StringComparison.Ordinal)
-                        || name.Contains("{") || name.Contains("}"))
-                        continue;
-
                     var normalizedName = NormalizeApplicationText(name);
                     if (normalizedName.Length < 2
                         || normalizedText.IndexOf(normalizedName, StringComparison.OrdinalIgnoreCase) < 0)
@@ -185,6 +185,22 @@ namespace Bot.ChromeNs
                 }
             }
             return false;
+        }
+
+        private static IEnumerable<string> SplitApplicationNames(string value)
+        {
+            return (value ?? string.Empty)
+                .Split(new[] { '\r', '\n', ',', '，', ';', '；', '|' },
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length >= 2 && !IsApplicationNamePlaceholder(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static bool IsApplicationNamePlaceholder(string value)
+        {
+            var name = (value ?? string.Empty).Trim();
+            return name.Contains("{") || name.Contains("}");
         }
 
         private static string NormalizeApplicationText(string value)
@@ -274,9 +290,8 @@ namespace Bot.ChromeNs
                     && string.Equals(x.AppName, "酷狗音乐", StringComparison.Ordinal));
                 if (legacy != null)
                 {
-                    var wasEnabled = legacy.Enabled;
                     ApplyGenericAccountTemplate(legacy);
-                    legacy.Enabled = wasEnabled;
+                    legacy.Enabled = false;
                     legacy.UpdatedAtTicks = DateTime.Now.Ticks;
                     DbHelper.Db.SaveRecordsInTransaction(new List<object> { legacy });
                     rules = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
@@ -317,8 +332,8 @@ namespace Bot.ChromeNs
                 + @"昵称|(?:账号|帐号)中心\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
                 + @"会员状态|我的会员\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
                 + @"会员到期|(?:VIP|会员)[^\r\n]*?(\d{4}-\d{2}-\d{2}到期)";
-            rule.Description = "识别移动端账号中心页面；提取账号ID、昵称、会员等级和到期日期。应用名称由当前店铺规则配置，不绑定固定品牌。";
-            rule.Enabled = true;
+            rule.Description = "识别移动端账号中心页面；提取账号ID、昵称、会员等级和到期日期。请填写当前店铺的真实应用名称并核对关键词后再启用。";
+            rule.Enabled = false;
         }
 
         private static void EnsureSchema()
