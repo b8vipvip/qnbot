@@ -274,7 +274,8 @@ namespace Bot.ChromeNs
             if (RechargeStatusAutoQueryService.TryConsumeHandled(
                 message,
                 messageText,
-                out rechargeQueryNote))
+                out rechargeQueryNote,
+                shopKey))
             {
                 return Skip("[充值进度查询]", rechargeQueryNote);
             }
