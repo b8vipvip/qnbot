@@ -457,3 +457,24 @@ def test_canonical_premerge_cancelled_outcome_terminates_the_current_buyer_gener
     assert "BuyerSessionAgentState.Cancelled" in process
     assert '"canonical_pre_merge_cancelled"' in process
 
+def test_legacy_qn_text_and_vision_fallback_paths_keep_last_mile_shop_scoped_guards():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    text_path = qn[
+        qn.index("private async Task ProcessTextBurstAsync"):
+        qn.index("private async Task ProcessVisionBurstAsync")
+    ]
+    vision_path = qn[
+        qn.index("private async Task ProcessVisionBurstAsync"):
+        qn.index("private void AddSkippedConversation")
+    ]
+
+    for region in (text_path, vision_path):
+        assert "Func<bool>" in region
+        assert "ParallelReplyRelevanceGate.ShouldSend(" in region
+        assert "out latestReason, false, burst.ShopKey" in region
+        assert "lease.CancellationToken, " in region
+        assert "rpa.LastSendWasCancelled" in region
+        assert "ResponseProgressTracker.Cancel(" in region
+    assert "lease.MarkSending(\"legacy_text_send_started\")" in text_path
+    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in qn
+
