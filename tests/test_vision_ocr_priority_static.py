@@ -86,8 +86,13 @@ def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
     assert "task.ShopKey," in decision
     assert "task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient" in decision
     assert "ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey)" in decision
-    assert "LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)" in vision_gate
-    assert "CanUseServerOcr" in vision_gate
+    assert "LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey)" in vision_gate
+    assert "CanUseServerOcr(shopKey)" in vision_gate
+    assert "HasAuthoritativeShopScope(shopKey)" in vision_gate
+    assert "if (!shopScopeUsable)" in vision_gate
+    assert "policy=attempt_and_record" in vision_gate
+    assert "if (!usable)" not in vision_gate
+    assert "ResolveShopVisionEndpoints(shopKey)" in vision_gate
 
 
 def test_ai_first_multimodal_path_still_attaches_shop_scoped_server_ocr():
@@ -112,3 +117,25 @@ def test_knowledge_source_label_identifies_server_ocr_not_local_ocr():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     assert '"服务端OCR+知识库V2"' in decision
     assert '"本地OCR+知识库V2"' not in decision
+
+
+
+def test_image_messages_are_not_silently_skipped_by_ocr_preflight():
+    decision = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    assert "var shopScopeUsable = HasAuthoritativeShopScope(shopKey)" in decision
+    assert "if (!localUsable && !externalUsable)" in decision
+    assert "仍进入视觉处理链路" in decision
+    assert "由实际OCR请求记录连接失败" in decision
+    assert "message.toid.nick" not in decision.split("private static bool CanUseServerOcr", 1)[1].split(
+        "private static VisionMessageDecision Skip", 1
+    )[0]
+
+
+def test_ocr_route_decision_is_logged_with_shop_scoped_capability_state():
+    decision = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    assert "图片消息路由探测" in decision
+    assert "serverOcrConfigured=" in decision
+    assert "visionEndpoints=" in decision
+    assert "买家消息路由决策" in qn
+    assert "visionDecision.Kind" in qn
