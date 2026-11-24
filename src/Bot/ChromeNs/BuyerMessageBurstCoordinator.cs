@@ -459,51 +459,63 @@ namespace Bot.ChromeNs
             var cutoff = dispatchedAt.AddMilliseconds(120);
             try
             {
-                var turns = ConversationContextStore.GetRecentTurns(
-                    item.SellerNick, item.BuyerNick, question, 24);
-                var newerBuyer = turns.Any(x => x != null
-                    && x.Role == "user"
-                    && !x.Withdrawn
-                    && x.Timestamp != DateTime.MinValue
-                    && x.Timestamp > cutoff
-                    && !string.IsNullOrWhiteSpace(x.Text));
-                if (newerBuyer)
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey);
+                if (shop == null
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                        (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
                 {
-                    reason = "买家已发送更新消息";
+                    reason = "无法通过权威ShopKey确认商品话术所属店铺";
                     return true;
                 }
 
-                var newerSeller = turns.Any(x => x != null
-                    && x.Role == "assistant"
-                    && !x.Withdrawn
-                    && x.Timestamp != DateTime.MinValue
-                    && x.Timestamp > cutoff
-                    && !string.IsNullOrWhiteSpace(x.Text)
-                    && !x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
-                    && !IsNonSubstantiveSellerGreeting(x.Text));
-                if (newerSeller)
+                using (ShopSettingsScope.Enter(shop, false))
                 {
-                    reason = "客服已发送后续实质指令或回复";
-                    return true;
-                }
+                    var turns = ConversationContextStore.GetRecentTurns(
+                        item.SellerNick, item.BuyerNick, question, 24);
+                    var newerBuyer = turns.Any(x => x != null
+                        && x.Role == "user"
+                        && !x.Withdrawn
+                        && x.Timestamp != DateTime.MinValue
+                        && x.Timestamp > cutoff
+                        && !string.IsNullOrWhiteSpace(x.Text));
+                    if (newerBuyer)
+                    {
+                        reason = "买家已发送更新消息";
+                        return true;
+                    }
 
-                // The event ledger can observe a real human reply before the mirrored
-                // conversation timeline has caught up. Do not ignore it merely because
-                // it was marked stale against a newer buyer generation.
-                var snapshot = new BuyerSessionAgent().GetSnapshot(
-                    item.SellerNick, item.BuyerNick, item.ShopKey);
-                var newerHuman = snapshot != null
-                    && snapshot.RecentEvents != null
-                    && snapshot.RecentEvents.Any(x => x != null
-                        && x.Kind == BuyerSessionEventKind.SellerHumanReply
-                        && x.SourceTimestamp != DateTime.MinValue
-                        && x.SourceTimestamp > cutoff);
-                if (newerHuman)
-                {
-                    reason = "事件账本检测到更新的人工客服回复";
-                    return true;
+                    var newerSeller = turns.Any(x => x != null
+                        && x.Role == "assistant"
+                        && !x.Withdrawn
+                        && x.Timestamp != DateTime.MinValue
+                        && x.Timestamp > cutoff
+                        && !string.IsNullOrWhiteSpace(x.Text)
+                        && !x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                        && !IsNonSubstantiveSellerGreeting(x.Text));
+                    if (newerSeller)
+                    {
+                        reason = "客服已发送后续实质指令或回复";
+                        return true;
+                    }
+
+                    // The event ledger can observe a real human reply before the mirrored
+                    // conversation timeline has caught up. Do not ignore it merely because
+                    // it was marked stale against a newer buyer generation.
+                    var snapshot = new BuyerSessionAgent().GetSnapshot(
+                        item.SellerNick, item.BuyerNick, item.ShopKey);
+                    var newerHuman = snapshot != null
+                        && snapshot.RecentEvents != null
+                        && snapshot.RecentEvents.Any(x => x != null
+                            && x.Kind == BuyerSessionEventKind.SellerHumanReply
+                            && x.SourceTimestamp != DateTime.MinValue
+                            && x.SourceTimestamp > cutoff);
+                    if (newerHuman)
+                    {
+                        reason = "事件账本检测到更新的人工客服回复";
+                        return true;
+                    }
+                    return false;
                 }
-                return false;
             }
             catch (Exception ex)
             {
