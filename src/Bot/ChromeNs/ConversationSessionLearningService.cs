@@ -3007,16 +3007,27 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var botReplyTurns = replyWindow
-                .Where(x => x.Role == "assistant" && !x.Withdrawn && IsBotTurn(x, cards))
+            Func<ConversationContextTurn, bool> isHumanReply = x =>
+                x != null && x.Role == "assistant" && !x.Withdrawn
+                && !IsBotTurn(x, cards) && !string.IsNullOrWhiteSpace(x.Text);
+            var answerIndexInReplyWindow = replyWindow.FindIndex(x => ReferenceEquals(x, answerTurn));
+            if (answerIndexInReplyWindow < 0 || !isHumanReply(answerTurn))
+            {
+                rejection = "human_reply_bundle_is_not_a_contiguous_verified_seller_sequence";
+                return false;
+            }
+
+            // Expand only through adjacent human seller turns around the model-selected
+            // human answer. A preceding bot reply does not contaminate the human evidence,
+            // and a bot turn between seller messages breaks the bundle.
+            var bundleStart = answerIndexInReplyWindow;
+            while (bundleStart > 0 && isHumanReply(replyWindow[bundleStart - 1])) bundleStart--;
+            var bundleEnd = answerIndexInReplyWindow;
+            while (bundleEnd + 1 < replyWindow.Count && isHumanReply(replyWindow[bundleEnd + 1])) bundleEnd++;
+            var humanReplyTurns = replyWindow.Skip(bundleStart)
+                .Take(bundleEnd - bundleStart + 1)
                 .ToList();
-            var humanReplyTurns = replyWindow
-                .Where(x => x.Role == "assistant" && !x.Withdrawn && !IsBotTurn(x, cards)
-                    && !string.IsNullOrWhiteSpace(x.Text))
-                .ToList();
-            if (humanReplyTurns.Count == 0 || humanReplyTurns.Count > 4
-                || botReplyTurns.Count > 0
-                || !humanReplyTurns.Any(x => ReferenceEquals(x, answerTurn)))
+            if (humanReplyTurns.Count == 0 || humanReplyTurns.Count > 4)
             {
                 rejection = "human_reply_bundle_is_not_a_contiguous_verified_seller_sequence";
                 return false;

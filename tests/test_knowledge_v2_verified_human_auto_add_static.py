@@ -52,7 +52,9 @@ def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message
     assert "another_buyer_message_interrupted_the_evidence_pair" in evidence
     assert "humanReplyTurns.Count == 0 || humanReplyTurns.Count > 4" in evidence
     assert "ReferenceEquals(x, answerTurn)" in evidence
-    assert "botReplyTurns.Count > 0" in evidence
+    assert "Func<ConversationContextTurn, bool> isHumanReply" in evidence
+    assert "bundleStart" in evidence
+    assert "bundleEnd" in evidence
     assert "nativeHumanReplyIds" in evidence
     assert "human_reply_bundle_is_not_a_contiguous_verified_seller_sequence" in evidence
     assert "EvidenceMessageIds = new List<string> { questionMessageId }.Concat(nativeHumanReplyIds).ToList()" in evidence
@@ -532,3 +534,15 @@ def test_reply_bundle_persists_every_native_alias_id_with_a_bounded_limit():
     assert ".Where(x => !string.IsNullOrWhiteSpace(x) && humanMessageIds.Contains(x))" in candidate
     assert "nativeHumanReplyIds.AddRange(nativeIds);" in candidate
     assert "nativeHumanReplyIds.Count > 4" in candidate
+
+
+
+def test_bot_turns_are_not_merged_into_human_reply_bundle():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    candidate = service[
+        service.index("private static bool TryCreateVerifiedNewKnowledgeCandidate"):
+        service.index("private static ConversationContextTurn FindUniqueTurnByMessageId")
+    ]
+    assert "&& !IsBotTurn(x, cards)" in candidate
+    assert "while (bundleStart > 0 && isHumanReply(replyWindow[bundleStart - 1]))" in candidate
+    assert "while (bundleEnd + 1 < replyWindow.Count && isHumanReply(replyWindow[bundleEnd + 1]))" in candidate
