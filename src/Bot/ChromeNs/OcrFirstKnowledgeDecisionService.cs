@@ -116,6 +116,22 @@ namespace Bot.ChromeNs
                 return null;
             }
 
+            VisualUnderstandingMatch visualMatch;
+            try
+            {
+                if (!VisualUnderstandingRuleService.TryMatch(task.ShopKey, knowledgeSeller, ocr.Text, out visualMatch))
+                {
+                    Log.Info("OCR 未命中本店视觉理解预设，转交上游视觉 AI: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("视觉理解规则匹配失败，转交上游视觉 AI: " + ex.Message, 10);
+                return null;
+            }
+
             if (shop == null || knowledgeSeller.Length == 0)
             {
                 Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析Knowledge V2店铺，禁止跨店检索。", 20);
@@ -131,7 +147,7 @@ namespace Bot.ChromeNs
                 {
                     var timeline = ConversationContextStore.BuildTimelineText(
                         knowledgeSeller, task.BuyerNick, task.CombinedQuestion, 12);
-                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
+                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text + Environment.NewLine + visualMatch.ContextText);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
@@ -186,11 +202,12 @@ namespace Bot.ChromeNs
                     + ", buyer=" + task.BuyerNick
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                if (string.IsNullOrWhiteSpace(contextAddon)) return null;
+                if (string.IsNullOrWhiteSpace(contextAddon)) contextAddon = string.Empty;
                 return new VisionRequestResult
                 {
                     Success = false,
-                    KnowledgeV2ContextPromptAddon = contextAddon,
+                    KnowledgeV2ContextPromptAddon = visualMatch.ContextText
+                        + (string.IsNullOrWhiteSpace(contextAddon) ? string.Empty : Environment.NewLine + contextAddon),
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrLatencyMs = ocr.ElapsedMs,
@@ -224,9 +241,9 @@ namespace Bot.ChromeNs
                 VisionModel = "none",
                 LatencyMs = sw.ElapsedMilliseconds,
                 VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
-                VisualSummary = string.Empty,
-                VisualTags = "server-ocr,knowledge-v2",
-                MatchedVisualKnowledgeId = "ocr-direct-knowledge-v2",
+                VisualSummary = visualMatch.AppName + "/" + visualMatch.ScreenName,
+                VisualTags = "server-ocr,visual-understanding,knowledge-v2",
+                MatchedVisualKnowledgeId = "ocr-direct-knowledge-v2:" + visualMatch.RuleId,
                 VisualKnowledgeScore = decision.Matches == null || decision.Matches.Count < 1 ? 0d : decision.Matches.Max(x => x.Score),
                 LocalOcrText = ocr.Text,
                 LocalOcrConfidence = ocr.Confidence,
