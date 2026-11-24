@@ -54,7 +54,8 @@ def test_product_link_preset_is_suppressed_after_newer_buyer_or_human_turn():
     canonical = source[source.index("internal static class CanonicalPreMergeDecisionService"):source.index("internal sealed class BuyerMessageBurstCoordinator")]
     assert "HasNewerSubstantiveConversationTurn(item, question, out supersededReason)" in canonical
     assert "商品链接预设已被后续买家消息或人工客服指令取代" in canonical
-    assert "BuyerSessionEventKind.SellerHumanReply" in canonical
+    assert "ConversationContextStore.GetRecentTurns" in canonical
+    assert 'x.Role == "assistant"' in canonical
     assert "买家已发送更新消息" in canonical
 
 
