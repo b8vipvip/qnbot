@@ -252,7 +252,7 @@ def test_task_detail_redacts_phone_email_and_long_numeric_ids(control_plane):
         cp, task_id, "success", "returned",
         http_status=200, text_chars=100, confidence=0.96,
         engine="RapidOCR/ONNXRuntime",
-        result_text="账号 Non-Directional 手机号 13800138000 邮箱 test@example.com ID 123456789012",
+        result_text="账号 Non-Directional 手机号 13800138000 邮箱 test@example.com ID 123456789012 密码:secret123",
         event_message="OCR 推理完成并返回",
         terminal=True,
     )
@@ -265,5 +265,7 @@ def test_task_detail_redacts_phone_email_and_long_numeric_ids(control_plane):
     assert "[手机号已脱敏]" in text
     assert "[邮箱已脱敏]" in text
     assert "[长数字ID已脱敏]" in text
+    assert "secret123" not in text
+    assert "[已脱敏]" in text
     assert detail["task"]["result_text_redacted"] is True
     assert "buyer" not in detail["task"]
