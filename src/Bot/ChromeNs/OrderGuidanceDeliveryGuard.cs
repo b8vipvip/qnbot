@@ -395,12 +395,13 @@ namespace Bot.ChromeNs
                     return true;
                 }
 
-                // The configured initial order preset often asks the buyer to photograph the
-                // KuGou account/application screen. If a recent pre-order image has already been
-                // analyzed as the official KuGou TV application, that requirement is satisfied.
-                // Login state is intentionally irrelevant for identifying the official app UI.
+                // The configured initial order preset may request a configured application's
+                // account screen. A recent pre-order image can satisfy that request only when
+                // the current shop's Visual Understanding rules identify the configured app.
+                // Login state is intentionally irrelevant for identifying the app UI.
                 if (!plan.IsBuyerFollowUp)
                 {
+                    string applicationName;
                     string visualEvidence;
                     if (RecentVisualContextService.TrySatisfyOrderPhotoRequirement(
                         plan.ShopKey,
@@ -408,13 +409,15 @@ namespace Bot.ChromeNs
                         plan.Buyer,
                         answer,
                         plan.EventTime,
+                        out applicationName,
                         out visualEvidence))
                     {
                         MarkDeliveredInternal(record, plan, "下单前图片已满足确认要求");
                         SaveInternal();
-                        reason = "买家下单前已发送可确认的酷狗官方APP界面图片，Bot不再重复索要照片";
-                        Log.Info("下单充值流程发送已取消：近期图片已经满足酷狗官方APP界面确认要求。seller="
-                            + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        var appLabel = string.IsNullOrWhiteSpace(applicationName) ? "目标应用" : applicationName;
+                        reason = "买家下单前已发送可确认的" + appLabel + "界面图片，Bot不再重复索要照片";
+                        Log.Info("下单充值流程发送已取消：近期图片已经满足已配置应用的界面确认要求。application="
+                            + appLabel + ", seller=" + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                             + ", evidence=" + Short(visualEvidence, 160));
                         return true;
                     }
@@ -561,7 +564,7 @@ namespace Bot.ChromeNs
 
         private static bool HasGuidanceSignature(string value)
         {
-            return value.Contains("酷狗账号")
+            return (value.Contains("账号") || value.Contains("应用") || value.Contains("软件"))
                 && (value.Contains("拍照") || value.Contains("截图") || value.Contains("发图"))
                 && (value.Contains("确认") || value.Contains("支持") || value.Contains("使用"));
         }
