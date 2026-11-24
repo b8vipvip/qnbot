@@ -486,7 +486,8 @@ namespace Bot.ChromeNs
                     ReplyDeduplicationService.RememberDelivered(
                         burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 else
-                    ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 if (workflowDecision == null && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                 {
                     KnowledgeLearningService.QueueLearn(
