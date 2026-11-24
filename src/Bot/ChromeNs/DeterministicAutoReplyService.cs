@@ -617,7 +617,8 @@ namespace Bot.ChromeNs
                     ReplyDeduplicationService.RememberDelivered(
                         item.SellerNick,
                         item.BuyerNick,
-                        answer);
+                        answer,
+                        item.ShopKey);
                 }
                 else if (item.SessionGeneration > 0)
                 {
