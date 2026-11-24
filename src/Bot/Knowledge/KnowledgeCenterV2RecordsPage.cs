@@ -92,7 +92,10 @@ namespace Bot.Knowledge
                         _count.Text = "读取失败：" + (t.Exception == null ? "未知错误" : t.Exception.GetBaseException().Message);
                         return;
                     }
-                    _all = t.Result ?? new List<KnowledgeV2Record>();
+                    _all = (t.Result ?? new List<KnowledgeV2Record>())
+                        .Where(x => x != null
+                            && !string.Equals(x.SourceType, "visual_understanding_rule", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
                     _recordsLoaded = true;
                     ApplyFilter();
                 })));
