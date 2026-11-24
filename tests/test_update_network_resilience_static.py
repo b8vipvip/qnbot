@@ -108,3 +108,64 @@ def test_host_fetch_reuses_container_loopback_without_exporting_credentials():
     assert 'supports_console_vless' in agent
     assert 'VLESS HTTPS 同步源码' in agent
     assert 'console_vless_preferred' in js
+
+
+def test_host_fetch_transport_selection_with_mocked_commands():
+    import subprocess
+
+    script = read(ROOT / "scripts" / "update-api-control-plane.sh")
+    functions = script.split("github_fetch_via_console_proxy() {", 1)[1]
+    functions = "github_fetch_via_console_proxy() {" + functions.split("# Verify and reuse", 1)[0]
+    harness = r"""
+set -Eeuo pipefail
+REPO_DIR=/mock/qnbot
+CONTAINER_NAME=mock-control-plane
+BRANCH=master
+GIT_FETCH_TIMEOUT_SECONDS=60
+GIT_FETCH_RETRIES=1
+GITHUB_SSH_HOST=ssh.github.com
+GITHUB_SSH_PORT=443
+log() { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*"; }
+die() { exit 91; }
+github_ssh_command() { echo mock-ssh; }
+git() { echo git@github.com:b8vipvip/qnbot.git; }
+nsenter() { :; }
+timeout() {
+  if [[ "$1" == "--foreground" ]]; then
+    shift 2
+    if [[ "$1" == nsenter ]]; then
+      printf 'PROXY_FETCH %s\n' "$*"
+      [[ "$MODE" == success ]]
+    elif [[ "$1" == env ]]; then
+      printf 'SSH_FETCH %s\n' "$*"
+      return 0
+    else
+      return 92
+    fi
+  elif [[ "$2" == docker && "$3" == inspect ]]; then
+    echo 12345
+  elif [[ "$2" == docker && "$3" == exec ]]; then
+    if [[ "$MODE" == disabled ]]; then return 1; fi
+    echo 11808
+  else
+    return 93
+  fi
+}
+"""
+    for mode in ("success", "failure", "disabled"):
+        result = subprocess.run(
+            ["bash", "-c", harness + "\n" + functions + "\nMODE=" + mode
+             + '\ngithub_fetch_with_retry\nprintf "TRANSPORT=%s\\n" "$GITHUB_FETCH_TRANSPORT"\n'],
+            capture_output=True, text=True, check=True,
+        )
+        output = result.stdout
+        if mode == "success":
+            assert "PROXY_FETCH" in output
+            assert "SSH_FETCH" not in output
+            assert "TRANSPORT=vless-https" in output
+            assert "+refs/heads/master:refs/remotes/origin/master" in output
+        else:
+            assert "SSH_FETCH" in output
+            assert "TRANSPORT=ssh" in output
+            assert ("PROXY_FETCH" in output) == (mode == "failure")
