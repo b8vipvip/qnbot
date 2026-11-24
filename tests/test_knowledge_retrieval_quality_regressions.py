@@ -178,3 +178,16 @@ def test_unapproved_legacy_learning_does_not_pollute_conversation_entities_or_v1
     assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in state
     assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in memory
     assert "var signature = ComputeSignature(knowledge);" in memory
+
+
+
+def test_existing_v2_learning_candidates_are_normalized_without_disabling_v2_editor_state():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    helper = repository[
+        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled"):
+        repository.index("private static KnowledgeV2Record CloneAndNormalize")
+    ]
+    assert "legacyCandidatesToNormalize" in helper
+    assert 'record.Status = "candidate";' in helper
+    assert "state.Db.SaveRecordsInTransaction(" in helper
+    assert "legacy_nonproduction_mirror_version" in helper

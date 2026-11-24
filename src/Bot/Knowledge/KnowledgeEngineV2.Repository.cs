@@ -1395,6 +1395,26 @@ namespace Bot.Knowledge
                 .Select(FromRow)
                 .Where(x => x != null && !KnowledgeV2AuthorityPolicy.IsProductionApproved(x))
                 .ToList();
+            // Older migrations could write Type=learning_candidate with Status=active.
+            // Normalize those existing rows once so the V2 editor state and the disabled
+            // legacy mirror agree without silently demoting the candidate's V2 Enabled flag.
+            var legacyCandidatesToNormalize = nonProductionRecords
+                .Where(record => string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (legacyCandidatesToNormalize.Count > 0)
+            {
+                foreach (var record in legacyCandidatesToNormalize)
+                {
+                    record.Status = "candidate";
+                    record.UpdatedAt = DateTime.Now;
+                }
+                state.Db.SaveRecordsInTransaction(
+                    legacyCandidatesToNormalize.Select(record => (object)ToRow(record)).ToList());
+            }
+
             var changed = 0;
             if (nonProductionRecords.Count > 0)
             {
