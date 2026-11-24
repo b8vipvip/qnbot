@@ -197,3 +197,13 @@ def test_order_reply_partial_or_exception_send_is_held_for_manual_review():
     assert "OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);" in process
     assert "if (!finishPersisted && (sendOk || sentSegments > 0 || plan.DeliveryUncertain))" in process
     assert "30天内禁止自动重发" in process
+
+
+
+def test_commerce_knowledge_postprocessing_uses_the_reports_authoritative_shopkey():
+    bridge = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    process = bridge[bridge.index("private static void ProcessReport"):bridge.index("private static bool ApplyScenarioScope")]
+    assert "ShopContextLocator.ResolveRuntimeByShopKey(report.ShopKey)" in process
+    assert "using (ShopSettingsScope.Enter(shop))" in process
+    assert "ConversationContextStore.GetRecentTurns(report.Seller, report.Buyer, report.ShopKey, 24)" in process
+    assert "GetRecentTurns(report.Seller, report.Buyer, string.Empty" not in process
