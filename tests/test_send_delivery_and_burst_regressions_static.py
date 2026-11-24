@@ -401,3 +401,19 @@ def test_final_guard_is_carried_to_the_last_moment_of_each_qianniu_physical_send
     assert native.index("IsPreSendGuardSatisfied(preSendGuard, \"HWND安全发送\")") < native.index("var moved = PostMessage(target, WmMouseMove")
     assert "IsPreSendGuardSatisfied(preSendGuard, \"安全UIA发送\")" in native
     assert "manualTakeoverCheck, preSendGuard).ConfigureAwait(false)" in native
+
+def test_premerge_fixed_replies_recheck_manual_takeover_and_turn_relevance_on_every_send_attempt():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    method = source[
+        source.index("private static async Task<bool> SendFixedAsync"):
+        source.index("private static bool TryResolveOffHours")
+    ]
+
+    assert "Func<bool> preSendGuard = () =>" in method
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in method
+    assert "item.ShopKey" in method
+    assert method.index("ParallelReplyRelevanceGate.ShouldSend(") < method.index(
+        "SendTextWithRetryAsync("
+    )
+    assert "item.BuyerNick, answer, 3, cancellationToken, preSendGuard" in method
+
