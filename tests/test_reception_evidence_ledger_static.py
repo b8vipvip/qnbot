@@ -7,7 +7,7 @@ def source(path):
 
 def test_event_ledger_is_shop_scoped_atomic_and_deduplicated():
     code=source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in code
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in code
     assert "ShopSettingsScope.Current" not in code
     assert 'Path.Combine(parent, "reception-evidence-ledger.json")' in code
     assert "CrossProcessAtomicStateFile.Acquire" in code
@@ -76,7 +76,7 @@ def test_evidence_ledger_requires_stable_seller_identity_and_nonempty_shopkey():
         code.index("/// <summary>", code.index("private static string PathForSeller"))
     ]
 
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in path
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
     assert "!shop.HasStableSellerId" in path
     assert "拒绝证据写入" in path
