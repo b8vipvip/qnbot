@@ -21,6 +21,9 @@ namespace Bot.Knowledge
             var text = (entry.Title ?? string.Empty) + " " + (entry.Keywords ?? string.Empty) + " " + (entry.Answer ?? string.Empty);
             var query = Parse(entry.Title ?? string.Empty, null);
             var type = ResolveType(entry.Category, query.Intent, query.Predicate, entry.Answer, entry.SourceType);
+            var isUnapprovedLearning = Bot.ChromeNs.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)
+                || IsPendingCandidate(entry.SourceType, entry.Category);
+            if (isUnapprovedLearning) type = "learning_candidate";
             var entities = ExtractEntities(text);
             var aliases = new List<string> { entry.Title ?? string.Empty };
             aliases.AddRange(SplitTerms(entry.Keywords));
@@ -59,7 +62,7 @@ namespace Bot.Knowledge
                 CorrectionCount = profile == null ? 0 : profile.SellerCorrectionCount,
                 WithdrawCount = profile == null ? 0 : profile.SellerWithdrawCount,
                 Enabled = entry.Enabled,
-                Status = IsPendingCandidate(entry.SourceType, entry.Category) ? "candidate" : "active",
+                Status = isUnapprovedLearning ? "candidate" : "active",
                 CreatedAt = parsedUpdated,
                 UpdatedAt = parsedUpdated,
                 LastVerifiedAt = parsedUpdated

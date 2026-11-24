@@ -194,3 +194,32 @@ def test_existing_v2_learning_candidates_are_normalized_without_disabling_v2_edi
     assert 'record.Status = "candidate";' in helper
     assert "state.Db.SaveRecordsInTransaction(" in helper
     assert "legacy_nonproduction_mirror_version" in helper
+
+
+
+def test_legacy_ai_generated_flag_is_authoritative_even_when_source_metadata_is_missing():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    helper = bridge[
+        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
+        bridge.index("public static bool IsPersistedStateSynchronized")
+    ]
+    from_legacy = semantics[
+        semantics.index("public static KnowledgeV2Record FromLegacy"):
+        semantics.index("public static KnowledgeV2Query Parse")
+    ]
+    assert "if (entry.AiGenerated) return true;" in helper
+    assert "manual_ai_generated" in helper
+    assert "var isUnapprovedLearning = Bot.ChromeNs.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
+    assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
+    assert "Status = isUnapprovedLearning ? \"candidate\" : \"active\"" in from_legacy
+
+
+def test_generic_manual_legacy_source_is_not_confused_with_ai_generated_provenance():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    helper = bridge[
+        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
+        bridge.index("public static bool IsPersistedStateSynchronized")
+    ]
+    assert 'source.IndexOf("manual_ai_generated"' in helper
+    assert 'value.IndexOf("manual", StringComparison.OrdinalIgnoreCase)' not in helper
