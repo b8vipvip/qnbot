@@ -363,7 +363,7 @@ namespace Bot.ChromeNs
         private static bool TryBuildFlow(
             JObject proposal,
             ReceptionWorkflowEvidenceContext evidence,
-            KugouReceptionConfig config,
+            ShopReceptionConfig config,
             bool handoffConfigured,
             string buyer,
             string shopKey,
@@ -693,8 +693,8 @@ namespace Bot.ChromeNs
 
             using (ShopSettingsScope.Enter(shop))
             {
-                KugouReceptionConfig config;
-                try { config = KugouReceptionConfigService.GetConfig(shop); }
+                ShopReceptionConfig config;
+                try { config = ShopReceptionConfigService.GetConfig(shop); }
                 catch (Exception ex)
                 {
                     result.SkippedCount = proposals.Count;
