@@ -76,7 +76,7 @@ def test_image_ocr_prewarms_knowledge_v2_and_separates_buyer_query_from_visual_e
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in local
     assert "task.CombinedQuestion" in local
     assert "var evidenceText = ocr.Text;" in local
-    assert "visualMatch == null ? string.Empty : visualMatch.ContextText" in local
+    assert "if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))" in local
     assert "visualMatch == null ? string.Empty : visualMatch.AppName" in local
     assert "if (visualMatch == null || decision == null" in local
     assert "仍独立执行Knowledge V2证据检索" in local

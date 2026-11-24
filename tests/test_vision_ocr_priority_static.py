@@ -161,7 +161,7 @@ def test_ocr_knowledge_lookup_uses_authoritative_shop_seller_and_image_alias_is_
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in decision
     assert "task.CombinedQuestion" in decision
     assert "var evidenceText = ocr.Text;" in decision
-    assert "visualMatch == null ? string.Empty : visualMatch.ContextText" in decision
+    assert "if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))" in decision
     assert "visualMatch == null ? string.Empty : visualMatch.AppName" in decision
     assert "if (visualMatch == null || decision == null" in decision
     assert "仍独立执行Knowledge V2证据检索" in decision
