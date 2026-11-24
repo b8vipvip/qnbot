@@ -1068,6 +1068,13 @@ namespace Bot.ChromeNs
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
                     BuyerSessionAgentState.Completed, "canonical_pre_merge_consumed", item.ShopKey);
+                return;
+            }
+            if (outcome == CanonicalPreMergeOutcome.Cancelled)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Cancelled, "canonical_pre_merge_cancelled", item.ShopKey);
             }
         }
 
