@@ -281,8 +281,10 @@ namespace Bot.ChromeNs
                 if (shopKey.Length > 0)
                 {
                     shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    // The supplied ShopKey is the authoritative identity. Resolve and enter
+                    // that exact scope even when another shop is the ambient AsyncLocal context.
                     if (shop == null
-                        || (current != null && !string.Equals(current.ShopKey, shopKey, StringComparison.Ordinal)))
+                        || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
                         return null;
                 }
                 else if (current != null)
@@ -297,7 +299,7 @@ namespace Bot.ChromeNs
                 }
 
                 if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
-                    || (sellerNick.Length > 0
+                    || (shopKey.Length == 0 && sellerNick.Length > 0
                         && !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
                     || (shopKey.Length > 0
                         && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)))
