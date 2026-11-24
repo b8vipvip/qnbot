@@ -167,8 +167,8 @@ def test_existing_sandbox_actions_retain_original_event_bindings():
 
 def test_shadow_mode_previews_do_not_relax_production_sending():
     engine = source("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
-    assert "return ResolveInternal(seller, buyer, message, false);" in engine
-    assert "return ResolveInternal(seller, buyer, message, true);" in engine
+    assert "return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty);" in engine
+    assert "return ResolveInternal(seller, buyer, message, true, string.Empty, string.Empty);" in engine
     assert "if (!decision.Enabled)" in engine
     assert "decision.HasConflict = manualExactConflict || (manualExact == null && HasConflict(best, second))" in engine
     assert "&& !highRisk" in engine
