@@ -788,7 +788,7 @@ def test_learning_report_ui_is_bound_to_one_verified_shop():
 def test_commerce_learning_bridge_resolves_report_by_shopkey_not_nickname():
     bridge = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
     process = bridge[
-        bridge.index("private static void ProcessReport("):
+        bridge.index("private static bool ProcessReport("):
         bridge.index("private static bool ApplyScenarioScope(")
     ]
     assert "ResolveRuntimeByShopKey(report.ShopKey)" in process
