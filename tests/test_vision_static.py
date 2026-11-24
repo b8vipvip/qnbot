@@ -155,3 +155,10 @@ def test_vision_timeline_reads_are_shopkey_scoped():
     helper = service[service.index('private static string BuildScopedTimelineText'):service.index('public static JObject BuildVisionPayload')]
     assert 'ResolveRuntimeByShopKey(task.ShopKey)' in helper
     assert 'ShopSettingsScope.Enter(shop, false)' in helper
+
+
+def test_cached_image_rebinding_preserves_shop_key_in_both_paths():
+    followup = read('src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs')
+    withdrawal = read('src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs')
+    assert 'ShopKey = source.ShopKey' in followup
+    assert 'ShopKey = burst.ShopKey' in withdrawal
