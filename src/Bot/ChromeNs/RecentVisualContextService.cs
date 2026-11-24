@@ -173,6 +173,7 @@ namespace Bot.ChromeNs
                     DateTime.Now.AddMinutes(-PromptWindowMinutes),
                     DateTime.Now.AddMinutes(2),
                     20)
+                .Where(x => !string.IsNullOrWhiteSpace(x.MessageKey))
                 .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .ToList();
@@ -252,7 +253,9 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(shopKey, seller);
             if (shop == null) return false;
             var config = KugouReceptionConfigService.GetConfig(shop);
-            if (!LooksLikeConfiguredPhotoGuidance(guidanceText, config)) return false;
+            if (config == null || !config.Enabled
+                || !LooksLikeConfiguredPhotoGuidance(guidanceText, config))
+                return false;
 
             var anchor = orderEventTime == DateTime.MinValue ? DateTime.Now : orderEventTime;
             if (anchor > DateTime.Now.AddMinutes(5) || anchor < DateTime.Now.AddDays(-7)) anchor = DateTime.Now;
@@ -327,9 +330,18 @@ namespace Bot.ChromeNs
             applicationName = string.Empty;
             var text = Regex.Replace((visualText ?? string.Empty).ToLowerInvariant(), @"\s+", string.Empty);
             VisualUnderstandingRuleEntity rule;
-            if (!VisualUnderstandingRuleService.TryResolveConfiguredApplication(
-                shopKey, seller, text, out applicationName, out rule))
+            try
+            {
+                if (!VisualUnderstandingRuleService.TryResolveConfiguredApplication(
+                    shopKey, seller, text, out applicationName, out rule))
+                    return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取店铺视觉理解应用配置失败，账号证据按未命中处理：" + ex.Message, 5);
+                applicationName = string.Empty;
                 return false;
+            }
 
             var explicitOfficial = ExplicitOfficialAppRegex.IsMatch(text);
             if (BuiltInOrUntrustedRegex.IsMatch(text) && !explicitOfficial) return false;
