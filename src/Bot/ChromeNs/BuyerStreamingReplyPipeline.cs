@@ -638,8 +638,6 @@ namespace Bot.ChromeNs
         internal const string SilentMarker = "__QNBOT_RECEPTION_WAIT__:";
         private static readonly Regex MobileOnly = new Regex(
             @"^(?:\+?86[- ]?)?1[3-9]\d{9}$", RegexOptions.Compiled);
-        private static readonly Regex PhotoRequest = new Regex(
-            @"拍照|截图|拍一张|发图片|发张图|拍给我", RegexOptions.Compiled);
 
         internal static bool TryChooseSilence(
             string seller, string buyer, string question, out string reason)
