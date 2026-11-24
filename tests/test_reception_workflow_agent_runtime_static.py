@@ -340,7 +340,7 @@ def test_visual_withdrawal_is_rechecked_against_exact_message_before_send():
     assert "按撤回处理" in visual
 
 
-def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_withdrawal():
+def test_reception_agent_uses_structured_verified_account_evidence_and_rechecks_withdrawal():
     recent = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
     agent = read("src/Bot/ChromeNs/ReceptionWorkflowAgentService.cs")
     runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
@@ -360,10 +360,16 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     ]
 
     assert "public string MessageKey { get; set; }" in account_type
+    assert "public string PhoneNumber { get; set; }" in account_type
+    assert "public string MembershipStatus { get; set; }" in account_type
+    assert "public string MembershipExpiry { get; set; }" in account_type
     assert "MessageKey = item.MessageKey" in recent
     assert '"account_evidence"' in agent
     assert "RecentVisualContextService.TryGetRecentAccountEvidence(" in account_builder
     assert "Kind = \"account_evidence\"" in account_builder
+    assert "accountEvidence.MembershipStatus" in account_builder
+    assert "accountEvidence.MembershipExpiry" in account_builder
+    assert "原始昵称、ID和手机号保留在本店结构化证据中" in account_builder
     assert "accountEvidence.UserId +" not in account_builder
     assert "accountEvidence.Nickname +" not in account_builder
     assert "AccountEvidenceMessageKey" in runtime
