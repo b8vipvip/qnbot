@@ -31,7 +31,7 @@ def test_evidence_has_no_raw_account_or_photo_data_and_no_fulfillment_authority(
     assert "raw OCR" in code
 
 def test_order_delivery_and_vision_analysis_are_written_only_as_observations():
-    instruction=source("src/Bot/ChromeNs/KugouReceptionPolicy.cs")
+    instruction=source("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
     vision=source("src/Bot/ChromeNs/VisionRequestService.cs")
     assert "ReceptionEvidenceLedger.RecordDeliveredEvidenceRequest(seller, buyer, text)" in instruction
     assert "ReceptionEvidenceLedger.RecordVisionObservation(" in vision
