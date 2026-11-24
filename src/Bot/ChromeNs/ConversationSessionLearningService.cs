@@ -3025,14 +3025,21 @@ namespace Bot.ChromeNs
             var nativeHumanReplyIds = new List<string>();
             foreach (var humanReplyTurn in humanReplyTurns)
             {
-                var nativeId = (humanReplyTurn.NativeAliases ?? new string[0])
-                    .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && humanMessageIds.Contains(x));
-                if (string.IsNullOrWhiteSpace(nativeId))
+                var nativeIds = (humanReplyTurn.NativeAliases ?? new string[0])
+                    .Where(x => !string.IsNullOrWhiteSpace(x) && humanMessageIds.Contains(x))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                if (nativeIds.Count == 0)
                 {
                     rejection = "original_native_human_reply_message_id_missing";
                     return false;
                 }
-                nativeHumanReplyIds.Add(nativeId);
+                nativeHumanReplyIds.AddRange(nativeIds);
+                if (nativeHumanReplyIds.Count > 4)
+                {
+                    rejection = "human_reply_evidence_bundle_exceeds_four_native_messages";
+                    return false;
+                }
             }
 
             answerTurn = humanReplyTurns.Last();

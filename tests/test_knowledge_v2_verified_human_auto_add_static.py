@@ -520,3 +520,15 @@ def test_auto_apply_accepts_one_question_plus_multiple_verified_human_reply_ids(
     assert "candidate.EvidenceMessageIds.Count > 5" in method
     assert "candidate.EvidenceMessageIds[0]" in method
     assert "candidate.EvidenceMessageIds[1]" in method
+
+
+
+def test_reply_bundle_persists_every_native_alias_id_with_a_bounded_limit():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    candidate = service[
+        service.index("private static bool TryCreateVerifiedNewKnowledgeCandidate"):
+        service.index("private static ConversationContextTurn FindUniqueTurnByMessageId")
+    ]
+    assert ".Where(x => !string.IsNullOrWhiteSpace(x) && humanMessageIds.Contains(x))" in candidate
+    assert "nativeHumanReplyIds.AddRange(nativeIds);" in candidate
+    assert "nativeHumanReplyIds.Count > 4" in candidate
