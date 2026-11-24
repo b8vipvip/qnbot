@@ -12,8 +12,8 @@ VERIFY_URL="${VERIFY_URL:-}"
 MIN_FREE_BEFORE_BUILD_MIB="${CONTROL_PLANE_MIN_BUILD_FREE_MIB:-4096}"
 MIN_FREE_BEFORE_BACKUP_MIB="${CONTROL_PLANE_MIN_BACKUP_FREE_MIB:-2048}"
 
-# GitHub source-network tuning. Git repository traffic uses GitHub's official SSH-over-443
-# endpoint by default, avoiding networks where outbound TCP/22 is unstable or filtered.
+# GitHub source-network tuning. The saved VLESS SOCKS listener is preferred for
+# existing repository fetches; official SSH-over-443 remains the fallback.
 GITHUB_SSH_HOST="${GITHUB_SSH_HOST:-ssh.github.com}"
 GITHUB_SSH_PORT="${GITHUB_SSH_PORT:-443}"
 GITHUB_SSH_CONNECT_TIMEOUT="${GITHUB_SSH_CONNECT_TIMEOUT:-15}"
@@ -267,7 +267,7 @@ github_fetch_via_console_proxy() {
   local origin pid port proxy url="https://github.com/b8vipvip/qnbot.git"
   origin="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null)" || return 1
   case "$origin" in
-    git@github.com:b8vipvip/qnbot.git|ssh://git@github.com/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot) ;;
+    git@github.com:b8vipvip/qnbot.git|ssh://git@github.com/b8vipvip/qnbot.git|ssh://git@ssh.github.com:443/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot) ;;
     *) return 1 ;;
   esac
   command -v nsenter >/dev/null 2>&1 || return 1
@@ -276,7 +276,15 @@ github_fetch_via_console_proxy() {
   # The saved node is decrypted only by the existing API proxy module.
   # Its listener exists only while the enabled VLESS process is running.
   port="$(timeout 5s docker exec "$CONTAINER_NAME" python -c '
-import os, socket
+import os, socket, sqlite3
+from pathlib import Path
+# Read only the enabled flag, never the stored encrypted or decrypted node.
+data = Path(os.getenv("DATA_DIR", "/data"))
+db = Path(os.getenv("DATABASE_PATH", str(data / "api-control-plane.db"))).resolve()
+with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=1) as conn:
+    row = conn.execute("SELECT enabled FROM version_update_proxy_settings WHERE id=1").fetchone()
+if not row or not row[0]:
+    raise SystemExit(1)
 port = max(1024, min(65535, int(os.getenv("GITHUB_VLESS_PROXY_PORT", "11808"))))
 with socket.create_connection(("127.0.0.1", port), timeout=1):
     print(port)
