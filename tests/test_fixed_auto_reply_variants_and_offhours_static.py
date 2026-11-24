@@ -129,7 +129,7 @@ def test_canonical_premerge_offhours_cooldowns_are_pruned_by_elapsed_time():
     ]
     handler = canonical[
         canonical.index("public static async Task<CanonicalPreMergeOutcome> HandleAsync"):
-        canonical.index("private static async Task<bool> SendFixedAsync")
+        canonical.index("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync")
     ]
 
     assert "Interlocked.Read(ref _lastOffHoursCleanupUtcTicks)" in cleanup
