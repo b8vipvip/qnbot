@@ -385,7 +385,7 @@ namespace Bot.Knowledge
         private static bool IsPendingCandidate(string sourceType, string category)
         {
             var value = (sourceType ?? string.Empty) + " " + (category ?? string.Empty);
-            return Regex.IsMatch(value, @"学习候选|pending|candidate", RegexOptions.IgnoreCase);
+            return Regex.IsMatch(value, @"自动学习|会话学习|人工回复学习|学习候选|pending|candidate|AI生成", RegexOptions.IgnoreCase);
         }
 
         private static double ResolveAuthority(string sourceType, KnowledgePolicyProfile profile)

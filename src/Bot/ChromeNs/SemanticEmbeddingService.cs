@@ -284,7 +284,8 @@ namespace Bot.ChromeNs
         {
             foreach (var entry in knowledge ?? new KnowledgeBaseEntry[0])
             {
-                if (entry == null || !entry.Enabled || string.IsNullOrWhiteSpace(entry.Answer)) continue;
+                if (entry == null || !entry.Enabled || string.IsNullOrWhiteSpace(entry.Answer)
+                    || Bot.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)) continue;
                 var id = StableId(entry);
                 var text = BuildDocumentText(entry);
                 yield return new DocumentDescriptor

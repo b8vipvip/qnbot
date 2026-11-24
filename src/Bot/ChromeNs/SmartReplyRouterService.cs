@@ -214,7 +214,10 @@ namespace Bot.ChromeNs
                     .Append("回复时仍然只回答买家当前真正想问的内容，不要把还原过程告诉买家。\n");
             }
 
-            if (plan.Candidates == null || plan.Candidates.Count == 0) return sb.ToString();
+            // AI_GENERAL means the best legacy candidate failed relevance thresholds.
+            // Do not leak weak candidates into the model prompt as if they were facts.
+            if (plan.Route == SmartReplyRouteKind.AiGeneral
+                || plan.Candidates == null || plan.Candidates.Count == 0) return sb.ToString();
             sb.Append("\n【智能知识路由】\n")
                 .Append("当前路由：").Append(RouteName(plan.Route)).Append("。")
                 .Append("上下文依赖度：").Append(plan.ContextDependencyScore.ToString("0.00")).Append("。");
@@ -353,14 +356,16 @@ namespace Bot.ChromeNs
 
             var pool = knowledge
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
+                .Where(x => !Bot.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x))
                 .Where(x => !KugouReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer))
                 .Select(x => ScoreCandidate(x, question, resolvedText, originalQuery, resolvedQuery, queryIntent, state, context))
                 .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
                 .Where(x => ConversationProgressGuardService.AllowKnowledge(x.Entry, state, question))
+                // Policy applicability is not query relevance. A positive ApplyWhen
+                // adjustment alone must never retrieve an unrelated knowledge record.
                 .Where(x => x.RetrievalScore >= 0.20
                     || x.ResolvedQueryScore >= 0.24
-                    || x.EntityScore >= 0.35
-                    || (x.PolicyEvaluation != null && x.PolicyEvaluation.ScoreAdjustment > 0))
+                    || x.EntityScore >= 0.35)
                 .OrderByDescending(x => x.FinalScore)
                 .Take(RetrievalPoolSize)
                 .ToList();

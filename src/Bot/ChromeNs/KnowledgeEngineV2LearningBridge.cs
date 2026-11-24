@@ -240,12 +240,18 @@ namespace Bot.Knowledge
         public static bool ShouldImportLegacyEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (entry == null || string.IsNullOrWhiteSpace(entry.Answer)) return false;
-            if (IsTrustedProductionSource(entry.SourceType)) return true;
+            return IsTrustedProductionSource(entry.SourceType) || IsUnapprovedLegacyLearningEntry(entry);
+        }
+
+        public static bool IsUnapprovedLegacyLearningEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
+        {
+            if (entry == null || IsTrustedProductionSource(entry.SourceType)) return false;
             var value = (entry.SourceType ?? string.Empty) + " " + (entry.Category ?? string.Empty);
             return value.IndexOf("学习", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("人工回复", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("manual", StringComparison.OrdinalIgnoreCase) >= 0
-                || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0;
+                || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.IndexOf("AI生成", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static bool IsPersistedStateSynchronized(KnowledgeV2Record record, Bot.ChromeNs.KnowledgeBaseEntry entry)
@@ -254,10 +260,20 @@ namespace Bot.Knowledge
             var expectedSource = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType.Trim();
             if (!string.Equals((record.SourceType ?? string.Empty).Trim(), expectedSource, StringComparison.OrdinalIgnoreCase))
                 return false;
-            if (record.Enabled != entry.Enabled) return false;
-            // Disabled records are intentionally outside production, regardless of
-            // their provenance-derived authority/status fields.
-            if (!record.Enabled) return true;
+            // Candidate and disabled V2 records are intentionally disabled in the
+            // legacy mirror. Compare the effective mirror state, not the V2 editor toggle.
+            var isCandidate = IsCandidate(record);
+            var isDisabledStatus = string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase);
+            var expectedLegacyEnabled = record.Enabled
+                && !isCandidate
+                && !isDisabledStatus
+                && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase);
+            if (entry.Enabled != expectedLegacyEnabled) return false;
+            if (!record.Enabled || isDisabledStatus) return true;
+            if (isCandidate)
+                return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
 
             if (IsExplicitHumanConfirmationSource(expectedSource))
             {
@@ -319,7 +335,10 @@ namespace Bot.Knowledge
 
         public static bool IsProductionApproved(KnowledgeV2Record record)
         {
-            return record != null && record.Enabled && !IsCandidate(record);
+            return record != null
+                && record.Enabled
+                && string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
+                && !IsCandidate(record);
         }
 
         public static void Promote(KnowledgeV2Record record)

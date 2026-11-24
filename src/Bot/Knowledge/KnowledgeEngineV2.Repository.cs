@@ -1348,7 +1348,11 @@ namespace Bot.Knowledge
             {
                 var schema = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == "schema_version");
                 var count = state.Db.ReadRecords<KnowledgeV2RecordRow>(null).Count;
-                if (schema != null && schema.Value == KnowledgeEngineV2Constants.SchemaVersion.ToString()) return;
+                if (schema != null && schema.Value == KnowledgeEngineV2Constants.SchemaVersion.ToString())
+                {
+                    EnsureLegacyNonProductionMirrorsDisabled(shop, state);
+                    return;
+                }
 
                 if (count == 0)
                 {
@@ -1377,7 +1381,53 @@ namespace Bot.Knowledge
                     Key = "schema_version",
                     Value = KnowledgeEngineV2Constants.SchemaVersion.ToString()
                 });
+                EnsureLegacyNonProductionMirrorsDisabled(shop, state);
             }
+        }
+
+        private static void EnsureLegacyNonProductionMirrorsDisabled(ShopContext shop, RepositoryState state)
+        {
+            const string markerKey = "legacy_nonproduction_mirror_version";
+            var marker = state.Db.ReadOneRecord<KnowledgeV2MetaRow>(x => x.Key == markerKey);
+            if (marker != null && string.Equals(marker.Value, "1", StringComparison.Ordinal)) return;
+
+            var nonProductionRecords = state.Db.ReadRecords<KnowledgeV2RecordRow>(null)
+                .Select(FromRow)
+                .Where(x => x != null && !KnowledgeV2AuthorityPolicy.IsProductionApproved(x))
+                .ToList();
+            var changed = 0;
+            if (nonProductionRecords.Count > 0)
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var legacy = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+                    foreach (var record in nonProductionRecords)
+                    {
+                        var matchingEntries = legacy.Where(entry => entry != null
+                            && ((!string.IsNullOrWhiteSpace(record.SourceId)
+                                    && string.Equals(entry.Id, record.SourceId, StringComparison.Ordinal))
+                                || (!string.IsNullOrWhiteSpace(record.Id)
+                                    && string.Equals(entry.Id, record.Id, StringComparison.Ordinal))
+                                || (string.Equals(KnowledgeEngineV2Semantics.Compact(entry.Title),
+                                        KnowledgeEngineV2Semantics.Compact(record.Title), StringComparison.Ordinal)
+                                    && string.Equals((entry.Answer ?? string.Empty).Trim(),
+                                        (record.Answer ?? string.Empty).Trim(), StringComparison.Ordinal))))
+                            .ToList();
+                        foreach (var entry in matchingEntries)
+                        {
+                            if (!entry.Enabled) continue;
+                            entry.Enabled = false;
+                            changed++;
+                        }
+                    }
+                    if (changed > 0) BotFeatureStore.SaveKnowledgeBase(legacy);
+                }
+            }
+
+            state.Db.SaveOneRecord(new KnowledgeV2MetaRow { Key = markerKey, Value = "1" });
+            if (changed > 0)
+                Log.Info("Knowledge V2已修复旧知识镜像中的非生产知识启用状态: shop="
+                    + shop.ShopKey + ", disabledLegacyEntries=" + changed);
         }
 
         private static KnowledgeV2Record CloneAndNormalize(KnowledgeV2Record source)
@@ -1425,6 +1475,9 @@ namespace Bot.Knowledge
             record.Predicate = KnowledgeEngineV2Semantics.NormalizePredicate(record.Predicate);
             record.RiskLevel = string.IsNullOrWhiteSpace(record.RiskLevel) ? "normal" : record.RiskLevel.Trim().ToLowerInvariant();
             record.Status = string.IsNullOrWhiteSpace(record.Status) ? "active" : record.Status.Trim().ToLowerInvariant();
+            if (string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                record.Enabled = false;
             record.Title = (record.Title ?? string.Empty).Trim();
             record.Subject = (record.Subject ?? string.Empty).Trim();
             record.Answer = (record.Answer ?? string.Empty).Trim();
@@ -1615,9 +1668,7 @@ namespace Bot.Knowledge
         private static void ApplyToLegacy(KnowledgeV2Record record, KnowledgeBaseEntry item)
         {
             item.Id = record.Id;
-            item.Enabled = record.Enabled
-                && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
+            item.Enabled = KnowledgeV2AuthorityPolicy.IsProductionApproved(record);
             item.Category = DisplayType(record.Type);
             item.Title = record.Title ?? string.Empty;
             item.Answer = record.Answer ?? string.Empty;

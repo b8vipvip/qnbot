@@ -87,3 +87,26 @@ def test_structured_rules_have_scope_priority_triggers_and_runtime_limits():
     assert "includePriorityFallback" in service
     assert "MaxTextRuleCharacters = 4200" in service
     assert "MaxVisionRuleCharacters = 6500" in service
+
+
+
+def test_ai_general_never_injects_weak_legacy_candidates():
+    code = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    prompt = code[code.index("public static string BuildPromptAddon"):code.index("private static string BuildContextDigest")]
+    retrieval = code[code.index("private static List<SmartKnowledgeCandidate> RetrieveCandidates"):code.index("private static SmartKnowledgeCandidate ScoreCandidate")]
+
+    assert "plan.Route == SmartReplyRouteKind.AiGeneral" in prompt
+    assert prompt.index("plan.Route == SmartReplyRouteKind.AiGeneral") < prompt.index("【智能知识路由】")
+    assert "PolicyEvaluation.ScoreAdjustment > 0" not in retrieval
+    assert "x.RetrievalScore >= 0.20" in retrieval
+    assert "x.ResolvedQueryScore >= 0.24" in retrieval
+
+
+def test_legacy_retrieval_paths_exclude_unapproved_learning_records():
+    smart = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    local = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    embedding = read("src/Bot/ChromeNs/SemanticEmbeddingService.cs")
+
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in smart
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in local
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in embedding

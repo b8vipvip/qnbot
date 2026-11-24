@@ -23,12 +23,14 @@ def test_v2_is_in_the_only_text_reply_path_before_ai_generation():
         runtime.index("private static bool IsApprovedMatchForLogging")
     ]
     entry = pipeline[pipeline.index("private static async Task ProcessTextBurstStreamingAsync"):]
-    assert "KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease)" in entry
-    assert entry.index("KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease)") < entry.index(
+    assert "KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)" in entry
+    assert entry.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < entry.index(
         'lease.MarkGenerating("streaming_answer_started")'
     ) < entry.index("StreamingBuyerAnswerService.GetAnswerAsync(")
     assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion)" in method
     assert "decision == null || !decision.CanDirectReply" in method
+    assert "KnowledgeV2RuntimeResult.Continue(contextPromptAddon)" in method
+    assert "KnowledgeV2RuntimeResult.HandledResult()" in method
     assert "return false;" in method
     assert "return true;" in method
     assert "V2HandlerWrapper" not in runtime

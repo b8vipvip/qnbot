@@ -20,7 +20,11 @@ namespace Bot.Knowledge
             {
                 if (Snapshots.TryGetValue(shop.ShopKey, out existing) && existing != null) return existing;
                 var records = KnowledgeEngineV2Repository.LoadAll(seller)
-                    .Where(x => x != null && x.Enabled)
+                    .Where(x => x != null)
+                    .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
+                    .Where(x => x != null && x.Enabled
+                        && !string.Equals(x.Status, "disabled", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 var snapshot = BuildSnapshot(shop.ShopKey, records);
                 Snapshots[shop.ShopKey] = snapshot;

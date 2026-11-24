@@ -116,11 +116,12 @@ def test_v2_is_called_explicitly_by_the_canonical_streaming_handler_not_a_racing
     assert "PatchedCoordinators" not in runtime
     assert "PatchExisting()" not in runtime
     plan = streaming.index("private static async Task ProcessTextBurstStreamingAsync")
-    v2 = streaming.index("KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease)", plan)
+    v2 = streaming.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)", plan)
     generating = streaming.index('lease.MarkGenerating("streaming_answer_started")', plan)
     ai = streaming.index("StreamingBuyerAnswerService.GetAnswerAsync(", plan)
     assert v2 < generating < ai
-    assert "if (workflowDecision == null && await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))" in streaming
+    assert "knowledgeV2Result = await KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease);" in streaming
+    assert "knowledgeV2Result.ContextPromptAddon" in streaming
 
 
 def test_learning_candidates_require_explicit_approval_before_direct_reply():

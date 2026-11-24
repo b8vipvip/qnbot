@@ -132,9 +132,13 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // Knowledge V2 remains the normal text-answer route when no active workflow matched.
-            if (workflowDecision == null && await KnowledgeEngineV2RuntimeBridge.TryHandleAsync(qn, lease))
-                return;
+            // Preserve approved V2 context matches when V2 cannot safely direct-reply.
+            KnowledgeV2RuntimeResult knowledgeV2Result = null;
+            if (workflowDecision == null)
+            {
+                knowledgeV2Result = await KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease);
+                if (knowledgeV2Result != null && knowledgeV2Result.Handled) return;
+            }
             var sourceClient = qn.CDP;
             var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
@@ -182,7 +186,8 @@ namespace Bot.ChromeNs
                                 conversationCtl.SetProcessing("正在流式生成答案：" + preview);
                             }
                         },
-                        burst.ShopKey);
+                        burst.ShopKey,
+                        knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon);
                     // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
                     // after they begin. Race the whole answer task only against the canonical generation
                     // budget. Provider/control-plane timeouts remain upstream concerns and must not be
@@ -926,7 +931,8 @@ namespace Bot.ChromeNs
             string question,
             CancellationToken token,
             Action<string> partial,
-            string shopKey = null)
+            string shopKey = null,
+            string knowledgeV2ContextAddon = null)
         {
             token.ThrowIfCancellationRequested();
 
@@ -1100,6 +1106,7 @@ namespace Bot.ChromeNs
             }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
+            dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
             dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller, buyer);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
