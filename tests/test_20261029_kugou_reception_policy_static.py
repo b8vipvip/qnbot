@@ -219,6 +219,17 @@ def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers
     assert not re.search(r"(?<![A-Za-z0-9])[a-f0-9]{24,}(?![A-Za-z0-9])", combined + "\n" + fixture, re.I)
     assert not re.search(r"https?://", combined, re.I)
 
+def test_reception_audit_uses_generic_path_and_reads_legacy_file_only_for_migration():
+    policy = src("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
+    assert '"shop-reception-decisions.json"' in policy
+    assert '"kugou-reception-decisions.json"' in policy
+    assert '"ShopReceptionAudit"' in policy
+    assert '"KugouReceptionAudit"' in policy
+    assert "ExistingAuditPath" in policy
+    assert "AppendAuditEntry(path, sourcePath" in policy
+    assert "if (!File.Exists(path) && File.Exists(legacyPath))" in policy
+
+
 def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
     policy = src(POLICY)
     audit = policy[
