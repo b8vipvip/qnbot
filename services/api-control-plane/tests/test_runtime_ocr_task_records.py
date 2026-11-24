@@ -99,6 +99,7 @@ def test_task_schema_status_updates_pagination_and_no_raw_data(control_plane):
     assert rows[0]["image_hash_prefix"] == "a" * 12
     assert rows[0]["queue_ms"] == 24
     assert rows[0]["text_chars"] == 3
+    assert rows[0]["result_text"] == ""
     assert "image" not in rows[0]
     assert "text" not in rows[0]
     assert "buyer" not in rows[0]
@@ -107,6 +108,7 @@ def test_task_schema_status_updates_pagination_and_no_raw_data(control_plane):
     assert all_rows["total"] == 1
     assert all_rows["counts"] == {"success": 1}
     assert all_rows["items"][0]["task_id"] == "task_001"
+    assert "result_text" not in all_rows["items"][0]
     assert all_rows["scope"] == "server_ocr_only"
     assert runtime_ocr._list_task_records(cp, 1, 10, "failed")["total"] == 0
     with pytest.raises(HTTPException) as exc:
@@ -123,15 +125,26 @@ def test_task_history_bounded_and_newest_first(control_plane, monkeypatch):
     assert result["total"] == 3
     assert [x["task_id"] for x in result["items"]] == ["task_4", "task_3"]
     assert [x["task_id"] for x in runtime_ocr._list_task_records(cp, 2, 2, "all")["items"]] == ["task_2"]
+    with cp.db() as conn:
+        event_task_ids = {
+            row["task_id"] for row in conn.execute(
+                "SELECT DISTINCT task_id FROM runtime_ocr_task_events"
+            ).fetchall()
+        }
+    assert event_task_ids == {"task_2", "task_3", "task_4"}
 
 
 def test_server_restart_marks_unfinished_tasks_interrupted(control_plane):
     cp = control_plane
-    runtime_ocr._create_task_record(cp, "stuck")
+    task_id = "b" * 32
+    runtime_ocr._create_task_record(cp, task_id)
     runtime_ocr.init_db(cp)
     records = task_rows(cp)
     assert records[0]["status"] == "interrupted"
     assert records[0]["error_code"] == "server_restarted"
+    detail = runtime_ocr._get_task_detail(cp, task_id)
+    assert detail["events"][-1]["stage"] == "server_restarted"
+    assert detail["events"][-1]["status"] == "interrupted"
 
 
 def test_runtime_success_returns_task_id_without_changing_ocr_contract(control_plane, monkeypatch):
@@ -154,7 +167,16 @@ def test_runtime_success_returns_task_id_without_changing_ocr_contract(control_p
     assert rec["text_chars"] == 5
     assert rec["confidence"] == pytest.approx(0.95)
     assert rec["image_hash_prefix"] == response["imageSha256"][:12]
-    assert "OCR文字" not in str(rec)
+    assert rec["engine"] == "fake"
+    assert rec["result_text"] == "OCR文字"
+    detail = runtime_ocr._get_task_detail(cp, response["ocrTaskId"])
+    assert detail["task"]["result_text"] == "OCR文字"
+    assert len(detail["events"]) >= 5
+    assert detail["events"][-1]["stage"] == "returned"
+    assert detail["events"][-1]["status"] == "success"
+    endpoint_detail = cp.routes[("GET", "/api/admin/ocr/tasks/{task_id}")]
+    route_detail = asyncio.run(endpoint_detail(response["ocrTaskId"], "admin"))
+    assert route_detail["task"]["task_id"] == response["ocrTaskId"]
 
 
 def test_runtime_rejects_bad_hash_without_saving_secret_header(control_plane):
@@ -172,7 +194,7 @@ def test_runtime_rejects_bad_hash_without_saving_secret_header(control_plane):
     assert "untrusted-private-value" not in str(rec)
 
 
-def test_runtime_failed_inference_is_recorded_but_ocr_text_not_persisted(
+def test_runtime_failed_inference_is_recorded_without_raw_exception_details(
     control_plane, monkeypatch,
 ):
     cp = control_plane
@@ -189,6 +211,9 @@ def test_runtime_failed_inference_is_recorded_but_ocr_text_not_persisted(
     assert rec["status"] == "failed"
     assert rec["error_code"] == "internal_ocr_error"
     assert "sensitive account content" not in str(rec)
+    detail = runtime_ocr._get_task_detail(cp, rec["task_id"])
+    assert "sensitive account content" not in str(detail)
+    assert detail["events"][-1]["message"] == "OCR 内部处理失败；原始异常内容未写入任务日志"
 
 
 def test_timeout_is_recorded_as_504_and_native_slot_released_after_exit(
@@ -217,3 +242,28 @@ def test_timeout_is_recorded_as_504_and_native_slot_released_after_exit(
     assert record["finished_at"] is not None
     # Response timeout must not leak any inference output into SQLite.
     assert "not sent" not in str(record)
+
+
+def test_task_detail_redacts_phone_email_and_long_numeric_ids(control_plane):
+    cp = control_plane
+    task_id = "d" * 32
+    runtime_ocr._create_task_record(cp, task_id)
+    runtime_ocr._update_task_record(
+        cp, task_id, "success", "returned",
+        http_status=200, text_chars=100, confidence=0.96,
+        engine="RapidOCR/ONNXRuntime",
+        result_text="账号 Non-Directional 手机号 13800138000 邮箱 test@example.com ID 123456789012",
+        event_message="OCR 推理完成并返回",
+        terminal=True,
+    )
+    detail = runtime_ocr._get_task_detail(cp, task_id)
+    text = detail["task"]["result_text"]
+    assert "Non-Directional" in text
+    assert "13800138000" not in text
+    assert "test@example.com" not in text
+    assert "123456789012" not in text
+    assert "[手机号已脱敏]" in text
+    assert "[邮箱已脱敏]" in text
+    assert "[长数字ID已脱敏]" in text
+    assert detail["task"]["result_text_redacted"] is True
+    assert "buyer" not in detail["task"]
