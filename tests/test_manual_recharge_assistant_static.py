@@ -156,3 +156,13 @@ def test_recharge_status_reply_is_bound_to_original_shop_session_and_rechecks_li
     assert "out latestReason, false, shopKey" in query
     assert "buyer, answer, 1, CancellationToken.None, preSendGuard" in query
 
+def test_recharge_claim_and_human_notification_dedup_are_shop_scoped():
+    service = read(ROOT / "src" / "Bot" / "ChromeNs" / "RechargeStatusAutoQueryService.cs")
+    incoming = read(ROOT / "src" / "Bot" / "ChromeNs" / "IncomingMessageSafety.cs")
+    assert "var scopedMessageKey = shop.ShopKey + \"|\" + messageKey;" in service
+    assert "HandledMessages.TryAdd(scopedMessageKey, entry)" in service
+    assert "string shopKey = null" in service[service.index("public static bool TryConsumeHandled"):service.index("private static bool TryFindRecentRedeemCode")]
+    assert "var key = shopKey + \"|\" + messageKey;" in service
+    assert "out rechargeQueryNote,\n                shopKey)" in incoming
+    assert "var dedupKey = (shopKey ?? string.Empty).Trim() + \"#\" + Normalize(seller)" in service
+
