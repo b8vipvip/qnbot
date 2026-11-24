@@ -167,6 +167,8 @@ def test_v2_startup_unwraps_already_installed_memory_v1_handler():
     assert "lock (PatchSync)" in disable
     assert "lock (PatchSync)" in memory
     assert "Volatile.Read(ref _disabledForV2)" in memory
+    assert "if (Volatile.Read(ref _disabledForV2) != 0)" in memory
+    assert "await inner(lease);" in memory
     assert "lock (PatchSync)" in memory
     assert "KnowledgeMemoryRuntimeBridge.DisableForV2();" in runtime
 

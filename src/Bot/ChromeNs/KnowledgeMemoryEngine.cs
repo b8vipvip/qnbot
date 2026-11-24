@@ -1048,6 +1048,11 @@ namespace Bot.ChromeNs
 
         private static async Task HandleAsync(QN qn, Func<BuyerMessageBurstLease, Task> inner, BuyerMessageBurstLease lease)
         {
+            if (Volatile.Read(ref _disabledForV2) != 0)
+            {
+                await inner(lease);
+                return;
+            }
             var burst = lease == null ? null : lease.Burst;
             if (qn == null || burst == null || burst.Items.Count < 1 || burst.LatestVisionItem != null || !burst.HasReplyableItem)
             {
