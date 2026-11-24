@@ -306,7 +306,7 @@ async function exportOcrTask(taskId){
     error.textContent=err.message||String(err);
     error.className="ocr-result bad";
   }finally{
-    if(button&&ocrTaskState.detailData)button.disabled=false;
+    if(button)button.disabled=false;
   }
 }
 ocrEl("ocrTaskDetailClose").addEventListener("click",()=>ocrEl("ocrTaskDetailDialog").close());
