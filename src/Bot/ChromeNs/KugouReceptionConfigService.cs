@@ -76,8 +76,9 @@ namespace Bot.ChromeNs
     // empty and disabled; JSON can never grant recharge or waive mandatory human review.
     internal static class KugouReceptionConfigService
     {
-        private const string Schema = "qnbot.kugou.reception-rules.v2";
-        private const string LegacySchema = "qnbot.kugou.reception-rules.v1";
+        private const string Schema = "qnbot.shop.reception-rules.v3";
+        private const string LegacySchemaV2 = "qnbot.kugou.reception-rules.v2";
+        private const string LegacySchemaV1 = "qnbot.kugou.reception-rules.v1";
         private static readonly Regex SafeId = new Regex(@"^[A-Za-z0-9_-]{1,128}$", RegexOptions.Compiled);
 
         private static ShopContext ResolveShop(string seller)
@@ -97,8 +98,14 @@ namespace Bot.ChromeNs
                 var folder = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
                 if (string.IsNullOrWhiteSpace(folder))
                     throw new InvalidOperationException("店铺配置目录为空。");
-                return Path.Combine(folder, "kugou-reception-rules.json");
+                return Path.Combine(folder, "shop-reception-rules.json");
             }
+        }
+
+        private static string LegacyPathForShop(ShopContext shop)
+        {
+            var current = PathForShop(shop);
+            return Path.Combine(Path.GetDirectoryName(current), "kugou-reception-rules.json");
         }
 
         private static JObject DefaultDocument()
@@ -106,7 +113,7 @@ namespace Bot.ChromeNs
             return new JObject
             {
                 ["schema"] = Schema,
-                ["version"] = 2,
+                ["version"] = 3,
                 ["enabled"] = false,
                 ["product_ids"] = new JArray(),
                 ["quarantine_knowledge_ids"] = new JArray(),
@@ -133,7 +140,7 @@ namespace Bot.ChromeNs
 
         private static JObject MigrateLegacyV1(JObject legacy)
         {
-            if (legacy == null || Convert.ToString(legacy["schema"]) != LegacySchema
+            if (legacy == null || Convert.ToString(legacy["schema"]) != LegacySchemaV1
                 || Convert.ToInt32(legacy["version"] ?? 0) != 1)
                 throw new InvalidOperationException("不支持的旧版接待配置。");
             if (legacy.Value<bool?>("manual_review_required") != true
@@ -143,8 +150,24 @@ namespace Bot.ChromeNs
             var migrated = DefaultDocument();
             var oldUrl = Convert.ToString(legacy["tcl_guide_url"]);
             if (IsHttpsUrl(oldUrl)) migrated["guide_url"] = oldUrl.Trim();
-            migrated["notes"] = "由 v1 自动迁移为 v2。为避免把旧源码业务事实自动复制到店铺配置，已保持 enabled=false；请人工核对并填写 product_ids、隔离ID、业务提示、视觉规则和教程地址后再启用。";
+            migrated["notes"] = "由旧版配置自动迁移为通用 v3。为避免把旧源码业务事实自动复制到店铺配置，已保持 enabled=false；请人工核对并填写 product_ids、隔离ID、业务提示、视觉规则和教程地址后再启用。";
             return migrated;
+        }
+
+        private static JObject MigrateLegacyV2(JObject legacy)
+        {
+            if (legacy == null || Convert.ToString(legacy["schema"]) != LegacySchemaV2
+                || Convert.ToInt32(legacy["version"] ?? 0) != 2)
+                throw new InvalidOperationException("不支持的旧版接待配置。");
+            if (legacy.Value<bool?>("manual_review_required") != true
+                || legacy.Value<bool?>("automatic_recharge_enabled") != false)
+                throw new InvalidOperationException("旧配置安全门禁不满足要求，拒绝自动迁移。");
+
+            legacy["schema"] = Schema;
+            legacy["version"] = 3;
+            legacy["notes"] = (Convert.ToString(legacy["notes"]) ?? string.Empty)
+                + " 已迁移为通用 ShopKey 配置格式 v3；所有业务名称、产品标识和规则内容均为店铺自定义数据。";
+            return legacy;
         }
 
         private static bool IsHttpsUrl(string value)
@@ -167,11 +190,13 @@ namespace Bot.ChromeNs
             catch (JsonException ex) { throw new InvalidOperationException("接待规则 JSON 格式错误：" + ex.Message); }
 
             var schema = Convert.ToString(obj["schema"]);
-            if (string.Equals(schema, LegacySchema, StringComparison.Ordinal))
+            if (string.Equals(schema, LegacySchemaV1, StringComparison.Ordinal))
                 obj = MigrateLegacyV1(obj);
+            else if (string.Equals(schema, LegacySchemaV2, StringComparison.Ordinal))
+                obj = MigrateLegacyV2(obj);
             if (!string.Equals(Convert.ToString(obj["schema"]), Schema, StringComparison.Ordinal))
                 throw new InvalidOperationException("接待规则 schema 不匹配。");
-            if (Convert.ToInt32(obj["version"] ?? 0) != 2)
+            if (Convert.ToInt32(obj["version"] ?? 0) != 3)
                 throw new InvalidOperationException("不支持的接待规则版本。");
 
             RequireBoolean(obj, "enabled");
@@ -402,11 +427,38 @@ namespace Bot.ChromeNs
         private static JObject ReadDocument(ShopContext shop)
         {
             var path = PathForShop(shop);
+            var sourcePath = File.Exists(path) ? path : LegacyPathForShop(shop);
+            if (!File.Exists(sourcePath)) return DefaultDocument();
+
             string error;
-            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 30, out error);
+            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(sourcePath, 2, 30, out error);
             if (!string.IsNullOrWhiteSpace(error))
                 throw new IOException("读取店铺接待配置失败：" + error);
-            return string.IsNullOrWhiteSpace(raw) ? DefaultDocument() : Validate(raw);
+            if (string.IsNullOrWhiteSpace(raw)) return DefaultDocument();
+
+            var validated = Validate(raw);
+            if (!string.Equals(sourcePath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules", 3000))
+                {
+                    if (lease == null || !lease.Acquired)
+                        throw new IOException("旧版接待配置迁移锁未获取，未修改原配置。");
+                    if (!File.Exists(path))
+                    {
+                        var migrated = validated.ToString(Formatting.Indented);
+                        if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, migrated, 3, 50, out error))
+                            throw new IOException("通用接待配置迁移失败：" + error);
+                    }
+                    else
+                    {
+                        var current = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 30, out error);
+                        if (!string.IsNullOrWhiteSpace(error))
+                            throw new IOException("读取已迁移接待配置失败：" + error);
+                        if (!string.IsNullOrWhiteSpace(current)) validated = Validate(current);
+                    }
+                }
+            }
+            return validated;
         }
 
         public static string GetJson(string seller)
@@ -423,6 +475,11 @@ namespace Bot.ChromeNs
             {
                 var info = new FileInfo(PathForShop(shop));
                 info.Refresh();
+                if (!info.Exists)
+                {
+                    info = new FileInfo(LegacyPathForShop(shop));
+                    info.Refresh();
+                }
                 return info.Exists
                     ? info.LastWriteTimeUtc.Ticks.ToString() + ":" + info.Length.ToString()
                     : "missing";
@@ -457,9 +514,10 @@ namespace Bot.ChromeNs
         public static string SaveJson(string seller, string raw)
         {
             var shop = ResolveShop(seller);
+            ReadDocument(shop); // migrate an existing legacy profile before the first generic write
             var validated = Validate(raw).ToString(Formatting.Indented);
             var path = PathForShop(shop);
-            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "KugouReceptionRules", 3000))
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules, 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("配置锁未获取，未修改任何规则。");
                 var directory = Path.GetDirectoryName(path);
@@ -483,7 +541,7 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(seller);
             var path = PathForShop(shop);
             string selectedBackup = null;
-            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "KugouReceptionRules", 3000))
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules, 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("恢复锁未获取。");
                 var directory = Path.GetDirectoryName(path);
