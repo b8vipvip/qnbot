@@ -207,7 +207,7 @@ def test_vision_model_selection_uses_exact_shopkey_and_never_global_fallback():
     assert "new AiEndpointConfig[0]" in source
     assert "fail-closed且不回退全局配置" in source
     assert "ResolveRuntimeBySellerNick" not in source
-    assert "本店未配置可用的视觉模型" in source
+    assert "已跳过：无法确认图片所属店铺身份" in source
 
 
 def test_recovered_buyer_messages_reenter_authoritative_shop_scope():
