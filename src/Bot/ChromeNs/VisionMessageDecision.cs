@@ -55,8 +55,8 @@ namespace Bot.ChromeNs
                 // the image merely because no billable vision endpoint is configured.
                 // ShopKey is supplied by the authoritative QN session. Resolve configuration from
                 // that scope, not from message.toid.nick, which can be an alias/display nickname.
-                // A failed preflight must not silently discard the image: the actual OCR request
-                // records the concrete endpoint/auth failure in the server task ledger and local log.
+                // A failed preflight must not silently discard the image: the OCR attempt records
+                // the concrete endpoint/auth failure locally; requests reaching the server enter its task ledger.
                 var shopScopeUsable = HasAuthoritativeShopScope(shopKey);
                 var localUsable = CanUseServerOcr(shopKey);
                 var selectedEndpoints = (ResolveShopVisionEndpoints(shopKey) ?? new AiEndpointConfig[0]).ToList();
@@ -100,7 +100,7 @@ namespace Bot.ChromeNs
                 if (!localUsable && !externalUsable)
                 {
                     Log.Info("图片消息没有可用的OCR/视觉连接预检结果，但仍进入视觉处理链路；"
-                        + "由实际OCR请求记录连接失败，避免静默丢弃图片: shopRef="
+                        + "由实际OCR处理阶段记录连接失败，避免静默丢弃图片: shopRef="
                         + MyWebSocketServer.DiagnosticRef("shop", shopKey));
                 }
 
@@ -111,7 +111,7 @@ namespace Bot.ChromeNs
                     Note = localUsable && !externalUsable
                         ? "使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。"
                         : (!localUsable && !externalUsable
-                            ? "已进入视觉处理链路；OCR连接状态由实际请求记录。"
+                            ? "已进入视觉处理链路；OCR连接状态由实际处理阶段记录。"
                             : string.Empty)
                 };
             }
