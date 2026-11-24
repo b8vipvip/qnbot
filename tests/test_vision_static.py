@@ -146,3 +146,12 @@ def test_ocr_text_fallback_includes_the_same_buyers_recent_conversation_context(
     assert 'ConversationContextStore.BuildTimelineText' in fallback
     assert '最近同一买家与客服对话（用于理解当前图片的上下文）' in fallback
     assert 'OCR文字AI兜底未获得有效答案' in fallback
+
+
+def test_vision_timeline_reads_are_shopkey_scoped():
+    service = read('src/Bot/ChromeNs/VisionRequestService.cs')
+    assert 'BuildScopedTimelineText(task, currentQuestion, 16)' in service
+    assert 'BuildScopedTimelineText(task, question, 12)' in service
+    helper = service[service.index('private static string BuildScopedTimelineText'):service.index('public static JObject BuildVisionPayload')]
+    assert 'ResolveRuntimeByShopKey(task.ShopKey)' in helper
+    assert 'ShopSettingsScope.Enter(shop, false)' in helper
