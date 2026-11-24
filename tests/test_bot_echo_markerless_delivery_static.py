@@ -63,6 +63,11 @@ def test_legacy_fixed_reply_rechecks_manual_takeover_before_send_and_retry():
     ]
 
     assert "Func<bool> preSendGuard = () =>" in method
+    assert "Params.Robot.CanUseRobotReal" in method
+    assert "Params.Robot.GetIsAutoReply()" in method
+    assert method.index("Params.Robot.GetIsAutoReply()") < method.index(
+        "ParallelReplyRelevanceGate.ShouldSend("
+    )
     assert "ParallelReplyRelevanceGate.ShouldSend(" in method
     assert "item.ShopKey" in method
     assert "item.BuyerNick, answer, 3, generationToken, preSendGuard" in method
