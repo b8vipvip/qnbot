@@ -538,22 +538,17 @@ namespace Bot.ChromeNs
                     // from the desktop process before declaring the image unavailable.
                     if (payload != null && IsHttpImageUrl(payload.resolvedUrl))
                     {
-                        var originalUrl = record.Url;
-                        record.Url = payload.resolvedUrl;
-                        try
+                        // Use a local URL override instead of mutating the shared cache record.
+                        // A concurrent Prime may publish a newer signed URL while this direct
+                        // fetch is in flight; restoring a captured old URL would overwrite it.
+                        var resolvedDownload = await DownloadAndPersistDirectAsync(
+                            record, endpoint, payload.resolvedUrl).ConfigureAwait(false);
+                        if (resolvedDownload != null && resolvedDownload.Success)
                         {
-                            var resolvedDownload = await DownloadAndPersistDirectAsync(record, endpoint).ConfigureAwait(false);
-                            if (resolvedDownload != null && resolvedDownload.Success)
-                            {
-                                Log.Info("千牛历史消息补全的签名图片URL已由客户端直连下载成功: seller="
-                                    + record.SellerNick + ", buyer=" + record.BuyerNick
-                                    + ", bytes=" + resolvedDownload.Bytes);
-                                return resolvedDownload;
-                            }
-                        }
-                        finally
-                        {
-                            record.Url = originalUrl;
+                            Log.Info("千牛历史消息补全的签名图片URL已由客户端直连下载成功: seller="
+                                + record.SellerNick + ", buyer=" + record.BuyerNick
+                                + ", bytes=" + resolvedDownload.Bytes);
+                            return resolvedDownload;
                         }
                     }
                     result.Error = payload == null || string.IsNullOrWhiteSpace(payload.error)
@@ -679,13 +674,15 @@ namespace Bot.ChromeNs
 
         private static async Task<CacheDownloadResult> DownloadAndPersistDirectAsync(
             CacheRecord record,
-            AiEndpointConfig endpoint)
+            AiEndpointConfig endpoint,
+            string urlOverride = null)
         {
             var result = new CacheDownloadResult();
             try
             {
+                var sourceUrl = string.IsNullOrWhiteSpace(urlOverride) ? record.Url : urlOverride;
                 Uri uri;
-                if (!Uri.TryCreate(record.Url, UriKind.Absolute, out uri)
+                if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out uri)
                     || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
                 {
                     result.Error = "图片 URL 协议不受支持";
@@ -754,7 +751,7 @@ namespace Bot.ChromeNs
                             Directory.CreateDirectory(CacheDirectory);
                             var path = Path.Combine(
                                 CacheDirectory,
-                                Sha256(record.Key + "|" + record.Url) + ExtensionForMime(mime));
+                                Sha256(record.Key + "|" + sourceUrl) + ExtensionForMime(mime));
                             var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
                             File.WriteAllBytes(temp, bytes);
                             if (File.Exists(path)) File.Delete(path);
