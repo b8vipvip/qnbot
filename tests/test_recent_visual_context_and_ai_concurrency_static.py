@@ -61,9 +61,28 @@ def test_recent_account_evidence_is_derived_from_shop_configured_app_and_generic
     assert "ApplicationName = applicationName" in visual
     assert "AccountNicknameRegex" in visual
     assert "AccountIdRegex" in visual
+    assert "ExtractedFieldsJson" in visual
+    assert "ParseExtractedAccountFields" in visual
+    assert "PhoneNumber = phoneNumber" in visual
+    assert "MembershipStatus = membershipStatus" in visual
     assert "TryResolveConfiguredApplication" in rules
     assert 'string.Equals(name, "{应用名称}"' in rules
     assert "酷狗" not in visual and "Kugou" not in visual
+
+
+def test_ocr_fields_are_persisted_separately_and_cleared_when_image_is_withdrawn():
+    learning = text("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    ocr_first = text("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision = text("src/Bot/ChromeNs/VisionRequestService.cs")
+    assert "ExtractedFieldsJson" in learning
+    assert "SerializeAccountFields" in learning
+    assert "add column ExtractedFieldsJson text" in learning
+    assert "old.ExtractedFieldsJson = string.Empty" in learning
+    assert "observation.ExtractedFieldsJson = string.Empty" in learning
+    assert "VisualKnowledgeLearningService.RecordVisionAnalysis" in ocr_first
+    assert "visualMatch.ExtractedFields" in ocr_first
+    assert "extractedAccountFields" in vision
+    assert "extractedAccountFields);" in vision
 
 
 def test_vision_prompt_uses_generic_configured_app_identity_without_login_requirement():
