@@ -259,7 +259,9 @@ namespace Bot.ChromeNs
                     && !string.IsNullOrWhiteSpace(accountEvidence.MessageKey))
                 {
                     var alias = "A1";
-                    var summary = "目标应用账号证据：已从买家图片识别到"
+                    var summary = "目标应用（"
+                        + (string.IsNullOrWhiteSpace(accountEvidence.ApplicationName) ? "名称未识别" : accountEvidence.ApplicationName)
+                        + "）账号证据：已从买家图片识别到"
                         + (string.IsNullOrWhiteSpace(accountEvidence.Nickname) ? "账号昵称未识别" : "账号昵称字段")
                         + "、"
                         + (string.IsNullOrWhiteSpace(accountEvidence.UserId) ? "账号ID未识别" : "账号ID字段")
