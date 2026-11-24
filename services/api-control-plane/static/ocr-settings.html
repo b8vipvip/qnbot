@@ -37,7 +37,27 @@
     .ocr-task-state{font-weight:600}
     .ocr-task-state[data-state="success"]{color:#15803d}
     .ocr-task-state[data-state="timeout"],.ocr-task-state[data-state="failed"],.ocr-task-state[data-state="rejected"]{color:#b42318}
-    @media(max-width:700px){.ocr-shell{padding:8px}.form-grid{grid-template-columns:1fr!important}.span-2{grid-column:auto!important}}
+    .ocr-task-actions{display:flex;gap:6px;align-items:center}
+    .ocr-task-actions button{padding:5px 9px;font-size:12px}
+    .ocr-task-dialog{width:min(900px,calc(100vw - 32px));max-width:900px;max-height:82vh;overflow:auto;border:1px solid var(--border,#d0d5dd);border-radius:12px;padding:18px;color:var(--text,#101828);background:var(--surface,#fff);box-shadow:0 18px 60px rgba(16,24,40,.24)}
+    .ocr-task-dialog::backdrop{background:rgba(16,24,40,.45)}
+    .ocr-task-detail-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--border,#e5e7eb);padding-bottom:12px;margin-bottom:12px}
+    .ocr-task-detail-head h3{margin:0 0 5px;font-size:18px}
+    .ocr-task-detail-head p{margin:0;color:var(--muted,#667085);font-size:12px;overflow-wrap:anywhere}
+    .ocr-task-detail-buttons{display:flex;gap:8px;flex-shrink:0}
+    .ocr-task-detail-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}
+    .ocr-task-detail-summary div{padding:9px;border:1px solid var(--border,#e5e7eb);border-radius:8px}
+    .ocr-task-detail-summary span{display:block;color:var(--muted,#667085);font-size:11px;margin-bottom:4px}
+    .ocr-task-detail-summary strong{font-size:13px;overflow-wrap:anywhere}
+    .ocr-task-detail-events{list-style:none;margin:8px 0 16px;padding:0;max-height:260px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:8px}
+    .ocr-task-detail-events li{padding:10px 12px;border-bottom:1px solid var(--border,#e5e7eb)}
+    .ocr-task-detail-events li:last-child{border-bottom:0}
+    .ocr-task-detail-events strong{display:block;font-size:13px}
+    .ocr-task-detail-events small{display:block;color:var(--muted,#667085);margin-top:3px}
+    .ocr-task-detail-events pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+    .ocr-task-detail-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;padding:12px;border:1px solid var(--border,#e5e7eb);border-radius:8px;background:rgba(127,127,127,.04);font-size:12px}
+    .ocr-task-detail-privacy{color:var(--muted,#667085);font-size:11px;margin-top:10px}
+    @media(max-width:700px){.ocr-shell{padding:8px}.form-grid{grid-template-columns:1fr!important}.span-2{grid-column:auto!important}.ocr-task-detail-head{display:block}.ocr-task-detail-buttons{margin-top:10px}}
   </style>
 </head>
 <body>
@@ -115,7 +135,7 @@
     <div class="panel-head">
       <div>
         <h2 id="ocrTasksHeading">OCR 任务记录</h2>
-        <p>记录服务端 OCR 每次调用的排队、推理与响应状态。仅保存诊断指标，不存储识别文字、原图或买家资料。最多保留最近 5000 条。</p>
+        <p>记录服务端 OCR 每次调用的排队、校验、推理、返回与异常过程。详情中提供脱敏识别文本；不保存原图、买家身份或 API 令牌。最多保留最近 5000 条。</p>
       </div>
       <div class="ocr-task-toolbar">
         <label for="ocrTaskFilter">状态</label>
@@ -136,9 +156,9 @@
     <div class="ocr-task-table-wrap">
       <table class="ocr-task-table">
         <thead>
-          <tr><th>开始时间</th><th>任务 ID</th><th>状态</th><th>阶段</th><th>排队 / 推理 / 总耗时</th><th>图片大小</th><th>识别字数 / 置信度</th><th>响应</th><th>原因代码</th></tr>
+          <tr><th>开始时间</th><th>任务 ID</th><th>状态</th><th>阶段</th><th>排队 / 推理 / 总耗时</th><th>图片大小</th><th>识别字数 / 置信度</th><th>响应</th><th>原因代码</th><th>详情</th></tr>
         </thead>
-        <tbody id="ocrTaskRows"><tr><td colspan="9" class="ocr-task-empty">尚无任务记录</td></tr></tbody>
+        <tbody id="ocrTaskRows"><tr><td colspan="10" class="ocr-task-empty">尚无任务记录</td></tr></tbody>
       </table>
     </div>
     <div class="ocr-task-pagination">
@@ -148,6 +168,26 @@
     </div>
     <p class="hint">这里的“成功”仅表示 OCR 服务端已返回识别结果；客户端知识库命中与向买家发送消息的状态不在本列表内。超时后原生推理可能仍占用计算资源，列表记录的是请求超时终态。</p>
     <div id="ocrTaskError" class="ocr-result" role="status"></div>
+    <dialog id="ocrTaskDetailDialog" class="ocr-task-dialog" aria-labelledby="ocrTaskDetailTitle">
+      <div class="ocr-task-detail-head">
+        <div>
+          <h3 id="ocrTaskDetailTitle">OCR 任务详情</h3>
+          <p id="ocrTaskDetailSubtitle">正在读取任务详情…</p>
+        </div>
+        <div class="ocr-task-detail-buttons">
+          <button id="ocrTaskDetailExport" class="secondary" type="button" disabled>导出 JSON</button>
+          <button id="ocrTaskDetailClose" class="secondary" type="button">关闭</button>
+        </div>
+      </div>
+      <div id="ocrTaskDetailSummary" class="ocr-task-detail-summary"></div>
+      <h4>处理过程日志</h4>
+      <ol id="ocrTaskDetailEvents" class="ocr-task-detail-events">
+        <li>正在读取任务事件…</li>
+      </ol>
+      <h4>OCR 识别结果（脱敏）</h4>
+      <pre id="ocrTaskDetailResult" class="ocr-task-detail-result">尚无识别结果</pre>
+      <p class="ocr-task-detail-privacy">原始图片、买家身份、请求头和 API 令牌不会保存。电话号码、邮箱及长数字 ID 会自动脱敏。</p>
+    </dialog>
   </section>
 
   <section class="panel">
@@ -163,6 +203,6 @@
     <p class="hint">识别引擎固定为 RapidOCR/ONNXRuntime；当前没有需要人工选择的模型路径或模型名称。模型由服务端镜像构建过程预取。</p>
   </section>
 </main>
-<script src="/static/ocr-settings.js?v=3"></script>
+<script src="/static/ocr-settings.js?v=4"></script>
 </body>
 </html>
