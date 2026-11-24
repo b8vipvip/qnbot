@@ -72,7 +72,7 @@ def test_canonical_short_reply_precedes_normal_merge_and_preserves_handoff_prior
     canonical = canonical_block()
 
     local = canonical.index("LocalShortReplyService.TryResolve(")
-    outcome = "return localOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;"
+    outcome = "return localOutcome;"
     local_end = canonical.index(outcome, local) + len(outcome)
     handoff_check = canonical.rfind("BotFeatureStore.EvaluateAutoReplyRule(question)", 0, local)
     local_block = canonical[local:local_end]
