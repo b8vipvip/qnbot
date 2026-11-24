@@ -141,10 +141,16 @@ namespace Bot.Knowledge
             var result = new List<string>();
             value = value ?? string.Empty;
             foreach (Match match in Regex.Matches(value,
-                @"酷狗音乐|酷狗|超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|K歌|充值|支付|付款|验证码|订单|退款|支付宝|微信|APP|软件|TCL|海信|创维|小米|华为",
+                @"超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|K歌|充值|支付|付款|验证码|订单|退款|支付宝|微信|APP|软件|TCL|海信|创维|小米|华为",
                 RegexOptions.IgnoreCase))
             {
                 result.Add(NormalizeEntity(match.Value));
+            }
+            foreach (Match match in Regex.Matches(value,
+                @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV))",
+                RegexOptions.IgnoreCase))
+            {
+                result.Add(match.Value);
             }
             foreach (Match match in Regex.Matches(value, @"\b\d{8,16}\b"))
                 result.Add("product:" + match.Value);
@@ -155,7 +161,7 @@ namespace Bot.Knowledge
         public static string ResolveSubject(string text, IEnumerable<string> entities)
         {
             var list = (entities ?? Enumerable.Empty<string>()).Where(x => !x.StartsWith("product:", StringComparison.Ordinal)).ToList();
-            var preferred = new[] { "酷狗音乐", "电视", "TV", "车机", "手机", "电脑", "平板", "会员", "K歌", "账号", "微信", "支付宝", "支付", "付款" };
+            var preferred = new[] { "电视", "TV", "车机", "手机", "电脑", "平板", "会员", "K歌", "账号", "微信", "支付宝", "支付", "付款" };
             var selected = preferred.Where(x => list.Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase))).Take(3).ToList();
             if (selected.Count > 0) return string.Join("/", selected);
             var cleaned = Regex.Replace((text ?? string.Empty).Trim(), @"^(这个|那个|这款|那款|请问|想问下)+", string.Empty);
@@ -464,7 +470,6 @@ namespace Bot.Knowledge
         {
             if (string.Equals(value, "电视机", StringComparison.OrdinalIgnoreCase)) return "电视";
             if (string.Equals(value, "tv", StringComparison.OrdinalIgnoreCase)) return "TV";
-            if (string.Equals(value, "酷狗", StringComparison.OrdinalIgnoreCase)) return "酷狗音乐";
             return (value ?? string.Empty).Trim();
         }
 
