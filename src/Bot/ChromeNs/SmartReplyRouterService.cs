@@ -357,7 +357,7 @@ namespace Bot.ChromeNs
             var pool = knowledge
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
                 .Where(x => !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x))
-                .Where(x => !KugouReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer))
+                .Where(x => !ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer))
                 .Select(x => ScoreCandidate(x, question, resolvedText, originalQuery, resolvedQuery, queryIntent, state, context))
                 .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
                 .Where(x => ConversationProgressGuardService.AllowKnowledge(x.Entry, state, question))
