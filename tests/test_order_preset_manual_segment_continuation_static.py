@@ -38,4 +38,4 @@ def test_manual_intervention_still_blocks_ordinary_ai_replies():
     assert 'SetSendCancellation("人工接管"' in block
     assert 'SetSendCancellation("人工接管"' in block
     assert "LastSendWasCancelled" in reliable
-    assert "自动发送因人工接管取消，禁止重试" in qn
+    assert "自动发送因人工接管或发送前状态门禁取消，禁止重试" in qn
