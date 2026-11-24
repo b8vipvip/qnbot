@@ -184,8 +184,8 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("OCR-first知识库检索失败，继续视觉模型链路: " + ex.Message, 20);
-                return null;
+                Log.ErrorWithMaxCount("视觉理解已命中，但Knowledge V2检索失败；保留本轮结构化字段并继续上游AI: " + ex.Message, 20);
+                return BuildVisualFallback(task, ocr, visualMatch, visualContext, string.Empty);
             }
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
