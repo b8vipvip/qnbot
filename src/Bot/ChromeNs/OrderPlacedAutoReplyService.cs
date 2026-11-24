@@ -1691,7 +1691,7 @@ namespace Bot.ChromeNs
                     if (sendOk)
                     {
                         OrderGuidanceDeliveryGuard.MarkDelivered(plan, plan.IsBuyerFollowUp ? "Bot强制补发" : "Bot强制订单规则发送");
-                        ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
+                        ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer, plan.ShopKey);
                     }
                     var sentSegments = presetSendResult == null ? (sendOk ? 1 : 0) : presetSendResult.SentSegments;
                     var finishPersisted = OrderPlacedAutoReplyService.FinishExecution(plan, sendOk, sentSegments);
