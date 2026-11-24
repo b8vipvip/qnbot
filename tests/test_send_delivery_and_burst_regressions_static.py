@@ -447,3 +447,13 @@ def test_fixed_reply_guard_cancellation_is_not_reported_as_transport_failure():
     assert "return ok" not in method
     assert "return ok\n                    ? CanonicalPreMergeOutcome.Consumed" in method
 
+def test_canonical_premerge_cancelled_outcome_terminates_the_current_buyer_generation():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    process = coordinator[
+        coordinator.index("private async Task ProcessPreMergeAsync"):
+        coordinator.index("private bool HasPendingBuyerMessages")
+    ]
+    assert "if (outcome == CanonicalPreMergeOutcome.Cancelled)" in process
+    assert "BuyerSessionAgentState.Cancelled" in process
+    assert '"canonical_pre_merge_cancelled"' in process
+
