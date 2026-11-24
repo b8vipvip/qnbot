@@ -305,8 +305,6 @@ namespace Bot.Knowledge
                 .Where(x => x.Length > 0)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            var answerMessageId = normalizedAnswerMessageIds.LastOrDefault() ?? string.Empty;
-
             if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
                 || questionMessageId.Length == 0 || normalizedAnswerMessageIds.Count == 0
                 || normalizedAnswerMessageIds.Count > 4

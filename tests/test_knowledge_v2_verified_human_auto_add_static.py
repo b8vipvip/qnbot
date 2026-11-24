@@ -507,3 +507,16 @@ def test_repository_audit_and_idempotency_keys_include_the_full_reply_bundle():
     assert "normalizedAnswerMessageIds.Count > 4" in method
     assert 'string.Join(",", normalizedAnswerMessageIds)' in method
     assert 'questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds)' in method
+
+
+
+def test_auto_apply_accepts_one_question_plus_multiple_verified_human_reply_ids():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    method = service[
+        service.index("private static bool CanAutoApplyVerifiedNewKnowledge"):
+        service.index("private static bool TryCreateVerifiedNewKnowledgeCandidate")
+    ]
+    assert "candidate.EvidenceMessageIds.Count < 2" in method
+    assert "candidate.EvidenceMessageIds.Count > 5" in method
+    assert "candidate.EvidenceMessageIds[0]" in method
+    assert "candidate.EvidenceMessageIds[1]" in method

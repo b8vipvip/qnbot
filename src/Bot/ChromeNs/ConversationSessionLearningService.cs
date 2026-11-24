@@ -1357,7 +1357,7 @@ namespace Bot.ChromeNs
                 || !string.IsNullOrWhiteSpace(candidate.KnowledgeId)
                 || !string.Equals(candidate.EvidenceType, "manual_reply", StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(candidate.SourceFingerprint, analysis.SourceFingerprint, StringComparison.Ordinal)
-                || candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count != 2
+                || candidate.EvidenceMessageIds == null || candidate.EvidenceMessageIds.Count < 2 || candidate.EvidenceMessageIds.Count > 5
                 || double.IsNaN(candidate.Confidence) || double.IsInfinity(candidate.Confidence)
                 || candidate.Confidence < 0.90 || candidate.Confidence > 1.0)
             {
