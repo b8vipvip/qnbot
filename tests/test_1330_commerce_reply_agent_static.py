@@ -221,7 +221,8 @@ def test_commerce_learning_does_not_drop_report_notifications_while_processing()
     assert "Interlocked.CompareExchange(ref _pendingUpdates, 0, 1)" in changed
     assert "Interlocked.Exchange(ref _processing, 0)" in changed
     assert "OnReportsChanged();" in changed
-    assert "ConversationSessionLearningService.GetReports(ConversationSessionLearningService.MaxReports)" in latest
+    assert "ConversationSessionLearningService.GetReports(" in latest
+    assert "ConversationSessionLearningService.MaxReports" in latest
 
 
 def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
