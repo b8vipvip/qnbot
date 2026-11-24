@@ -31,6 +31,7 @@ def test_post_order_photo_preset_uses_shop_configured_application_identity():
     assert "LooksLikeConfiguredPhotoGuidance" in helper
     assert "PhotoInstructionAllCues" in helper
     assert "PhotoInstructionAnyCues" in helper
+    assert "config == null || !config.Enabled" in helper
     assert "TryResolveConfiguredApplication" in helper
     assert "HasConfiguredOfficialAppEvidence" in helper
     assert "ExplicitOfficialAppRegex" in helper
