@@ -152,7 +152,7 @@ namespace Bot.ChromeNs
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
-                        return null;
+                        return BuildVisualFallback(visualMatch, ocr, "Knowledge V2未启用");
                     }
 
                     if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
@@ -180,7 +180,7 @@ namespace Bot.ChromeNs
                         Log.Info("服务端OCR已完成，但Knowledge V2索引在等待窗口内仍未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
                             + ", buyer=" + task.BuyerNick);
-                        return null;
+                        return BuildVisualFallback(visualMatch, ocr, "Knowledge V2索引未就绪");
                     }
 
                     decision = KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question);
@@ -193,7 +193,7 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("OCR-first知识库检索失败，继续视觉模型链路: " + ex.Message, 20);
-                return null;
+                return BuildVisualFallback(visualMatch, ocr, "Knowledge V2检索异常");
             }
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
@@ -250,6 +250,26 @@ namespace Bot.ChromeNs
                 LocalOcrLatencyMs = ocr.ElapsedMs,
                 LocalOcrCacheHit = ocr.CacheHit,
                 LocalOcrEngine = ocr.Engine
+            };
+        }
+
+        private static VisionRequestResult BuildVisualFallback(
+            VisualUnderstandingMatch match, LocalOcrResult ocr, string reason)
+        {
+            return new VisionRequestResult
+            {
+                Success = false,
+                Error = reason ?? string.Empty,
+                KnowledgeV2ContextPromptAddon = match == null ? string.Empty : match.ContextText,
+                VisualQuestion = match == null ? string.Empty : match.AppName + "/" + match.ScreenName,
+                VisualSummary = match == null ? string.Empty : match.Description,
+                VisualTags = "server-ocr,visual-understanding",
+                MatchedVisualKnowledgeId = match == null ? string.Empty : match.RuleId,
+                LocalOcrText = ocr == null ? string.Empty : ocr.Text,
+                LocalOcrConfidence = ocr == null ? 0d : ocr.Confidence,
+                LocalOcrLatencyMs = ocr == null ? 0L : ocr.ElapsedMs,
+                LocalOcrCacheHit = ocr != null && ocr.CacheHit,
+                LocalOcrEngine = ocr == null ? string.Empty : ocr.Engine
             };
         }
 
