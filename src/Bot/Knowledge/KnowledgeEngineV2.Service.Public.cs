@@ -167,12 +167,37 @@ namespace Bot.Knowledge
                     configuredSubject = string.Empty;
                 if (configuredSubject.Length >= 2)
                     evidenceEntities.Insert(0, configuredSubject);
-                query.Entities = (query.Entities ?? new List<string>())
-                    .Concat(evidenceEntities)
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(10)
-                    .ToList();
+
+                if (!buyerMessageHasProductId && evidenceHasProductId)
+                {
+                    // The image is the freshest product evidence. Put its explicitly labeled
+                    // product ID before other OCR and inherited query entities so the bounded
+                    // ten-entity query cannot silently drop the product key.
+                    var evidenceProductIds = evidenceEntities
+                        .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var evidenceNonProductEntities = evidenceEntities
+                        .Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var queryEntities = (query.Entities ?? new List<string>())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .ToList();
+                    query.Entities = evidenceProductIds
+                        .Concat(evidenceNonProductEntities)
+                        .Concat(queryEntities)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(10)
+                        .ToList();
+                }
+                else
+                {
+                    query.Entities = (query.Entities ?? new List<string>())
+                        .Concat(evidenceEntities)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(10)
+                        .ToList();
+                }
                 if (configuredSubject.Length >= 2)
                     query.Subject = string.IsNullOrWhiteSpace(query.Subject)
                         ? configuredSubject
