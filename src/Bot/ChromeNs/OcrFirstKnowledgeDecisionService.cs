@@ -198,7 +198,7 @@ namespace Bot.ChromeNs
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextAddon = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
-                Log.Info("OCR-first知识库未达到安全直答条件，继续视觉模型链路: seller=" + task.SellerNick
+                Log.Info("视觉理解已命中，但Knowledge V2未达到安全直答条件，携带结构化图片事实交给上游AI: seller=" + task.SellerNick
                     + ", buyer=" + task.BuyerNick
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
