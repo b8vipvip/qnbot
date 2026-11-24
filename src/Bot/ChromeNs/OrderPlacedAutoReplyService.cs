@@ -1406,7 +1406,7 @@ namespace Bot.ChromeNs
                 }
                 if (sent)
                 {
-                    KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);
+                    ShopReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);
                     return true;
                 }
 
@@ -1422,7 +1422,7 @@ namespace Bot.ChromeNs
                 {
                     Log.Info("订单发送已由远端历史二次确认，取消自动重试: seller=" + plan.Seller
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
-                    KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);
+                    ShopReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);
                     return true;
                 }
                 if (remote == RemoteSellerEchoVerification.Unavailable)
