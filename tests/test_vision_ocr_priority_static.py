@@ -80,9 +80,10 @@ def test_ai_first_yields_before_ocr_direct_reply_but_keeps_no_ai_fallback():
 def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     vision_gate = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    prewarm = decision.index("PrepareForVision(task.ShopKey, knowledgeSeller)")
     ocr_call = decision.index("LocalOcrService.TryRecognizeAsync")
-    knowledge_gate = decision.index("KnowledgeEngineV2Service.IsEnabled")
-    assert ocr_call < knowledge_gate
+    knowledge_gate = decision.index("KnowledgeEngineV2Service.IsSnapshotReady")
+    assert prewarm < ocr_call < knowledge_gate
     assert "task.ShopKey," in decision
     assert "task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient" in decision
     assert "ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey)" in decision
