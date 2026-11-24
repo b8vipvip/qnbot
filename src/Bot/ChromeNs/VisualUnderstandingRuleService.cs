@@ -229,7 +229,9 @@ namespace Bot.ChromeNs
                     && string.Equals(x.AppName, "酷狗音乐", StringComparison.Ordinal));
                 if (legacy != null)
                 {
+                    var wasEnabled = legacy.Enabled;
                     ApplyGenericAccountTemplate(legacy);
+                    legacy.Enabled = wasEnabled;
                     legacy.UpdatedAtTicks = DateTime.Now.Ticks;
                     DbHelper.Db.SaveRecordsInTransaction(new List<object> { legacy });
                     rules = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
