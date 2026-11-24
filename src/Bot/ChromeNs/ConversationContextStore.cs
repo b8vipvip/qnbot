@@ -408,10 +408,12 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string currentQuestion,
-            int maxTurns)
+            int maxTurns,
+            string shopKey = null)
         {
             TimelineState state;
-            if (!States.TryGetValue(Key(seller, buyer), out state)) return new List<ConversationContextTurn>();
+            if (!States.TryGetValue(Key(seller, buyer, shopKey), out state))
+                return new List<ConversationContextTurn>();
             var normalizedCurrent = NormalizeText(currentQuestion);
             var now = DateTime.Now;
             lock (state.Sync)
@@ -1336,16 +1338,22 @@ namespace Bot.ChromeNs
                 Log.Info("会话上下文缓存清理: removed=" + removed + ", retained=" + States.Count);
         }
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string seller, string buyer, string shopKey = null)
         {
-            return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()
+            return ScopeKey(seller, shopKey) + "#" + (seller ?? string.Empty).Trim()
                 + "#" + (buyer ?? string.Empty).Trim();
         }
 
         private static string ScopeKey(string seller, string shopKey = null)
         {
             shopKey = (shopKey ?? string.Empty).Trim();
-            if (shopKey.Length > 0) return shopKey;
+            if (shopKey.Length > 0)
+            {
+                var exact = ResolveShop(seller, shopKey);
+                return exact == null
+                    ? "unresolved:" + Guid.NewGuid().ToString("N")
+                    : exact.ShopKey;
+            }
             var current = ShopSettingsScope.Current;
             if (current != null)
                 return string.Equals((current.SellerNick ?? string.Empty).Trim(),
