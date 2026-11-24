@@ -69,3 +69,10 @@ def test_image_followup_preserves_shop_scope_and_recognizes_workflow_continuatio
     assert "IsSequentialWorkflowFollowUp(compact)" in pipeline
     assert '"然后怎么弄"' in pipeline
     assert '"接下来怎么办"' in pipeline
+
+
+def test_withdrawal_aware_cached_image_rebind_keeps_shop_key():
+    pipeline = text("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    start = pipeline.index("var synthetic = new BuyerMessageBurstItem")
+    end = pipeline.index("};", start)
+    assert "ShopKey = burst.ShopKey" in pipeline[start:end]
