@@ -254,6 +254,7 @@ def _public_accounts(payload: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "nickname": str(payload.get("nickname") or "").strip()[:120],
                 "userid": str(payload.get("userid") or "").strip()[:120],
+                "phone": str(payload.get("phone") or payload.get("mobile") or payload.get("mobile_phone") or payload.get("phone_number") or "").strip()[:32],
                 "selector": "zh1",
             }
         )
@@ -268,10 +269,11 @@ def _public_accounts(payload: Dict[str, Any]) -> Dict[str, Any]:
                 {
                     "nickname": str(item.get("nickname") or "").strip()[:120],
                     "userid": str(item.get("userid") or "").strip()[:120],
+                    "phone": str(item.get("phone") or item.get("mobile") or item.get("mobile_phone") or item.get("phone_number") or "").strip()[:32],
                     "selector": "zh" + str(index),
                 }
             )
-    accounts = [x for x in accounts if x["nickname"] or x["userid"]]
+    accounts = [x for x in accounts if x["nickname"] or x["userid"] or x["phone"]]
     if not accounts:
         raise HTTPException(status_code=502, detail="账号查询接口未返回可确认账号")
     return {"status": status, "record_id": record_id, "accounts": accounts}
