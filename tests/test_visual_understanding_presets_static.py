@@ -46,7 +46,8 @@ def test_ocr_visual_preset_precedes_knowledge_v2_and_ai_receives_extracted_facts
     assert match < knowledge
     assert "OCR 未命中本店视觉理解预设，转交上游视觉 AI" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
-    assert "KnowledgeV2ContextPromptAddon = visualMatch.ContextText" in decision
+    assert "contextAddon = visualMatch.ContextText" in decision
+    assert "KnowledgeV2ContextPromptAddon = contextAddon" in decision
     assert "knowledgeV2ContextAddon" in vision
     assert "requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr)" in vision
 
