@@ -53,11 +53,11 @@ namespace Bot.ChromeNs
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex AccountNicknameRegex = new Regex(
-            @"(?:账号)?昵称\\s*(?:[:：]|为)\\s*([^\\s,，;；。|]{1,40})",
+            @"(?:账号)?昵称\s*(?:[:：]|为)\s*([^\s,，;；。|]{1,40})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex AccountIdRegex = new Regex(
-            @"(?:[\\u4e00-\\u9fff]{0,12})?(?:用户|账号)?ID\\s*(?:[:：]|为)\\s*([A-Za-z0-9_-]{3,64})",
+            @"(?:[\u4e00-\u9fff]{0,12})?(?:用户|账号)?ID\s*(?:[:：]|为)\s*([A-Za-z0-9_-]{3,64})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static bool IsWithdrawnObservation(
@@ -325,7 +325,7 @@ namespace Bot.ChromeNs
             out string applicationName)
         {
             applicationName = string.Empty;
-            var text = Regex.Replace((visualText ?? string.Empty).ToLowerInvariant(), @"\\s+", string.Empty);
+            var text = Regex.Replace((visualText ?? string.Empty).ToLowerInvariant(), @"\s+", string.Empty);
             VisualUnderstandingRuleEntity rule;
             if (!VisualUnderstandingRuleService.TryResolveConfiguredApplication(
                 shopKey, seller, text, out applicationName, out rule))
@@ -334,12 +334,12 @@ namespace Bot.ChromeNs
             var explicitOfficial = ExplicitOfficialAppRegex.IsMatch(text);
             if (BuiltInOrUntrustedRegex.IsMatch(text) && !explicitOfficial) return false;
 
-            var cues = ((rule.RequiredKeywords ?? string.Empty) + "\\n"
-                    + (rule.OptionalKeywords ?? string.Empty) + "\\n"
+            var cues = ((rule.RequiredKeywords ?? string.Empty) + "\n"
+                    + (rule.OptionalKeywords ?? string.Empty) + "\n"
                     + (rule.ScreenName ?? string.Empty))
-                .Split(new[] { '\\r', '\\n', '|', ';', '；', ',', '，' },
+                .Split(new[] { '\r', '\n', '|', ';', '；', ',', '，' },
                     StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => Regex.Replace(x.Trim(), @"\\s+", string.Empty))
+                .Select(x => Regex.Replace(x.Trim(), @"\s+", string.Empty))
                 .Where(x => x.Length >= 2)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
