@@ -467,6 +467,18 @@ namespace Bot.ChromeNs
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
                 return;
             }
+            var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            if (sendCancelled)
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                if (lifecycleLease.IsCurrent)
+                    lifecycleLease.MarkCompleted("vision_send_cancelled");
+                if (ctl != null)
+                    ctl.SetSendResult(false, "未发送：人工接管或发送前会话门禁已取消旧图片回复");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "视觉回复发送前会话门禁取消", burst.ShopKey);
+                return;
+            }
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
