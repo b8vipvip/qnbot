@@ -51,7 +51,7 @@ namespace Bot.Knowledge
             {
                 Width = 330, Height = 30, Margin = new Thickness(0, 0, 8, 0),
                 VerticalContentAlignment = VerticalAlignment.Center,
-                ToolTip = "只需输入一句业务知识，例如：电视端会员支持酷狗TV登录，购买后在电视端使用手机号登录即可。AI会自动生成标题、类型、Intent、Subject、Predicate、实体、同义问法、标准答案、条件、风险和可信度等字段。"
+                ToolTip = "只需输入一句业务知识，例如：电视端会员支持某应用登录，购买后在电视端使用手机号登录即可。AI会自动生成标题、类型、Intent、Subject、Predicate、实体、同义问法、标准答案、条件、风险和可信度等字段。"
             };
             var create = new Button { Content = "AI一句话新增", Width = 112, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
             var index = toolbar.Children.IndexOf(legacyAdd);
