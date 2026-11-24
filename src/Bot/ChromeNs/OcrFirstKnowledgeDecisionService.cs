@@ -87,7 +87,7 @@ namespace Bot.ChromeNs
 
             var question = BuildKnowledgeQuestion(task.CombinedQuestion, ocr.Text);
             KnowledgeV2Decision decision;
-            string knowledgeSeller;
+            string knowledgeSeller = string.Empty;
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
