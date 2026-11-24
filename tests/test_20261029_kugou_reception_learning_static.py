@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LEARNING = "src/Bot/ChromeNs/ConversationSessionLearningService.cs"
-POLICY = "src/Bot/ChromeNs/KugouReceptionPolicy.cs"
+POLICY = "src/Bot/ChromeNs/ShopReceptionPolicy.cs"
 
 def text(p):
     return (ROOT / p).read_text(encoding="utf-8-sig")
@@ -82,7 +82,7 @@ def test_knowledge_center_exposes_scoped_read_only_audit():
     assert "KnowledgeV2ReceptionAuditPage.cs" in build
 
 def test_shop_rule_editor_is_validated_versioned_and_reversible():
-    rules = text("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    rules = text("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
     nav = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     target = text("src/Directory.Build.targets")
@@ -101,7 +101,7 @@ def test_shop_rule_editor_is_validated_versioned_and_reversible():
     assert 'Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller))' in nav
     assert "ShopReceptionConfigService.SaveJson(_seller, _editor.Text)" in ui
     assert "ShopReceptionConfigService.RestoreLatestBackup(_seller)" in ui
-    assert "KugouReceptionConfigService.cs" in target
+    assert "ShopReceptionConfigService.cs" in target
     assert "KnowledgeV2ReceptionRulesPage.cs" in target
 
 def test_optional_guidance_flags_never_disable_critical_safety():
@@ -118,7 +118,7 @@ def test_optional_guidance_flags_never_disable_critical_safety():
 
 
 def test_private_profile_migration_is_explicit_and_never_auto_enables_old_store_policy():
-    rules = text("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    rules = text("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
     assert "MigrateLegacyV1" in rules
     assert 'migrated["notes"]' in rules
