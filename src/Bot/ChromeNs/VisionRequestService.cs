@@ -286,7 +286,7 @@ namespace Bot.ChromeNs
                 var image = await _resolver.ResolveAsync(
                     task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient);
                 if (image == null || !image.Success) return null;
-                var ocr = LocalOcrService.TryGetCachedRecognition(image.LocalCachePath);
+                var ocr = LocalOcrService.TryGetCachedRecognition(image.LocalCachePath, task.ShopKey, task.BuyerNick);
                 if (ocr == null || !ocr.Success || ocr.Confidence < 0.88
                     || string.IsNullOrWhiteSpace(ocr.Text)
                     || ocr.Text.Trim().Length < 8) return null;
