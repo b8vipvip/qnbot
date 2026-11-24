@@ -448,6 +448,7 @@ namespace Bot.ChromeNs
                 {
                     var path = ExistingAuditPath();
                     if (string.IsNullOrWhiteSpace(path)) return "没有审计目录。";
+                    if (!File.Exists(path)) return "当前店铺还没有接待决策记录。";
                     string error;
                     var content = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (!string.IsNullOrWhiteSpace(error)) return "读取审计失败：" + error;
@@ -473,7 +474,7 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop))
                 {
                     var path = ExistingAuditPath();
-                    if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return string.Empty;
                     string error;
                     var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
@@ -554,7 +555,8 @@ namespace Bot.ChromeNs
         {
             var current = AuditPath(false);
             if (!string.IsNullOrWhiteSpace(current) && File.Exists(current)) return current;
-            return AuditPath(true);
+            var legacy = AuditPath(true);
+            return !string.IsNullOrWhiteSpace(legacy) && File.Exists(legacy) ? legacy : current;
         }
 
         private static void AppendAuditEntry(
@@ -567,11 +569,10 @@ namespace Bot.ChromeNs
             string evidence,
             string ruleId)
         {
-            string error;
-            var raw = File.Exists(sourcePath)
-                ? CrossProcessAtomicStateFile.ReadAllTextShared(sourcePath, 2, 25, out error)
-                : string.Empty;
-            if (!File.Exists(sourcePath)) error = string.Empty;
+            string error = string.Empty;
+            var raw = string.Empty;
+            if (File.Exists(sourcePath))
+                raw = CrossProcessAtomicStateFile.ReadAllTextShared(sourcePath, 2, 25, out error);
             if (!string.IsNullOrWhiteSpace(error))
                 throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
 
