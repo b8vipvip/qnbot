@@ -82,7 +82,7 @@ namespace Bot.Knowledge
             var evidenceMode = _showEvidence;
             Task.Run(() => evidenceMode
                     ? ReceptionEvidenceLedger.GetAuditJson(_seller)
-                    : KugouReceptionPolicy.GetAuditJson(_seller))
+                    : ShopReceptionPolicy.GetAuditJson(_seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (t.IsFaulted)
@@ -111,7 +111,7 @@ namespace Bot.Knowledge
             {
                 var json = _showEvidence
                     ? ReceptionEvidenceLedger.GetAuditJson(_seller)
-                    : KugouReceptionPolicy.GetAuditJson(_seller);
+                    : ShopReceptionPolicy.GetAuditJson(_seller);
                 // The source is a shop-isolated, hashed audit: never export raw buyer messages.
                 if (!json.TrimStart().StartsWith("[", StringComparison.Ordinal))
                 {
