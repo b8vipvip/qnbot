@@ -112,7 +112,7 @@ def test_ai_history_exposes_existing_session_learning_reports():
 def test_learning_timeline_uses_same_shop_scoped_key_as_context_store():
     ctx=read("src/Bot/ChromeNs/ConversationContextStore.cs")
     bridge=read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
-    assert 'return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()' in ctx
+    assert 'return ScopeKey(seller, shopKey) + "#" + (seller ?? string.Empty).Trim()' in ctx
     assert 'States.TryGetValue(Key(seller, buyer), out state)' in ctx
     assert 'ConversationContextStore.GetExistingLearningState(seller, buyer)' in bridge
     assert '(seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim()' not in bridge
