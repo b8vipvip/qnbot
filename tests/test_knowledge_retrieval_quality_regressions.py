@@ -123,3 +123,30 @@ def test_v2_ngram_recall_uses_deterministic_even_sampling_not_hashset_order():
     assert "RecallNgrams(exact, 2, 24)" in index
     assert "RecallNgrams(query.Normalized, 2, 24)" in index
     assert "RecallNgrams(exact, 2, 24)" in incremental
+
+
+
+def test_short_standalone_faqs_are_not_misclassified_as_context_fragments():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    method = semantics[
+        semantics.index("public static bool IsContextDependent"):
+        semantics.index("public static bool IsHighRisk")
+    ]
+    assert "if (compact.Length <= 8)" in method
+    assert "ExtractEntities(compact)" in method
+    assert "hasExplicitIntent" in method
+    assert "return entities.Count == 0 || !hasExplicitIntent;" in method
+
+
+def test_verified_learning_accepts_short_standalone_procedures_but_blocks_volatile_facts():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    learning = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+
+    assert "question.Length < 4 || question.Length > 400" in repository
+    assert "answer.Length < 2 || answer.Length > 1200" in repository
+    assert "支付方式|付款方式" in semantics
+    assert 'category = "usage_guide";' in learning
+    assert 'ContainsVolatileCommerceFact(question + " " + answer)' in learning
+    assert "支付成功|付款成功|充值成功|支付状态|付款状态|充值状态" in repository
+    assert "支付成功|付款成功|充值成功|支付状态|付款状态|充值状态" in learning

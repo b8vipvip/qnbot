@@ -103,6 +103,7 @@ namespace Bot.Knowledge
             var value = Compact(text);
             if (value.Length == 0) return "general";
             if (Regex.IsMatch(value, @"退款|退货|售后|赔偿|投诉")) return "after_sale";
+            if (Regex.IsMatch(value, @"支付方式|付款方式|支持.*(支付|付款|微信|支付宝)|能用.*(微信|支付宝)|(?:微信|支付宝).{0,4}(支持|可以|能用|能否|吗)")) return "payment_method";
             if (Regex.IsMatch(value, @"多少钱|价格|费用|收费")) return "price";
             if (Regex.IsMatch(value, @"多久|什么时候|几天|时效|到账")) return "time";
             if (Regex.IsMatch(value, @"怎么|如何|步骤|操作|登录|绑定|充值方法|怎么充|激活")) return "how_to";
@@ -117,6 +118,7 @@ namespace Bot.Knowledge
         {
             var value = Compact(text);
             if (Regex.IsMatch(value, @"哪里买|在哪买|购买|下单|链接")) return "purchase_channel";
+            if (Regex.IsMatch(value, @"支付方式|付款方式|支持.*(支付|付款|微信|支付宝)|能用.*(微信|支付宝)|(?:微信|支付宝).{0,4}(支持|可以|能用|能否|吗)")) return "payment_method";
             if (Regex.IsMatch(value, @"多少钱|价格|费用|收费")) return "price";
             if (Regex.IsMatch(value, @"登录|绑定|账号")) return "account_binding";
             if (Regex.IsMatch(value, @"充值|怎么充|如何充|激活|开通")) return "activation_method";
@@ -136,7 +138,7 @@ namespace Bot.Knowledge
             var result = new List<string>();
             value = value ?? string.Empty;
             foreach (Match match in Regex.Matches(value,
-                @"酷狗音乐|酷狗|超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|K歌|充值|验证码|订单|退款|支付宝|微信|APP|软件|TCL|海信|创维|小米|华为",
+                @"酷狗音乐|酷狗|超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|K歌|充值|支付|付款|验证码|订单|退款|支付宝|微信|APP|软件|TCL|海信|创维|小米|华为",
                 RegexOptions.IgnoreCase))
             {
                 result.Add(NormalizeEntity(match.Value));
@@ -150,7 +152,7 @@ namespace Bot.Knowledge
         public static string ResolveSubject(string text, IEnumerable<string> entities)
         {
             var list = (entities ?? Enumerable.Empty<string>()).Where(x => !x.StartsWith("product:", StringComparison.Ordinal)).ToList();
-            var preferred = new[] { "酷狗音乐", "电视", "TV", "车机", "手机", "电脑", "平板", "会员", "K歌", "账号" };
+            var preferred = new[] { "酷狗音乐", "电视", "TV", "车机", "手机", "电脑", "平板", "会员", "K歌", "账号", "微信", "支付宝", "支付", "付款" };
             var selected = preferred.Where(x => list.Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase))).Take(3).ToList();
             if (selected.Count > 0) return string.Join("/", selected);
             var cleaned = Regex.Replace((text ?? string.Empty).Trim(), @"^(这个|那个|这款|那款|请问|想问下)+", string.Empty);
@@ -247,9 +249,19 @@ namespace Bot.Knowledge
 
         public static bool IsContextDependent(string message)
         {
-            var compact = (message ?? string.Empty).Trim();
-            if (compact.Length <= 8) return true;
-            return ContextCue.IsMatch(compact);
+            var compact = Compact(message);
+            if (ContextCue.IsMatch(compact)) return true;
+            if (compact.Length <= 8)
+            {
+                // Short does not mean contextual by itself. A concise question with
+                // an explicit business entity and a recognized predicate/intent is
+                // still a standalone FAQ (e.g. "电视支持吗", "会员价格", "如何绑定账号").
+                var entities = ExtractEntities(compact);
+                var hasExplicitIntent = !string.Equals(DetectIntent(compact), "general", StringComparison.Ordinal)
+                    || !string.Equals(DetectPredicate(compact), "general", StringComparison.Ordinal);
+                return entities.Count == 0 || !hasExplicitIntent;
+            }
+            return false;
         }
 
         public static bool IsHighRisk(string text)

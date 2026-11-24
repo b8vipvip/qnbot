@@ -27,7 +27,7 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, RepositoryState> States =
             new ConcurrentDictionary<string, RepositoryState>(StringComparer.Ordinal);
         private static readonly Regex AutoLearningNonReusableFact = new Regex(
-            @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|账号|登录|绑定|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉|忽略(之前|以上|系统|规则)|系统提示|提示词|API密钥|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥",
+            @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付成功|付款成功|充值成功|支付状态|付款状态|充值状态|绑定成功|绑定失败|登录成功|登录失败|账号异常|账号封禁|账号冻结|账号被盗|退款|退货|售后|赔偿|投诉|差评|举报|仲裁|身份证|银行卡|验证码|密码|手机号|电话|地址|收件人|今天|明天|现在|目前|当前|本周|本月|临时|一次性|封号|解封|法律|报警|起诉|忽略(之前|以上|系统|规则)|系统提示|提示词|API密钥|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex AutoLearningPersonalData = new Regex(
             @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
@@ -305,8 +305,8 @@ namespace Bot.Knowledge
             if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
                 || questionMessageId.Length == 0 || answerMessageId.Length == 0
                 || string.Equals(questionMessageId, answerMessageId, StringComparison.Ordinal)
-                || question.Length < 9 || question.Length > 400
-                || answer.Length < 8 || answer.Length > 1200
+                || question.Length < 4 || question.Length > 400
+                || answer.Length < 2 || answer.Length > 1200
                 || string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
                 || double.IsNaN(confidence) || double.IsInfinity(confidence)
                 || confidence < 0.90 || confidence > 1.0)

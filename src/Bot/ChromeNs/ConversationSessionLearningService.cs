@@ -2665,14 +2665,14 @@ namespace Bot.ChromeNs
             // safe fallback whenever AI normalization cannot be grounded strongly.
             var sourceQuestion = Redact(Clean(evidenceCandidate.Question, 400));
             var sourceAnswer = StripAi(Redact(Clean(evidenceCandidate.Answer, 1200)));
-            if (sourceQuestion.Length < 9 || sourceAnswer.Length < 8)
+            if (sourceQuestion.Length < 4 || sourceAnswer.Length < 2)
             {
                 rejection = "verified_human_source_text_invalid";
                 return false;
             }
 
             var candidateQuestion = Redact(Clean(generatedQuestion, 400));
-            var questionGrounded = candidateQuestion.Length >= 9
+            var questionGrounded = candidateQuestion.Length >= 4
                 && candidateQuestion.Length <= 400
                 && !KnowledgeEngineV2Semantics.IsContextDependent(candidateQuestion)
                 && !KnowledgeEngineV2Semantics.IsHighRisk(candidateQuestion)
@@ -2685,7 +2685,7 @@ namespace Bot.ChromeNs
             var question = questionGrounded ? candidateQuestion : sourceQuestion;
 
             var candidateAnswer = StripAi(Redact(Clean(generatedAnswer, 1200)));
-            var answerGrounded = candidateAnswer.Length >= 8
+            var answerGrounded = candidateAnswer.Length >= 2
                 && candidateAnswer.Length <= 1200
                 && !KnowledgeEngineV2Semantics.IsHighRisk(candidateAnswer)
                 && !ContainsHighRisk(candidateAnswer)
@@ -2782,6 +2782,8 @@ namespace Bot.ChromeNs
             }
 
             var category = (generatedCategory ?? string.Empty).Trim().ToLowerInvariant();
+            if (parsed.Intent == "how_to" || parsed.Intent == "troubleshoot")
+                category = "usage_guide";
             if (category != "product_feature" && category != "usage_guide"
                 && category != "business_fact")
                 category = "business_fact";
@@ -3044,16 +3046,14 @@ namespace Bot.ChromeNs
 
             var question = Redact(Clean(questionTurn.Text, 400));
             var answer = Redact(Clean(answerTurn.Text, 1200));
-            if (question.Length < 9 || question.Length > 400 || answer.Length < 8 || answer.Length > 1200
+            if (question.Length < 4 || question.Length > 400 || answer.Length < 2 || answer.Length > 1200
                 || KnowledgeEngineV2Semantics.IsContextDependent(question)
                 || string.IsNullOrWhiteSpace(question)
                 || string.IsNullOrWhiteSpace(answer)
-                || !Regex.IsMatch(question, @"[?？]|能不能|是否|是不是|怎么|如何|什么|哪里|哪些|多少|可以|支持|能否|有没有|会不会|为什么|需要|怎样|能用|可不可以")
+                || !Regex.IsMatch(question, @"[?？]|能不能|是否|是不是|怎么|如何|什么|哪里|哪些|多少|可以|支持|能否|有没有|会不会|为什么|需要|怎样|能用|可不可以|支付|付款|微信|支付宝|登录|绑定|充值")
                 || ContainsHighRisk(question + " " + answer)
                 || KnowledgeEngineV2Semantics.IsHighRisk(question + " " + answer)
-                || Regex.IsMatch(question + " " + answer,
-                    @"订单|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|支付|付款|充值|账号|登录|绑定|今天|明天|现在|目前|当前|本周|本月|临时|一次性|忽略(之前|以上|系统|规则)|系统提示|提示词|API密钥|远程控制|下载并运行|执行命令|关闭安全|转账|私钥|密钥|https?://|www\.",
-                    RegexOptions.IgnoreCase)
+                || ContainsVolatileCommerceFact(question + " " + answer)
                 || Regex.IsMatch(question + " " + answer,
                     @"(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{17}[0-9Xx](?!\d)|(?<!\d)\d{16,19}(?!\d)|(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"))
             {
@@ -3761,6 +3761,13 @@ namespace Bot.ChromeNs
         {
             var terms = new[] { "退款", "退货", "赔偿", "投诉", "差评", "举报", "仲裁", "身份证", "银行卡", "验证码", "密码", "订单隐私", "订单号", "手机号", "账号安全", "封号", "解封", "法律", "报警" };
             return terms.Any(x => (value ?? string.Empty).IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static bool ContainsVolatileCommerceFact(string value)
+        {
+            return Regex.IsMatch(value ?? string.Empty,
+                @"订单|订单号|物流|快递|发货|库存|现货|价格|多少钱|优惠|折扣|活动|促销|优惠券|运费|时效|到账|今天|明天|现在|目前|当前|本周|本月|临时|一次性|支付成功|付款成功|充值成功|支付状态|付款状态|充值状态|绑定成功|绑定失败|登录成功|登录失败|账号异常|账号封禁|账号冻结|账号被盗",
+                RegexOptions.IgnoreCase);
         }
 
 
