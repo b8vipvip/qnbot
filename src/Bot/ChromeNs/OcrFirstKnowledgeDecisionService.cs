@@ -203,11 +203,12 @@ namespace Bot.ChromeNs
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
                 if (string.IsNullOrWhiteSpace(contextAddon)) contextAddon = string.Empty;
+                contextAddon = visualMatch.ContextText
+                    + (string.IsNullOrWhiteSpace(contextAddon) ? string.Empty : Environment.NewLine + contextAddon);
                 return new VisionRequestResult
                 {
                     Success = false,
-                    KnowledgeV2ContextPromptAddon = visualMatch.ContextText
-                        + (string.IsNullOrWhiteSpace(contextAddon) ? string.Empty : Environment.NewLine + contextAddon),
+                    KnowledgeV2ContextPromptAddon = contextAddon,
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrLatencyMs = ocr.ElapsedMs,
