@@ -150,7 +150,18 @@ namespace Bot.ChromeNs
 
             string code;
             DateTime codeTime;
-            if (!TryFindRecentRedeemCode(seller, from, question, out code, out codeTime))
+            var shop = ShopContextLocator.ResolveRuntimeBySeller(qn);
+            var sourceClient = qn.CDP;
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || sourceServer == null
+                || !sourceServer.IsAuthoritativeShopSession(shop.ShopKey, sourceClient.SessionId))
+                return;
+
+            if (!TryFindRecentRedeemCode(seller, from, question, shop.ShopKey, out code, out codeTime))
             {
                 Log.Info("买家询问充值进度，但同一会话未发现客服发送的明确兑换码标签: seller="
                     + seller + ", buyer=" + from);
@@ -171,7 +182,10 @@ namespace Bot.ChromeNs
                 + ", codeHash=" + Hash(code).Substring(0, 12)
                 + ", codeAgeMinutes=" + Math.Max(0, (int)(DateTime.Now - codeTime).TotalMinutes));
 
-            Task.Run(async () => await QueryAndReplyAsync(qn, seller, from, question, code));
+            var detectedAt = DateTime.Now;
+            Task.Run(async () => await QueryAndReplyAsync(
+                qn, shop.ShopKey, sourceClient, sourceClient.SessionId,
+                seller, from, question, code, detectedAt));
         }
 
         public static bool TryConsumeHandled(
@@ -201,12 +215,13 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string currentQuestion,
+            string shopKey,
             out string code,
             out DateTime timestamp)
         {
             code = string.Empty;
             timestamp = DateTime.MinValue;
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 24);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 24, shopKey);
             foreach (var turn in turns
                 .Where(x => x != null && x.Role == "assistant" && !x.Withdrawn)
                 .OrderByDescending(x => x.Timestamp))
@@ -225,10 +240,14 @@ namespace Bot.ChromeNs
 
         private static async Task QueryAndReplyAsync(
             QN qn,
+            string shopKey,
+            CDPClient sourceClient,
+            string sourceSessionId,
             string seller,
             string buyer,
             string question,
-            string code)
+            string code,
+            DateTime detectedAt)
         {
             JObject result = null;
             string failure = string.Empty;
@@ -274,10 +293,38 @@ namespace Bot.ChromeNs
 
             var answer = BotOutboundMessageFormatter.EnsureAiMarker(
                 BotFeatureStore.ApplyOutputPolicy(reply));
-            var sendOk = await qn.SendTextWithRetryAsync(buyer, answer, 1);
+            if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                || !IsSourceSessionCurrent(qn, shopKey, sourceClient, sourceSessionId, seller))
+            {
+                Log.Info("充值状态自动答复发送前Bot开关或原店铺CDP身份已变化，取消迟到回复: buyer=" + buyer);
+                return;
+            }
+            string relevanceReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                seller, buyer, question, detectedAt, out relevanceReason, false, shopKey))
+            {
+                Log.Info("充值状态自动答复被最后会话相关性门禁阻止: buyer=" + buyer
+                    + ", reason=" + relevanceReason);
+                return;
+            }
+            Func<bool> preSendGuard = () =>
+            {
+                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()
+                    || !IsSourceSessionCurrent(qn, shopKey, sourceClient, sourceSessionId, seller))
+                    return false;
+                string latestReason;
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                    seller, buyer, question, detectedAt, out latestReason, false, shopKey);
+                if (!shouldSend)
+                    Log.Info("充值状态等待发送资源期间会话已变化，取消迟到回复: buyer=" + buyer
+                        + ", reason=" + latestReason);
+                return shouldSend;
+            };
+            var sendOk = await qn.SendTextWithRetryAsync(
+                buyer, answer, 1, CancellationToken.None, preSendGuard);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(seller, buyer, answer);
+                ReplyDeduplicationService.RememberDelivered(seller, buyer, answer, shopKey);
             }
 
             Log.Info("充值结果自动答复完成: seller=" + seller
@@ -298,6 +345,23 @@ namespace Bot.ChromeNs
                     category,
                     failure);
             }
+        }
+
+        private static bool IsSourceSessionCurrent(
+            QN qn, string shopKey, CDPClient sourceClient, string sourceSessionId, string seller)
+        {
+            if (qn == null || sourceClient == null
+                || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !ReferenceEquals(qn.CDP, sourceClient)
+                || !string.Equals(sourceClient.ShopKey, shopKey, StringComparison.Ordinal)
+                || !string.Equals(sourceClient.SessionId, sourceSessionId, StringComparison.Ordinal))
+                return false;
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            var server = MyWebSocketServer.WSocketSvrInst;
+            return shop != null
+                && string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                && server != null
+                && server.IsAuthoritativeShopSession(shopKey, sourceSessionId);
         }
 
         private static async Task<JObject> QueryServerAsync(string seller, string buyer, string code)
