@@ -53,27 +53,42 @@ namespace Bot.ChromeNs
                 // before deciding that the shop has no image capability. VisionRequestService executes
                 // this local route before selecting any external provider, so pre-routing must not skip
                 // the image merely because no billable vision endpoint is configured.
-                var localUsable = CanUseServerOcr(seller, shopKey);
-                var selectedEndpoints = ResolveShopVisionEndpoints(message, shopKey);
-                var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
+                // ShopKey is supplied by the authoritative QN session. Resolve configuration from
+                // that scope, not from message.toid.nick, which can be an alias/display nickname.
+                // A failed preflight must not silently discard the image: the OCR attempt records
+                // the concrete endpoint/auth failure locally; requests reaching the server enter its task ledger.
+                var shopScopeUsable = HasAuthoritativeShopScope(shopKey);
+                var localUsable = CanUseServerOcr(shopKey);
+                var selectedEndpoints = (ResolveShopVisionEndpoints(shopKey) ?? new AiEndpointConfig[0]).ToList();
+                var externalUsable = selectedEndpoints.Any(
                     e => e != null
                         && e.Enabled
                         && e.SupportsVision
                         && !string.IsNullOrWhiteSpace(e.VisionModel)
                         && !string.IsNullOrWhiteSpace(e.ApiKey)
                         && !string.IsNullOrWhiteSpace(e.BaseUrl));
-                var usable = localUsable || externalUsable;
+                Log.Info("图片消息路由探测: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", shopScope=" + shopScopeUsable
+                    + ", serverOcrConfigured=" + localUsable
+                    + ", visionEndpoints=" + selectedEndpoints.Count
+                    + ", policy=attempt_and_record");
 
-                // BuyerMessageBurstCoordinator runs DeterministicAutoReplyService before merge.
-                // Images are intentionally marked replyable here only when a first greeting was
-                // reserved, so that sender can deliver the greeting first; VisionDecisionKind stays
-                // Vision and the same image is analysed immediately afterwards.
+                // BuyerMessageBurstCoordinator runs deterministic pre-merge rules before merge.
+                // A valid ShopKey keeps this image replyable even if preflight cannot read the OCR
+                // token; the OCR stage records the failure locally, and any server call enters its task ledger.
+                if (!shopScopeUsable)
+                {
+                    if (firstPrepared)
+                        FirstInquiryFixedReplyService.ReleaseReservation(
+                            seller, buyer, "图片消息缺少可验证的ShopKey店铺身份", shopKey);
+                    return Skip("[图片]", "已跳过：无法确认图片所属店铺身份，已阻止跨店处理。");
+                }
+
                 if (firstPrepared)
                 {
                     safetyDecision.ShouldCallAi = true;
-                    safetyDecision.Note = usable
-                        ? "首条咨询固定回复先发送，随后继续图片视觉理解。"
-                        : "首条咨询固定回复先发送；当前既无可用本地OCR知识直答，也无外部视觉模型，后续视觉任务将安全失败而不发送伪答案。";
+                    safetyDecision.Note = "首条咨询固定回复先发送，随后继续图片视觉理解；OCR/视觉连接状态将在实际处理阶段记录。";
                     return new VisionMessageDecision
                     {
                         Kind = VisionDecisionKind.Vision,
@@ -82,8 +97,12 @@ namespace Bot.ChromeNs
                     };
                 }
 
-                if (!usable)
-                    return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，且本地OCR+Knowledge V2不可用，未向买家发送消息。");
+                if (!localUsable && !externalUsable)
+                {
+                    Log.Info("图片消息没有可用的OCR/视觉连接预检结果，但仍进入视觉处理链路；"
+                        + "由实际OCR处理阶段记录连接失败，避免静默丢弃图片: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shopKey));
+                }
 
                 return new VisionMessageDecision
                 {
@@ -91,7 +110,9 @@ namespace Bot.ChromeNs
                     QuestionLabel = "[图片]",
                     Note = localUsable && !externalUsable
                         ? "使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。"
-                        : string.Empty
+                        : (!localUsable && !externalUsable
+                            ? "已进入视觉处理链路；OCR连接状态由实际处理阶段记录。"
+                            : string.Empty)
                 };
             }
 
@@ -120,49 +141,54 @@ namespace Bot.ChromeNs
             return Skip("[图片]", safetyDecision.Note);
         }
 
-        private static bool CanUseServerOcr(string sellerNick, string shopKey)
+        private static bool HasAuthoritativeShopScope(string shopKey)
         {
-            sellerNick = (sellerNick ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
-            if (sellerNick.Length == 0 || shopKey.Length == 0) return false;
+            if (shopKey.Length == 0) return false;
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                if (shop == null
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
-                    return false;
+                return shop != null && !string.IsNullOrWhiteSpace(shop.SellerNick);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool CanUseServerOcr(string shopKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || string.IsNullOrWhiteSpace(shop.SellerNick)) return false;
                 using (ShopSettingsScope.Enter(shop, false))
                 {
-                    // OCR remains available while Knowledge V2 is disabled or rebuilding;
-                    // its cached text can still support a text-only or multimodal fallback.
-                    return LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey);
+                    // The stable ShopKey resolves the authoritative seller. Do not compare it with
+                    // message.toid.nick because Qianniu may deliver an alias/display nickname here.
+                    return LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey);
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount(
-                    "图片服务端OCR能力探测失败，继续检查外部视觉模型：" + Safe(ex.Message, 220),
+                    "图片服务端OCR能力探测失败，仍允许进入实际OCR链路记录故障：" + Safe(ex.Message, 220),
                     20);
                 return false;
             }
         }
 
-        private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
-            QNChatMessage message,
-            string shopKey)
+        private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(string shopKey)
         {
             try
             {
-                var sellerNick = message == null || message.toid == null
-                    ? string.Empty
-                    : (message.toid.nick ?? string.Empty).Trim();
                 shopKey = (shopKey ?? string.Empty).Trim();
-                if (sellerNick.Length == 0 || shopKey.Length == 0)
-                    return new AiEndpointConfig[0];
+                if (shopKey.Length == 0) return new AiEndpointConfig[0];
 
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
-                if (shop == null
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                if (shop == null || string.IsNullOrWhiteSpace(shop.SellerNick))
                     return new AiEndpointConfig[0];
                 using (ShopSettingsScope.Enter(shop))
                 {
