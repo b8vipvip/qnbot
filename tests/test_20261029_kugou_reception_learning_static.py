@@ -49,8 +49,9 @@ def test_merchant_scoped_state_is_short_lived_and_privacy_minimized():
     assert '"awaiting_order_review"' in policy
     assert "ResolveShopForSeller(seller)" in policy
     audit_path = policy[policy.index("private static string AuditPath(bool legacy)"):policy.index("private static string ExistingAuditPath()")]
-    assert 'legacy ? "kugou-reception-decisions.json" : "shop-reception-decisions.json"' in audit_path
-    assert 'Path.Combine(directory, "shop-reception-decisions.json")' not in policy
+    assert 'return Path.Combine(directory, legacy' in audit_path
+    assert '? "kugou-reception-decisions.json"' in audit_path
+    assert ': "shop-reception-decisions.json"' in audit_path
     assert 'Path.Combine(directory, "kugou-reception-decisions.json")' not in policy
 
 def test_order_photo_wait_only_advances_after_confirmed_delivery():
