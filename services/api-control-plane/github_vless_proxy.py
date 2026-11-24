@@ -387,7 +387,7 @@ def _status_locked() -> Dict[str, Any]:
         "updated_at": str(row.get("updated_at") or "") if row else "",
         "last_error": error,
         "last_test": dict(_LAST_TEST),
-        "scope": "control-plane-github-https-only",
+        "scope": "control-plane-and-host-git-github-https",
         "isolation": {
             "listen": f"{LISTEN_HOST}:{LISTEN_PORT}",
             "tun": False,

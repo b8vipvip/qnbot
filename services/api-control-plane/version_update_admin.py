@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 import bot_update_cache
 import bot_update_progress
 import bot_update_push
+import github_vless_proxy
 
 
 router = APIRouter()
@@ -280,6 +281,10 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
             "update": server_status,
             "network": {
                 "git_transport": str(server_status.get("agent", {}).get("git_transport") or "ssh-443"),
+                "console_vless_preferred": bool(
+                    server_status.get("agent", {}).get("supports_console_vless")
+                    and bot_update_progress.github_proxy() == github_vless_proxy.LOCAL_PROXY
+                ),
                 "git_fetch_attempts": int(server_status.get("agent", {}).get("git_fetch_attempts") or 5),
             },
         },

@@ -39,7 +39,7 @@ sudo bash scripts/update-api-control-plane.sh
 
 更新脚本会自动：
 
-1. 使用 GitHub SSH 拉取 `master` 最新代码；
+1. 优先使用后台已启用的 VLESS 节点通过 Git HTTPS 拉取 `master` 最新代码；代理不可用时回退至 GitHub SSH 443（首次部署没有运行容器时直接使用 SSH）；
 2. 拒绝覆盖服务器上未提交的已跟踪代码修改；
 3. 兼容旧的 `/opt/qianniu-api-control-plane` ZIP 部署；
 4. 保留并迁移原 `.env` 和 `data/`；
@@ -216,3 +216,5 @@ Windows 更新备份默认保存在当前用户目录：
 5. 买家连续秒发时旧 AI 流会取消；
 6. 新答案只在完整生成后发送；
 7. `日志与调试` 可正常查看。
+
+服务端源码代理复用运行中控制面容器的 loopback SOCKS，通过主机 `nsenter --net` 仅隔离 Git 请求；无需导出节点凭据、开放 SOCKS 端口或修改系统代理。升级到支持该功能的主机脚本之后，下一次网页更新即可使用该链路。

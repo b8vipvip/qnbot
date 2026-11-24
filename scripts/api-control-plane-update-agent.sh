@@ -47,7 +47,7 @@ write_agent() {
 import json,os,sys,time
 print(json.dumps({
  'pid':os.getppid(), 'last_seen_at_unix':time.time(), 'current_commit':sys.argv[1],
- 'agent_version':2, 'git_transport':'ssh-443' if sys.argv[3]=='443' else 'ssh',
+ 'agent_version':3, 'supports_console_vless':True, 'git_transport':'ssh-443' if sys.argv[3]=='443' else 'ssh',
  'git_host':sys.argv[2], 'git_port':int(sys.argv[3]), 'git_fetch_attempts':int(sys.argv[4])
 },ensure_ascii=False))
 PY
@@ -75,6 +75,7 @@ phase_from_line() {
   local line="$1" request_id="$2" current="$3" target="$4"
   case "$line" in
     *"拉取 GitHub 最新"*) write_status running "同步 GitHub 源码" 7 "$line" "$request_id" "$current" "$target" ;;
+    *"GitHub 源码同步: VLESS HTTPS"*) write_status running "VLESS HTTPS 同步源码" 10 "$line" "$request_id" "$current" "$target" ;;
     *"GitHub 源码同步:"*) write_status running "Git SSH 443 同步源码" 10 "$line" "$request_id" "$current" "$target" ;;
     *"GitHub fetch"*"失败"*) write_status running "GitHub 网络重试" 10 "$line" "$request_id" "$current" "$target" ;;
     *"GitHub 源码同步成功"*) write_status running "GitHub 源码同步完成" 13 "$line" "$request_id" "$current" "$target" ;;
@@ -125,7 +126,7 @@ process_request() {
   request_id="$(json_get "$processing" request_id)"
   target="$(json_get "$processing" requested_commit)"
   current="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
-  write_status running "准备更新" 3 "主机更新代理已接管任务；GitHub 源码将使用 SSH 443 + 自动重试" "$request_id" "$current" "$target"
+  write_status running "准备更新" 3 "主机更新代理已接管任务；GitHub 源码优先复用后台 VLESS HTTPS，SSH 443 备用" "$request_id" "$current" "$target"
   : > "$LOG_FILE"
 
   heartbeat_loop &
@@ -167,7 +168,7 @@ fi
 write_agent
 if [[ ! -f "$STATUS_FILE" ]]; then
   current="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
-  write_status idle "等待更新" 0 "主机更新代理在线；GitHub 源码使用 SSH 443" "" "$current" "$current"
+  write_status idle "等待更新" 0 "主机更新代理在线；后台 VLESS HTTPS 优先，SSH 443 备用" "" "$current" "$current"
 fi
 
 while true; do

@@ -54,7 +54,7 @@ function renderGithubProxySettings(data){
     const nodeName=node.name?`节点：${esc(node.name)} · `:"";
     parts.push(`${nodeName}${esc(node.server||"已保存")} : ${esc(node.port||"-")} · ${esc(node.security||"-")} · ${esc(node.transport||"-")}${node.flow?` · ${esc(node.flow)}`:""}`);
   }else parts.push("尚未保存 VLESS 节点。");
-  parts.push("隔离范围：仅本控制面 GitHub HTTPS；本地 SOCKS 仅监听容器 127.0.0.1，不启用 TUN，不修改服务器系统代理或默认路由。");
+  parts.push("隔离范围：GitHub API、客户端 Release 及支持该功能的主机源码同步；SOCKS 仍仅监听容器 127.0.0.1，不启用 TUN，不修改系统代理或默认路由。");
   const test=data.last_test||{};
   if(test.tested_at)parts.push(test.ok?`最近测试成功：${esc(cnTime(test.tested_at))} · ${esc(test.latency_ms)}ms`:`最近测试失败：${esc(cnTime(test.tested_at))} · ${esc(test.error||"")}`);
   if(data.last_error)parts.push(`当前错误：${esc(data.last_error)}`);
@@ -115,7 +115,7 @@ function renderVersionUpdate(data){
      (!server.current_commit?badge("等待识别当前版本","gray"):
       (server.update_available?badge("发现新版本","warn"):badge("已是最新","good"))));
   const agentHint=agent.online?"":`<p class="hint">${esc(agent.status_message||"未收到主机更新代理心跳；代理可能未安装、已停止或数据目录不一致。")}</p><p class="hint">如果代理尚未安装，请执行：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code>。如果以前安装过，请检查：<code>sudo systemctl status qianniu-api-update-agent.service</code>；查看日志：<code>sudo journalctl -u qianniu-api-update-agent.service -n 80 --no-pager</code>。</p>`;
-  const gitTransport=(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
+  const gitTransport=serverNet.console_vless_preferred?"VLESS HTTPS 优先 / SSH 443 备用":(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
   $("serverVersionCard").innerHTML=`
     <div class="provider-card">
       <div class="provider-top"><strong>API 控制面</strong>${serverStatus}</div>
@@ -135,7 +135,7 @@ function renderVersionUpdate(data){
       <p class="hint">更新状态：${update.status_age_seconds==null?"--":Number(update.status_age_seconds)+"秒前"} · 最后日志输出：${update.log_age_seconds==null?"--":Number(update.log_age_seconds)+"秒前"} · 日志大小：${vuBytes(update.log_size_bytes)}</p>
       <div class="actions"><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='build';loadServerRuntimeLogs()">查看构建日志</button><button class="secondary" onclick="switchPage('server-runtime');document.getElementById('serverRuntimeSource').value='update';loadServerRuntimeLogs()">查看更新日志</button></div>
       <p class="hint">GPTAuto 智能更新：点击一次即可自动判断热修复或正式构建，并校验运行版本、CI 证据及健康状态。</p>
-      <p class="hint">服务端源码仍由主机更新代理通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取；上方 VLESS 配置只作用于控制面内部的 GitHub HTTPS / Release 下载，不改变主机 SSH 更新链路。</p>
+      <p class="hint">服务端源码优先复用上方已启用的 VLESS 节点（Git HTTPS）；代理不可用或拉取失败时自动切换 <code>ssh.github.com:443</code>。旧版主机代理需完成一次更新后才支持此功能。</p>
       <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>${runtimeUnverified&&sameSourceVersion?"重新构建并验证当前服务端版本":"检查并智能更新"}</button></div>
     </div>`;
 
@@ -174,7 +174,7 @@ async function startServerVersionUpdate(){
   const needsReverify=!!(versionUpdateState.last&&versionUpdateState.last.server&&versionUpdateState.last.server.needs_runtime_verification);
   const text=needsReverify
     ?"确认重新构建并核验实际运行的服务端镜像？该镜像缺少构建提交标记，当前后台的『已更新』仅来自更新状态。操作会先构建，再备份并切换容器，期间可能短暂出现 502；失败将按现有流程回滚。"
-    :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将通过 Git SSH 443 自动重试，然后自动判断是否适合免构建热修复，必要时仍执行正式镜像构建；失败保留回滚证据。";
+    :"确认将 API 控制面自动更新到 GitHub master 最新版本？源码将优先复用已启用的 VLESS HTTPS 代理，失败时使用 Git SSH 443 自动重试，然后自动判断是否适合免构建热修复，必要时仍执行正式镜像构建；失败保留回滚证据。";
   if(!confirm(text))return;
   try{const r=await api("/api/admin/version-update/server/start",{method:"POST"});toast(r.already_latest?"服务端已经是 GitHub 最新版":"服务端更新任务已启动");await loadVersionUpdate()}catch(err){toast(err.message)}
 }

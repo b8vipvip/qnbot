@@ -12,8 +12,8 @@ VERIFY_URL="${VERIFY_URL:-}"
 MIN_FREE_BEFORE_BUILD_MIB="${CONTROL_PLANE_MIN_BUILD_FREE_MIB:-4096}"
 MIN_FREE_BEFORE_BACKUP_MIB="${CONTROL_PLANE_MIN_BACKUP_FREE_MIB:-2048}"
 
-# GitHub source-network tuning. Git repository traffic uses GitHub's official SSH-over-443
-# endpoint by default, avoiding networks where outbound TCP/22 is unstable or filtered.
+# GitHub source-network tuning. The saved VLESS SOCKS listener is preferred for
+# existing repository fetches; official SSH-over-443 remains the fallback.
 GITHUB_SSH_HOST="${GITHUB_SSH_HOST:-ssh.github.com}"
 GITHUB_SSH_PORT="${GITHUB_SSH_PORT:-443}"
 GITHUB_SSH_CONNECT_TIMEOUT="${GITHUB_SSH_CONNECT_TIMEOUT:-15}"
@@ -258,7 +258,64 @@ github_clone_with_retry() {
   die "GitHub SSH 克隆连续失败 ${GIT_FETCH_RETRIES} 次，请检查服务器到 ssh.github.com:443 的网络或 SSH Key。"
 }
 
+# Reuse the running control-plane's loopback SOCKS listener without exporting
+# its VLESS credentials or exposing a host/LAN port. Only the Git process
+# enters the container network namespace; the host worktree remains local.
+GITHUB_FETCH_TRANSPORT="ssh"
+
+github_fetch_via_console_proxy() {
+  local origin pid port proxy url="https://github.com/b8vipvip/qnbot.git"
+  origin="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null)" || return 1
+  case "$origin" in
+    git@github.com:b8vipvip/qnbot.git|ssh://git@github.com/b8vipvip/qnbot.git|ssh://git@ssh.github.com:443/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot.git|https://github.com/b8vipvip/qnbot) ;;
+    *) return 1 ;;
+  esac
+  command -v nsenter >/dev/null 2>&1 || return 1
+  pid="$(timeout 5s docker inspect -f '{{.State.Pid}}' "$CONTAINER_NAME" 2>/dev/null)" || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" -gt 1 ]] || return 1
+  # The saved node is decrypted only by the existing API proxy module.
+  # Its listener exists only while the enabled VLESS process is running.
+  port="$(timeout 5s docker exec "$CONTAINER_NAME" python -c '
+import os, socket, sqlite3
+from pathlib import Path
+# Read only the enabled flag, never the stored encrypted or decrypted node.
+data = Path(os.getenv("DATA_DIR", "/data"))
+db = Path(os.getenv("DATABASE_PATH", str(data / "api-control-plane.db"))).resolve()
+with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=1) as conn:
+    row = conn.execute("SELECT enabled FROM version_update_proxy_settings WHERE id=1").fetchone()
+if not row or not row[0]:
+    raise SystemExit(1)
+port = max(1024, min(65535, int(os.getenv("GITHUB_VLESS_PROXY_PORT", "11808"))))
+with socket.create_connection(("127.0.0.1", port), timeout=1):
+    print(port)
+' 2>/dev/null)" || return 1
+  [[ "$port" =~ ^[0-9]{4,5}$ && "$port" -ge 1024 && "$port" -le 65535 ]] || return 1
+  proxy="socks5h://127.0.0.1:$port"
+  log "GitHub 源码同步: VLESS HTTPS（复用后台代理），第 1/1 次"
+  # Use the public canonical repository, keep TLS verification enabled,
+  # bypass credential helpers, and update the same origin tracking ref.
+  # No persistent git config or system proxy is changed.
+  if timeout --foreground "${GIT_FETCH_TIMEOUT_SECONDS}s" \
+      nsenter --target "$pid" --net -- env -u HTTP_PROXY -u HTTPS_PROXY \
+      -u ALL_PROXY -u NO_PROXY -u http_proxy -u https_proxy -u all_proxy -u no_proxy \
+      -u GIT_SSL_NO_VERIFY GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      git -C "$REPO_DIR" -c "http.proxy=$proxy" \
+      -c "http.$url.proxy=$proxy" -c http.sslVerify=true \
+      -c "http.$url.sslVerify=true" -c http.followRedirects=false \
+      -c "http.$url.followRedirects=false" -c credential.helper= \
+      -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 \
+      fetch --progress --prune "$url" "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"; then
+    GITHUB_FETCH_TRANSPORT="vless-https"
+    log "GitHub 源码同步成功（VLESS HTTPS）"
+    return 0
+  fi
+  warn "GitHub fetch VLESS HTTPS 失败，自动切换 SSH 443；旧服务保持运行。"
+  return 1
+}
+
 github_fetch_with_retry() {
+  if github_fetch_via_console_proxy; then return 0; fi
+  GITHUB_FETCH_TRANSPORT="ssh"
   local attempt rc delay command
   command="$(github_ssh_command)"
   for attempt in $(seq 1 "$GIT_FETCH_RETRIES"); do
@@ -369,7 +426,7 @@ print_build_failure_hint() {
 
 build_new_image() {
   log "构建网络配置:"
-  printf '  GitHub source: SSH %s:%s, retries=%s\n' "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
+  printf '  GitHub source: %s (SSH fallback %s:%s, retries=%s)\n' "$GITHUB_FETCH_TRANSPORT" "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
   printf '  Base image: %s\n' "$BASE_IMAGE"
   printf '  PyPI: %s\n' "$CONTROL_PLANE_BUILD_PIP_INDEX_URL"
   printf '  APT: %s\n' "$CONTROL_PLANE_BUILD_APT_MIRROR"
@@ -492,7 +549,7 @@ fi
 
 # Only require build capacity after choosing the build path.
 check_free_kib "$REPO_DIR" "$(( 512 * 1024 ))" "Git 同步前"
-log "拉取 GitHub 最新 $BRANCH 分支（Git SSH over 443 + 自动重试）"
+log "拉取 GitHub 最新 $BRANCH 分支（后台 VLESS HTTPS 优先，SSH 443 备用）"
 github_fetch_with_retry
 if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   git -C "$REPO_DIR" checkout "$BRANCH"
@@ -710,7 +767,7 @@ cat /tmp/qianniu-control-plane-public-health.json
 
 log "更新成功"
 printf 'Git commit: %s\n' "$NEW_COMMIT"
-printf 'Git transport: SSH %s:%s, retries=%s\n' "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
+printf 'Git transport: %s (SSH fallback %s:%s, retries=%s)\n' "$GITHUB_FETCH_TRANSPORT" "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
 printf 'Service dir: %s\n' "$SERVICE_DIR"
 printf 'Backup: %s\n' "$BACKUP_DIR"
 printf 'Build log: %s\n' "$BUILD_LOG"
