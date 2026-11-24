@@ -560,7 +560,8 @@ namespace Bot.ChromeNs
                     ReplyDeduplicationService.RememberDelivered(
                         burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 else
-                    ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                    ReplyDeduplicationService.RememberDelivered(
+                        burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 if (workflowDecision == null && string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
                 {
                     KnowledgeLearningService.QueueLearn(
