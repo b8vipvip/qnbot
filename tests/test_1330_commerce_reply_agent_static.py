@@ -221,7 +221,7 @@ def test_commerce_learning_does_not_drop_report_notifications_while_processing()
     assert "Interlocked.CompareExchange(ref _pendingUpdates, 0, 1)" in changed
     assert "Interlocked.Exchange(ref _processing, 0)" in changed
     assert "OnReportsChanged();" in changed
-    assert "ConversationSessionLearningService.GetReports(200)" in latest
+    assert "ConversationSessionLearningService.GetReports(ConversationSessionLearningService.MaxReports)" in latest
 
 
 def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
@@ -236,3 +236,14 @@ def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
     assert "Processed.TryRemove(report.Id, out ignored)" in latest
     assert "if (shop == null) return false;" in process
     assert "return true;" in process
+
+
+
+def test_commerce_learning_replays_the_full_retained_report_window_after_restart():
+    source = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    latest = source[source.index("private static void ProcessLatest()"):source.index("private static bool ProcessReport(")]
+
+    assert "ConversationSessionLearningService.MaxReports" in latest
+    assert "CompletedAt >= StartedAt" not in latest
+    assert "StartedAt" not in source
+    assert "OrderBy(x => x.CompletedAt)" in latest

@@ -22,7 +22,6 @@ namespace Bot.ChromeNs
     {
         private static readonly ConcurrentDictionary<string, byte> Processed =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        private static readonly DateTime StartedAt = DateTime.Now.AddSeconds(-5);
         private static int _initialized;
         private static int _processing;
         private static int _pendingUpdates;
@@ -71,11 +70,14 @@ namespace Bot.ChromeNs
 
         private static void ProcessLatest()
         {
-            var reports = ConversationSessionLearningService.GetReports(200)
+            // The report store retains at most MaxReports completed reports. Replay the
+            // full retained window after startup so a crash/restart cannot strand a report
+            // that completed before this process began. ApplyScenarioScope is idempotent.
+            var reports = ConversationSessionLearningService.GetReports(
+                    ConversationSessionLearningService.MaxReports)
                 .Where(x => x != null
                     && string.Equals(x.Status, "学习完成", StringComparison.Ordinal)
-                    && x.CompletedAt != DateTime.MinValue
-                    && x.CompletedAt >= StartedAt)
+                    && x.CompletedAt != DateTime.MinValue)
                 .OrderBy(x => x.CompletedAt)
                 .ToList();
             foreach (var report in reports)
