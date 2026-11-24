@@ -524,9 +524,44 @@ def init_db(control_plane: Optional[Any] = None) -> None:
                 image_bytes INTEGER NOT NULL DEFAULT 0,
                 image_hash_prefix TEXT NOT NULL DEFAULT '',
                 text_chars INTEGER NOT NULL DEFAULT 0,
-                confidence REAL NOT NULL DEFAULT 0
+                confidence REAL NOT NULL DEFAULT 0,
+                engine TEXT NOT NULL DEFAULT '',
+                result_text TEXT NOT NULL DEFAULT '',
+                result_text_redacted INTEGER NOT NULL DEFAULT 0
             )
             """
+        )
+        # Add detail columns to existing installations without rebuilding task history.
+        task_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(runtime_ocr_task_records)").fetchall()
+        }
+        for column, definition in (
+            ("engine", "TEXT NOT NULL DEFAULT ''"),
+            ("result_text", "TEXT NOT NULL DEFAULT ''"),
+            ("result_text_redacted", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in task_columns:
+                conn.execute(
+                    "ALTER TABLE runtime_ocr_task_records ADD COLUMN "
+                    + column + " " + definition
+                )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_ocr_task_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_task_events_task "
+            "ON runtime_ocr_task_events(task_id, event_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ocr_task_started "
@@ -536,13 +571,23 @@ def init_db(control_plane: Optional[Any] = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_ocr_task_status_started "
             "ON runtime_ocr_task_records(status, started_at DESC)"
         )
-        # A service restart interrupts in-flight tasks from the previous process.
+        # A service restart interrupts in-flight tasks from the previous process
+        # and adds an auditable event to each affected task.
+        unfinished = conn.execute(
+            "SELECT task_id FROM runtime_ocr_task_records WHERE status IN ('queued','running')"
+        ).fetchall()
         conn.execute(
             """UPDATE runtime_ocr_task_records SET status='interrupted',
                phase='server_restarted', error_code='server_restarted',
                finished_at=? WHERE status IN ('queued','running')""",
             (now,),
         )
+        for unfinished_row in unfinished:
+            _append_task_event(
+                conn, cp, str(unfinished_row["task_id"]), "server_restarted",
+                "interrupted", "服务重启，未完成任务已标记中断",
+                {"http_status": 503},
+            )
         row = conn.execute("SELECT * FROM runtime_ocr_settings WHERE id = 1").fetchone()
         # Upgrade only the untouched old 8s bootstrap default. Never override
         # an administrator-defined timeout, even when it equals eight seconds.
@@ -593,6 +638,13 @@ def install(control_plane: Any) -> None:
         admin_username: str = Depends(require_admin),
     ) -> Dict[str, Any]:
         return _list_task_records(control_plane, page, page_size, status_filter)
+
+    @app.get("/api/admin/ocr/tasks/{task_id}")
+    async def get_runtime_ocr_task_detail(
+        task_id: str,
+        admin_username: str = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        return _get_task_detail(control_plane, task_id)
 
     @app.put("/api/admin/ocr/settings")
     async def update_runtime_ocr_settings(
