@@ -76,7 +76,7 @@ namespace Bot.ChromeNs
 
                 // BuyerMessageBurstCoordinator runs deterministic pre-merge rules before merge.
                 // A valid ShopKey keeps this image replyable even if preflight cannot read the OCR
-                // token; the actual OCR/vision request records the failure instead of dropping it.
+                // token; the OCR stage records the failure locally, and any server call enters its task ledger.
                 if (!shopScopeUsable)
                 {
                     if (firstPrepared)
