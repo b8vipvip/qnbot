@@ -83,3 +83,27 @@ def test_commerce_context_does_not_masquerade_as_empty_order_history_when_ledger
     assert "order_ledger_unavailable" in select
     assert "GetRecentOrderSnapshots(seller, buyer, 12)" in select
     assert "return null;" in select
+
+
+
+def test_order_guidance_ledger_cross_process_transactions_reload_from_disk():
+    guard = read("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
+    # Every state access uses the same named mutex, and invalidates the process-local
+    # cache while still holding that mutex. Atomic replacement alone is not an RMW lock.
+    mutex = 'using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))'
+    assert guard.count(mutex) == 6
+    assert guard.count("if (!ledgerLease.Acquired)") == 6
+    assert guard.count("_state = null;") >= 8
+
+    observe = guard[guard.index("public static void ObserveOrder"):guard.index("public static bool IsExplicitBuyerFollowUp")]
+    recent = guard[guard.index("public static List<OrderSnapshot> GetRecentOrderSnapshots"):guard.index("public static bool TryGetLatestOrderSnapshot")]
+    followup = guard[guard.index("public static bool CanCreateFollowUp"):guard.index("public static bool ShouldSuppressBeforeSend")]
+    presend = guard[guard.index("public static bool ShouldSuppressBeforeSend"):guard.index("public static void MarkDelivered")]
+    delivered = guard[guard.index("public static void MarkDelivered"):guard.index("private static OrderGuidanceRecord NewRecord")]
+
+    assert observe.index("if (!ledgerLease.Acquired)") < observe.index("_state = null;") < observe.index("EnsureLoaded()") < observe.index("SaveInternal()")
+    assert "record.Snapshot = CloneSnapshot(snapshot)" in observe
+    assert 'throw new IOException("订单账本跨进程锁不可用' in recent
+    assert "订单账本跨进程锁不可用，已阻止自动补发" in followup
+    assert "订单账本跨进程锁不可用，已阻止发送" in presend
+    assert delivered.index("if (!ledgerLease.Acquired)") < delivered.index("MarkDeliveredInternal") < delivered.index("SaveInternal()")
