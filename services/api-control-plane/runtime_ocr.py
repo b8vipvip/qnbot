@@ -239,6 +239,7 @@ def _sanitize_ocr_text(value: Any, max_chars: int = _OCR_TEXT_MAX_CHARS):
         (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "[手机号已脱敏]"),
         (re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE), "[邮箱已脱敏]"),
         (re.compile(r"(?i)(验证码\s*[:：]?\s*)\d{4,8}"), r"\1[已脱敏]"),
+        (re.compile(r"(?i)((?:密码|password|passwd)\s*[:：=]\s*)[^\s,，;；]{1,64}"), r"\1[已脱敏]"),
         (re.compile(r"(?<!\d)\d{8,}(?!\d)"), "[长数字ID已脱敏]"),
     )
     for pattern, replacement in patterns:
