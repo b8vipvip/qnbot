@@ -140,6 +140,11 @@ namespace Bot.Knowledge
         {
             var result = new List<string>();
             value = value ?? string.Empty;
+            // Structured product identifiers are useful retrieval keys, but arbitrary
+            // 8-16 digit values are often phone numbers, account IDs or order numbers.
+            // Only explicit product/item labels and known product URL forms become entities.
+            foreach (var productId in ExtractProductIds(value))
+                result.Add("product:" + productId);
             foreach (Match match in Regex.Matches(value,
                 @"超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|K歌|充值|支付|付款|验证码|订单|退款|支付宝|微信|APP|软件|TCL|海信|创维|小米|华为",
                 RegexOptions.IgnoreCase))
@@ -152,8 +157,6 @@ namespace Bot.Knowledge
             {
                 result.Add(match.Value);
             }
-            foreach (Match match in Regex.Matches(value, @"\b\d{8,16}\b"))
-                result.Add("product:" + match.Value);
             return result.Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -500,8 +503,34 @@ namespace Bot.Knowledge
 
         private static List<string> ExtractProductIds(string text)
         {
-            return Regex.Matches(text ?? string.Empty, @"\b\d{8,16}\b")
-                .Cast<Match>().Select(x => x.Value).Distinct().Take(10).ToList();
+            text = text ?? string.Empty;
+            var result = new List<string>();
+            var labeled = Regex.Matches(
+                text,
+                @"(?:(?:商品|产品)\s*(?:ID|编号|编码)|宝贝\s*(?:ID|编号|编码)|(?:product|item|goods)[_\s-]?id)\s*[""']?\s*[:：=#]?\s*[""']?(\d{8,20})",
+                RegexOptions.IgnoreCase);
+            result.AddRange(labeled.Cast<Match>()
+                .Where(x => x.Groups.Count > 1 && x.Groups[1].Success)
+                .Select(x => x.Groups[1].Value));
+
+            var urls = Regex.Matches(
+                text,
+                @"(?:item\.taobao\.com/item\.htm|detail\.tmall\.com/item\.htm)[^\s<>""']*[?&]id=(\d{8,20})|item\.jd\.com/(\d{8,20})\.html|[?&](?:itemId|productId|goods_id|goodsId)=(\d{8,20})(?:[&#\s""']|$)",
+                RegexOptions.IgnoreCase);
+            foreach (Match match in urls)
+            {
+                for (var group = 1; group < match.Groups.Count; group++)
+                {
+                    if (!match.Groups[group].Success) continue;
+                    result.Add(match.Groups[group].Value);
+                    break;
+                }
+            }
+
+            return result.Where(x => Regex.IsMatch(x ?? string.Empty, @"^\d{8,20}$"))
+                .Distinct(StringComparer.Ordinal)
+                .Take(10)
+                .ToList();
         }
 
         private static string NormalizeEntity(string value)

@@ -11,11 +11,12 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// OCR-first local decision layer for image messages. It resolves the already-cached image,
-    /// calls the authenticated server OCR control-plane endpoint and only allows a direct reply
-    /// when OCR confidence is high AND Knowledge Engine V2 independently passes its existing
-    /// CanDirectReply safety gate. When the server selects AI-first and a usable vision endpoint
-    /// exists, this early direct-reply layer yields immediately so visual AI remains the primary
-    /// decision source; OCR can still be attached later as auxiliary evidence by the vision path.
+    /// calls the authenticated server OCR control-plane endpoint. Direct replies additionally
+    /// require a configured visual rule to confirm application/screen identity and Knowledge V2
+    /// to pass its existing CanDirectReply safety gate. OCR evidence can still enrich V2 retrieval
+    /// when no visual rule matches; that path is context-only and yields to AI for the final answer.
+    /// When the server selects AI-first and a usable vision endpoint exists, this early layer yields
+    /// immediately so visual AI remains primary; OCR is attached later as auxiliary evidence.
     /// </summary>
     internal static class OcrFirstKnowledgeDecisionService
     {
@@ -115,20 +116,22 @@ namespace Bot.ChromeNs
                 return null;
             }
 
-            VisualUnderstandingMatch visualMatch;
+            VisualUnderstandingMatch visualMatch = null;
             try
             {
                 if (!VisualUnderstandingRuleService.TryMatch(task.ShopKey, knowledgeSeller, ocr.Text, out visualMatch))
                 {
-                    Log.Info("OCR 未命中本店视觉理解预设，转交上游视觉 AI: shopRef="
+                    visualMatch = null;
+                    Log.Info("OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索；不允许基于未确认应用身份提前直答: shopRef="
                         + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
-                    return null;
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("视觉理解规则匹配失败，转交上游视觉 AI: " + ex.Message, 10);
-                return null;
+                // A visual preset is an optional application-identity hint, not a prerequisite
+                // for OCR evidence retrieval. Knowledge V2 still sees the OCR evidence below.
+                visualMatch = null;
+                Log.ErrorWithMaxCount("视觉理解规则匹配失败，仍继续OCR证据检索；不允许基于未确认应用身份提前直答: " + ex.Message, 10);
             }
 
             if (shop == null || knowledgeSeller.Length == 0)
@@ -180,12 +183,15 @@ namespace Bot.ChromeNs
                         return BuildVisualFallback(visualMatch, ocr, "Knowledge V2索引未就绪");
                     }
 
+                    var evidenceText = ocr.Text;
+                    if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))
+                        evidenceText += Environment.NewLine + visualMatch.ContextText;
                     decision = KnowledgeEngineV2Service.ResolveWithEvidence(
                         knowledgeSeller,
                         task.BuyerNick,
                         question,
-                        ocr.Text + Environment.NewLine + visualMatch.ContextText,
-                        visualMatch.AppName);
+                        evidenceText,
+                        visualMatch == null ? string.Empty : visualMatch.AppName);
                 }
             }
             catch (OperationCanceledException)
@@ -197,20 +203,36 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("OCR-first知识库检索失败，继续视觉模型链路: " + ex.Message, 20);
                 return BuildVisualFallback(visualMatch, ocr, "Knowledge V2检索异常");
             }
-            if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
+            // Without a configured visual rule we may still use OCR to retrieve approved
+            // Knowledge V2 context, but we never allow an OCR-only local direct reply because
+            // the application/screen identity has not been confirmed.
+            if (visualMatch == null || decision == null || !decision.CanDirectReply
+                || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextAddon = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
-                Log.Info("视觉理解已命中，但Knowledge V2未达到安全直答条件，携带结构化图片事实交给上游AI: seller=" + task.SellerNick
+                if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))
+                    contextAddon = visualMatch.ContextText
+                        + (string.IsNullOrWhiteSpace(contextAddon) ? string.Empty : Environment.NewLine + contextAddon);
+                Log.Info((visualMatch == null
+                    ? "OCR未命中视觉理解预设，Knowledge V2仅作为检索证据，禁止提前直答"
+                    : "视觉理解已命中，但Knowledge V2未达到安全直答条件")
+                    + "，携带OCR证据及可用知识上下文交给上游AI: seller=" + task.SellerNick
                     + ", buyer=" + task.BuyerNick
                     + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
                 if (string.IsNullOrWhiteSpace(contextAddon)) contextAddon = string.Empty;
-                contextAddon = visualMatch.ContextText
-                    + (string.IsNullOrWhiteSpace(contextAddon) ? string.Empty : Environment.NewLine + contextAddon);
                 return new VisionRequestResult
                 {
                     Success = false,
                     KnowledgeV2ContextPromptAddon = contextAddon,
+                    VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
+                    VisualSummary = visualMatch == null
+                        ? "未匹配到已配置视觉预设；OCR仅用于知识检索辅助证据"
+                        : visualMatch.AppName + "/" + visualMatch.ScreenName,
+                    VisualTags = visualMatch == null
+                        ? "server-ocr,knowledge-v2-evidence"
+                        : "server-ocr,visual-understanding,knowledge-v2",
+                    MatchedVisualKnowledgeId = visualMatch == null ? string.Empty : visualMatch.RuleId,
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrLatencyMs = ocr.ElapsedMs,
@@ -266,7 +288,7 @@ namespace Bot.ChromeNs
                 KnowledgeV2ContextPromptAddon = match == null ? string.Empty : match.ContextText,
                 VisualQuestion = match == null ? string.Empty : match.AppName + "/" + match.ScreenName,
                 VisualSummary = match == null ? string.Empty : match.Description,
-                VisualTags = "server-ocr,visual-understanding",
+                VisualTags = match == null ? "server-ocr" : "server-ocr,visual-understanding",
                 MatchedVisualKnowledgeId = match == null ? string.Empty : match.RuleId,
                 LocalOcrText = ocr == null ? string.Empty : ocr.Text,
                 LocalOcrConfidence = ocr == null ? 0d : ocr.Confidence,

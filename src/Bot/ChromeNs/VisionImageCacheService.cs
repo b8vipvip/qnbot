@@ -178,20 +178,33 @@ namespace Bot.ChromeNs
                     {
                         // A failed first attempt must not permanently poison the message key.
                         // The vision pipeline calls Prime again with the authoritative CDP client;
-                        // use that opportunity for one bounded retry through the logged-in browser.
+                        // refresh the media URL/message snapshot before its one bounded retry.
                         if (browserClient != null && !browserClient.IsInvalidated
                             && !browserClient.IsShopIdentityRetired
                             && string.Equals((browserClient.ShopKey ?? string.Empty).Trim(),
                                 shopKey, StringComparison.Ordinal))
                             record.BrowserClient = browserClient;
-                        if (record.Message == null) record.Message = message;
-                        if ((record.DownloadTask == null
+
+                        var canRetry = (record.DownloadTask == null
                                 || (record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)))
-                            && record.DownloadAttempts < 2)
+                            && record.DownloadAttempts < 2;
+                        if (canRetry)
                         {
+                            // MessageKey is the stable identity. A signed URL or original media
+                            // payload may be populated after the first event callback; do not let
+                            // an empty/stale first URL poison the retry.
+                            if (!string.IsNullOrWhiteSpace(url))
+                                record.Url = url;
+                            if (message != null
+                                && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick))
+                                record.Message = message;
                             record.DownloadAttempts++;
                             record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                             created = true;
+                        }
+                        else if (record.Message == null)
+                        {
+                            record.Message = message;
                         }
                     }
                 }

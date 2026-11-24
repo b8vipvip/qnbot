@@ -92,7 +92,12 @@ def test_ocr_visual_template_precedes_knowledge_v2_and_ai_receives_extracted_fac
     match = decision.index("VisualUnderstandingRuleService.TryMatch")
     knowledge = decision.index("KnowledgeEngineV2Service.Resolve")
     assert match < knowledge
-    assert "OCR 未命中本店视觉理解预设，转交上游视觉 AI" in decision
+    assert "OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索" in decision
+    match_block = decision.split("VisualUnderstandingRuleService.TryMatch", 1)[1].split(
+        "if (shop == null || knowledgeSeller.Length == 0)", 1
+    )[0]
+    assert "return null;" not in match_block
+    assert "if (visualMatch == null || decision == null" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
     assert "contextAddon = visualMatch.ContextText" in decision
     assert "KnowledgeV2ContextPromptAddon = contextAddon" in decision
@@ -155,7 +160,12 @@ def test_visual_understanding_precedes_knowledge_v2_and_unmatched_images_fall_ba
     assert decision.index("VisualUnderstandingRuleService.TryMatch") < decision.index(
         "KnowledgeEngineV2Service.Resolve"
     )
-    assert "OCR 未命中本店视觉理解预设，转交上游视觉 AI" in decision
+    assert "OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索" in decision
+    match_block = decision.split("VisualUnderstandingRuleService.TryMatch", 1)[1].split(
+        "if (shop == null || knowledgeSeller.Length == 0)", 1
+    )[0]
+    assert "return null;" not in match_block
+    assert "if (visualMatch == null || decision == null" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
 
 def test_enabled_visual_rule_requires_nonempty_application_identity_at_save_and_match():

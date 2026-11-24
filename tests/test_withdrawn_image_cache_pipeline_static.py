@@ -148,10 +148,14 @@ def test_image_download_falls_back_to_authenticated_qianniu_browser_and_message_
     assert "safeResponseTimeoutMs" in cdp
 
 
-def test_failed_image_download_can_retry_once_with_browser_session():
+def test_failed_image_download_can_retry_once_with_browser_session_and_refreshed_source():
     cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    assert "var canRetry = (record.DownloadTask == null" in cache
     assert "record.DownloadAttempts < 2" in cache
     assert "record.BrowserClient = browserClient" in cache
+    assert "record.Url = url;" in cache
+    assert "SameConversation(seller, buyer, record.SellerNick, record.BuyerNick)" in cache
+    assert "record.Message = message;" in cache
     assert "record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)" in cache
     assert "图片获取失败：直连下载=" in cache
 

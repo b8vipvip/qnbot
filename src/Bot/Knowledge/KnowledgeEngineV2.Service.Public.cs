@@ -132,24 +132,72 @@ namespace Bot.Knowledge
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
             // Persist only buyer-authored query semantics. OCR/menu labels must never
             // become the next turn's working-memory intent, predicate or subject.
-            UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
+            // An image-only message has no buyer-authored query to update memory with.
+            // Preserve the previous subject instead of replacing it with an empty parse.
+            if (message.Length > 0)
+                UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
             if (hasEvidence)
             {
+                var buyerMessageHasProductId = KnowledgeEngineV2Semantics.ExtractEntities(message)
+                    .Any(x => (x ?? string.Empty).StartsWith("product:", StringComparison.OrdinalIgnoreCase));
                 var evidenceEntities = KnowledgeEngineV2Semantics.ExtractEntities(evidenceText)
-                    .Where(x => !string.IsNullOrWhiteSpace(x)
-                        && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    // Prefer an explicitly labeled OCR product ID over generic OCR terms.
+                    .OrderByDescending(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
                     .ToList();
+                var evidenceHasProductId = evidenceEntities.Any(
+                    x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase));
+                if (buyerMessageHasProductId)
+                {
+                    // The current buyer-authored product ID is authoritative over OCR.
+                    evidenceEntities = evidenceEntities
+                        .Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+                else if (evidenceHasProductId)
+                {
+                    // A labeled product ID in the current image supersedes a stale product
+                    // inherited from working memory; keep memory only when OCR has no product ID.
+                    query.Entities = (query.Entities ?? new List<string>())
+                        .Where(x => !(x ?? string.Empty).StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
                 var configuredSubject = (evidenceSubject ?? string.Empty).Trim();
                 if (configuredSubject.Contains("{") || configuredSubject.Contains("}"))
                     configuredSubject = string.Empty;
                 if (configuredSubject.Length >= 2)
                     evidenceEntities.Insert(0, configuredSubject);
-                query.Entities = (query.Entities ?? new List<string>())
-                    .Concat(evidenceEntities)
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(10)
-                    .ToList();
+
+                if (!buyerMessageHasProductId && evidenceHasProductId)
+                {
+                    // The image is the freshest product evidence. Put its explicitly labeled
+                    // product ID before other OCR and inherited query entities so the bounded
+                    // ten-entity query cannot silently drop the product key.
+                    var evidenceProductIds = evidenceEntities
+                        .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var evidenceNonProductEntities = evidenceEntities
+                        .Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var queryEntities = (query.Entities ?? new List<string>())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .ToList();
+                    query.Entities = evidenceProductIds
+                        .Concat(evidenceNonProductEntities)
+                        .Concat(queryEntities)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(10)
+                        .ToList();
+                }
+                else
+                {
+                    query.Entities = (query.Entities ?? new List<string>())
+                        .Concat(evidenceEntities)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(10)
+                        .ToList();
+                }
                 if (configuredSubject.Length >= 2)
                     query.Subject = string.IsNullOrWhiteSpace(query.Subject)
                         ? configuredSubject
