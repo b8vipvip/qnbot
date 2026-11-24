@@ -138,6 +138,28 @@ namespace Bot.ChromeNs
                 return null;
             }
 
+            // Persist rule-extracted account fields separately from the redacted visual summary.
+            // This also covers the direct OCR+Knowledge V2 path, which returns before VisionRequestService
+            // reaches its later multimodal observation persistence call.
+            try
+            {
+                VisualKnowledgeLearningService.RecordVisionAnalysis(
+                    task.ShopKey,
+                    knowledgeSeller,
+                    task.BuyerNick,
+                    task.Message,
+                    task.MessageKey,
+                    string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
+                    visualMatch.ContextText,
+                    "server-ocr,visual-understanding",
+                    string.Empty,
+                    visualMatch.ExtractedFields);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("保存OCR结构化视觉字段失败，不影响本轮知识检索：" + ex.Message, 10);
+            }
+
             KnowledgeV2Decision decision;
             try
             {
