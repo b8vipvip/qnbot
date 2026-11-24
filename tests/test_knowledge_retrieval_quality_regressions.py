@@ -29,6 +29,27 @@ def test_structured_product_ids_participate_in_full_and_incremental_knowledge_in
     assert 'result.Add("product:" + match.Value);' in semantics
 
 
+def test_explicit_product_id_mismatch_cannot_use_product_bound_knowledge():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    applicable = semantics[
+        semantics.index("public static bool IsApplicable"):
+        semantics.index("public static string FactKey")
+    ]
+    normalize = semantics[
+        semantics.index("private static List<string> NormalizeProductIds"):
+        semantics.index("private static List<string> NormalizeScopeTerms")
+    ]
+
+    assert "NormalizeProductIds(record.ProductIds)" in applicable
+    assert "NormalizeProductIds(" in applicable
+    assert "recordProductIds.Count > 0 && queryProductIds.Count > 0" in applicable
+    assert "商品ID与当前问题中的商品不匹配" in applicable
+    assert "recordProductIds.Any(id => queryProductIds.Any(queryId =>" in applicable
+    assert "StringComparison.OrdinalIgnoreCase" in normalize
+    # No supplied product ID is not a mismatch: buyers can identify a product by name.
+    assert "queryProductIds.Count > 0" in applicable
+
+
 def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or_memory():
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
