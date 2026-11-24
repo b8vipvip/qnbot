@@ -586,7 +586,27 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken).ConfigureAwait(false);
+                // Human replies do not cancel the buyer generation, so a delayed fixed
+                // reply must re-check the live conversation immediately before every send.
+                Func<bool> preSendGuard = () =>
+                {
+                    string relevanceReason;
+                    var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.DisplayText,
+                        detectedAt,
+                        out relevanceReason,
+                        false,
+                        item.ShopKey);
+                    if (!shouldSend)
+                        Log.Info(source + "固定回复最终发送门禁阻止旧答案: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", reason=" + relevanceReason);
+                    return shouldSend;
+                };
+                var ok = await qn.SendTextWithRetryAsync(
+                    item.BuyerNick, answer, 3, generationToken, preSendGuard).ConfigureAwait(false);
                 if (ok)
                 {
                     ReplyDeduplicationService.RememberDelivered(
