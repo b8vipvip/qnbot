@@ -3,6 +3,7 @@ using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Bot.ShopScope;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -24,6 +25,7 @@ namespace Bot.ChromeNs
         public string VisualQuestion { get; set; }
         public string VisualSummary { get; set; }
         public string VisualTags { get; set; }
+        public string ExtractedFieldsJson { get; set; }
         public string GeneratedAnswer { get; set; }
         public string Status { get; set; }
         public string LearnedKnowledgeId { get; set; }
@@ -81,7 +83,8 @@ namespace Bot.ChromeNs
             string visualQuestion,
             string visualSummary,
             string visualTags,
-            string generatedAnswer)
+            string generatedAnswer,
+            IDictionary<string, string> extractedFields = null)
         {
             shopKey = Clean(shopKey, 200);
             seller = Clean(seller, 160);
@@ -96,6 +99,7 @@ namespace Bot.ChromeNs
             BackfillLegacyShopRows(shopKey, seller);
             var withdrawn = VisionImageCacheService.IsMessageKeyWithdrawn(
                 seller, buyer, messageKey, shopKey);
+            var extractedFieldsJson = withdrawn ? string.Empty : SerializeAccountFields(extractedFields);
             var observedAt = GetMessageTime(message);
             if (observedAt == DateTime.MinValue || observedAt > DateTime.Now.AddMinutes(2)) observedAt = DateTime.Now;
             var entity = new VisualKnowledgeObservationEntity
@@ -108,6 +112,7 @@ namespace Bot.ChromeNs
                 VisualQuestion = visualQuestion,
                 VisualSummary = visualSummary,
                 VisualTags = visualTags,
+                ExtractedFieldsJson = extractedFieldsJson,
                 GeneratedAnswer = generatedAnswer,
                 Status = withdrawn ? "图片已撤回" : "等待人工接待结束",
                 LearnedKnowledgeId = string.Empty,
@@ -126,8 +131,16 @@ namespace Bot.ChromeNs
                         old.VisualQuestion = entity.VisualQuestion;
                         old.VisualSummary = entity.VisualSummary;
                         old.VisualTags = entity.VisualTags;
+                        if (withdrawn)
+                        {
+                            old.Status = "图片已撤回";
+                            old.ExtractedFieldsJson = string.Empty;
+                        }
+                        else if (!string.IsNullOrWhiteSpace(entity.ExtractedFieldsJson))
+                        {
+                            old.ExtractedFieldsJson = entity.ExtractedFieldsJson;
+                        }
                         old.GeneratedAnswer = entity.GeneratedAnswer;
-                        if (withdrawn) old.Status = "图片已撤回";
                         old.UpdatedAtTicks = DateTime.Now.Ticks;
                         entity = old;
                     }
@@ -211,6 +224,7 @@ namespace Bot.ChromeNs
                         Buyer = buyer,
                         MessageKey = messageKey,
                         Status = "图片已撤回",
+                        ExtractedFieldsJson = string.Empty,
                         LearnedKnowledgeId = string.Empty,
                         ObservedAtTicks = now,
                         UpdatedAtTicks = now
@@ -222,6 +236,7 @@ namespace Bot.ChromeNs
                 foreach (var observation in matching)
                 {
                     observation.Status = "图片已撤回";
+                    observation.ExtractedFieldsJson = string.Empty;
                     observation.UpdatedAtTicks = now;
                     updates.Add(observation);
                     observationIds.Add(observation.EntityId);
@@ -597,8 +612,9 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,GeneratedAnswer text,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,ExtractedFieldsJson text,GeneratedAnswer text,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column ShopKey text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column ExtractedFieldsJson text"); } catch { }
                 DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeObservation_ShopSellerBuyer on VisualKnowledgeObservationEntity(ShopKey,Seller,Buyer,ObservedAtTicks)");
                 DbHelper.Db.Execute("create table if not exists VisualKnowledgeEntryEntity (EntityId text primary key not null,ShopKey text,Seller text,VisualQuestion text,VisualSummary text,VisualTags text,Answer text,SourceType text,Confirmations integer not null default 0,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualKnowledgeEntryEntity add column ShopKey text"); } catch { }
@@ -736,6 +752,29 @@ namespace Bot.ChromeNs
         private static DateTime FromTicks(long ticks) { try { return ticks > 0 ? new DateTime(ticks) : DateTime.MinValue; } catch { return DateTime.MinValue; } }
         private static string StripAi(string value) { value = (value ?? string.Empty).Trim(); while (value.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)) value = value.Substring(0, value.Length - 4).TrimEnd(); return value; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty); }
+        private static string SerializeAccountFields(IDictionary<string, string> fields)
+        {
+            if (fields == null || fields.Count == 0) return string.Empty;
+            var safe = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in fields)
+            {
+                var name = Clean(pair.Key, 40);
+                if (name.Length == 0
+                    || Regex.IsMatch(name, @"密码|验证码|校验码|身份证|银行卡|token|password|secret",
+                        RegexOptions.IgnoreCase))
+                    continue;
+                if (!Regex.IsMatch(name,
+                    @"ID|账号|昵称|手机号|手机号码|联系电话|会员状态|会员等级|会员到期|到期日期",
+                    RegexOptions.IgnoreCase))
+                    continue;
+                var value = Clean(pair.Value, 120);
+                if (value.Length == 0) continue;
+                safe[name] = value;
+                if (safe.Count >= 12) break;
+            }
+            return safe.Count == 0 ? string.Empty : JsonConvert.SerializeObject(safe);
+        }
+
         private static string Clean(string value, int max) { value = (value ?? string.Empty).Trim(); return max > 0 && value.Length > max ? value.Substring(0, max).Trim() : value; }
         private static string Short(string value, int max) { value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim(); return value.Length > max ? value.Substring(0, max) + "..." : value; }
         private static string Redact(string value)
