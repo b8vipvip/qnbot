@@ -47,3 +47,12 @@ def test_cancelled_non_cooperative_provider_task_loses_owner_immediately():
     assert "Task.WhenAny(dispatchTask, cancelledTask)" in dispatch
     assert "return;" in dispatch
     assert "底层非协作任务如继续运行也不再拥有发送/终态资格" in dispatch
+
+
+def test_product_link_preset_is_suppressed_after_newer_buyer_or_human_turn():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    canonical = source[source.index("internal static class CanonicalPreMergeDecisionService"):source.index("internal sealed class BuyerMessageBurstCoordinator")]
+    assert "HasNewerSubstantiveConversationTurn(item, question, out supersededReason)" in canonical
+    assert "商品链接预设已被后续买家消息或人工客服指令取代" in canonical
+    assert "BuyerSessionEventKind.SellerHumanReply" in canonical
+    assert "买家已发送更新消息" in canonical
