@@ -241,6 +241,7 @@ namespace Bot.Knowledge
             {
                 Nav("知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.All)),
                 Nav("商品知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Product)),
+                Nav("视觉理解", () => new VisualUnderstandingRulesPage(_seller, _shopKey)),
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
                 Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller)),
