@@ -185,19 +185,22 @@ namespace Bot.ChromeNs
                                 shopKey, StringComparison.Ordinal))
                             record.BrowserClient = browserClient;
 
+                        var taskPending = record.DownloadTask != null && !record.DownloadTask.IsCompleted;
                         var canRetry = (record.DownloadTask == null
                                 || (record.DownloadTask.IsCompleted && !IsTaskSuccessful(record.DownloadTask)))
                             && record.DownloadAttempts < 2;
+
+                        // A newer signed URL/message snapshot can arrive while the first download
+                        // is still running. Preserve it now so the bounded retry does not reuse
+                        // the stale URL that the in-flight attempt may already have captured.
+                        if ((taskPending || canRetry) && !string.IsNullOrWhiteSpace(url))
+                            record.Url = url;
+                        if ((taskPending || canRetry) && message != null
+                            && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick))
+                            record.Message = message;
+
                         if (canRetry)
                         {
-                            // MessageKey is the stable identity. A signed URL or original media
-                            // payload may be populated after the first event callback; do not let
-                            // an empty/stale first URL poison the retry.
-                            if (!string.IsNullOrWhiteSpace(url))
-                                record.Url = url;
-                            if (message != null
-                                && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick))
-                                record.Message = message;
                             record.DownloadAttempts++;
                             record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                             created = true;
