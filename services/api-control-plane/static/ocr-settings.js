@@ -237,6 +237,7 @@ function ocrRenderTaskDetail(data){
   ocrTaskDetailSummaryCell(summary,"SHA-256 前缀",task.image_hash_prefix||"-");
   ocrTaskDetailSummaryCell(summary,"排队 / 推理 / 总耗时",ocrSafeNumber(task.queue_ms)+" / "+ocrSafeNumber(task.inference_ms)+" / "+ocrSafeNumber(task.elapsed_ms)+" ms");
   ocrTaskDetailSummaryCell(summary,"识别字数 / 置信度",ocrSafeNumber(task.text_chars)+" 字 / "+(ocrSafeNumber(task.confidence)*100).toFixed(1)+"%");
+  ocrTaskDetailSummaryCell(summary,"识别文本处理",task.result_text_redacted?"包含自动脱敏":"未触发脱敏");
   ocrTaskDetailSummaryCell(summary,"原因代码",OCR_TASK_ERRORS[task.error_code]||task.error_code||"-");
 
   const eventList=ocrEl("ocrTaskDetailEvents");
