@@ -8,6 +8,27 @@ def read(path):
 
 
 
+
+def test_structured_product_ids_participate_in_full_and_incremental_knowledge_indexes():
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+
+    record_entities = index.split("private static IEnumerable<string> RecordEntities", 1)[1].split(
+        "private static HashSet<int> Recall", 1
+    )[0]
+    assert "record.ProductIds" in record_entities
+    assert '"product:" + value' in record_entities
+    assert "Distinct(StringComparer.OrdinalIgnoreCase)" in record_entities
+
+    assert "foreach (var entity in RecordEntities(record))" in index
+    assert "EntitySimilarity(query.Entities, RecordEntities(record))" in index
+    assert "foreach (var entity in RecordEntities(record))" in incremental
+    assert "Add(snapshot.Entity" in incremental
+    assert "Remove(snapshot.Entity" in incremental
+    assert 'result.Add("product:" + match.Value);' in semantics
+
+
 def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or_memory():
     service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
