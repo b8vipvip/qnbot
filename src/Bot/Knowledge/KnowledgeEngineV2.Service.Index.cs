@@ -52,7 +52,7 @@ namespace Bot.Knowledge
                 var record = snapshot.Records[i];
                 Add(snapshot.Intent, record.Intent, i);
                 Add(snapshot.Predicate, record.Predicate, i);
-                foreach (var entity in record.Entities ?? new List<string>())
+                foreach (var entity in RecordEntities(record))
                     Add(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), i);
                 foreach (var alias in (record.Aliases ?? new List<string>()).Concat(new[] { record.Title }))
                 {
@@ -62,6 +62,24 @@ namespace Bot.Knowledge
                 }
             }
             return snapshot;
+        }
+
+        private static IEnumerable<string> RecordEntities(KnowledgeV2Record record)
+        {
+            if (record == null) return Enumerable.Empty<string>();
+            var entities = record.Entities ?? new List<string>();
+            var products = (record.ProductIds ?? new List<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x =>
+                {
+                    var value = x.Trim();
+                    if (value.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        value = value.Substring("product:".Length).Trim();
+                    return value.Length == 0 ? string.Empty : "product:" + value;
+                });
+            return entities.Concat(products)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         private static HashSet<int> Recall(Snapshot snapshot, KnowledgeV2Query query)
@@ -115,7 +133,7 @@ namespace Bot.Knowledge
                 : (query.Predicate == "general" || record.Predicate == "general" ? 0.30 : 0.0);
             var intent = string.Equals(query.Intent, record.Intent, StringComparison.OrdinalIgnoreCase) ? 1.0
                 : (query.Intent == "general" || record.Intent == "general" ? 0.35 : 0.0);
-            var entity = EntitySimilarity(query.Entities, record.Entities);
+            var entity = EntitySimilarity(query.Entities, RecordEntities(record));
             var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id);
             var confidence = Clamp(record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment);
             var score = Clamp(predicate * 0.34 + entity * 0.25 + intent * 0.17 + alias * 0.16 + confidence * 0.08);
@@ -145,7 +163,7 @@ namespace Bot.Knowledge
             var score = 0.0;
             if (record.Predicate == query.Predicate) score += 4;
             if (record.Intent == query.Intent) score += 2;
-            score += EntitySimilarity(query.Entities, record.Entities) * 3;
+            score += EntitySimilarity(query.Entities, RecordEntities(record)) * 3;
             return score;
         }
 
