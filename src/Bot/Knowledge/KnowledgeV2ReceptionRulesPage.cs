@@ -20,7 +20,7 @@ namespace Bot.Knowledge
             var header = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
             header.Children.Add(new TextBlock
             {
-                Text = "酷狗店铺接待规则",
+                Text = "店铺接待规则",
                 FontSize = 19, FontWeight = FontWeights.SemiBold
             });
             header.Children.Add(new TextBlock
