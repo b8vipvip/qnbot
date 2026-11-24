@@ -134,7 +134,7 @@ def test_module_is_packaged_and_admin_switch_is_visible():
     assert "/api/admin/manual-recharge/settings" in page
 
 def test_recharge_status_reply_is_bound_to_original_shop_session_and_rechecks_live_takeover():
-    service = read(SERVICE)
+    service = read(ROOT / "src" / "Bot" / "ChromeNs" / "RechargeStatusAutoQueryService.cs")
     claim = service[
         service.index("private static void TryClaimAndQuery"):
         service.index("public static bool TryConsumeHandled")
