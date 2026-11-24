@@ -93,11 +93,23 @@ namespace Bot.ChromeNs
             return TryRecognizeAsync(imagePath, sellerNick, shopKey, null, cancellationToken, timeoutMs);
         }
 
+        public static Task<LocalOcrResult> TryRecognizeAsync(
+            string imagePath,
+            string sellerNick,
+            string shopKey,
+            string buyerNick,
+            CancellationToken cancellationToken,
+            int timeoutMs = DefaultTimeoutMs)
+        {
+            return TryRecognizeAsync(imagePath, sellerNick, shopKey, buyerNick, null, cancellationToken, timeoutMs);
+        }
+
         public static async Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
             string sellerNick,
             string shopKey,
             string buyerNick,
+            string messageKey,
             CancellationToken cancellationToken,
             int timeoutMs = DefaultTimeoutMs)
         {
@@ -132,7 +144,7 @@ namespace Bot.ChromeNs
                 return Failure("计算图片哈希失败: " + ex.Message, startedAt);
             }
 
-            var cached = TryReadCache(sha256, shopKey, buyerNick);
+            var cached = TryReadCache(sha256, shopKey, buyerNick, messageKey);
             if (cached != null)
             {
                 return new LocalOcrResult
@@ -223,7 +235,7 @@ namespace Bot.ChromeNs
                                 Error = string.Empty,
                                 ImageSha256 = sha256
                             };
-                            TryWriteCache(result, shopKey, buyerNick);
+                            TryWriteCache(result, shopKey, buyerNick, messageKey);
                             Log.Info("服务端OCR完成: sha256=" + ShortHash(sha256)
                                 + ", chars=" + (result.Text == null ? 0 : result.Text.Length)
                                 + ", confidence=" + result.Confidence.ToString("0.000", CultureInfo.InvariantCulture)
@@ -247,15 +259,15 @@ namespace Bot.ChromeNs
         // OCR-to-text-AI fallback may reuse successful OCR evidence but must
         // NEVER restart a failed/504 inference immediately (which would queue
         // behind a still-running ONNX worker and double load).
-        internal static LocalOcrResult TryGetCachedRecognition(string imagePath, string shopKey, string buyerNick)
+        internal static LocalOcrResult TryGetCachedRecognition(string imagePath, string shopKey, string buyerNick, string messageKey)
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath)
-                    || string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick))
+                    || string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(messageKey))
                     return null;
                 var hash = ComputeSha256(imagePath);
-                var cached = TryReadCache(hash, shopKey, buyerNick);
+                var cached = TryReadCache(hash, shopKey, buyerNick, messageKey);
                 if (cached == null) return null;
                 return new LocalOcrResult
                 {
@@ -409,11 +421,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static LocalOcrCacheEnvelope TryReadCache(string sha256, string shopKey, string buyerNick)
+        private static LocalOcrCacheEnvelope TryReadCache(string sha256, string shopKey, string buyerNick, string messageKey)
         {
             try
             {
-                var path = GetCachePath(sha256, shopKey, buyerNick);
+                var path = GetCachePath(sha256, shopKey, buyerNick, messageKey);
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
                 var envelope = JsonConvert.DeserializeObject<LocalOcrCacheEnvelope>(File.ReadAllText(path, Encoding.UTF8));
                 if (envelope == null || !string.Equals(envelope.ImageSha256, sha256, StringComparison.OrdinalIgnoreCase)) return null;
@@ -431,13 +443,13 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void TryWriteCache(LocalOcrResult result, string shopKey, string buyerNick)
+        private static void TryWriteCache(LocalOcrResult result, string shopKey, string buyerNick, string messageKey)
         {
             if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.ImageSha256)
-                || string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick)) return;
+                || string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(messageKey)) return;
             try
             {
-                var path = GetCachePath(result.ImageSha256, shopKey, buyerNick);
+                var path = GetCachePath(result.ImageSha256, shopKey, buyerNick, messageKey);
                 if (string.IsNullOrWhiteSpace(path)) return;
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var envelope = new LocalOcrCacheEnvelope
@@ -458,17 +470,19 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string GetCachePath(string sha256, string shopKey, string buyerNick)
+        private static string GetCachePath(string sha256, string shopKey, string buyerNick, string messageKey)
         {
             if (string.IsNullOrWhiteSpace(sha256)
                 || string.IsNullOrWhiteSpace(shopKey)
-                || string.IsNullOrWhiteSpace(buyerNick)) return null;
+                || string.IsNullOrWhiteSpace(buyerNick)
+                || string.IsNullOrWhiteSpace(messageKey)) return null;
             var root = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "QianniuAiBot",
                 "ocr-cache",
                 ScopeHash(shopKey),
-                ScopeHash(buyerNick));
+                ScopeHash(buyerNick),
+                ScopeHash(messageKey));
             return Path.Combine(root, sha256 + ".json");
         }
 
