@@ -107,3 +107,14 @@ def test_order_guidance_ledger_cross_process_transactions_reload_from_disk():
     assert "订单账本跨进程锁不可用，已阻止自动补发" in followup
     assert "订单账本跨进程锁不可用，已阻止发送" in presend
     assert delivered.index("if (!ledgerLease.Acquired)") < delivered.index("MarkDeliveredInternal") < delivered.index("SaveInternal()")
+
+
+
+def test_equivalent_seller_reply_dedup_never_reads_another_shop_timeline():
+    source = read("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
+    presend = source[source.index("public static bool ShouldSuppressBeforeSend"):source.index("public static void MarkDelivered")]
+    compare = source[source.index("private static bool FindEquivalentSellerReply"):source.index("internal static bool EquivalentGuidance")]
+    assert "FindEquivalentSellerReply(plan.ShopKey, plan.Seller, plan.Buyer, answer, since, out matched)" in presend
+    assert "string shopKey," in compare
+    assert "ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24)" in compare
+    assert "GetRecentTurns(seller, buyer, string.Empty" not in compare
