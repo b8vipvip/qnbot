@@ -363,7 +363,10 @@ namespace Bot.ChromeNs
                     OffHoursDeliveredUntil[buyerKey] = ok
                         ? DateTime.Now.AddMinutes(OffHoursRepeatMinutes)
                         : DateTime.Now.AddSeconds(15);
-                    return ok ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+                    return ok ? CanonicalPreMergeOutcome.Consumed
+                        : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
+                            ? CanonicalPreMergeOutcome.Cancelled
+                            : CanonicalPreMergeOutcome.Failed;
                 }
                 return CanonicalPreMergeOutcome.Consumed;
             }
@@ -388,7 +391,10 @@ namespace Bot.ChromeNs
                     qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey), cancellationToken).ConfigureAwait(false);
                 Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + productOk + ", aiCalled=false");
-                return productOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+                return productOk ? CanonicalPreMergeOutcome.Consumed
+                    : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
+                        ? CanonicalPreMergeOutcome.Cancelled
+                        : CanonicalPreMergeOutcome.Failed;
             }
 
             string firstReply;
@@ -414,6 +420,7 @@ namespace Bot.ChromeNs
                         item.BuyerNick,
                         qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason(), item.ShopKey);
                     return cancellationToken.IsCancellationRequested
+                        || (qn.Rpa != null && qn.Rpa.LastSendWasCancelled)
                         ? CanonicalPreMergeOutcome.Cancelled
                         : CanonicalPreMergeOutcome.Failed;
                 }
@@ -440,7 +447,10 @@ namespace Bot.ChromeNs
                         Log.Info("本地短消息精确命中: seller=" + item.SellerNick
                             + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
                             + ", success=" + localOk + ", aiCalled=false");
-                        return localOk ? CanonicalPreMergeOutcome.Consumed : CanonicalPreMergeOutcome.Failed;
+                        return localOk ? CanonicalPreMergeOutcome.Consumed
+                            : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
+                                ? CanonicalPreMergeOutcome.Cancelled
+                                : CanonicalPreMergeOutcome.Failed;
                     }
                 }
             }
@@ -599,14 +609,18 @@ namespace Bot.ChromeNs
                 };
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
+                var sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
                 if (ok)
-                    ReplyDeduplicationService.RememberDelivered(item.SellerNick, item.BuyerNick, answer);
+                    ReplyDeduplicationService.RememberDelivered(
+                        item.SellerNick, item.BuyerNick, answer, item.ShopKey);
                 if (ctl != null)
                     ctl.SetSendResult(ok, ok
                         ? "已发送（" + source + "，由统一买家生命周期前置处理）"
-                        : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                        : sendCancelled
+                            ? "未发送：人工接管或发送前会话门禁已取消"
+                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
                 Log.Info(source + "前置真实发送完成: seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick + ", success=" + ok);
+                    + ", buyer=" + item.BuyerNick + ", success=" + ok + ", cancelled=" + sendCancelled);
                 return ok;
             }
             catch (OperationCanceledException)
@@ -623,7 +637,11 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
+                if (qn.Rpa != null && qn.Rpa.LastSendWasCancelled)
+                    ResponseProgressTracker.Cancel(
+                        item.SellerNick, item.BuyerNick, "固定回复发送前会话门禁取消", item.ShopKey);
+                else
+                    ResponseProgressTracker.Complete(item.SellerNick, item.BuyerNick, item.ShopKey);
             }
         }
 
