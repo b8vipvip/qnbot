@@ -181,7 +181,7 @@ namespace Bot.ChromeNs
                     }
                     else
                     {
-                        ReplyDeduplicationService.RememberDelivered(seller, buyer, reply);
+                        ReplyDeduplicationService.RememberDelivered(seller, buyer, reply, shop.ShopKey);
                         KnowledgeLearningService.RegisterAnswerSource(
                             seller, buyer, question, reply, "人工回复-企业微信应用");
                         KnowledgeLearningService.QueueLearn(
