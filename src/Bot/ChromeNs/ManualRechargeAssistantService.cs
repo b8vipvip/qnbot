@@ -75,7 +75,7 @@ namespace Bot.ChromeNs
             public long RecordId;
             public Stage Stage;
             public DateTime UpdatedUtc;
-            public KugouAccountEvidence Evidence;
+            public AccountVisualEvidence Evidence;
             public List<AccountCandidate> Accounts = new List<AccountCandidate>();
             public AccountCandidate Selected;
         }
@@ -108,8 +108,8 @@ namespace Bot.ChromeNs
                 string orderId;
                 if (!TryFindRecentRedeemCode(seller, buyer, out orderId)) return false;
 
-                KugouAccountEvidence evidence;
-                if (!RecentVisualContextService.TryGetRecentKugouAccountEvidence(shop.ShopKey, seller, buyer, out evidence)
+                AccountVisualEvidence evidence;
+                if (!RecentVisualContextService.TryGetRecentAccountEvidence(shop.ShopKey, seller, buyer, out evidence)
                     || evidence == null)
                 {
                     return false;
@@ -230,7 +230,7 @@ namespace Bot.ChromeNs
                         await SendAsync(
                             qn,
                             buyer,
-                            "已和您刚才设备截图里的酷狗账号核对一致：" + DisplayAccount(state.Selected)
+                            "已和您刚才设备截图里的" + (string.IsNullOrWhiteSpace(state.Evidence.ApplicationName) ? "目标应用" : state.Evidence.ApplicationName) + "账号核对一致：" + DisplayAccount(state.Selected)
                                 + "。确认给这个账号充值的话，请回复“确认充值”。",
                             cancellationToken).ConfigureAwait(false);
                         return true;
@@ -361,7 +361,7 @@ namespace Bot.ChromeNs
 
         private static List<AccountCandidate> FindExactMatches(
             IEnumerable<AccountCandidate> accounts,
-            KugouAccountEvidence evidence)
+            AccountVisualEvidence evidence)
         {
             if (evidence == null) return new List<AccountCandidate>();
             var nickname = NormalizeAccount(evidence.Nickname);
