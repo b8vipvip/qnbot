@@ -50,9 +50,12 @@ def test_new_knowledge_still_requires_exact_real_buyer_and_non_bot_human_message
     assert "questionTurn.Withdrawn || answerTurn.Withdrawn" in evidence
     assert "TimeSpan.FromMinutes(30)" in evidence
     assert "another_buyer_message_interrupted_the_evidence_pair" in evidence
-    assert "humanReplyTurns.Count != 1" in evidence
-    assert "ReferenceEquals(humanReplyTurns[0], answerTurn)" in evidence
-    assert "human_reply_is_split_across_multiple_messages" in evidence
+    assert "humanReplyTurns.Count == 0 || humanReplyTurns.Count > 4" in evidence
+    assert "ReferenceEquals(x, answerTurn)" in evidence
+    assert "botReplyTurns.Count > 0" in evidence
+    assert "nativeHumanReplyIds" in evidence
+    assert "human_reply_bundle_is_not_a_contiguous_verified_seller_sequence" in evidence
+    assert "EvidenceMessageIds = new List<string> { questionMessageId }.Concat(nativeHumanReplyIds).ToList()" in evidence
 
 
 def test_ai_generated_question_answer_are_automatically_checked_against_source_evidence():
@@ -467,3 +470,28 @@ def test_verified_auto_add_persists_native_qianniu_ids_not_synthesized_message_k
     assert "humanMessageIds.Contains(nativeAnswerId)" in candidate
     assert "questionMessageId = nativeQuestionId;" in candidate
     assert "answerMessageId = nativeAnswerId;" in candidate
+
+
+
+def test_split_human_reply_bubbles_are_merged_and_all_native_ids_are_persisted():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    apply = service[
+        service.index("private static int ApplyVerifiedCorpusNewKnowledge"):
+        service.index("private static bool CanAutoApplyVerifiedNewKnowledge")
+    ]
+    candidate = service[
+        service.index("private static bool TryCreateVerifiedNewKnowledgeCandidate"):
+        service.index("private static ConversationContextTurn FindUniqueTurnByMessageId")
+    ]
+    save = repository[
+        repository.index("public static bool TryCreateVerifiedSessionKnowledge"):
+        repository.index("private static bool IsSafeAutomaticNewKnowledge")
+    ]
+
+    assert 'string.Join("\\n", humanReplyTurns' in candidate
+    assert "EvidenceMessageIds = new List<string> { questionMessageId }.Concat(nativeHumanReplyIds).ToList()" in candidate
+    assert "verified.EvidenceMessageIds.Skip(1)" in apply
+    assert "IEnumerable<string> answerMessageIds" in save
+    assert 'string.Join(",", normalizedAnswerMessageIds)' in save
+    assert 'MessageRecordId = "session-human-evidence:" + questionMessageId + "," + string.Join' in save

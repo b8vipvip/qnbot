@@ -1277,7 +1277,7 @@ namespace Bot.ChromeNs
                         verified.Aliases,
                         (verified.Keywords ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries),
                         verified.EvidenceMessageIds[0],
-                        verified.EvidenceMessageIds[1],
+                        verified.EvidenceMessageIds.Skip(1),
                         verified.Confidence,
                         expectedCurrentFingerprint,
                         out applyMessage,
@@ -2975,26 +2975,76 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            // MessageKey may be a deterministic fallback composed from text/time.
-            // Production learning requires at least one original Qianniu-native ID
-            // on each side and persists that native alias, never the fallback key.
+            // The seller may send one answer across several consecutive bubbles.
+            // Keep the entire contiguous human reply bundle; never let AI select only
+            // the first fragment and silently lose a condition or correction.
             var nativeQuestionId = (questionTurn.NativeAliases ?? new string[0])
                 .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-            var nativeAnswerId = (answerTurn.NativeAliases ?? new string[0])
-                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-            if (string.IsNullOrWhiteSpace(nativeQuestionId)
-                || string.IsNullOrWhiteSpace(nativeAnswerId)
-                || !buyerMessageIds.Contains(nativeQuestionId)
-                || !humanMessageIds.Contains(nativeAnswerId))
+            if (string.IsNullOrWhiteSpace(nativeQuestionId) || !buyerMessageIds.Contains(nativeQuestionId))
+            {
+                rejection = "original_native_buyer_message_id_missing";
+                return false;
+            }
+            questionMessageId = nativeQuestionId;
+
+            var orderedTurns = (turns ?? new List<ConversationContextTurn>())
+                .Where(x => x != null)
+                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
+                .ToList();
+            var questionIndex = orderedTurns.IndexOf(questionTurn);
+            if (questionIndex < 0)
+            {
+                rejection = "question_answer_turn_order_invalid";
+                return false;
+            }
+
+            var replyWindow = orderedTurns.Skip(questionIndex + 1)
+                .TakeWhile(x => x.Role != "user" || x.Withdrawn)
+                .ToList();
+            if (!replyWindow.Any(x => ReferenceEquals(x, answerTurn)))
+            {
+                rejection = "another_buyer_message_interrupted_the_evidence_pair";
+                return false;
+            }
+
+            var botReplyTurns = replyWindow
+                .Where(x => x.Role == "assistant" && !x.Withdrawn && IsBotTurn(x, cards))
+                .ToList();
+            var humanReplyTurns = replyWindow
+                .Where(x => x.Role == "assistant" && !x.Withdrawn && !IsBotTurn(x, cards)
+                    && !string.IsNullOrWhiteSpace(x.Text))
+                .ToList();
+            if (humanReplyTurns.Count == 0 || humanReplyTurns.Count > 4
+                || botReplyTurns.Count > 0
+                || !humanReplyTurns.Any(x => ReferenceEquals(x, answerTurn)))
+            {
+                rejection = "human_reply_bundle_is_not_a_contiguous_verified_seller_sequence";
+                return false;
+            }
+
+            var nativeHumanReplyIds = new List<string>();
+            foreach (var humanReplyTurn in humanReplyTurns)
+            {
+                var nativeId = (humanReplyTurn.NativeAliases ?? new string[0])
+                    .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && humanMessageIds.Contains(x));
+                if (string.IsNullOrWhiteSpace(nativeId))
+                {
+                    rejection = "original_native_human_reply_message_id_missing";
+                    return false;
+                }
+                nativeHumanReplyIds.Add(nativeId);
+            }
+
+            answerTurn = humanReplyTurns.Last();
+            var nativeAnswerId = nativeHumanReplyIds.Last();
+            if (string.IsNullOrWhiteSpace(nativeAnswerId) || !humanMessageIds.Contains(nativeAnswerId))
             {
                 rejection = "original_native_message_id_missing";
                 return false;
             }
-            questionMessageId = nativeQuestionId;
             answerMessageId = nativeAnswerId;
 
-            if (questionTurn.Timestamp == DateTime.MinValue
-                || answerTurn.Timestamp == DateTime.MinValue)
+            if (questionTurn.Timestamp == DateTime.MinValue || answerTurn.Timestamp == DateTime.MinValue)
             {
                 rejection = "question_answer_timestamp_missing";
                 return false;
@@ -3010,42 +3060,10 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var orderedTurns = (turns ?? new List<ConversationContextTurn>())
-                .Where(x => x != null)
-                .OrderBy(x => x.PreciseTimeTicks > 0 ? x.PreciseTimeTicks : x.Timestamp.Ticks)
-                .ToList();
-            var questionIndex = orderedTurns.IndexOf(questionTurn);
-            var answerIndex = orderedTurns.IndexOf(answerTurn);
-            if (questionIndex < 0 || answerIndex <= questionIndex)
-            {
-                rejection = "question_answer_turn_order_invalid";
-                return false;
-            }
-            for (var i = questionIndex + 1; i < answerIndex; i++)
-            {
-                if (orderedTurns[i].Role == "user" && !orderedTurns[i].Withdrawn)
-                {
-                    rejection = "another_buyer_message_interrupted_the_evidence_pair";
-                    return false;
-                }
-            }
-
-            // One seller answer may be split across several message bubbles. Until
-            // the evidence model supports a multi-message answer bundle, do not let
-            // AI select only one fragment and silently lose a condition or correction.
-            var humanReplyTurns = orderedTurns
-                .Skip(questionIndex + 1)
-                .TakeWhile(x => x.Role != "user" || x.Withdrawn)
-                .Where(x => x.Role == "assistant" && !x.Withdrawn && !IsBotTurn(x, cards))
-                .ToList();
-            if (humanReplyTurns.Count != 1 || !ReferenceEquals(humanReplyTurns[0], answerTurn))
-            {
-                rejection = "human_reply_is_split_across_multiple_messages";
-                return false;
-            }
-
             var question = Redact(Clean(questionTurn.Text, 400));
-            var answer = Redact(Clean(answerTurn.Text, 1200));
+            var answer = Redact(Clean(string.Join("\n", humanReplyTurns
+                .Select(x => Clean(x.Text, 1200))
+                .Where(x => !string.IsNullOrWhiteSpace(x))), 1200));
             if (question.Length < 4 || question.Length > 400 || answer.Length < 2 || answer.Length > 1200
                 || KnowledgeEngineV2Semantics.IsContextDependent(question)
                 || string.IsNullOrWhiteSpace(question)
@@ -3081,7 +3099,7 @@ namespace Bot.ChromeNs
                 Keywords = string.Join(",", (parsed.Entities ?? new List<string>())
                     .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(12)),
                 EvidenceType = "manual_reply",
-                Evidence = "已从当前完整会话中验证真实买家消息与非Bot人工客服回复。",
+                Evidence = "已从当前完整会话中验证真实买家消息与连续非Bot人工客服回复序列。",
                 Reason = Redact(Clean(reason, 500)),
                 Confidence = confidence,
                 Applied = false,
@@ -3089,7 +3107,7 @@ namespace Bot.ChromeNs
                 KnowledgeId = string.Empty,
                 SourceFingerprint = sourceFingerprint,
                 CorpusBatchIndex = 0,
-                EvidenceMessageIds = new List<string> { questionMessageId, answerMessageId }
+                EvidenceMessageIds = new List<string> { questionMessageId }.Concat(nativeHumanReplyIds).ToList()
             };
             return true;
         }

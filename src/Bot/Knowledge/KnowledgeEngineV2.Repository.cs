@@ -284,7 +284,7 @@ namespace Bot.Knowledge
             IEnumerable<string> aliases,
             IEnumerable<string> keywords,
             string questionMessageId,
-            string answerMessageId,
+            IEnumerable<string> answerMessageIds,
             double confidence,
             string expectedCorpusFingerprint,
             out string result,
@@ -300,11 +300,16 @@ namespace Bot.Knowledge
             question = (question ?? string.Empty).Trim();
             answer = (answer ?? string.Empty).Trim();
             questionMessageId = (questionMessageId ?? string.Empty).Trim();
-            answerMessageId = (answerMessageId ?? string.Empty).Trim();
+            var normalizedAnswerMessageIds = (answerMessageIds ?? Enumerable.Empty<string>())
+                .Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var answerMessageId = normalizedAnswerMessageIds.LastOrDefault() ?? string.Empty;
 
             if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
-                || questionMessageId.Length == 0 || answerMessageId.Length == 0
-                || string.Equals(questionMessageId, answerMessageId, StringComparison.Ordinal)
+                || questionMessageId.Length == 0 || normalizedAnswerMessageIds.Count == 0
+                || normalizedAnswerMessageIds.Contains(questionMessageId, StringComparer.Ordinal)
                 || question.Length < 4 || question.Length > 400
                 || answer.Length < 2 || answer.Length > 1200
                 || string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
@@ -361,7 +366,7 @@ namespace Bot.Knowledge
             var state = GetState(shop);
             EnsureMigrated(shop, state);
             var sourceId = BuildHumanEvidenceSourceId(
-                shop.ShopKey, sessionId, questionMessageId, answerMessageId);
+                shop.ShopKey, sessionId, questionMessageId, string.Join(",", normalizedAnswerMessageIds));
             var now = DateTime.Now;
             KnowledgeV2Record record = null;
             var recoveredExisting = false;
@@ -535,7 +540,7 @@ namespace Bot.Knowledge
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     KnowledgeId = record.Id,
-                    MessageRecordId = "session-human-evidence:" + questionMessageId + "," + answerMessageId,
+                    MessageRecordId = "session-human-evidence:" + questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds),
                     Action = "apply",
                     PreviousJson = JsonConvert.SerializeObject(tombstone),
                     CurrentJson = JsonConvert.SerializeObject(record),
