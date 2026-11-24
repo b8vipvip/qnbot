@@ -3,6 +3,7 @@ using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
@@ -175,6 +176,24 @@ namespace Bot.ChromeNs
                         {
                             if (string.IsNullOrWhiteSpace(result.VisualQuestion)) result.VisualQuestion = currentQuestion;
                             var generatedAnswer = result.Answer;
+                            IDictionary<string, string> extractedAccountFields = null;
+                            try
+                            {
+                                if (localOcr != null && localOcr.Success
+                                    && !string.IsNullOrWhiteSpace(localOcr.Text))
+                                {
+                                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
+                                    VisualUnderstandingMatch visualMatch;
+                                    if (shop != null
+                                        && VisualUnderstandingRuleService.TryMatch(
+                                            task.ShopKey, shop.SellerNick, localOcr.Text, out visualMatch))
+                                        extractedAccountFields = visualMatch.ExtractedFields;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.ErrorWithMaxCount("提取本店OCR结构化账号字段失败：" + ex.Message, 10);
+                            }
                             VisualKnowledgeMatch learned;
                             if (!string.IsNullOrWhiteSpace(result.VisualSummary)
                                 && VisualKnowledgeLearningService.TryFindMatch(
@@ -206,7 +225,8 @@ namespace Bot.ChromeNs
                                 result.VisualQuestion,
                                 result.VisualSummary,
                                 result.VisualTags,
-                                generatedAnswer);
+                                generatedAnswer,
+                                extractedAccountFields);
 
                             string verifiedReply;
                             string policyReason;
