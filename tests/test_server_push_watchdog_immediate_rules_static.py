@@ -33,7 +33,8 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
 
     first_block = canonical[first:local_short]
     release = first_block.index("FirstInquiryFixedReplyService.ReleaseReservation(")
-    assert "CanonicalPreMergeOutcome.Failed" in first_block[release:]
+    assert "return firstOutcome;" in first_block[release:]
+    assert "CanonicalPreMergeOutcome.Cancelled" in first_block
 
 
 def test_order_auto_reply_still_precedes_burst_merge_path():
