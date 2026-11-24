@@ -121,7 +121,7 @@ namespace Bot.ChromeNs
 
             foreach (var item in BotFeatureStore.GetKnowledgeBase()
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
-                .Where(x => !Bot.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)))
+                .Where(x => !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)))
             {
                 var currentScore = Score(item, question, false);
                 if (latestAgentPrompt != null)

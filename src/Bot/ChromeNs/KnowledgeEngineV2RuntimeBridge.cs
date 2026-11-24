@@ -450,7 +450,7 @@ namespace Bot.ChromeNs
 
             var matches = (decision.Matches ?? new System.Collections.Generic.List<KnowledgeV2Match>())
                 .Where(match => match != null && match.Record != null
-                    && Bot.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)
+                    && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)
                     && !string.Equals(match.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
                     && !KnowledgeEngineV2Semantics.IsHighRisk(match.Record.Answer)
                     && match.Score >= 0.52
@@ -506,7 +506,7 @@ namespace Bot.ChromeNs
 
         private static bool IsApprovedMatchForLogging(KnowledgeV2Match match)
         {
-            return match != null && Bot.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record);
+            return match != null && Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record);
         }
     }
 }
