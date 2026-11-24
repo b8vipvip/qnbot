@@ -138,16 +138,30 @@ namespace Bot.Knowledge
                 UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
             if (hasEvidence)
             {
-                var queryHasProductId = (query.Entities ?? new List<string>())
+                var buyerMessageHasProductId = KnowledgeEngineV2Semantics.ExtractEntities(message)
                     .Any(x => (x ?? string.Empty).StartsWith("product:", StringComparison.OrdinalIgnoreCase));
                 var evidenceEntities = KnowledgeEngineV2Semantics.ExtractEntities(evidenceText)
-                    .Where(x => !string.IsNullOrWhiteSpace(x)
-                        && (!queryHasProductId
-                            || !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
-                    // Prefer an explicitly labeled OCR product ID over generic OCR terms,
-                    // but never let OCR override a product ID stated by the buyer.
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    // Prefer an explicitly labeled OCR product ID over generic OCR terms.
                     .OrderByDescending(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
                     .ToList();
+                var evidenceHasProductId = evidenceEntities.Any(
+                    x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase));
+                if (buyerMessageHasProductId)
+                {
+                    // The current buyer-authored product ID is authoritative over OCR.
+                    evidenceEntities = evidenceEntities
+                        .Where(x => !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+                else if (evidenceHasProductId)
+                {
+                    // A labeled product ID in the current image supersedes a stale product
+                    // inherited from working memory; keep memory only when OCR has no product ID.
+                    query.Entities = (query.Entities ?? new List<string>())
+                        .Where(x => !(x ?? string.Empty).StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
                 var configuredSubject = (evidenceSubject ?? string.Empty).Trim();
                 if (configuredSubject.Contains("{") || configuredSubject.Contains("}"))
                     configuredSubject = string.Empty;

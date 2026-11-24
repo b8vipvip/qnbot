@@ -78,10 +78,12 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert internal.index("UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)") < internal.index(
         "ExtractEntities(evidenceText)"
     )
-    assert "var queryHasProductId" in internal
+    assert "var buyerMessageHasProductId" in internal
+    assert "var evidenceHasProductId" in internal
     assert 'StartsWith("product:", StringComparison.OrdinalIgnoreCase)' in internal
-    assert "!queryHasProductId" in internal
-    assert "|| !x.StartsWith(\"product:\"" in internal
+    assert "if (buyerMessageHasProductId)" in internal
+    assert "else if (evidenceHasProductId)" in internal
+    assert "current image supersedes a stale product" in internal
     assert "OrderByDescending(x => x.StartsWith(\"product:\"" in internal
     assert "query.Entities = (query.Entities ?? new List<string>())" in internal
     assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
