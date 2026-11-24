@@ -158,6 +158,6 @@ def test_enabled_visual_rule_requires_nonempty_application_identity_at_save_and_
         "private static Dictionary<string, string> Extract", 1
     )[0]
 
-    assert "rule.Enabled && (rule.AppName.Length == 0 || IsApplicationNamePlaceholder(rule.AppName))" in save
+    assert "rule.Enabled && !SplitApplicationNames(rule.AppName).Any()" in save
     assert "configuredNames.Count == 0 || !configuredNames.Any" in match
     assert "Fail closed even if a legacy row bypassed the current Save validation" in match
