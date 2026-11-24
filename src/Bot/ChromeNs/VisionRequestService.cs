@@ -130,7 +130,7 @@ namespace Bot.ChromeNs
                         }
 
                         // Local OCR remains attached as evidence for the vision fallback. Because the
-                        // OCR cache is SHA-256 keyed, this second lookup is normally a local cache hit.
+                        // OCR cache is scoped by ShopKey, buyer, message key and image hash, so this second lookup is normally a local cache hit.
                         var localOcr = await LocalOcrService.TryRecognizeAsync(
                             image.LocalCachePath, task.SellerNick, task.ShopKey, task.BuyerNick, task.MessageKey, cts.Token);
                         var requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr);
