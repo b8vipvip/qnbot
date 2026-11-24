@@ -313,11 +313,12 @@ namespace Bot.ChromeNs
                 "主页隐私设置", "余额", "已购内容", "已购音乐", "VIP"
             });
             rule.ExcludedKeywords = string.Join(Environment.NewLine, new[] { "登录页", "验证码" });
-            rule.FieldPatterns = @"账号ID|(?:^|[\r\n])[^\r\n]{0,16}ID\s*[:：]?\s*([A-Za-z0-9_-]{5,})" + Environment.NewLine
-                + @"昵称|(?:账号|帐号)中心\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
-                + @"会员状态|我的会员\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
-                + @"会员到期|(?:VIP|会员)[^\r\n]*?(\d{4}-\d{2}-\d{2}到期)";
-            rule.Description = "识别移动端账号中心页面；提取账号ID、昵称、会员等级和到期日期。应用名称由当前店铺规则配置，不绑定固定品牌。";
+            rule.FieldPatterns = @"账号ID|(?:[\u4e00-\u9fff]{0,12})?(?:用户|账号)?ID\s*[:：]?\s*([A-Za-z0-9_-]{3,64})" + Environment.NewLine
+                + @"昵称|(?:昵称\s*[:：]?\s*|(?:账号|帐号)中心[\r\n]+)([^\r\n]{1,40})" + Environment.NewLine
+                + @"会员状态|(?:我的会员|会员状态)\s*[:：]?\s*([^\r\n]{1,40})" + Environment.NewLine
+                + @"会员到期|(?:VIP|会员)[^\r\n]*?(\d{4}-\d{2}-\d{2}到期)" + Environment.NewLine
+                + @"手机号|(?:手机号|手机号码|联系电话)\s*[:：]?\s*(1[3-9]\d{9})";
+            rule.Description = "识别移动端账号中心页面；提取账号ID、昵称、手机号、会员等级和到期日期。应用名称由当前店铺规则配置，不绑定固定品牌。";
             rule.Enabled = true;
         }
 
