@@ -387,3 +387,17 @@ def test_background_recovery_and_burst_activity_are_shopkey_scoped():
     assert 'BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick, item.ShopKey)' in burst
     template = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
     assert 'BotActivityCoordinator.Begin("订单模板字段发送V2", plan.Seller, plan.Buyer, plan.ShopKey)' in template
+
+def test_active_reply_and_manual_delivery_paths_use_explicit_shop_scoped_dedup():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    wecom = read("src/Bot/ChromeNs/WeComAppBridgeClient.cs")
+
+    assert "burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey" in streaming
+    assert "burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey" in vision
+    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in qn
+    assert "RememberDelivered(plan.Seller, plan.Buyer, answer, plan.ShopKey)" in order
+    assert "RememberDelivered(seller, buyer, reply, shop.ShopKey)" in wecom
+
