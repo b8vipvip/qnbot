@@ -294,7 +294,7 @@ def test_withdrawn_images_are_excluded_from_agent_evidence_and_visual_learning()
     manual_learning = read("src/Bot/ChromeNs/ManualVisualReplyLearningService.cs")
 
     assert "IsMessageKeyWithdrawn(" in cache
-    assert "FindRecord(messageKey, string.Empty, shop.ShopKey)" in cache
+    assert "FindRecord(messageKey, string.Empty, shop.ShopKey, seller, buyer)" in cache
     assert "VisualKnowledgeLearningService.MarkObservationWithdrawn(" in cache
     assert 'Status = withdrawn ? "图片已撤回" : "等待人工接待结束"' in visual_learning
     assert 'observation.Status = "图片已撤回"' in visual_learning
