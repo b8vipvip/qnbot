@@ -1645,6 +1645,12 @@ namespace Bot.Knowledge
                 using (ShopSettingsScope.Enter(shop))
                 {
                     var list = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+                    if (IsVisualUnderstandingRule(record))
+                    {
+                        list.RemoveAll(x => x != null && string.Equals(x.Id, record.Id, StringComparison.Ordinal));
+                        BotFeatureStore.SaveKnowledgeBase(list);
+                        return;
+                    }
                     var item = list.FirstOrDefault(x => x != null && string.Equals(x.Id, record.Id, StringComparison.Ordinal));
                     if (item == null)
                     {
@@ -1681,7 +1687,7 @@ namespace Bot.Knowledge
                 var list = new List<KnowledgeBaseEntry>();
                 foreach (var record in records ?? new List<KnowledgeV2Record>())
                 {
-                    if (record == null) continue;
+                    if (record == null || IsVisualUnderstandingRule(record)) continue;
                     var item = new KnowledgeBaseEntry();
                     ApplyToLegacy(record, item);
                     list.Add(item);
@@ -1689,6 +1695,12 @@ namespace Bot.Knowledge
                 using (ShopSettingsScope.Enter(shop)) BotFeatureStore.SaveKnowledgeBase(list);
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("V2完整知识镜像旧知识库失败: " + ex.Message, 10); }
+        }
+
+        private static bool IsVisualUnderstandingRule(KnowledgeV2Record record)
+        {
+            return record != null
+                && string.Equals(record.SourceType, "visual_understanding_rule", StringComparison.OrdinalIgnoreCase);
         }
 
         private static void ApplyToLegacy(KnowledgeV2Record record, KnowledgeBaseEntry item)
