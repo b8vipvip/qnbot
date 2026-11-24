@@ -223,3 +223,17 @@ def test_generic_manual_legacy_source_is_not_confused_with_ai_generated_provenan
     ]
     assert 'source.IndexOf("manual_ai_generated"' in helper
     assert 'value.IndexOf("manual", StringComparison.OrdinalIgnoreCase)' not in helper
+
+
+
+def test_existing_v2_records_keep_ai_generated_source_provenance_as_candidates():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    candidate = bridge[
+        bridge.index("public static bool IsCandidate(KnowledgeV2Record record)"):
+        bridge.index("public static bool IsProductionApproved")
+    ]
+    assert 'if (IsTrustedProductionSource(record.SourceType)) return false;' in candidate
+    assert 'source.IndexOf("AI生成"' in candidate
+    assert 'source.IndexOf("manual_ai_generated"' in candidate
+    assert 'source.IndexOf("session"' in candidate
+    assert 'source.IndexOf("人工回复"' in candidate

@@ -334,8 +334,14 @@ namespace Bot.Knowledge
             if (record == null) return false;
             if (IsExplicitHumanConfirmationSource(record.SourceType)) return false;
             if (IsTrustedProductionSource(record.SourceType)) return false;
+            var source = record.SourceType ?? string.Empty;
             return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
+                || string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                || source.IndexOf("学习", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("人工回复", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("AI生成", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("manual_ai_generated", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static bool IsProductionApproved(KnowledgeV2Record record)
