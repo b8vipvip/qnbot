@@ -1132,7 +1132,8 @@ namespace Bot.ChromeNs
 
             string relevanceReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                out relevanceReason, false, burst.ShopKey))
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
                 Log.Info("Knowledge Memory发送前被并发相关性门控抑制: buyer=" + burst.BuyerNick
@@ -1140,12 +1141,39 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await qn.SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            if (!lease.MarkSending("knowledge_memory_send_started"))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：generation在Knowledge Memory发送前已失效");
+                return;
+            }
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    return false;
+                string latestRelevanceReason;
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestRelevanceReason, false, burst.ShopKey);
+                if (!shouldSend)
+                    Log.Info("Knowledge Memory等待发送资源期间会话已变化，阻止迟到直答: buyer="
+                        + burst.BuyerNick + ", reason=" + latestRelevanceReason);
+                return shouldSend;
+            };
+            var sendOk = await qn.SendTextWithRetryAsync(
+                burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                ReplyDeduplicationService.RememberDelivered(
+                    burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 if (decision.Best != null && decision.Best.Card != null && decision.Best.Card.Entry != null)
                     KnowledgePolicyProfileService.RecordRouteSelection(decision.Best.Card.Entry, true);
+                lease.MarkCompleted("knowledge_memory_send_completed");
+            }
+            else
+            {
+                lease.MarkFailed("knowledge_memory_send_failed");
             }
             if (ctl != null)
             {
