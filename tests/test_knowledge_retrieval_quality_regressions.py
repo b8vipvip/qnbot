@@ -30,7 +30,7 @@ def test_structured_product_ids_participate_in_full_and_incremental_knowledge_in
     extractor = semantics.split("private static List<string> ExtractProductIds", 1)[1].split(
         "private static string NormalizeEntity", 1
     )[0]
-    assert "商品" in extractor and "宝贝" in extractor
+    assert "商品" in extractor and "产品" in extractor and "宝贝" in extractor
     assert "product|item|goods" in extractor
     assert "item\\.taobao\\.com/item\\.htm" in extractor
     assert "item\\.jd\\.com" in extractor
@@ -343,3 +343,20 @@ def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabl
     assert '!string.Equals(record.Type, "learning_candidate"' in helper
     assert 'record.Type = "learning_candidate";' in helper
     assert 'record.Status = "candidate";' in helper
+
+def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bound():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    internal = service[
+        service.index("private static KnowledgeV2Decision ResolveInternal"):
+        service.index("private static bool IsEligibleProductionMatch")
+    ]
+
+    assert "if (!buyerMessageHasProductId && evidenceHasProductId)" in internal
+    assert "var evidenceProductIds = evidenceEntities" in internal
+    assert "var evidenceNonProductEntities = evidenceEntities" in internal
+    assert "var queryEntities = (query.Entities ?? new List<string>())" in internal
+    assert "query.Entities = evidenceProductIds" in internal
+    assert internal.index("evidenceProductIds") < internal.index(".Concat(evidenceNonProductEntities)")
+    assert ".Concat(queryEntities)" in internal
+    assert ".Take(10)" in internal
+
