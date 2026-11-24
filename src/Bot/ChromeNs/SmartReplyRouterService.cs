@@ -553,7 +553,7 @@ namespace Bot.ChromeNs
             if (!Regex.IsMatch(compact, @"^(这个|那个|这款|那款|这种|那种)")) return false;
             var stripped = Regex.Replace(compact, @"^(这个|那个|这款|那款|这种|那种)", string.Empty);
             if (stripped.Length < 8) return false;
-            if (!Regex.IsMatch(stripped, @"会员|电视|tv|手机|电脑|平板|酷狗|音乐|充值|账号|设备|软件|app|价格|退款|订单", RegexOptions.IgnoreCase)) return false;
+            if (!Regex.IsMatch(stripped, @"会员|电视|tv|手机|电脑|平板|音乐|应用|平台|充值|账号|设备|软件|app|价格|退款|订单", RegexOptions.IgnoreCase)) return false;
             if (HighRiskTerms.Any(x => stripped.Contains(Compact(x)))) return false;
             return best.FinalScore >= 0.84
                 && (best.RetrievalScore >= 0.72 || best.ResolvedQueryScore >= 0.78 || best.SemanticScore >= 0.82);
