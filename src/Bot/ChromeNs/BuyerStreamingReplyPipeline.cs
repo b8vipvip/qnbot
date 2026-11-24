@@ -542,6 +542,17 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick);
                 return;
             }
+            var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            if (sendCancelled)
+            {
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                lease.MarkCompleted("streaming_send_cancelled");
+                if (conversationCtl != null)
+                    conversationCtl.SetSendResult(false, "未发送：人工接管或发送前会话门禁已取消旧回复");
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "Smart Reply发送前会话门禁取消", burst.ShopKey);
+                return;
+            }
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
