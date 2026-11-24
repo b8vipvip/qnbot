@@ -141,3 +141,24 @@ def test_ocr_route_decision_is_logged_with_shop_scoped_capability_state():
     assert "visionEndpoints=" in decision
     assert "买家消息路由决策" in qn
     assert "visionDecision.Kind" in qn
+
+
+
+def test_ocr_and_priority_connections_use_authoritative_shopkey_not_ambient_nickname():
+    local_ocr = read("src/Bot/ChromeNs/LocalOcrService.cs")
+    priority = read("src/Bot/ChromeNs/VisionOcrPriorityService.cs")
+    for source in (local_ocr, priority):
+        assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in source
+        assert "shopKey.Length == 0 && sellerNick.Length > 0" in source
+        assert "current != null && !string.Equals(current.ShopKey, shopKey" not in source
+
+
+def test_ocr_knowledge_lookup_uses_authoritative_shop_seller_and_image_alias_is_allowed():
+    decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert "var knowledgeSeller = shop == null ? string.Empty" in decision
+    assert "KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question)" in decision
+    assert "BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer)" in decision
+    assert "var isVisionItem = item.VisionDecision != null" in burst
+    assert "(!isVisionItem && !sellerMatchesShop)" in burst
+    assert "图片消息使用权威ShopKey店铺作用域继续处理" in burst
