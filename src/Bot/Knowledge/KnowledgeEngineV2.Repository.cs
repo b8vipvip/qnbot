@@ -309,6 +309,7 @@ namespace Bot.Knowledge
 
             if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
                 || questionMessageId.Length == 0 || normalizedAnswerMessageIds.Count == 0
+                || normalizedAnswerMessageIds.Count > 4
                 || normalizedAnswerMessageIds.Contains(questionMessageId, StringComparer.Ordinal)
                 || question.Length < 4 || question.Length > 400
                 || answer.Length < 2 || answer.Length > 1200
@@ -573,7 +574,7 @@ namespace Bot.Knowledge
             if (!KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                 seller, recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add",
                 "knowledge", record.Id,
-                questionMessageId + "," + answerMessageId, record.Title,
+                questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds), record.Title,
                 recoveredExisting ? "idempotent_existing_source" : "no_existing_knowledge",
                 KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
                 recoveredExisting

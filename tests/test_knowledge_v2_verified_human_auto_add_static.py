@@ -495,3 +495,15 @@ def test_split_human_reply_bubbles_are_merged_and_all_native_ids_are_persisted()
     assert "IEnumerable<string> answerMessageIds" in save
     assert 'string.Join(",", normalizedAnswerMessageIds)' in save
     assert 'MessageRecordId = "session-human-evidence:" + questionMessageId + "," + string.Join' in save
+
+
+
+def test_repository_audit_and_idempotency_keys_include_the_full_reply_bundle():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    method = repository[
+        repository.index("public static bool TryCreateVerifiedSessionKnowledge"):
+        repository.index("private static bool IsSafeAutomaticNewKnowledge")
+    ]
+    assert "normalizedAnswerMessageIds.Count > 4" in method
+    assert 'string.Join(",", normalizedAnswerMessageIds)' in method
+    assert 'questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds)' in method
