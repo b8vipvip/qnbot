@@ -161,8 +161,14 @@ namespace Bot.Knowledge
         public static string ResolveSubject(string text, IEnumerable<string> entities)
         {
             var list = (entities ?? Enumerable.Empty<string>()).Where(x => !x.StartsWith("product:", StringComparison.Ordinal)).ToList();
+            var selected = new List<string>();
+            var appMatch = Regex.Match(text ?? string.Empty,
+                @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV))",
+                RegexOptions.IgnoreCase);
+            if (appMatch.Success) selected.Add(appMatch.Value);
             var preferred = new[] { "电视", "TV", "车机", "手机", "电脑", "平板", "会员", "K歌", "账号", "微信", "支付宝", "支付", "付款" };
-            var selected = preferred.Where(x => list.Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase))).Take(3).ToList();
+            selected.AddRange(preferred.Where(x => list.Any(y => string.Equals(x, y, StringComparison.OrdinalIgnoreCase))));
+            selected = selected.Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList();
             if (selected.Count > 0) return string.Join("/", selected);
             var cleaned = Regex.Replace((text ?? string.Empty).Trim(), @"^(这个|那个|这款|那款|请问|想问下)+", string.Empty);
             cleaned = Regex.Replace(cleaned, @"[？?！!。,.，]", string.Empty).Trim();
