@@ -63,8 +63,8 @@ def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     canonical = canonical_block()
 
     resolve = canonical.index("FirstInquiryFixedReplyService.TryResolve(")
-    invoke_send = canonical.index("var firstOk = await SendFixedAsync(", resolve)
-    success = canonical.index("if (firstOk)", invoke_send)
+    invoke_send = canonical.index("var firstOutcome = await SendFixedAsync(", resolve)
+    success = canonical.index("if (firstOutcome == CanonicalPreMergeOutcome.Consumed)", invoke_send)
     mark = canonical.index("FirstInquiryFixedReplyService.MarkDelivered(", success)
     failure = canonical.index("else", mark)
     release = canonical.index("FirstInquiryFixedReplyService.ReleaseReservation(", failure)
@@ -76,7 +76,8 @@ def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     assert sender > release
     assert "首条咨询固定回复" in canonical
     assert "ReleaseReservation(" in failure_block
-    assert "CanonicalPreMergeOutcome.Failed" in failure_block
+    assert "return firstOutcome;" in failure_block
+    assert "CanonicalPreMergeOutcome.Cancelled" in canonical
 
 
 def test_off_hours_reply_is_a_fixed_local_rule_not_ai_dependent():
