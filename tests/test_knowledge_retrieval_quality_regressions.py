@@ -376,3 +376,34 @@ def test_knowledge_v2_and_legacy_memory_direct_sends_recheck_shop_scoped_relevan
         assert "out latestRelevanceReason, false, burst.ShopKey" in source
         assert send_anchor in source
 
+def test_recent_turns_can_resolve_exact_shop_scope_without_treating_shop_key_as_question_text():
+    context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
+    method = context[
+        context.index("public static List<ConversationContextTurn> GetRecentTurns"):
+        context.index("public static List<ConversationMirrorSnapshot> GetMirrorConversationSnapshots")
+    ]
+    key = context[
+        context.index("private static string Key("):
+        context.index("private static ShopContext ResolveShop(")
+    ]
+
+    assert "int maxTurns,\n            string shopKey = null" in method
+    assert "Key(seller, buyer, shopKey)" in method
+    assert "ScopeKey(seller, shopKey)" in key
+    assert "ResolveShop(seller, shopKey)" in key
+    assert '"unresolved:" + Guid.NewGuid().ToString("N")' in key
+
+
+def test_relevance_order_and_recharge_queries_use_explicit_shop_scoped_timelines():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    order = read("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
+    recharge = read("src/Bot/ChromeNs/RechargeStatusAutoQueryService.cs")
+    gate = streaming[
+        streaming.index("class ParallelReplyRelevanceGate"):
+        streaming.index("internal static class ShopScopedReplyCircuitBreaker")
+    ]
+
+    assert "GetRecentTurns(seller, buyer, string.Empty, 24, shopKey)" in gate
+    assert "GetRecentTurns(seller, buyer, string.Empty, 24, shopKey)" in order
+    assert "GetRecentTurns(seller, buyer, currentQuestion, 24, shopKey)" in recharge
+
