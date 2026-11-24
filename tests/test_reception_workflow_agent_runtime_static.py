@@ -275,7 +275,7 @@ def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
         runtime.index("internal static void CompleteDecision")
     ]
 
-    assert "KugouReceptionConfigService.GetConfig(shop)" in current
+    assert "ShopReceptionConfigService.GetConfig(shop)" in current
     assert "!config.Enabled || !config.EnableAutoGuidance" in current
     assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
     assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
