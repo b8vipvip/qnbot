@@ -80,7 +80,8 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     )
     assert "var queryHasProductId" in internal
     assert 'StartsWith("product:", StringComparison.OrdinalIgnoreCase)' in internal
-    assert "!queryHasProductId ||" in internal
+    assert "!queryHasProductId" in internal
+    assert "|| !x.StartsWith(\"product:\"" in internal
     assert "OrderByDescending(x => x.StartsWith(\"product:\"" in internal
     assert "query.Entities = (query.Entities ?? new List<string>())" in internal
     assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
