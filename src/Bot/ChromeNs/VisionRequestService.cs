@@ -362,14 +362,12 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
-                if (shop == null
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
-                        (task.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
-                    return string.Empty;
+                var canonicalSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+                if (shop == null || canonicalSeller.Length == 0) return string.Empty;
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     return ConversationContextStore.BuildTimelineText(
-                        task.SellerNick, task.BuyerNick, question, maxTurns);
+                        canonicalSeller, task.BuyerNick, question, maxTurns);
                 }
             }
             catch (Exception ex)
