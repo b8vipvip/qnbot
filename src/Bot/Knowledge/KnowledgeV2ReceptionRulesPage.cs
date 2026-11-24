@@ -63,7 +63,7 @@ namespace Bot.Knowledge
         public void RefreshView()
         {
             _status.Text = "正在读取当前店铺的规则...";
-            Task.Run(() => KugouReceptionConfigService.GetJson(_seller))
+            Task.Run(() => ShopReceptionConfigService.GetJson(_seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (t.IsFaulted)
@@ -84,7 +84,7 @@ namespace Bot.Knowledge
                 return;
             try
             {
-                _status.Text = KugouReceptionConfigService.SaveJson(_seller, _editor.Text);
+                _status.Text = ShopReceptionConfigService.SaveJson(_seller, _editor.Text);
             }
             catch (Exception ex)
             {
@@ -100,7 +100,7 @@ namespace Bot.Knowledge
                 return;
             try
             {
-                _status.Text = KugouReceptionConfigService.RestoreLatestBackup(_seller);
+                _status.Text = ShopReceptionConfigService.RestoreLatestBackup(_seller);
                 RefreshView();
             }
             catch (Exception ex)
