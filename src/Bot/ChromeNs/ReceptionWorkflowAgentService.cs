@@ -249,7 +249,8 @@ namespace Bot.ChromeNs
             }
 
             // Account evidence is derived only from a recent, non-withdrawn observation
-            // of the official Kugou app. Never send the raw nickname or account ID to the model.
+            // whose application identity matches this shop's enabled Visual Understanding rules.
+            // Never send the raw nickname or account ID to the model.
             try
             {
                 AccountVisualEvidence accountEvidence;
