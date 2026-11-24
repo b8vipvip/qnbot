@@ -2,6 +2,7 @@ using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
 using Bot.ShopScope;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,6 +16,9 @@ namespace Bot.ChromeNs
         public string ApplicationName { get; set; }
         public string Nickname { get; set; }
         public string UserId { get; set; }
+        public string PhoneNumber { get; set; }
+        public string MembershipStatus { get; set; }
+        public string MembershipExpiry { get; set; }
         public string MessageKey { get; set; }
         public DateTime ObservedAt { get; set; }
         public string Summary { get; set; }
@@ -187,21 +191,35 @@ namespace Bot.ChromeNs
                 if (!HasConfiguredOfficialAppEvidence(shop.ShopKey, seller, combined, out applicationName))
                     continue;
 
-                var nicknameMatch = AccountNicknameRegex.Match(combined);
-                var idMatch = AccountIdRegex.Match(combined);
-                var nickname = nicknameMatch.Success
-                    ? CleanAccountField(nicknameMatch.Groups[1].Value, 40)
-                    : string.Empty;
-                var userId = idMatch.Success
-                    ? CleanAccountField(idMatch.Groups[1].Value, 64)
-                    : string.Empty;
-                if (nickname.Length == 0 && userId.Length == 0) continue;
+                var fields = ParseExtractedAccountFields(item.ExtractedFieldsJson);
+                var nickname = GetExtractedField(fields, "昵称", "账号昵称");
+                var userId = GetExtractedField(fields, "账号ID", "用户ID", "ID");
+                var phoneNumber = GetExtractedField(fields, "手机号", "手机号码", "联系电话");
+                var membershipStatus = GetExtractedField(fields, "会员状态", "会员等级");
+                var membershipExpiry = GetExtractedField(fields, "会员到期", "到期日期");
+
+                // Older observations may predate structured OCR field persistence. Keep a
+                // generic label-based fallback, but prefer the unredacted configured OCR fields.
+                if (nickname.Length == 0)
+                {
+                    var match = AccountNicknameRegex.Match(combined);
+                    if (match.Success) nickname = CleanAccountField(match.Groups[1].Value, 40);
+                }
+                if (userId.Length == 0)
+                {
+                    var match = AccountIdRegex.Match(combined);
+                    if (match.Success) userId = CleanAccountField(match.Groups[1].Value, 64);
+                }
+                if (nickname.Length == 0 && userId.Length == 0 && phoneNumber.Length == 0) continue;
 
                 evidence = new AccountVisualEvidence
                 {
                     ApplicationName = applicationName,
                     Nickname = nickname,
                     UserId = userId,
+                    PhoneNumber = phoneNumber,
+                    MembershipStatus = membershipStatus,
+                    MembershipExpiry = membershipExpiry,
                     MessageKey = item.MessageKey,
                     ObservedAt = SafeTime(item.ObservedAtTicks),
                     Summary = CleanForPrompt(item.VisualSummary, 220)
@@ -519,6 +537,35 @@ namespace Bot.ChromeNs
             {
                 return DateTime.MinValue;
             }
+        }
+
+        private static Dictionary<string, string> ParseExtractedAccountFields(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                return JsonConvert.DeserializeObject<Dictionary<string, string>>(json)
+                    ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private static string GetExtractedField(
+            IDictionary<string, string> fields,
+            params string[] names)
+        {
+            if (fields == null || names == null) return string.Empty;
+            foreach (var name in names)
+            {
+                var pair = fields.FirstOrDefault(x =>
+                    string.Equals(x.Key, name, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(pair.Value))
+                    return CleanAccountField(pair.Value, 120);
+            }
+            return string.Empty;
         }
 
         private static string CleanAccountField(string value, int max)
