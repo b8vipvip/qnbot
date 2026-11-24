@@ -76,6 +76,31 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"
 }
 
+# Keep the web update control path available after manual deployments too.  The
+# agent runs on the Ubuntu host (not inside the API container) and owns Docker,
+# backup, health-check and rollback operations.
+ensure_host_update_agent() {
+  local installer="$REPO_DIR/scripts/install-api-control-plane-update-agent.sh"
+  if [[ ! -f "$installer" ]]; then
+    warn "缺少主机更新代理安装脚本: $installer；本次部署继续，但后台在线更新仍不可用。"
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "当前主机未检测到 systemctl，无法启用服务端网页更新代理。"
+    return 0
+  fi
+  log "确保服务端网页更新代理已安装并启用"
+  if REPO_DIR="$REPO_DIR" DATA_DIR="$SERVICE_DIR/data" \
+      GITHUB_SSH_HOST="$GITHUB_SSH_HOST" \
+      GITHUB_SSH_PORT="$GITHUB_SSH_PORT" \
+      GIT_FETCH_RETRIES="$GIT_FETCH_RETRIES" \
+      bash "$installer"; then
+    log "服务端网页更新代理已就绪"
+  else
+    warn "主机更新代理安装或心跳验证失败；本次服务端部署结果不受影响，但后台在线更新暂不可用。请检查 qianniu-api-update-agent.service。"
+  fi
+}
+
 # Use filesystem-available KiB (excludes root-reserved blocks).
 check_free_kib() {
   local path="$1" minimum_kib="$2" stage="$3" available_kib
@@ -530,10 +555,12 @@ if [[ "$SMART_MODE" == "client-build" ]]; then
   fi
   log "GPTAuto 智能判断：仅 Windows 客户端代码变更，服务器无需 Docker Build"
   log "Windows 编译/客户端正式版资产由 GitHub Actions 和既有客户端发布流程负责；不会把服务器重启冒充客户端交付成功"
+  if [[ "$OLD_DEPLOY_KIND" == "repo" ]]; then ensure_host_update_agent; fi
   exit 0
 fi
 if [[ "$SMART_MODE" == "checks-only" ]]; then
   log "GPTAuto 智能判断：无运行时代码变更，无需容器部署"
+  if [[ "$OLD_DEPLOY_KIND" == "repo" ]]; then ensure_host_update_agent; fi
   exit 0
 fi
 # Automatically choose verified image build when previous container lacks
@@ -562,6 +589,7 @@ if [[ "$SMART_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" && "$OLD_DEPLO
       --state-file "$SERVICE_DIR/data/server-update/runtime-deployment.json" \
       --health-url "http://127.0.0.1:${BIND_PORT}/healthz"; then
     log "GPTAuto 智能热修复成功：健康检查通过，跳过完整 Docker Build"
+    ensure_host_update_agent
     exit 0
   fi
   warn "智能热修复未成功；不自动启动第二套构建"
@@ -654,6 +682,10 @@ if [[ "$CMD_JSON" != *"bootstrap.py"* ]]; then
   warn "容器启动命令不是 bootstrap.py: $CMD_JSON"
   rollback
 fi
+
+# The new container now uses SERVICE_DIR/data, so the host agent and API share
+# exactly the same server-update request/status/heartbeat directory.
+ensure_host_update_agent
 
 if [[ -z "$VERIFY_URL" ]]; then
   PUBLIC_BASE_URL="$(read_env_value PUBLIC_BASE_URL "$SERVICE_DIR/.env")"
