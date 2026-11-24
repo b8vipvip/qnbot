@@ -76,6 +76,12 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("OCR-first服务端OCR失败，继续视觉模型链路: " + ex.Message, 20);
                 return null;
             }
+            if (ocr == null || !ocr.Success)
+            {
+                Log.Info("OCR-first服务端OCR未成功，继续视觉/文字兜底: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                    + ", resultAvailable=false");
+            }
             if (!IsHighConfidenceUsefulText(ocr))
             {
                 Log.Info("OCR-first未满足本地知识直答阈值，继续视觉模型链路: seller=" + task.SellerNick
