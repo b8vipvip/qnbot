@@ -132,12 +132,21 @@ namespace Bot.Knowledge
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
             // Persist only buyer-authored query semantics. OCR/menu labels must never
             // become the next turn's working-memory intent, predicate or subject.
-            UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
+            // An image-only message has no buyer-authored query to update memory with.
+            // Preserve the previous subject instead of replacing it with an empty parse.
+            if (message.Length > 0)
+                UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
             if (hasEvidence)
             {
+                var queryHasProductId = (query.Entities ?? new List<string>())
+                    .Any(x => (x ?? string.Empty).StartsWith("product:", StringComparison.OrdinalIgnoreCase));
                 var evidenceEntities = KnowledgeEngineV2Semantics.ExtractEntities(evidenceText)
                     .Where(x => !string.IsNullOrWhiteSpace(x)
-                        && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                        && (!queryHasProductId
+                            || !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)))
+                    // Prefer an explicitly labeled OCR product ID over generic OCR terms,
+                    // but never let OCR override a product ID stated by the buyer.
+                    .OrderByDescending(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 var configuredSubject = (evidenceSubject ?? string.Empty).Trim();
                 if (configuredSubject.Contains("{") || configuredSubject.Contains("}"))

@@ -26,7 +26,15 @@ def test_structured_product_ids_participate_in_full_and_incremental_knowledge_in
     assert "foreach (var entity in RecordEntities(record))" in incremental
     assert "Add(snapshot.Entity" in incremental
     assert "Remove(snapshot.Entity" in incremental
-    assert 'result.Add("product:" + match.Value);' in semantics
+    assert "foreach (var productId in ExtractProductIds(value))" in semantics
+    extractor = semantics.split("private static List<string> ExtractProductIds", 1)[1].split(
+        "private static string NormalizeEntity", 1
+    )[0]
+    assert "商品" in extractor and "宝贝" in extractor
+    assert "product|item|goods" in extractor
+    assert "item\\.taobao\\.com/item\\.htm" in extractor
+    assert "item\\.jd\\.com" in extractor
+    assert 'Regex.Matches(text ?? string.Empty, @"\\b\\d{8,16}\\b")' not in extractor
 
 
 def test_explicit_product_id_mismatch_cannot_use_product_bound_knowledge():
@@ -66,18 +74,25 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject)" in resolve
     assert "if (message.Length == 0 && !hasEvidence)" in internal
     assert "if (IsMediaPlaceholder(message)) message = string.Empty;" in internal
+    assert "if (message.Length > 0)" in internal
     assert internal.index("UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)") < internal.index(
         "ExtractEntities(evidenceText)"
     )
+    assert "var queryHasProductId" in internal
     assert 'StartsWith("product:", StringComparison.OrdinalIgnoreCase)' in internal
+    assert "!queryHasProductId ||" in internal
+    assert "OrderByDescending(x => x.StartsWith(\"product:\"" in internal
     assert "query.Entities = (query.Entities ?? new List<string>())" in internal
     assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
     assert "decision.Query = query;" in internal
 
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
     assert "task.CombinedQuestion" in ocr
-    assert "ocr.Text + Environment.NewLine + visualMatch.ContextText" in ocr
-    assert "visualMatch.AppName" in ocr
+    assert "var evidenceText = ocr.Text;" in ocr
+    assert "visualMatch == null ? string.Empty : visualMatch.ContextText" in ocr
+    assert "visualMatch == null ? string.Empty : visualMatch.AppName" in ocr
+    assert "if (visualMatch == null || decision == null" in ocr
+    assert "仍独立执行Knowledge V2证据检索" in ocr
     assert "BuildKnowledgeQuestion" not in ocr
     assert "BuildTimelineText" not in ocr
 
