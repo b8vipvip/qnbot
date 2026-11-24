@@ -1022,10 +1022,30 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            if (!lease.MarkSending("legacy_text_send_started"))
+            {
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "旧文本发送路径generation已失效", burst.ShopKey);
+                return;
+            }
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                    || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    return false;
+                string latestReason;
+                return ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestReason, false, burst.ShopKey);
+            };
+            var sendOk = await SendTextWithRetryAsync(
+                burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
+            var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+                lease.MarkCompleted("legacy_text_send_completed");
+                ReplyDeduplicationService.RememberDelivered(
+                    burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
                 {
                     KnowledgeLearningService.QueueLearn(
@@ -1036,13 +1056,29 @@ namespace Bot.ChromeNs
                         burst.BuyerNick);
                 }
             }
+            else if (sendCancelled)
+            {
+                lease.MarkCompleted("legacy_text_send_cancelled");
+            }
+            else
+            {
+                lease.MarkFailed("legacy_text_send_failed");
+            }
             if (conversationCtl != null)
             {
-                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送（合并本轮买家消息）" : "发送失败：" + rpa.GetSendFailureReason());
+                conversationCtl.SetSendResult(sendOk, sendOk
+                    ? "已发送（合并本轮买家消息）"
+                    : sendCancelled ? "未发送：人工接管或发送前会话门禁已取消"
+                    : "发送失败：" + rpa.GetSendFailureReason());
             }
             Log.Info("文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
+                + ", cancelled=" + sendCancelled
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "旧文本发送前会话门禁取消", burst.ShopKey);
+            else
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private async Task ProcessVisionBurstAsync(
@@ -1149,12 +1185,26 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            Func<bool> visionPreSendGuard = () =>
+            {
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                    || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    return false;
+                string latestReason;
+                return ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestReason, false, burst.ShopKey);
+            };
+            var sendOk = await SendTextWithRetryAsync(
+                burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard);
+            var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
             if (sendOk) lease.MarkCompleted("vision_send_completed");
+            else if (sendCancelled) lease.MarkCompleted("vision_send_cancelled");
             else lease.MarkFailed("vision_send_failed");
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                ReplyDeduplicationService.RememberDelivered(
+                    burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 KnowledgeLearningService.QueueLearn(
                     burst.CombinedQuestion,
                     answer,
@@ -1162,10 +1212,18 @@ namespace Bot.ChromeNs
                     burst.SellerNick,
                     burst.BuyerNick);
             }
-            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
+            if (ctl != null) ctl.SetSendResult(sendOk, sendOk
+                ? "已发送（合并图片与本轮消息）"
+                : sendCancelled ? "未发送：人工接管或发送前会话门禁已取消"
+                : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
             Log.Info("视觉真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
+                + ", cancelled=" + sendCancelled
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "旧视觉发送前会话门禁取消", burst.ShopKey);
+            else
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
