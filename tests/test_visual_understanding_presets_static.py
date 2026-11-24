@@ -37,7 +37,7 @@ def test_visual_understanding_is_shop_scoped_and_uses_only_a_generic_template():
 
 def test_legacy_visual_preset_is_converted_to_generic_values_without_overwriting_custom_rules():
     service = read("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
-    migration = service.split("One-time conversion of the old automatically seeded sample", 1)[1].split(
+    migration = service.split("One-time conversion is limited to the byte-for-byte legacy seed values.", 1)[1].split(
         "if (rules.Any", 1
     )[0]
     assert "ApplyGenericAccountTemplate(legacy)" in migration
@@ -66,7 +66,7 @@ def test_visual_understanding_requires_all_required_ocr_keywords_and_honors_excl
     assert "IsApplicationNamePlaceholder(rule.AppName)" in match
     assert "configuredNames.Any" in match
     assert "NormalizeApplicationText(name)" in match
-    assert "启用视觉理解规则前必须填写真实应用名称" in service
+    assert "启用视觉理解规则前必须填写至少一个真实应用名称" in service
     assert "Extract(best.FieldPatterns, ocrText)" in match
 
 
