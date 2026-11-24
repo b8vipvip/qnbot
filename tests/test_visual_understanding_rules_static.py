@@ -98,4 +98,6 @@ def test_raw_ocr_cache_is_isolated_per_shop_and_buyer_and_has_short_retention():
     assert "ScopeHash(shopKey)" in local
     assert "ScopeHash(buyerNick)" in local
     assert "ScopeHash(messageKey)" in local
+    assert "CleanupLegacyUnscopedCache()" in local
+    assert "SearchOption.TopDirectoryOnly" in local
     assert "string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick)" in local
