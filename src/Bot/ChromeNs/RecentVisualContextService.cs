@@ -308,7 +308,7 @@ namespace Bot.ChromeNs
             KugouReceptionConfig config)
         {
             var text = (guidanceText ?? string.Empty).Trim();
-            if (!PhotoRequestRegex.IsMatch(text) || config == null) return false;
+            if (!PhotoRequestRegex.IsMatch(text) || config == null || !config.Enabled) return false;
             var all = config.PhotoInstructionAllCues ?? new List<string>();
             var any = config.PhotoInstructionAnyCues ?? new List<string>();
             var excluded = config.PhotoInstructionExcludedCues ?? new List<string>();
