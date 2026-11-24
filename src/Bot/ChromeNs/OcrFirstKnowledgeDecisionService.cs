@@ -4,7 +4,6 @@ using BotLib;
 using System;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -145,9 +144,7 @@ namespace Bot.ChromeNs
                 // identity owned by the ShopKey, never the untrusted message.toid.nick value.
                 using (ShopSettingsScope.Enter(shop, false))
                 {
-                    var timeline = ConversationContextStore.BuildTimelineText(
-                        knowledgeSeller, task.BuyerNick, task.CombinedQuestion, 12);
-                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text + Environment.NewLine + visualMatch.ContextText);
+                    var question = (task.CombinedQuestion ?? string.Empty).Trim();
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
@@ -183,7 +180,12 @@ namespace Bot.ChromeNs
                         return BuildVisualFallback(visualMatch, ocr, "Knowledge V2索引未就绪");
                     }
 
-                    decision = KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question);
+                    decision = KnowledgeEngineV2Service.ResolveWithEvidence(
+                        knowledgeSeller,
+                        task.BuyerNick,
+                        question,
+                        ocr.Text + Environment.NewLine + visualMatch.ContextText,
+                        visualMatch.AppName);
                 }
             }
             catch (OperationCanceledException)
@@ -281,28 +283,6 @@ namespace Bot.ChromeNs
             if (text.Length < MinUsefulTextChars) return false;
             var semanticChars = text.Count(ch => IsCjk(ch) || char.IsLetter(ch));
             return semanticChars >= 2;
-        }
-
-        private static string BuildKnowledgeQuestion(string combinedQuestion, string timeline, string ocrText)
-        {
-            var sb = new StringBuilder();
-            var question = (combinedQuestion ?? string.Empty).Trim();
-            if (question.Length > 0 && !string.Equals(question, "[图片]", StringComparison.Ordinal))
-            {
-                sb.AppendLine("买家本轮文字：").AppendLine(question);
-            }
-
-            timeline = (timeline ?? string.Empty).Trim();
-            if (timeline.Length > 3000) timeline = timeline.Substring(timeline.Length - 3000);
-            if (timeline.Length > 0)
-            {
-                sb.AppendLine("最近客服与买家对话（用于理解图片提交原因）：")
-                    .AppendLine(timeline);
-            }
-
-            sb.AppendLine("图片OCR文字（仅为文字证据）：")
-                .Append((ocrText ?? string.Empty).Trim());
-            return sb.ToString().Trim();
         }
 
         private static bool IsCjk(char ch)
