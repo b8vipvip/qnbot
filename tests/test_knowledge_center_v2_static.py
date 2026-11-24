@@ -142,8 +142,8 @@ def test_learning_candidates_require_explicit_approval_before_direct_reply():
     assert 'record.Type = "learning_candidate";' in bridge
     assert 'record.Status = "candidate";' in bridge
     assert 'KnowledgeV2Record existing = null;' in bridge
-    assert '!string.Equals(record.Status, "candidate"' in repo
-    assert '!string.Equals(record.Type, "learning_candidate"' in repo
+    assert "item.Enabled = KnowledgeV2AuthorityPolicy.IsProductionApproved(record);" in repo
+    assert '&& !IsCandidate(record);' in bridge
 
 
 def test_disabled_records_remain_visible_to_knowledge_center_management():
@@ -198,7 +198,8 @@ def test_knowledge_v2_disabled_and_deleted_provenance_is_never_normalized_back_t
         assert "!record.Enabled" in method
         assert 'record.Status, "disabled"' in method
         assert 'record.Status, "deleted"' in method
-    assert "if (!record.Enabled) return true;" in sync
+    assert "if (!record.Enabled || isDisabledStatus) return true;" in sync
+    assert "var expectedLegacyEnabled = record.Enabled" in sync
 
 
 def test_knowledge_center_hides_deleted_tombstones_but_keeps_disabled_records_manageable():

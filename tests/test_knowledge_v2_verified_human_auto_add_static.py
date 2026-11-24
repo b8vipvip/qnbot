@@ -208,7 +208,7 @@ def test_ai_auto_published_source_is_not_misclassified_as_human_approved():
     assert "ai_auto_learned_human_evidence" in bridge
     assert "public static bool IsAutoPublishedHumanEvidenceSource" in bridge
     assert "private static bool IsTrustedProductionSource" in bridge
-    assert "if (IsTrustedProductionSource(entry.SourceType)) return true;" in bridge
+    assert "return IsTrustedProductionSource(entry.SourceType) || IsUnapprovedLegacyLearningEntry(entry);" in bridge
     assert "ApplyAutoPublished(record);" in bridge
     assert "if (IsTrustedProductionSource(record.SourceType)) return false;" in bridge
     assert "record.Authority = Math.Max(record.Authority, 0.90);" in bridge

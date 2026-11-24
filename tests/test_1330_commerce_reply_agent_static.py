@@ -113,7 +113,7 @@ def test_v2_direct_reply_obeys_shared_commerce_authority_before_resolve():
     assert gate < resolve
     assert "commerceAuthority.AllowLocalTerminalReply" in text[gate:resolve]
     assert "Knowledge Engine V2已让出终态直答权" in text
-    assert "return false;" in text[gate:resolve]
+    assert "return KnowledgeV2RuntimeResult.Continue();" in text[gate:resolve]
     assert "OrderGuidanceDeliveryGuard.TryGetLatestOrderSnapshot" not in text[gate:resolve]
 
 
