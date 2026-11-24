@@ -83,6 +83,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterHelpWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\LegacyKnowledgePreviewWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\VisualUnderstandingRulesPage.cs" Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\VisualUnderstandingRulesPage.cs')" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2BotReplyManagementPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />
@@ -98,6 +99,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2FeedbackBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\VisualUnderstandingRuleService.cs" Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\VisualUnderstandingRuleService.cs')" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
