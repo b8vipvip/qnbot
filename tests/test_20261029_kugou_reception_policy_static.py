@@ -130,14 +130,14 @@ def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
 def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default():
     config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
     policy = src(POLICY)
-    assert 'qnbot.kugou.reception-rules.v2' in config
+    assert 'qnbot.shop.reception-rules.v3' in config
     assert '["enabled"] = false' in config
     assert '["product_ids"] = new JArray()' in config
     assert '["quarantine_knowledge_ids"] = new JArray()' in config
     assert '["guide_url"] = string.Empty' in config
     assert '["policy_prompt"] = string.Empty' in config
     assert "shop.HasStableSellerId" in config
-    assert 'Path.Combine(folder, "kugou-reception-rules.json")' in config
+    assert 'Path.Combine(folder, "shop-reception-rules.json")' in config
     assert "KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
     assert "KugouReceptionConfigService.GetConfig(shop)" in policy
 
@@ -194,7 +194,7 @@ def test_private_config_regex_patterns_have_a_runtime_timeout_and_fail_closed():
 
 def test_private_profile_schema_documentation_covers_fail_closed_enablement_and_visual_rule_semantics():
     docs = src("docs/SHOPKEY_RECEPTION_PROFILE_V2.md")
-    assert "qnbot.kugou.reception-rules.v2" in docs
+    assert "qnbot.shop.reception-rules.v3" in docs
     assert "enabled" in docs and "product_ids" in docs
     assert "all_cue_groups" in docs and "positive_cue_groups" in docs
     assert "none_positive_cues" in docs
