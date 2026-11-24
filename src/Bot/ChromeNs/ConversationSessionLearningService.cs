@@ -490,7 +490,7 @@ namespace Bot.ChromeNs
                 {
                     return (DbHelper.Db.Select(
                         typeof(ConversationSessionLearningReportEntity),
-                        "where Status = ? and CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks <= 0 order by UpdatedAtTicks asc limit " + take,
+                        "where Status = ? and CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks <= 0 order by UpdatedAtTicks desc limit " + take,
                         "学习完成") ?? new List<object>())
                         .OfType<ConversationSessionLearningReportEntity>()
                         .Where(x => x != null)
@@ -521,7 +521,7 @@ namespace Bot.ChromeNs
                         .OfType<ConversationSessionLearningReportEntity>()
                         .FirstOrDefault();
                     if (report == null
-                        || !string.Equals(report.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals((report.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal)
                         || report.CompletedAtTicks <= 0
                         || !string.Equals(report.Status, "学习完成", StringComparison.Ordinal))
                         return false;

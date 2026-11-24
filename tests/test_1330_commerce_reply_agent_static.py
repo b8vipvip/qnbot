@@ -252,6 +252,7 @@ def test_commerce_learning_uses_a_durable_marker_for_restart_recovery():
     assert "TryMarkCommerceScenarioProcessed(" in latest
     assert "CommerceScenarioProcessedAtTicks" in service
     assert "CommerceScenarioProcessedAtTicks <= 0" in pending
+    assert "order by UpdatedAtTicks desc limit" in pending
     assert "CommerceScenarioProcessedAtTicks integer not null default 0" in service
     assert "StartedAt" not in source
     assert "OrderBy(x => x.CompletedAt)" in latest
@@ -274,6 +275,6 @@ def test_completed_legacy_report_without_shopkey_can_be_terminally_marked_withou
     process = bridge[bridge.index("private static bool ProcessReport"):bridge.index("private static bool ApplyScenarioScope")]
 
     assert "if (reportId.Length == 0) return false;" in marker
-    assert "report.ShopKey, shopKey, StringComparison.Ordinal" in marker
+    assert "(report.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal" in marker
     assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;" in process
     assert "ResolveRuntimeBySellerNick(report.Seller)" not in process
