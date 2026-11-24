@@ -284,7 +284,7 @@ namespace Bot.Knowledge
             IEnumerable<string> aliases,
             IEnumerable<string> keywords,
             string questionMessageId,
-            string answerMessageId,
+            IEnumerable<string> answerMessageIds,
             double confidence,
             string expectedCorpusFingerprint,
             out string result,
@@ -300,11 +300,15 @@ namespace Bot.Knowledge
             question = (question ?? string.Empty).Trim();
             answer = (answer ?? string.Empty).Trim();
             questionMessageId = (questionMessageId ?? string.Empty).Trim();
-            answerMessageId = (answerMessageId ?? string.Empty).Trim();
-
+            var normalizedAnswerMessageIds = (answerMessageIds ?? Enumerable.Empty<string>())
+                .Select(x => (x ?? string.Empty).Trim())
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
             if (seller.Length == 0 || expectedShopKey.Length == 0 || sessionId.Length == 0
-                || questionMessageId.Length == 0 || answerMessageId.Length == 0
-                || string.Equals(questionMessageId, answerMessageId, StringComparison.Ordinal)
+                || questionMessageId.Length == 0 || normalizedAnswerMessageIds.Count == 0
+                || normalizedAnswerMessageIds.Count > 4
+                || normalizedAnswerMessageIds.Contains(questionMessageId, StringComparer.Ordinal)
                 || question.Length < 4 || question.Length > 400
                 || answer.Length < 2 || answer.Length > 1200
                 || string.IsNullOrWhiteSpace(expectedCorpusFingerprint)
@@ -361,7 +365,7 @@ namespace Bot.Knowledge
             var state = GetState(shop);
             EnsureMigrated(shop, state);
             var sourceId = BuildHumanEvidenceSourceId(
-                shop.ShopKey, sessionId, questionMessageId, answerMessageId);
+                shop.ShopKey, sessionId, questionMessageId, string.Join(",", normalizedAnswerMessageIds));
             var now = DateTime.Now;
             KnowledgeV2Record record = null;
             var recoveredExisting = false;
@@ -535,7 +539,7 @@ namespace Bot.Knowledge
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     KnowledgeId = record.Id,
-                    MessageRecordId = "session-human-evidence:" + questionMessageId + "," + answerMessageId,
+                    MessageRecordId = "session-human-evidence:" + questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds),
                     Action = "apply",
                     PreviousJson = JsonConvert.SerializeObject(tombstone),
                     CurrentJson = JsonConvert.SerializeObject(record),
@@ -568,7 +572,7 @@ namespace Bot.Knowledge
             if (!KnowledgeEngineV2GovernanceAuditService.TryAppendAction(
                 seller, recoveredExisting ? "session_ai_auto_add_recovered" : "session_ai_auto_add",
                 "knowledge", record.Id,
-                questionMessageId + "," + answerMessageId, record.Title,
+                questionMessageId + "," + string.Join(",", normalizedAnswerMessageIds), record.Title,
                 recoveredExisting ? "idempotent_existing_source" : "no_existing_knowledge",
                 KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
                 recoveredExisting
@@ -1395,12 +1399,13 @@ namespace Bot.Knowledge
                 .Select(FromRow)
                 .Where(x => x != null && !KnowledgeV2AuthorityPolicy.IsProductionApproved(x))
                 .ToList();
-            // Older migrations could write Type=learning_candidate with Status=active.
-            // Normalize those existing rows once so the V2 editor state and the disabled
-            // legacy mirror agree without silently demoting the candidate's V2 Enabled flag.
+            // Older migrations could write Type=learning_candidate with Status=active,
+            // or retain an AI-generated source as business_fact. Normalize every record
+            // that the current authority policy identifies as a candidate.
             var legacyCandidatesToNormalize = nonProductionRecords
-                .Where(record => string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                .Where(record => KnowledgeV2AuthorityPolicy.IsCandidate(record)
+                    && (!string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase))
                     && !string.Equals(record.Status, "disabled", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(record.Status, "deleted", StringComparison.OrdinalIgnoreCase))
                 .ToList();
