@@ -290,15 +290,23 @@ namespace Bot.ChromeNs
             ShopContext shop = null;
             try { shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey); }
             catch { shop = null; }
-            if (shop == null
-                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
-                    (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+            var isVisionItem = item.VisionDecision != null
+                && item.VisionDecision.Kind == VisionDecisionKind.Vision;
+            var sellerMatchesShop = shop != null
+                && string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                    (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal);
+            if (shop == null || (!isVisionItem && !sellerMatchesShop))
             {
                 Log.ErrorWithMaxCount(
                     "统一买家生命周期缺少可验证的ShopKey店铺作用域，已阻断普通AI链路: shopRef="
                     + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey)
                     + ", seller=" + item.SellerNick + ", buyer=" + item.BuyerNick, 20);
                 return CanonicalPreMergeOutcome.Failed;
+            }
+            if (isVisionItem && !sellerMatchesShop)
+            {
+                Log.Info("图片消息使用权威ShopKey店铺作用域继续处理；忽略消息展示昵称别名差异: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey));
             }
 
             using (ShopSettingsScope.Enter(shop))
