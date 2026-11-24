@@ -122,9 +122,6 @@ namespace Bot.ChromeNs
                 return null;
             }
 
-            var timeline = ConversationContextStore.BuildTimelineText(
-                task.SellerNick, task.BuyerNick, task.CombinedQuestion, 12);
-            var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
             KnowledgeV2Decision decision;
             try
             {
@@ -132,6 +129,9 @@ namespace Bot.ChromeNs
                 // identity owned by the ShopKey, never the untrusted message.toid.nick value.
                 using (ShopSettingsScope.Enter(shop, false))
                 {
+                    var timeline = ConversationContextStore.BuildTimelineText(
+                        task.SellerNick, task.BuyerNick, task.CombinedQuestion, 12);
+                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
