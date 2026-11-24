@@ -29,7 +29,7 @@ def test_catalog_is_v2_shop_scoped_and_requires_stable_shop_identity():
     assert "private static string HistoryDirectoryForShop(ShopContext shop)" in service
     assert "private static void EnsureLegacyDraftMigrated(ShopContext shop)" in service
     assert "private static void SaveHistorySnapshot(ShopContext shop, JObject catalog)" in service
-    assert "KugouReceptionPolicy.ResolveShopForSeller" not in service
+    assert "ShopReceptionPolicy.ResolveShopForSeller" not in service
     assert "public static string GetActiveJson(string seller, string shopKey)" in service
     assert "public static string GetActiveFlowJson(string seller, string flowId, string shopKey)" in service
 
