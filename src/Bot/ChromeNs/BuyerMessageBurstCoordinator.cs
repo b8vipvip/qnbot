@@ -577,6 +577,11 @@ namespace Bot.ChromeNs
                 // gate as streamed text replies, including every physical retry inside QN.
                 Func<bool> preSendGuard = () =>
                 {
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    {
+                        Log.Info(source + "固定回复发送前检测到Bot开关已关闭，取消发送");
+                        return false;
+                    }
                     string relevanceReason;
                     var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                         item.SellerNick,
