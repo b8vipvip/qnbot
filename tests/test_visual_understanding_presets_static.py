@@ -148,3 +148,16 @@ def test_visual_understanding_precedes_knowledge_v2_and_unmatched_images_fall_ba
     )
     assert "OCR 未命中本店视觉理解预设，转交上游视觉 AI" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
+
+def test_enabled_visual_rule_requires_nonempty_application_identity_at_save_and_match():
+    service = read("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
+    save = service.split("public static void Save", 1)[1].split(
+        "public static bool Delete", 1
+    )[0]
+    match = service.split("public static bool TryMatch", 1)[1].split(
+        "private static Dictionary<string, string> Extract", 1
+    )[0]
+
+    assert "rule.Enabled && (rule.AppName.Length == 0 || IsApplicationNamePlaceholder(rule.AppName))" in save
+    assert "configuredNames.Count == 0 || !configuredNames.Any" in match
+    assert "Fail closed even if a legacy row bypassed the current Save validation" in match
