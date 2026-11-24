@@ -25,8 +25,8 @@ def test_quarantine_is_non_destructive_and_applies_to_both_knowledge_paths():
     assert "config.QuarantineTextPatterns" in p
     v2 = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     smart = src("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "KugouReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
-    assert "KugouReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in smart
+    assert "ShopReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
+    assert "ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in smart
     assert "KnowledgeEngineV2Repository.ReplaceAll" not in p
     assert "Delete(" not in p
 
@@ -37,7 +37,7 @@ def test_phone_only_wait_blocks_before_other_auto_reply_lanes():
     assert "PhotoInstruction.IsMatch(instruction)" in p
     assert "config.PhotoInstructionExcludedCues" in p
     assert "HasAllCues(instruction, config.PhotoInstructionAllCues)" in p
-    assert premerge.index("KugouReceptionPolicy.TryWaitForEvidence(") < premerge.index(
+    assert premerge.index("ShopReceptionPolicy.TryWaitForEvidence(") < premerge.index(
         "ManualRechargeAssistantService.TryHandleAsync("
     )
     assert 'return CanonicalPreMergeOutcome.Consumed;' in premerge
@@ -47,16 +47,16 @@ def test_all_reply_lanes_share_reception_send_gate():
     premerge = src("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     vision = src(SENDER)
     assert 'lease.MarkCompleted("reception_business_guard_suppressed");' in text
-    assert "KugouReceptionPolicy.BlockOutgoing(" in text
-    assert "KugouReceptionPolicy.BlockOutgoing(" in premerge
-    assert "KugouReceptionPolicy.BlockOutgoing(" in vision
+    assert "ShopReceptionPolicy.BlockOutgoing(" in text
+    assert "ShopReceptionPolicy.BlockOutgoing(" in premerge
+    assert "ShopReceptionPolicy.BlockOutgoing(" in vision
     assert 'lifecycleLease.MarkCompleted("vision_business_guard_suppressed");' in vision
     assert "ParallelReplyRelevanceGate.ShouldSend(" in vision
 
 def test_visual_branch_uses_evidence_not_product_title_to_authorize():
     policy = src(POLICY)
     vision = src(VISION)
-    assert "KugouReceptionPolicy.TryResolveVisual(" in vision
+    assert "ShopReceptionPolicy.TryResolveVisual(" in vision
     assert "result.VisualSummary, result.LocalOcrText" in vision
     assert "config.VisualRules" in policy
     assert "MatchesVisualRule(compact, rule)" in policy
@@ -121,7 +121,7 @@ def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
     policy = src(POLICY)
     config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
 
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in config
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in config
     assert policy.count("var shop = ResolveShopForSeller(seller);") >= 3
     assert "var cacheKey = shop.ShopKey;" in policy
 
@@ -138,8 +138,8 @@ def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default(
     assert '["policy_prompt"] = string.Empty' in config
     assert "shop.HasStableSellerId" in config
     assert 'Path.Combine(folder, "shop-reception-rules.json")' in config
-    assert "KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
-    assert "KugouReceptionConfigService.GetConfig(shop)" in policy
+    assert "ShopReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
+    assert "ShopReceptionConfigService.GetConfig(shop)" in policy
 
 
 def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review():
@@ -159,7 +159,7 @@ def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review()
 def test_store_visual_facts_and_reply_templates_are_data_driven_not_public_constants():
     policy = src(POLICY)
     config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
-    assert "KugouVisualRule" in config
+    assert "ShopVisualRule" in config
     assert "all_cue_groups" in config
     assert "positive_cue_groups" in config
     assert "visual_rules" in config
@@ -313,10 +313,10 @@ def test_cross_process_shop_profile_changes_invalidate_cached_detection_immediat
     ]
     revision = config[
         config.index("internal static string GetProfileRevision"):
-        config.index("internal static KugouReceptionConfig GetConfig(ShopContext shop)")
+        config.index("internal static ShopReceptionConfig GetConfig(ShopContext shop)")
     ]
 
-    assert "KugouReceptionConfigService.GetProfileRevision(shop)" in applies
+    assert "ShopReceptionConfigService.GetProfileRevision(shop)" in applies
     assert "cached.ProfileRevision, profileRevision" in applies
     assert "ProfileRevision = profileRevision" in applies
     assert "info.LastWriteTimeUtc.Ticks.ToString()" in revision
