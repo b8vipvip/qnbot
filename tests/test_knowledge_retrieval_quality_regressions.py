@@ -194,3 +194,59 @@ def test_existing_v2_learning_candidates_are_normalized_without_disabling_v2_edi
     assert 'record.Status = "candidate";' in helper
     assert "state.Db.SaveRecordsInTransaction(" in helper
     assert "legacy_nonproduction_mirror_version" in helper
+
+
+
+def test_legacy_ai_generated_flag_is_authoritative_even_when_source_metadata_is_missing():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    helper = bridge[
+        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
+        bridge.index("public static bool IsPersistedStateSynchronized")
+    ]
+    from_legacy = semantics[
+        semantics.index("public static KnowledgeV2Record FromLegacy"):
+        semantics.index("public static KnowledgeV2Query Parse")
+    ]
+    assert "if (entry.AiGenerated) return true;" in helper
+    assert "manual_ai_generated" in helper
+    assert "var isUnapprovedLearning = KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
+    assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
+    assert "Status = isUnapprovedLearning ? \"candidate\" : \"active\"" in from_legacy
+
+
+def test_generic_manual_legacy_source_is_not_confused_with_ai_generated_provenance():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    helper = bridge[
+        bridge.index("public static bool IsUnapprovedLegacyLearningEntry"):
+        bridge.index("public static bool IsPersistedStateSynchronized")
+    ]
+    assert 'source.IndexOf("manual_ai_generated"' in helper
+    assert 'value.IndexOf("manual", StringComparison.OrdinalIgnoreCase)' not in helper
+
+
+
+def test_existing_v2_records_keep_ai_generated_source_provenance_as_candidates():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    candidate = bridge[
+        bridge.index("public static bool IsCandidate(KnowledgeV2Record record)"):
+        bridge.index("public static bool IsProductionApproved")
+    ]
+    assert 'if (IsTrustedProductionSource(record.SourceType)) return false;' in candidate
+    assert 'source.IndexOf("AI生成"' in candidate
+    assert 'source.IndexOf("manual_ai_generated"' in candidate
+    assert 'source.IndexOf("session"' in candidate
+    assert 'source.IndexOf("人工回复"' in candidate
+
+
+
+def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabling_them():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    helper = repository[
+        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled"):
+        repository.index("private static KnowledgeV2Record CloneAndNormalize")
+    ]
+    assert "KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
+    assert '!string.Equals(record.Type, "learning_candidate"' in helper
+    assert 'record.Type = "learning_candidate";' in helper
+    assert 'record.Status = "candidate";' in helper
