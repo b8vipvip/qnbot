@@ -81,7 +81,7 @@ def test_visual_evidence_is_shop_scoped_recent_and_redacted_for_workflow_learnin
 
     method = visual[
         visual.index("internal static List<VisualKnowledgeObservationEntity> GetRecentWorkflowEvidence"):
-        visual.index("public static bool TryGetRecentKugouAccountEvidence")
+        visual.index("public static bool TryGetRecentAccountEvidence")
     ]
     assert "LoadRecent(" in method
     assert "DateTime.Now.AddMinutes(-PromptWindowMinutes)" in method
@@ -258,7 +258,7 @@ def test_stale_cancel_cannot_release_a_newer_workflow_version_reservation():
 
 
 def test_workflow_send_is_blocked_if_auto_guidance_is_disabled_after_generation():
-    policy = read("src/Bot/ChromeNs/KugouReceptionPolicy.cs")
+    policy = read("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
     guard = policy[
         policy.index("internal static bool BlockOutgoing("):
         policy.index("internal static bool IsScreenshotQuestion")
@@ -275,7 +275,7 @@ def test_pre_send_validation_rechecks_current_shop_policy_and_product_scope():
         runtime.index("internal static void CompleteDecision")
     ]
 
-    assert "KugouReceptionConfigService.GetConfig(shop)" in current
+    assert "ShopReceptionConfigService.GetConfig(shop)" in current
     assert "!config.Enabled || !config.EnableAutoGuidance" in current
     assert "config.ProductIds == null || config.ProductIds.Count == 0" in current
     assert "flowProducts.Any(x => !config.ProductIds.Contains(x, StringComparer.Ordinal))" in current
@@ -347,7 +347,7 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     session = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
 
     account_type = recent[
-        recent.index("internal sealed class KugouAccountEvidence"):
+        recent.index("internal sealed class AccountVisualEvidence"):
         recent.index("internal static class RecentVisualContextService")
     ]
     account_builder = agent[
@@ -362,12 +362,12 @@ def test_reception_agent_uses_masked_verified_account_evidence_and_rechecks_with
     assert "public string MessageKey { get; set; }" in account_type
     assert "MessageKey = item.MessageKey" in recent
     assert '"account_evidence"' in agent
-    assert "RecentVisualContextService.TryGetRecentKugouAccountEvidence(" in account_builder
+    assert "RecentVisualContextService.TryGetRecentAccountEvidence(" in account_builder
     assert "Kind = \"account_evidence\"" in account_builder
     assert "accountEvidence.UserId +" not in account_builder
     assert "accountEvidence.Nickname +" not in account_builder
     assert "AccountEvidenceMessageKey" in runtime
-    assert "TryGetRecentKugouAccountEvidence(" in runtime_current
+    assert "TryGetRecentAccountEvidence(" in runtime_current
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in runtime_current
     assert "var accountTrigger = isImage" in runtime
     assert "if (evidenceReady && action == \"ASK_EVIDENCE\")" in runtime

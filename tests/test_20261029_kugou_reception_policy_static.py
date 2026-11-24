@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def src(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
-POLICY = "src/Bot/ChromeNs/KugouReceptionPolicy.cs"
+POLICY = "src/Bot/ChromeNs/ShopReceptionPolicy.cs"
 TEXT = "src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs"
 VISION = "src/Bot/ChromeNs/VisionRequestService.cs"
 SENDER = "src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs"
@@ -25,8 +25,8 @@ def test_quarantine_is_non_destructive_and_applies_to_both_knowledge_paths():
     assert "config.QuarantineTextPatterns" in p
     v2 = src("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     smart = src("src/Bot/ChromeNs/SmartReplyRouterService.cs")
-    assert "KugouReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
-    assert "KugouReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in smart
+    assert "ShopReceptionPolicy.IsQuarantined(seller, record.Id, record.Title, record.Answer)" in v2
+    assert "ShopReceptionPolicy.IsQuarantined(seller, x.Id, x.Title, x.Answer)" in smart
     assert "KnowledgeEngineV2Repository.ReplaceAll" not in p
     assert "Delete(" not in p
 
@@ -37,7 +37,7 @@ def test_phone_only_wait_blocks_before_other_auto_reply_lanes():
     assert "PhotoInstruction.IsMatch(instruction)" in p
     assert "config.PhotoInstructionExcludedCues" in p
     assert "HasAllCues(instruction, config.PhotoInstructionAllCues)" in p
-    assert premerge.index("KugouReceptionPolicy.TryWaitForEvidence(") < premerge.index(
+    assert premerge.index("ShopReceptionPolicy.TryWaitForEvidence(") < premerge.index(
         "ManualRechargeAssistantService.TryHandleAsync("
     )
     assert 'return CanonicalPreMergeOutcome.Consumed;' in premerge
@@ -47,16 +47,16 @@ def test_all_reply_lanes_share_reception_send_gate():
     premerge = src("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     vision = src(SENDER)
     assert 'lease.MarkCompleted("reception_business_guard_suppressed");' in text
-    assert "KugouReceptionPolicy.BlockOutgoing(" in text
-    assert "KugouReceptionPolicy.BlockOutgoing(" in premerge
-    assert "KugouReceptionPolicy.BlockOutgoing(" in vision
+    assert "ShopReceptionPolicy.BlockOutgoing(" in text
+    assert "ShopReceptionPolicy.BlockOutgoing(" in premerge
+    assert "ShopReceptionPolicy.BlockOutgoing(" in vision
     assert 'lifecycleLease.MarkCompleted("vision_business_guard_suppressed");' in vision
     assert "ParallelReplyRelevanceGate.ShouldSend(" in vision
 
 def test_visual_branch_uses_evidence_not_product_title_to_authorize():
     policy = src(POLICY)
     vision = src(VISION)
-    assert "KugouReceptionPolicy.TryResolveVisual(" in vision
+    assert "ShopReceptionPolicy.TryResolveVisual(" in vision
     assert "result.VisualSummary, result.LocalOcrText" in vision
     assert "config.VisualRules" in policy
     assert "MatchesVisualRule(compact, rule)" in policy
@@ -85,7 +85,7 @@ def test_decision_audit_is_bounded_and_anonymizes_buyer():
 
 def test_uncertain_or_negated_image_evidence_cannot_authorize_device():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "visual_evidence_uncertain" in policy
     assert "ASK_EVIDENCE" in policy
     assert "need_resource_confirmation" in policy
@@ -119,16 +119,16 @@ def test_reception_policy_cache_and_knowledge_detection_are_shopkey_scoped():
 
 def test_reception_config_and_audit_keep_the_exact_current_shop_scope():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
 
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in config
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in config
     assert policy.count("var shop = ResolveShopForSeller(seller);") >= 3
     assert "var cacheKey = shop.ShopKey;" in policy
 
 
 
 def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     policy = src(POLICY)
     assert 'qnbot.shop.reception-rules.v3' in config
     assert '["enabled"] = false' in config
@@ -138,12 +138,12 @@ def test_private_reception_profile_v2_is_shopkey_scoped_and_disabled_by_default(
     assert '["policy_prompt"] = string.Empty' in config
     assert "shop.HasStableSellerId" in config
     assert 'Path.Combine(folder, "shop-reception-rules.json")' in config
-    assert "KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
-    assert "KugouReceptionConfigService.GetConfig(shop)" in policy
+    assert "ShopReceptionPolicy.InvalidateShopCache(shop.ShopKey)" in config
+    assert "ShopReceptionConfigService.GetConfig(shop)" in policy
 
 
 def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     migration = config[
         config.index("private static JObject MigrateLegacyV1"):
         config.index("private static bool IsHttpsUrl")
@@ -158,8 +158,8 @@ def test_legacy_reception_profile_migrates_disabled_and_requires_manual_review()
 
 def test_store_visual_facts_and_reply_templates_are_data_driven_not_public_constants():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
-    assert "KugouVisualRule" in config
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
+    assert "ShopVisualRule" in config
     assert "all_cue_groups" in config
     assert "positive_cue_groups" in config
     assert "visual_rules" in config
@@ -184,7 +184,7 @@ def test_high_risk_learning_review_is_global_and_not_disabled_by_optional_shop_p
 
 def test_private_config_regex_patterns_have_a_runtime_timeout_and_fail_closed():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "SafeIsMatch" in policy
     assert "return true;" in policy[policy.index("private static bool SafeIsMatch"):policy.index("private static bool MatchesVisualRule")]
     assert "TimeSpan.FromMilliseconds(100)" in policy
@@ -208,7 +208,7 @@ def test_private_profile_schema_documentation_covers_fail_closed_enablement_and_
 def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers_or_urls():
     paths = [
         POLICY,
-        "src/Bot/ChromeNs/KugouReceptionConfigService.cs",
+        "src/Bot/ChromeNs/ShopReceptionConfigService.cs",
         "docs/SHOPKEY_RECEPTION_PROFILE_V2.md",
         "tests/test_20261029_kugou_reception_learning_static.py",
     ]
@@ -218,6 +218,17 @@ def test_public_policy_sources_and_test_fixtures_contain_no_merchant_identifiers
     assert not re.search(r"(?<![A-Za-z0-9])\d{12,20}(?![A-Za-z0-9])", combined + "\n" + fixture)
     assert not re.search(r"(?<![A-Za-z0-9])[a-f0-9]{24,}(?![A-Za-z0-9])", combined + "\n" + fixture, re.I)
     assert not re.search(r"https?://", combined, re.I)
+
+def test_reception_audit_uses_generic_path_and_reads_legacy_file_only_for_migration():
+    policy = src("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
+    assert '"shop-reception-decisions.json"' in policy
+    assert '"kugou-reception-decisions.json"' in policy
+    assert '"ShopReceptionAudit"' in policy
+    assert '"KugouReceptionAudit"' in policy
+    assert "ExistingAuditPath" in policy
+    assert "AppendAuditEntry(path, sourcePath" in policy
+    assert "if (!File.Exists(path) && File.Exists(legacyPath))" in policy
+
 
 def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
     policy = src(POLICY)
@@ -232,7 +243,7 @@ def test_corrupt_reception_audit_is_never_replaced_with_an_empty_journal():
     assert "catch { entries = new List<ReceptionAuditEntry>(); }" not in audit
 
 def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriting_current_config():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     restore = config[
         config.index("public static string RestoreLatestBackup"):
         config.index("\n    }\n}")
@@ -245,7 +256,7 @@ def test_private_reception_restore_skips_corrupt_newest_backup_without_overwriti
     assert "Guid.NewGuid().ToString(\"N\")" in restore
 
 def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     save = config[
         config.index("public static string SaveJson"):
         config.index("public static string RestoreLatestBackup")
@@ -258,7 +269,7 @@ def test_private_profile_backup_names_are_unique_under_rapid_repeated_saves():
 
 
 def test_private_profile_string_fields_and_visual_rule_ids_are_strictly_bounded():
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     assert "private static string ReadStringField(JObject obj, string name, int maxLength, bool required)" in config
     assert 'ReadStringField(obj, "policy_prompt", 12000, true)' in config
     assert 'ReadStringField(obj, "visual_uncertain_reply", 2000, true)' in config
@@ -306,17 +317,17 @@ def test_expired_shop_detection_cache_entries_are_pruned_without_racing_refreshe
 
 def test_cross_process_shop_profile_changes_invalidate_cached_detection_immediately():
     policy = src(POLICY)
-    config = src("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = src("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     applies = policy[
         policy.index("public static bool Applies"):
         policy.index("internal static bool RequiresManualKnowledgeReview")
     ]
     revision = config[
         config.index("internal static string GetProfileRevision"):
-        config.index("internal static KugouReceptionConfig GetConfig(ShopContext shop)")
+        config.index("internal static ShopReceptionConfig GetConfig(ShopContext shop)")
     ]
 
-    assert "KugouReceptionConfigService.GetProfileRevision(shop)" in applies
+    assert "ShopReceptionConfigService.GetProfileRevision(shop)" in applies
     assert "cached.ProfileRevision, profileRevision" in applies
     assert "ProfileRevision = profileRevision" in applies
     assert "info.LastWriteTimeUtc.Ticks.ToString()" in revision

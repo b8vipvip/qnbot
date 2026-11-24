@@ -17,7 +17,7 @@ namespace Bot.ChromeNs
     // Store-scoped reception facts. This is an authoritative guard in front of the
     // existing text/vision reply paths, NOT another independent message sender.
     // Unrelated shops are unaffected; detect the store by its existing verified item.
-    internal static class KugouReceptionPolicy
+    internal static class ShopReceptionPolicy
     {
         private sealed class ShopDetection
         {
@@ -120,7 +120,7 @@ namespace Bot.ChromeNs
             // The cache is shared by multiple Bot processes indirectly through the
             // same profile file. Compare its on-disk revision before reusing a match,
             // so a disable/product-scope change from another process takes effect now.
-            var profileRevision = KugouReceptionConfigService.GetProfileRevision(shop);
+            var profileRevision = ShopReceptionConfigService.GetProfileRevision(shop);
             ShopDetection cached;
             if (!string.IsNullOrEmpty(profileRevision)
                 && Shops.TryGetValue(cacheKey, out cached)
@@ -131,7 +131,7 @@ namespace Bot.ChromeNs
             var matched = false;
             try
             {
-                var config = KugouReceptionConfigService.GetConfig(shop);
+                var config = ShopReceptionConfigService.GetConfig(shop);
                 if (config.Enabled && config.ProductIds != null && config.ProductIds.Count > 0)
                 {
                     using (ShopSettingsScope.Enter(shop))
@@ -177,7 +177,7 @@ namespace Bot.ChromeNs
         public static bool IsQuarantined(string seller, string id, string title, string answer)
         {
             if (!Applies(seller)) return false;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (config.QuarantineKnowledgeIds.Contains((id ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))
                 return true;
             var body = (title ?? string.Empty) + " " + (answer ?? string.Empty);
@@ -189,7 +189,7 @@ namespace Bot.ChromeNs
         internal static void ObserveDeliveredOrderInstruction(string seller, string buyer, string text)
         {
             if (!Applies(seller)) return;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (!config.EnablePhoneWait) return;
             text = (text ?? string.Empty).Trim();
             if (!PhotoInstruction.IsMatch(text)
@@ -205,7 +205,7 @@ namespace Bot.ChromeNs
         {
             reason = string.Empty;
             if (!Applies(seller)) return false;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (!config.EnablePhoneWait) return false;
             var input = (question ?? string.Empty).Trim();
             if (!PhoneOnly.IsMatch(input)) return false;
@@ -237,7 +237,7 @@ namespace Bot.ChromeNs
         {
             reason = string.Empty;
             if (!Applies(seller)) return false;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             var output = answer ?? string.Empty;
             if (!config.EnableAutoGuidance && !string.IsNullOrWhiteSpace(config.GuideUrl)
                 && output.IndexOf(config.GuideUrl, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -283,7 +283,7 @@ namespace Bot.ChromeNs
                 }
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    var config = KugouReceptionConfigService.GetConfig(shop);
+                    var config = ShopReceptionConfigService.GetConfig(shop);
                     var output = answer ?? string.Empty;
                     if (config == null || !config.Enabled)
                     {
@@ -317,7 +317,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        internal static bool IsScreenshotQuestion(string question, KugouReceptionConfig config)
+        internal static bool IsScreenshotQuestion(string question, ShopReceptionConfig config)
         {
             var value = (question ?? string.Empty).Replace(" ", "").Trim();
             return HasAnyCue(value, config == null ? null : config.ScreenshotQuestionCues);
@@ -332,7 +332,7 @@ namespace Bot.ChromeNs
             answer = string.Empty;
             reason = string.Empty;
             if (!Applies(seller)) return false;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (!config.EnableAutoGuidance) return false;
             var evidence = (summary ?? string.Empty) + " " + (ocr ?? string.Empty);
             if (evidence.Trim().Length == 0) return false;
@@ -377,7 +377,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static bool MatchesVisualRule(string text, KugouVisualRule rule)
+        private static bool MatchesVisualRule(string text, ShopVisualRule rule)
         {
             if (rule == null) return false;
             foreach (var group in rule.AllCueGroups)
@@ -426,7 +426,7 @@ namespace Bot.ChromeNs
         public static string BuildPromptAddon(string seller, string buyer)
         {
             if (!Applies(seller)) return string.Empty;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (string.IsNullOrWhiteSpace(config.PolicyPrompt)) return string.Empty;
             var knownStage = GetRecentStage(seller, buyer);
             return "\n\n" + config.PolicyPrompt
@@ -446,9 +446,9 @@ namespace Bot.ChromeNs
                 if (shop == null) return "没有可用的店铺作用域，禁止跨店铺读取审计。";
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
-                    if (string.IsNullOrWhiteSpace(directory)) return "没有审计目录。";
-                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    var path = ExistingAuditPath();
+                    if (string.IsNullOrWhiteSpace(path)) return "没有审计目录。";
+                    if (!File.Exists(path)) return "当前店铺还没有接待决策记录。";
                     string error;
                     var content = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (!string.IsNullOrWhiteSpace(error)) return "读取审计失败：" + error;
@@ -473,9 +473,8 @@ namespace Bot.ChromeNs
                 if (shop == null) return string.Empty;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
-                    if (string.IsNullOrWhiteSpace(directory)) return string.Empty;
-                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    var path = ExistingAuditPath();
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return string.Empty;
                     string error;
                     var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
@@ -511,49 +510,98 @@ namespace Bot.ChromeNs
                 if (shop == null) return;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                var basePath = BusinessPolicyProfileService.GetUserPath();
-                var directory = Path.GetDirectoryName(basePath);
-                if (string.IsNullOrWhiteSpace(directory)) return;
-                var path = Path.Combine(directory, "kugou-reception-decisions.json");
-                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "KugouReceptionAudit", 1500))
-                {
-                    if (lease == null || !lease.Acquired) return;
-                    string error;
-                    var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
-                    if (!string.IsNullOrWhiteSpace(error))
-                        throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
-                    List<ReceptionAuditEntry> entries;
-                    if (string.IsNullOrWhiteSpace(raw))
+                    var path = AuditPath(false);
+                    var legacyPath = AuditPath(true);
+                    if (string.IsNullOrWhiteSpace(path)) return;
+
+                    using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionAudit", 1500))
                     {
-                        entries = new List<ReceptionAuditEntry>();
-                    }
-                    else
-                    {
-                        try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw); }
-                        catch (Exception ex)
+                        if (lease == null || !lease.Acquired) return;
+                        var sourcePath = File.Exists(path) ? path : legacyPath;
+                        if (!File.Exists(path) && File.Exists(legacyPath))
                         {
-                            throw new InvalidDataException("既有接待审计结构损坏，保留原文件不覆盖。", ex);
+                            // The legacy journal is read under its old lock while a new
+                            // generic journal is created. The original file is never deleted.
+                            using (var legacyLease = CrossProcessAtomicStateFile.Acquire(
+                                legacyPath, "KugouReceptionAudit", 1500))
+                            {
+                                if (legacyLease == null || !legacyLease.Acquired) return;
+                                AppendAuditEntry(path, sourcePath, seller, buyer, action, stage, evidence, ruleId);
+                            }
                         }
-                        if (entries == null)
-                            throw new InvalidDataException("既有接待审计不是有效数组，保留原文件不覆盖。");
+                        else
+                        {
+                            AppendAuditEntry(path, sourcePath, seller, buyer, action, stage, evidence, ruleId);
+                        }
                     }
-                    entries.Add(new ReceptionAuditEntry
-                    {
-                        AtUtc = DateTime.UtcNow, BuyerHash = HashBuyer(seller, buyer),
-                        Decision = action, Stage = stage, Evidence = evidence, RuleId = ruleId
-                    });
-                    entries = entries.Where(x => x != null && x.AtUtc > DateTime.UtcNow.AddDays(-7))
-                        .OrderByDescending(x => x.AtUtc).Take(300).ToList();
-                    if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
-                        path, JsonConvert.SerializeObject(entries, Formatting.Indented), 2, 25, out error))
-                        Log.ErrorWithMaxCount("接待决策审计保存失败: " + error, 10);
-                }
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("接待决策审计异常: " + ex.Message, 10);
             }
+        }
+
+        private static string AuditPath(bool legacy)
+        {
+            var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
+            if (string.IsNullOrWhiteSpace(directory)) return string.Empty;
+            return Path.Combine(directory, legacy
+                ? "kugou-reception-decisions.json"
+                : "shop-reception-decisions.json");
+        }
+
+        private static string ExistingAuditPath()
+        {
+            var current = AuditPath(false);
+            if (!string.IsNullOrWhiteSpace(current) && File.Exists(current)) return current;
+            var legacy = AuditPath(true);
+            return !string.IsNullOrWhiteSpace(legacy) && File.Exists(legacy) ? legacy : current;
+        }
+
+        private static void AppendAuditEntry(
+            string path,
+            string sourcePath,
+            string seller,
+            string buyer,
+            string action,
+            string stage,
+            string evidence,
+            string ruleId)
+        {
+            string error = string.Empty;
+            var raw = string.Empty;
+            if (File.Exists(sourcePath))
+                raw = CrossProcessAtomicStateFile.ReadAllTextShared(sourcePath, 2, 25, out error);
+            if (!string.IsNullOrWhiteSpace(error))
+                throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
+
+            List<ReceptionAuditEntry> entries;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                entries = new List<ReceptionAuditEntry>();
+            }
+            else
+            {
+                try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw); }
+                catch (Exception ex)
+                {
+                    throw new InvalidDataException("既有接待审计结构损坏，保留原文件不覆盖。", ex);
+                }
+                if (entries == null)
+                    throw new InvalidDataException("既有接待审计不是有效数组，保留原文件不覆盖。");
+            }
+
+            entries.Add(new ReceptionAuditEntry
+            {
+                AtUtc = DateTime.UtcNow, BuyerHash = HashBuyer(seller, buyer),
+                Decision = action, Stage = stage, Evidence = evidence, RuleId = ruleId
+            });
+            entries = entries.Where(x => x != null && x.AtUtc > DateTime.UtcNow.AddDays(-7))
+                .OrderByDescending(x => x.AtUtc).Take(300).ToList();
+            if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                path, JsonConvert.SerializeObject(entries, Formatting.Indented), 2, 25, out error))
+                Log.ErrorWithMaxCount("接待决策审计保存失败: " + error, 10);
         }
 
         private static string HashBuyer(string seller, string buyer)

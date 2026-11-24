@@ -7,7 +7,7 @@ def source(path):
 
 def test_event_ledger_is_shop_scoped_atomic_and_deduplicated():
     code=source("src/Bot/ChromeNs/ReceptionEvidenceLedger.cs")
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in code
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in code
     assert "ShopSettingsScope.Current" not in code
     assert 'Path.Combine(parent, "reception-evidence-ledger.json")' in code
     assert "CrossProcessAtomicStateFile.Acquire" in code
@@ -31,7 +31,7 @@ def test_evidence_has_no_raw_account_or_photo_data_and_no_fulfillment_authority(
     assert "raw OCR" in code
 
 def test_order_delivery_and_vision_analysis_are_written_only_as_observations():
-    instruction=source("src/Bot/ChromeNs/KugouReceptionPolicy.cs")
+    instruction=source("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
     vision=source("src/Bot/ChromeNs/VisionRequestService.cs")
     assert "ReceptionEvidenceLedger.RecordDeliveredEvidenceRequest(seller, buyer, text)" in instruction
     assert "ReceptionEvidenceLedger.RecordVisionObservation(" in vision
@@ -76,7 +76,7 @@ def test_evidence_ledger_requires_stable_seller_identity_and_nonempty_shopkey():
         code.index("/// <summary>", code.index("private static string PathForSeller"))
     ]
 
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in path
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in path
     assert "string.IsNullOrWhiteSpace(shop.ShopKey)" in path
     assert "!shop.HasStableSellerId" in path
     assert "拒绝证据写入" in path

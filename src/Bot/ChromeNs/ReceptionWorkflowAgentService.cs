@@ -249,17 +249,20 @@ namespace Bot.ChromeNs
             }
 
             // Account evidence is derived only from a recent, non-withdrawn observation
-            // of the official Kugou app. Never send the raw nickname or account ID to the model.
+            // whose application identity matches this shop's enabled Visual Understanding rules.
+            // Never send the raw nickname or account ID to the model.
             try
             {
-                KugouAccountEvidence accountEvidence;
-                if (RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                AccountVisualEvidence accountEvidence;
+                if (RecentVisualContextService.TryGetRecentAccountEvidence(
                     shopKey, seller, buyer, out accountEvidence)
                     && accountEvidence != null
                     && !string.IsNullOrWhiteSpace(accountEvidence.MessageKey))
                 {
                     var alias = "A1";
-                    var summary = "酷狗官方App账号证据：已从买家图片识别到"
+                    var summary = "目标应用（"
+                        + (string.IsNullOrWhiteSpace(accountEvidence.ApplicationName) ? "名称未识别" : accountEvidence.ApplicationName)
+                        + "）账号证据：已从买家图片识别到"
                         + (string.IsNullOrWhiteSpace(accountEvidence.Nickname) ? "账号昵称未识别" : "账号昵称字段")
                         + "、"
                         + (string.IsNullOrWhiteSpace(accountEvidence.UserId) ? "账号ID未识别" : "账号ID字段")
@@ -360,7 +363,7 @@ namespace Bot.ChromeNs
         private static bool TryBuildFlow(
             JObject proposal,
             ReceptionWorkflowEvidenceContext evidence,
-            KugouReceptionConfig config,
+            ShopReceptionConfig config,
             bool handoffConfigured,
             string buyer,
             string shopKey,
@@ -427,7 +430,7 @@ namespace Bot.ChromeNs
                 });
             if (requiresAccountEvidence && !selected.Any(x => x.Kind == "account_evidence"))
             {
-                reason = "账号核验步骤缺少来自买家图片的已验证酷狗账号证据";
+                reason = "账号核验步骤缺少来自买家图片的已验证目标应用账号证据";
                 return false;
             }
 
@@ -690,8 +693,8 @@ namespace Bot.ChromeNs
 
             using (ShopSettingsScope.Enter(shop))
             {
-                KugouReceptionConfig config;
-                try { config = KugouReceptionConfigService.GetConfig(shop); }
+                ShopReceptionConfig config;
+                try { config = ShopReceptionConfigService.GetConfig(shop); }
                 catch (Exception ex)
                 {
                     result.SkippedCount = proposals.Count;

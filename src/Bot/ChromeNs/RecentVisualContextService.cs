@@ -10,8 +10,9 @@ using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
-    internal sealed class KugouAccountEvidence
+    internal sealed class AccountVisualEvidence
     {
+        public string ApplicationName { get; set; }
         public string Nickname { get; set; }
         public string UserId { get; set; }
         public string MessageKey { get; set; }
@@ -47,20 +48,16 @@ namespace Bot.ChromeNs
             "app|应用|电视版|电视端|大屏版|大屏端|首页|我的页面|个人中心|会员中心|超级vip|导航栏|设置页|最近播放",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        private static readonly Regex KugouUiCueRegex = new Regex(
-            "推荐|mv|k歌|淘唱会|乐库|全量曲|儿童|宅家|我喜欢|我的歌单|最近播放|已购音乐|超级vip|大屏vip|酷狗账号",
+        private static readonly Regex ExplicitOfficialAppRegex = new Regex(
+            "官方\\s*(?:app|应用|版|电视版|电视端|大屏版|大屏端)|(?:app|应用|电视版|电视端|大屏版|大屏端)\\s*官方",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        private static readonly Regex HumanOfficialKugouRegex = new Regex(
-            "酷狗.{0,12}(?:官方app|官方应用|官方版|电视版|电视端).{0,18}(?:支持|可以|能用|可用)|(?:官方app|官方应用|酷狗音乐app|酷狗app).{0,18}(?:支持|可以|能用|可用)",
+        private static readonly Regex AccountNicknameRegex = new Regex(
+            @"(?:账号)?昵称\s*(?:[:：]|为)\s*([^\s,，;；。|]{1,40})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        private static readonly Regex KugouNicknameRegex = new Regex(
-            @"(?:酷狗)?(?:账号)?昵称\s*(?:[:：]|为)\s*([^\s,，;；。|]{1,40})",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-        private static readonly Regex KugouUserIdRegex = new Regex(
-            @"(?:酷狗|用户|账号)?(?:ID|id)\s*(?:[:：]|为)\s*([A-Za-z0-9_-]{3,64})",
+        private static readonly Regex AccountIdRegex = new Regex(
+            @"(?:[\u4e00-\u9fff]{0,12})?(?:用户|账号)?ID\s*(?:[:：]|为)\s*([A-Za-z0-9_-]{3,64})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static bool IsWithdrawnObservation(
@@ -150,21 +147,21 @@ namespace Bot.ChromeNs
                 .ToList();
         }
 
-        public static bool TryGetRecentKugouAccountEvidence(
+        public static bool TryGetRecentAccountEvidence(
             string seller,
             string buyer,
-            out KugouAccountEvidence evidence)
+            out AccountVisualEvidence evidence)
         {
             evidence = null;
             var shop = ResolveShop(string.Empty, seller);
-            return shop != null && TryGetRecentKugouAccountEvidence(shop.ShopKey, seller, buyer, out evidence);
+            return shop != null && TryGetRecentAccountEvidence(shop.ShopKey, seller, buyer, out evidence);
         }
 
-        public static bool TryGetRecentKugouAccountEvidence(
+        public static bool TryGetRecentAccountEvidence(
             string shopKey,
             string seller,
             string buyer,
-            out KugouAccountEvidence evidence)
+            out AccountVisualEvidence evidence)
         {
             evidence = null;
             var shop = ResolveShop(shopKey, seller);
@@ -176,6 +173,7 @@ namespace Bot.ChromeNs
                     DateTime.Now.AddMinutes(-PromptWindowMinutes),
                     DateTime.Now.AddMinutes(2),
                     20)
+                .Where(x => !string.IsNullOrWhiteSpace(x.MessageKey))
                 .Where(x => !IsWithdrawnObservation(shop.ShopKey, seller, buyer, x))
                 .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
                 .ToList();
@@ -185,11 +183,12 @@ namespace Bot.ChromeNs
                 var combined = CleanForPrompt(
                     (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty),
                     1800);
-                if (combined.IndexOf("酷狗", StringComparison.OrdinalIgnoreCase) < 0) continue;
-                if (!HasKugouOfficialAppEvidence(combined)) continue;
+                string applicationName;
+                if (!HasConfiguredOfficialAppEvidence(shop.ShopKey, seller, combined, out applicationName))
+                    continue;
 
-                var nicknameMatch = KugouNicknameRegex.Match(combined);
-                var idMatch = KugouUserIdRegex.Match(combined);
+                var nicknameMatch = AccountNicknameRegex.Match(combined);
+                var idMatch = AccountIdRegex.Match(combined);
                 var nickname = nicknameMatch.Success
                     ? CleanAccountField(nicknameMatch.Groups[1].Value, 40)
                     : string.Empty;
@@ -198,8 +197,9 @@ namespace Bot.ChromeNs
                     : string.Empty;
                 if (nickname.Length == 0 && userId.Length == 0) continue;
 
-                evidence = new KugouAccountEvidence
+                evidence = new AccountVisualEvidence
                 {
+                    ApplicationName = applicationName,
                     Nickname = nickname,
                     UserId = userId,
                     MessageKey = item.MessageKey,
@@ -221,7 +221,8 @@ namespace Bot.ChromeNs
             evidence = string.Empty;
             var shop = ResolveShop(string.Empty, seller);
             return shop != null && TrySatisfyOrderPhotoRequirement(
-                shop.ShopKey, seller, buyer, guidanceText, orderEventTime, out evidence);
+                shop.ShopKey, seller, buyer, guidanceText, orderEventTime,
+                out evidence);
         }
 
         public static bool TrySatisfyOrderPhotoRequirement(
@@ -232,9 +233,29 @@ namespace Bot.ChromeNs
             DateTime orderEventTime,
             out string evidence)
         {
+            string ignoredApplicationName;
+            return TrySatisfyOrderPhotoRequirement(
+                shopKey, seller, buyer, guidanceText, orderEventTime,
+                out ignoredApplicationName, out evidence);
+        }
+
+        public static bool TrySatisfyOrderPhotoRequirement(
+            string shopKey,
+            string seller,
+            string buyer,
+            string guidanceText,
+            DateTime orderEventTime,
+            out string applicationName,
+            out string evidence)
+        {
+            applicationName = string.Empty;
             evidence = string.Empty;
             var shop = ResolveShop(shopKey, seller);
-            if (shop == null || !LooksLikeKugouPhotoGuidance(guidanceText)) return false;
+            if (shop == null) return false;
+            var config = ShopReceptionConfigService.GetConfig(shop);
+            if (config == null || !config.Enabled
+                || !LooksLikeConfiguredPhotoGuidance(guidanceText, config))
+                return false;
 
             var anchor = orderEventTime == DateTime.MinValue ? DateTime.Now : orderEventTime;
             if (anchor > DateTime.Now.AddMinutes(5) || anchor < DateTime.Now.AddDays(-7)) anchor = DateTime.Now;
@@ -242,8 +263,12 @@ namespace Bot.ChromeNs
             var until = anchor.AddMinutes(5);
 
             string humanEvidence;
-            if (TryFindHumanOfficialKugouConfirmation(shop.ShopKey, seller, buyer, since, until, out humanEvidence))
+            string humanApplicationName;
+            if (TryFindHumanConfiguredAppConfirmation(
+                shop.ShopKey, seller, buyer, since, until,
+                out humanApplicationName, out humanEvidence))
             {
+                applicationName = humanApplicationName;
                 evidence = humanEvidence;
                 return true;
             }
@@ -257,13 +282,20 @@ namespace Bot.ChromeNs
             foreach (var item in items)
             {
                 var combined = (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty);
-                if (combined.IndexOf("酷狗", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                VisualUnderstandingRuleEntity matchedRule;
+                string candidateApplicationName;
+                if (!VisualUnderstandingRuleService.TryResolveConfiguredApplication(
+                    shop.ShopKey, seller, combined, out candidateApplicationName, out matchedRule))
+                    continue;
 
-                // The newest KuGou-related visual observation is authoritative. If it explicitly
-                // looks like a TV built-in/third-party/non-official UI, do not fall back to an
-                // older qualifying image from an earlier topic/device.
-                if (!HasKugouOfficialAppEvidence(combined)) return false;
+                // The newest observation for a configured application is authoritative.
+                // If it is a built-in, third-party or otherwise unverified UI, do not fall
+                // back to an older qualifying image from an earlier topic/device.
+                if (!HasConfiguredOfficialAppEvidence(
+                    shop.ShopKey, seller, combined, out candidateApplicationName))
+                    return false;
 
+                applicationName = candidateApplicationName;
                 evidence = CleanForPrompt(item.VisualSummary, 180);
                 if (evidence.Length == 0) evidence = CleanForPrompt(item.VisualTags, 180);
                 return true;
@@ -271,50 +303,73 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        internal static bool LooksLikeKugouPhotoGuidance(string guidanceText)
+        internal static bool LooksLikeConfiguredPhotoGuidance(
+            string guidanceText,
+            ShopReceptionConfig config)
         {
             var text = (guidanceText ?? string.Empty).Trim();
-            return text.IndexOf("酷狗", StringComparison.OrdinalIgnoreCase) >= 0
-                && PhotoRequestRegex.IsMatch(text);
+            if (!PhotoRequestRegex.IsMatch(text) || config == null || !config.Enabled) return false;
+            var all = config.PhotoInstructionAllCues ?? new List<string>();
+            var any = config.PhotoInstructionAnyCues ?? new List<string>();
+            var excluded = config.PhotoInstructionExcludedCues ?? new List<string>();
+            if (all.Count == 0 && any.Count == 0) return false;
+            if (all.Any(cue => text.IndexOf(cue, StringComparison.OrdinalIgnoreCase) < 0)) return false;
+            if (any.Count > 0 && !any.Any(cue => text.IndexOf(cue, StringComparison.OrdinalIgnoreCase) >= 0))
+                return false;
+            if (excluded.Any(cue => text.IndexOf(cue, StringComparison.OrdinalIgnoreCase) >= 0))
+                return false;
+            return true;
         }
 
-        internal static bool HasKugouOfficialAppEvidence(string visualText)
+        internal static bool HasConfiguredOfficialAppEvidence(
+            string shopKey,
+            string seller,
+            string visualText,
+            out string applicationName)
         {
+            applicationName = string.Empty;
             var text = Regex.Replace((visualText ?? string.Empty).ToLowerInvariant(), @"\s+", string.Empty);
-            if (text.IndexOf("酷狗", StringComparison.Ordinal) < 0) return false;
+            VisualUnderstandingRuleEntity rule;
+            try
+            {
+                if (!VisualUnderstandingRuleService.TryResolveConfiguredApplication(
+                    shopKey, seller, text, out applicationName, out rule))
+                    return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取店铺视觉理解应用配置失败，账号证据按未命中处理：" + ex.Message, 5);
+                applicationName = string.Empty;
+                return false;
+            }
 
-            var explicitOfficial = text.Contains("酷狗官方")
-                || text.Contains("官方app")
-                || text.Contains("官方应用")
-                || text.Contains("酷狗音乐app")
-                || text.Contains("酷狗app")
-                || text.Contains("酷狗tv")
-                || text.Contains("酷狗大屏")
-                || text.Contains("酷狗音乐电视版")
-                || text.Contains("酷狗音乐电视端");
-
+            var explicitOfficial = ExplicitOfficialAppRegex.IsMatch(text);
             if (BuiltInOrUntrustedRegex.IsMatch(text) && !explicitOfficial) return false;
 
-            var appCue = AppCueRegex.IsMatch(text);
-            var uiCueCount = KugouUiCueRegex.Matches(text).Cast<Match>()
-                .Select(x => x.Value)
+            var cues = ((rule.RequiredKeywords ?? string.Empty) + "\n"
+                    + (rule.OptionalKeywords ?? string.Empty) + "\n"
+                    + (rule.ScreenName ?? string.Empty))
+                .Split(new[] { '\r', '\n', '|', ';', '；', ',', '，' },
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => Regex.Replace(x.Trim(), @"\s+", string.Empty))
+                .Where(x => x.Length >= 2)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
-            var brandedApplication = text.Contains("酷狗音乐") && (appCue || uiCueCount >= 2);
-
-            // Login state is deliberately not part of this decision. The purpose is only to
-            // identify that the buyer already photographed the official KuGou application UI.
-            return explicitOfficial || brandedApplication;
+                .ToList();
+            var matchedCueCount = cues.Count(cue =>
+                text.IndexOf(cue, StringComparison.OrdinalIgnoreCase) >= 0);
+            return explicitOfficial || (AppCueRegex.IsMatch(text) && matchedCueCount >= 2);
         }
 
-        private static bool TryFindHumanOfficialKugouConfirmation(
+        private static bool TryFindHumanConfiguredAppConfirmation(
             string shopKey,
             string seller,
             string buyer,
             DateTime since,
             DateTime until,
+            out string applicationName,
             out string evidence)
         {
+            applicationName = string.Empty;
             evidence = string.Empty;
             try
             {
@@ -322,35 +377,39 @@ namespace Bot.ChromeNs
                 if (shop == null) return false;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24)
-                    .Where(x => x != null && !x.Withdrawn)
-                    .Where(x => x.Timestamp == DateTime.MinValue || (x.Timestamp >= since && x.Timestamp <= until))
-                    .OrderBy(x => x.Timestamp)
-                    .ToList();
+                    var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24)
+                        .Where(x => x != null && !x.Withdrawn)
+                        .Where(x => x.Timestamp == DateTime.MinValue || (x.Timestamp >= since && x.Timestamp <= until))
+                        .OrderBy(x => x.Timestamp)
+                        .ToList();
 
-                var imageIndex = -1;
-                for (var i = turns.Count - 1; i >= 0; i--)
-                {
-                    if (turns[i].Role != "user") continue;
-                    var text = turns[i].Text ?? string.Empty;
-                    if (text.Contains("[图片]") || text.Contains("【图片】"))
+                    var imageIndex = -1;
+                    for (var i = turns.Count - 1; i >= 0; i--)
                     {
-                        imageIndex = i;
-                        break;
+                        if (turns[i].Role != "user") continue;
+                        var text = turns[i].Text ?? string.Empty;
+                        if (text.Contains("[图片]") || text.Contains("【图片】"))
+                        {
+                            imageIndex = i;
+                            break;
+                        }
                     }
-                }
-                if (imageIndex < 0) return false;
+                    if (imageIndex < 0) return false;
 
-                for (var i = turns.Count - 1; i > imageIndex; i--)
-                {
-                    if (turns[i].Role != "assistant") continue;
-                    var text = (turns[i].Text ?? string.Empty).Trim();
-                    if (text.Length == 0 || IsBotMarked(text)) continue;
-                    if (!HumanOfficialKugouRegex.IsMatch(text)) continue;
-                    evidence = "人工客服已确认：" + CleanForPrompt(text, 160);
-                    return true;
-                }
-                return false;
+                    for (var i = turns.Count - 1; i > imageIndex; i--)
+                    {
+                        if (turns[i].Role != "assistant") continue;
+                        var text = (turns[i].Text ?? string.Empty).Trim();
+                        if (text.Length == 0 || IsBotMarked(text)) continue;
+                        string candidateApplicationName;
+                        if (!HasConfiguredOfficialAppEvidence(
+                            shopKey, seller, text, out candidateApplicationName))
+                            continue;
+                        applicationName = candidateApplicationName;
+                        evidence = "人工客服已确认：" + CleanForPrompt(text, 160);
+                        return true;
+                    }
+                    return false;
                 }
             }
             catch

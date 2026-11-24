@@ -310,13 +310,13 @@ namespace Bot.ChromeNs
                 return;
             }
             ShopContext visionShop = null;
-            KugouReceptionConfig visionConfig = null;
+            ShopReceptionConfig visionConfig = null;
             try
             {
                 visionShop = ShopContextLocator.ResolveRuntimeByShopKey(burst.ShopKey);
                 if (visionShop != null
                     && string.Equals(visionShop.SellerNick, burst.SellerNick, StringComparison.OrdinalIgnoreCase))
-                    visionConfig = KugouReceptionConfigService.GetConfig(visionShop);
+                    visionConfig = ShopReceptionConfigService.GetConfig(visionShop);
             }
             catch { }
             if (visionConfig != null && visionConfig.Enabled && !visionConfig.EnableAutoGuidance)
@@ -328,7 +328,7 @@ namespace Bot.ChromeNs
                 return;
             }
             string receptionBlock;
-            var receptionBlocked = KugouReceptionPolicy.BlockOutgoing(
+            var receptionBlocked = ShopReceptionPolicy.BlockOutgoing(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer,
                 out receptionBlock, burst.ShopKey,
                 workflowDecision != null && workflowDecision.RequiresSend);

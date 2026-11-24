@@ -36,10 +36,12 @@ def test_start_requires_same_conversation_redeem_code_consent_and_recent_visual_
     assert 'x.Role == "assistant"' in service
     assert '@"(?:会员)?兑换码\\s*[:：]' in service
     assert "HasExplicitConsent(text)" in service
-    assert "RecentVisualContextService.TryGetRecentKugouAccountEvidence" in service
-    assert "HasKugouOfficialAppEvidence(combined)" in visual
-    assert "KugouNicknameRegex" in visual
-    assert "KugouUserIdRegex" in visual
+    assert "RecentVisualContextService.TryGetRecentAccountEvidence" in service
+    assert "HasConfiguredOfficialAppEvidence" in visual
+    assert "AccountNicknameRegex" in visual
+    assert "AccountIdRegex" in visual
+    assert "ApplicationName = applicationName" in visual
+    assert "TryResolveConfiguredApplication" in visual
 
 
 def test_sensitive_phone_and_code_are_memory_only_and_expire():

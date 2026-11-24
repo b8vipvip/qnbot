@@ -714,7 +714,7 @@ namespace Bot.ChromeNs
             string buyer)
         {
             if (!CanLearn(question, answer)) return;
-            if (KugouReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
+            if (ShopReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
             {
                 Log.Info("店铺业务知识自动学习改为会话复盘待审核：source=" + sourceType
                     + ", seller=" + seller);
@@ -772,7 +772,7 @@ namespace Bot.ChromeNs
             var explicitOperatorEdit = string.Equals(sourceType, "人工修改", StringComparison.Ordinal)
                 || string.Equals(sourceType, "管理员审核", StringComparison.Ordinal);
             if (!explicitOperatorEdit
-                && KugouReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
+                && ShopReceptionPolicy.RequiresManualKnowledgeReview(seller, question, answer))
             {
                 return new KnowledgeLearningResult
                 {

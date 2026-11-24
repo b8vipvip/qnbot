@@ -54,7 +54,7 @@ namespace Bot.ChromeNs
 
         private static string PathForSeller(string seller)
         {
-            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            var shop = ShopReceptionPolicy.ResolveShopForSeller(seller);
             if (shop == null
                 || string.IsNullOrWhiteSpace(shop.ShopKey)
                 || !shop.HasStableSellerId)

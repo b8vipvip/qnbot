@@ -351,9 +351,9 @@ namespace Bot.ChromeNs
 
             string businessBlock;
             var businessBlocked = workflowDecision != null
-                ? KugouReceptionPolicy.BlockOutgoing(
+                ? ShopReceptionPolicy.BlockOutgoing(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock, burst.ShopKey)
-                : KugouReceptionPolicy.BlockOutgoing(
+                : ShopReceptionPolicy.BlockOutgoing(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock);
             if (businessBlocked)
             {
@@ -638,17 +638,15 @@ namespace Bot.ChromeNs
         internal const string SilentMarker = "__QNBOT_RECEPTION_WAIT__:";
         private static readonly Regex MobileOnly = new Regex(
             @"^(?:\+?86[- ]?)?1[3-9]\d{9}$", RegexOptions.Compiled);
-        private static readonly Regex PhotoRequest = new Regex(
-            @"拍照|截图|拍一张|发图片|发张图|拍给我", RegexOptions.Compiled);
 
         internal static bool TryChooseSilence(
             string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
-            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
+            if (ShopReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
                 return true;
-            if (!KugouReceptionPolicy.Applies(seller)
-                || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait)
+            if (!ShopReceptionPolicy.Applies(seller)
+                || !ShopReceptionConfigService.GetConfig(seller).EnablePhoneWait)
                 return false;
             var input = (question ?? string.Empty).Trim();
             if (!MobileOnly.IsMatch(input)) return false;
@@ -658,13 +656,12 @@ namespace Bot.ChromeNs
             if (lastSeller == null || lastSeller.Timestamp == DateTime.MinValue
                 || lastSeller.Timestamp < DateTime.Now.AddHours(-2)) return false;
             var instruction = lastSeller.Text ?? string.Empty;
-            if (!PhotoRequest.IsMatch(instruction)
-                || (instruction.IndexOf("电视", StringComparison.Ordinal) < 0
-                    && instruction.IndexOf("酷狗", StringComparison.Ordinal) < 0
-                    && instruction.IndexOf("账号", StringComparison.Ordinal) < 0)) return false;
+            var config = ShopReceptionConfigService.GetConfig(seller);
+            if (!RecentVisualContextService.LooksLikeConfiguredPhotoGuidance(instruction, config))
+                return false;
             // A later instruction to send a phone number is a different workflow step.
             if (instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0) return false;
-            reason = "等待买家发送电视账号界面图片；仅收到手机号，不重复提问或发送无关答案";
+            reason = "等待买家发送目标应用账号界面图片；仅收到手机号，不重复提问或发送无关答案";
             return true;
         }
 
@@ -672,7 +669,7 @@ namespace Bot.ChromeNs
         {
             return "\n\n【接待步骤与证据优先】\n"
                 + "先根据当前买家消息、最近客服指令、订单阶段、已核验的图片语义和店铺知识库判断本轮步骤。"
-                + "如果前面要求拍电视账号界面，买家提供图片或追问‘是这个界面吗’，优先核对图片是否真正展示指定账号及绑定状态；"
+                + "如果前面要求拍目标应用账号界面，买家提供图片或追问‘是这个界面吗’，优先核对图片是否真正展示目标账号及绑定状态；"
                 + "不能因为商品名称含会员就回答‘包含会员’，也不能把识别到电视品牌当作已经完成账号绑定。"
                 + "无法读到可靠的图像证据时不得猜测已绑定或支持充值，应要求清晰的指定页面或保持人工核验。"
                 + "有设备专属绑定教程时只能从本店知识库中选取与已确认设备型号一致的教程链接；不能编造教程链接。"
@@ -1108,7 +1105,7 @@ namespace Bot.ChromeNs
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
-            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller, buyer);
+            dynamicSystemPrompt += ShopReceptionPolicy.BuildPromptAddon(seller, buyer);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };

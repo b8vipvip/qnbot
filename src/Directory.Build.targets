@@ -274,14 +274,14 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlDataManagement.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlDataManagement.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionPolicy.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionPolicy.cs" />
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ShopReceptionPolicy.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ShopReceptionPolicy.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionAuditPage.cs" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionConfigService.cs')">
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KugouReceptionConfigService.cs" />
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ShopReceptionConfigService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ShopReceptionConfigService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeV2ReceptionRulesPage.cs" />

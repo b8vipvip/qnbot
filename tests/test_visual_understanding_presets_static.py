@@ -90,17 +90,24 @@ def test_generic_settings_and_help_do_not_ship_brand_specific_examples():
     operations_ui = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
     recharge_settings = read("services/api-control-plane/static/manual-recharge.html")
     vision_prompt = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    operator_ui = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
+    config = read("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
+    default_config = config.split("private static JObject DefaultDocument", 1)[1].split(
+        "private static JObject MigrateLegacyV1", 1
+    )[0]
     template = service.split("private static void ApplyGenericAccountTemplate", 1)[1].split(
         "private static void EnsureSchema", 1
     )[0]
     assert "酷狗" not in template
+    assert "酷狗" not in default_config
     for surface in (help_window, reception_page, policy_profile, correction_window,
-                    reply_management, memory_ui, operations_ui, recharge_settings, vision_prompt):
+                    reply_management, memory_ui, operations_ui, recharge_settings,
+                    vision_prompt, operator_ui):
         assert "酷狗" not in surface
 
 
 def test_new_shop_reception_settings_use_generic_schema_and_path_with_legacy_read_support():
-    config = read("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = read("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     default = config.split("private static JObject DefaultDocument", 1)[1].split(
         "private static JObject MigrateLegacyV1", 1
     )[0]

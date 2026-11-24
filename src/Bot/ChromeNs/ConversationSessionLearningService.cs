@@ -1025,7 +1025,7 @@ namespace Bot.ChromeNs
                             skipped++;
                             continue;
                         }
-                        if (KugouReceptionPolicy.Applies(session.Seller)
+                        if (ShopReceptionPolicy.Applies(session.Seller)
                             && RequiresWorkflowReview(suggestion))
                         {
                             // An AI-extracted device/eligibility/account/payment rule is only a
@@ -1514,7 +1514,7 @@ namespace Bot.ChromeNs
             if (ContainsHighRisk(candidate.Question + " " + candidate.Answer)
                 || KnowledgeEngineV2Semantics.IsHighRisk(candidate.Question + " " + candidate.Answer))
                 return false;
-            if (KugouReceptionPolicy.Applies(seller) && RequiresWorkflowReview(candidate))
+            if (ShopReceptionPolicy.Applies(seller) && RequiresWorkflowReview(candidate))
                 return false;
             return true;
         }
@@ -2884,7 +2884,7 @@ namespace Bot.ChromeNs
         {
             var sourceText = sourceAnswer ?? string.Empty;
             var generatedText = generatedAnswer ?? string.Empty;
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
+            var anchors = @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV|电视版|电视端))|[A-Za-z][A-Za-z0-9 ._-]{1,24}(?=(?:Music|APP|TV))|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var negative = @"不支持|未支持|尚不支持|不兼容|不适配|不适用|不适合|不推荐|不建议|不符合|非会员|不可以|不能|无法|不可用|不可|不允许|禁止|不提供|不包含|没有|暂不|不是|并非|不会|未开通|未包含|未提供|无法使用|不能使用";
             foreach (Match source in Regex.Matches(sourceText, anchors, RegexOptions.IgnoreCase))
             {
@@ -2908,7 +2908,7 @@ namespace Bot.ChromeNs
 
         private static bool HasMissingKnowledgeAnchors(string sourceText, string generatedText)
         {
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
+            var anchors = @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV|电视版|电视端))|[A-Za-z][A-Za-z0-9 ._-]{1,24}(?=(?:Music|APP|TV))|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var generated = new HashSet<string>(
                 Regex.Matches(generatedText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                     .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
@@ -2921,7 +2921,7 @@ namespace Bot.ChromeNs
 
         private static bool HasUnverifiedKnowledgeAnchors(string sourceText, string generatedText)
         {
-            var anchors = @"酷狗音乐|酷狗|酷我音乐|酷我|QQ音乐|网易云音乐|Spotify|Apple Music|YouTube Music|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
+            var anchors = @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV|电视版|电视端))|[A-Za-z][A-Za-z0-9 ._-]{1,24}(?=(?:Music|APP|TV))|Android|安卓|iOS|苹果|iPhone|iPad|Windows|macOS|Linux|鸿蒙|HarmonyOS|TCL|海信|创维|小米|华为|荣耀|OPPO|vivo|三星|索尼|电视|TV|大屏|车机|手机|电脑|平板|语音|视频|直播|音乐|K歌|唱歌|投屏|下载|离线|缓存|同步|播放|安装|连接|录音|字幕|歌词|音效|音质|评论|收藏|分享|搜索|多端|跨设备|支付宝|微信";
             var source = new HashSet<string>(
                 Regex.Matches(sourceText ?? string.Empty, anchors, RegexOptions.IgnoreCase)
                     .Cast<Match>().Select(x => NormalizeKnowledgeAnchor(x.Value)),
@@ -3544,7 +3544,7 @@ namespace Bot.ChromeNs
                         + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
                         + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
-                        + "workflow_proposals最多4条，只能引用下方真实证据别名；必须同时引用买家原始消息、人工客服真实回复和同一买家的已核验订单快照。图片相关流程可引用V开头的视觉观察别名；官方账号证据可引用A开头的account_evidence别名。每个步骤的required_evidence只能使用buyer_message、image_message、vision_observation、account_evidence、order_snapshot、manual_correction；image_message表示当前新图片消息，vision_observation表示同一买家会话中已保存的OCR/视觉分析结果，account_evidence表示来自非撤回图片的官方酷狗账号字段识别结果（不包含原始昵称或ID）。ASK_EVIDENCE的reply_text只能请求补充截图或必要信息，不得承诺业务结果；REPLY必须提供reply_evidence_ref且只能引用真实人工客服回复。不得生成付款、充值、退款、账号修改、发货或履约动作。无足够证据、无当前店铺商品范围或无法构造完整状态转移时返回空数组。通过程序化证据绑定和目录校验后将自动发布，无需管理员审批。"
+                        + "workflow_proposals最多4条，只能引用下方真实证据别名；必须同时引用买家原始消息、人工客服真实回复和同一买家的已核验订单快照。图片相关流程可引用V开头的视觉观察别名；官方账号证据可引用A开头的account_evidence别名。每个步骤的required_evidence只能使用buyer_message、image_message、vision_observation、account_evidence、order_snapshot、manual_correction；image_message表示当前新图片消息，vision_observation表示同一买家会话中已保存的OCR/视觉分析结果，account_evidence表示来自非撤回图片、并由当前店铺视觉理解规则确认的目标应用账号字段识别结果（不包含原始昵称或ID）。ASK_EVIDENCE的reply_text只能请求补充截图或必要信息，不得承诺业务结果；REPLY必须提供reply_evidence_ref且只能引用真实人工客服回复。不得生成付款、充值、退款、账号修改、发货或履约动作。无足够证据、无当前店铺商品范围或无法构造完整状态转移时返回空数组。通过程序化证据绑定和目录校验后将自动发布，无需管理员审批。"
                 },
                 new JObject
                 {
@@ -3813,7 +3813,7 @@ namespace Bot.ChromeNs
             var text = (suggestion.Question ?? "") + " " + (suggestion.Answer ?? "")
                 + " " + (suggestion.Category ?? "");
             return Regex.IsMatch(text,
-                @"酷狗|会员|设备|电视|车机|账号|登录|绑定|充值|退款|支持|不支持|支付|付款|到账|发货|教程|app|tcl|海信|雷鸟|小米",
+                @"会员|设备|电视|车机|账号|登录|绑定|充值|退款|支持|不支持|支付|付款|到账|发货|教程|app|应用|软件|平台|tcl|海信|雷鸟|小米",
                 RegexOptions.IgnoreCase);
         }
 

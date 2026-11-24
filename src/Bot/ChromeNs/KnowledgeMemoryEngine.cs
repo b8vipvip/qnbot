@@ -622,7 +622,13 @@ namespace Bot.ChromeNs
             var result = new List<string>();
             value = value ?? string.Empty;
             foreach (Match match in Regex.Matches(value,
-                @"酷狗音乐|酷狗|超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|充值|验证码|订单|退款|支付宝|微信|APP|软件",
+                @"超级会员|豪华会员|电视机|电视|TV|大屏|车机|手机|电脑|平板|账号|会员|充值|验证码|订单|退款|支付宝|微信|APP|软件",
+                RegexOptions.IgnoreCase))
+            {
+                result.Add(match.Value);
+            }
+            foreach (Match match in Regex.Matches(value,
+                @"[\u4e00-\u9fff]{2,8}(?=(?:音乐|视频|应用|软件|APP|TV))",
                 RegexOptions.IgnoreCase))
             {
                 result.Add(match.Value);

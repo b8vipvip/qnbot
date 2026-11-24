@@ -11,7 +11,7 @@ using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
-    internal sealed class KugouVisualRule
+    internal sealed class ShopVisualRule
     {
         public string Id { get; set; }
         public List<List<string>> AllCueGroups { get; set; }
@@ -24,7 +24,7 @@ namespace Bot.ChromeNs
         public string Stage { get; set; }
     }
 
-    internal sealed class KugouReceptionConfig
+    internal sealed class ShopReceptionConfig
     {
         public bool Enabled { get; set; }
         public bool EnableAutoGuidance { get; set; }
@@ -45,9 +45,9 @@ namespace Bot.ChromeNs
         public List<string> PhotoInstructionAnyCues { get; set; }
         public List<string> PhotoInstructionExcludedCues { get; set; }
         public List<string> ScreenshotQuestionCues { get; set; }
-        public List<KugouVisualRule> VisualRules { get; set; }
+        public List<ShopVisualRule> VisualRules { get; set; }
 
-        public KugouReceptionConfig()
+        public ShopReceptionConfig()
         {
             Enabled = false;
             EnableAutoGuidance = false;
@@ -68,13 +68,13 @@ namespace Bot.ChromeNs
             PhotoInstructionAnyCues = new List<string>();
             PhotoInstructionExcludedCues = new List<string>();
             ScreenshotQuestionCues = new List<string>();
-            VisualRules = new List<KugouVisualRule>();
+            VisualRules = new List<ShopVisualRule>();
         }
     }
 
     // Business facts live in a per-ShopKey profile. The shipped/default profile is deliberately
     // empty and disabled; JSON can never grant recharge or waive mandatory human review.
-    internal static class KugouReceptionConfigService
+    internal static class ShopReceptionConfigService
     {
         private const string Schema = "qnbot.shop.reception-rules.v3";
         private const string LegacySchemaV2 = "qnbot.kugou.reception-rules.v2";
@@ -83,7 +83,7 @@ namespace Bot.ChromeNs
 
         private static ShopContext ResolveShop(string seller)
         {
-            var shop = KugouReceptionPolicy.ResolveShopForSeller(seller);
+            var shop = ShopReceptionPolicy.ResolveShopForSeller(seller);
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey) || !shop.HasStableSellerId)
                 throw new InvalidOperationException("店铺身份不稳定或未绑定唯一 ShopKey，禁止读取或修改专属接待配置。");
             return shop;
@@ -376,9 +376,9 @@ namespace Bot.ChromeNs
             return id;
         }
 
-        private static KugouReceptionConfig ToConfig(JObject obj)
+        private static ShopReceptionConfig ToConfig(JObject obj)
         {
-            var config = new KugouReceptionConfig
+            var config = new ShopReceptionConfig
             {
                 Enabled = obj.Value<bool>("enabled"),
                 EnableAutoGuidance = obj.Value<bool>("enable_auto_guidance"),
@@ -399,7 +399,7 @@ namespace Bot.ChromeNs
                 PhotoInstructionAnyCues = ReadStringArray(obj["photo_instruction_any_cues"], "photo_instruction_any_cues", 30),
                 PhotoInstructionExcludedCues = ReadStringArray(obj["photo_instruction_excluded_cues"], "photo_instruction_excluded_cues", 30),
                 ScreenshotQuestionCues = ReadStringArray(obj["screenshot_question_cues"], "screenshot_question_cues", 30),
-                VisualRules = new List<KugouVisualRule>()
+                VisualRules = new List<ShopVisualRule>()
             };
             var rules = obj["visual_rules"] as JArray;
             if (rules != null)
@@ -407,7 +407,7 @@ namespace Bot.ChromeNs
                 foreach (var token in rules)
                 {
                     var rule = (JObject)token;
-                    config.VisualRules.Add(new KugouVisualRule
+                    config.VisualRules.Add(new ShopVisualRule
                     {
                         Id = Convert.ToString(rule["id"]),
                         AllCueGroups = ReadCueGroups(rule["all_cue_groups"], "all_cue_groups"),
@@ -491,23 +491,23 @@ namespace Bot.ChromeNs
             }
         }
 
-        internal static KugouReceptionConfig GetConfig(ShopContext shop)
+        internal static ShopReceptionConfig GetConfig(ShopContext shop)
         {
             try { return ToConfig(ReadDocument(shop)); }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("店铺接待配置无效或不可用，保持专属流程关闭：" + ex.Message, 10);
-                return new KugouReceptionConfig();
+                return new ShopReceptionConfig();
             }
         }
 
-        public static KugouReceptionConfig GetConfig(string seller)
+        public static ShopReceptionConfig GetConfig(string seller)
         {
             try { return GetConfig(ResolveShop(seller)); }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("店铺接待身份无法唯一解析，保持专属流程关闭：" + ex.Message, 10);
-                return new KugouReceptionConfig();
+                return new ShopReceptionConfig();
             }
         }
 
@@ -532,7 +532,7 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, validated, 3, 50, out error))
                     throw new IOException("流程规则原子保存失败：" + error);
             }
-            KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey);
+            ShopReceptionPolicy.InvalidateShopCache(shop.ShopKey);
             return "当前 ShopKey 的接待规则已验证并保存；旧版本已备份。未触发任何买家回复或充值。";
         }
 
@@ -573,7 +573,7 @@ namespace Bot.ChromeNs
                 if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(path, original, 3, 50, out error))
                     throw new IOException("恢复历史备份失败：" + error);
             }
-            KugouReceptionPolicy.InvalidateShopCache(shop.ShopKey);
+            ShopReceptionPolicy.InvalidateShopCache(shop.ShopKey);
             return "已恢复最近一份有效的当前 ShopKey 接待规则备份：" + Path.GetFileName(selectedBackup);
         }
     }
