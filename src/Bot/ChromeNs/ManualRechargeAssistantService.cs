@@ -80,6 +80,17 @@ namespace Bot.ChromeNs
             public AccountCandidate Selected;
         }
 
+        private sealed class SendContext
+        {
+            public string ShopKey;
+            public string Seller;
+            public string Buyer;
+            public string Question;
+            public DateTime DetectedAt;
+            public CDPClient SourceClient;
+            public string SourceSessionId;
+        }
+
         public static async Task<bool> TryHandleAsync(
             QN qn,
             BuyerMessageBurstItem item,
@@ -95,10 +106,28 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || buyer.Length == 0 || text.Length == 0) return false;
 
             ShopContext shop;
-            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey); }
             catch { shop = null; }
-            if (shop == null) return false;
+            var sourceClient = qn.CDP;
+            var sourceServer = MyWebSocketServer.WSocketSvrInst;
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
+                || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal)
+                || sourceClient == null || sourceClient.IsInvalidated || sourceClient.IsShopIdentityRetired
+                || !string.Equals(sourceClient.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                || sourceServer == null
+                || !sourceServer.IsAuthoritativeShopSession(shop.ShopKey, sourceClient.SessionId))
+                return false;
 
+            var sendContext = new SendContext
+            {
+                ShopKey = shop.ShopKey,
+                Seller = seller,
+                Buyer = buyer,
+                Question = text,
+                DetectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt,
+                SourceClient = sourceClient,
+                SourceSessionId = sourceClient.SessionId
+            };
             var key = Key(shop.ShopKey, seller, buyer);
             Session state;
             if (!Sessions.TryGetValue(key, out state) || state == null)
@@ -106,7 +135,7 @@ namespace Bot.ChromeNs
                 if (!HasExplicitConsent(text)) return false;
 
                 string orderId;
-                if (!TryFindRecentRedeemCode(seller, buyer, out orderId)) return false;
+                if (!TryFindRecentRedeemCode(seller, buyer, shop.ShopKey, out orderId)) return false;
 
                 AccountVisualEvidence evidence;
                 if (!RecentVisualContextService.TryGetRecentAccountEvidence(shop.ShopKey, seller, buyer, out evidence)
@@ -139,7 +168,7 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
-                    await StopAndHandoffAsync(qn, key, state, "兑换码校验", ex, cancellationToken)
+                    await StopAndHandoffAsync(qn, key, state, "兑换码校验", ex, cancellationToken, sendContext)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -152,7 +181,7 @@ namespace Bot.ChromeNs
                 {
                     Session ignored;
                     Sessions.TryRemove(key, out ignored);
-                    await SendAsync(qn, buyer, "好的，已取消自动代充，不会继续提交。", cancellationToken)
+                    await SendAsync(qn, buyer, "好的，已取消自动代充，不会继续提交。", cancellationToken, sendContext)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -162,7 +191,7 @@ namespace Bot.ChromeNs
                     var phone = Extract(PhoneRegex, text);
                     if (phone.Length == 0)
                     {
-                        await SendAsync(qn, buyer, "可以的，手机号发我，我这边帮您提交。", cancellationToken)
+                        await SendAsync(qn, buyer, "可以的，手机号发我，我这边帮您提交。", cancellationToken, sendContext)
                             .ConfigureAwait(false);
                         return true;
                     }
@@ -175,6 +204,7 @@ namespace Bot.ChromeNs
                     if (interval.Value<bool?>("allowed") != true)
                         throw new Exception("验证码发送过于频繁，当前不能继续自动提交");
 
+                    EnsureSendContextCurrent(qn, sendContext, cancellationToken, "发送验证码前");
                     await PostControlPlaneAsync(
                         "/api/runtime/v1/manual-recharge/send-code",
                         new JObject
@@ -188,7 +218,7 @@ namespace Bot.ChromeNs
                         qn,
                         buyer,
                         "验证码已经发到您手机了，收到后把6位验证码发我。",
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken, sendContext).ConfigureAwait(false);
                     return true;
                 }
 
@@ -197,7 +227,7 @@ namespace Bot.ChromeNs
                     var code = Extract(CodeRegex, text);
                     if (code.Length == 0)
                     {
-                        await SendAsync(qn, buyer, "请把短信里的6位验证码发我。", cancellationToken)
+                        await SendAsync(qn, buyer, "请把短信里的6位验证码发我。", cancellationToken, sendContext)
                             .ConfigureAwait(false);
                         return true;
                     }
@@ -232,7 +262,7 @@ namespace Bot.ChromeNs
                             buyer,
                             "已和您刚才设备截图里的" + (string.IsNullOrWhiteSpace(state.Evidence.ApplicationName) ? "目标应用" : state.Evidence.ApplicationName) + "账号核对一致：" + DisplayAccount(state.Selected)
                                 + "。确认给这个账号充值的话，请回复“确认充值”。",
-                            cancellationToken).ConfigureAwait(false);
+                            cancellationToken, sendContext).ConfigureAwait(false);
                         return true;
                     }
 
@@ -244,7 +274,7 @@ namespace Bot.ChromeNs
                         qn,
                         buyer,
                         prefix + "\n" + BuildAccountPrompt(state.Accounts),
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken, sendContext).ConfigureAwait(false);
                     return true;
                 }
 
@@ -256,10 +286,10 @@ namespace Bot.ChromeNs
                             qn,
                             buyer,
                             "为避免充错账号，请明确回复“确认充值”后我再提交。",
-                            cancellationToken).ConfigureAwait(false);
+                            cancellationToken, sendContext).ConfigureAwait(false);
                         return true;
                     }
-                    await SubmitFinalAsync(qn, key, state, state.Selected, cancellationToken)
+                    await SubmitFinalAsync(qn, key, state, state.Selected, cancellationToken, sendContext)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -273,10 +303,10 @@ namespace Bot.ChromeNs
                             qn,
                             buyer,
                             "为避免充错账号，请回复账号前的数字并明确确认，例如“1确认充值”。",
-                            cancellationToken).ConfigureAwait(false);
+                            cancellationToken, sendContext).ConfigureAwait(false);
                         return true;
                     }
-                    await SubmitFinalAsync(qn, key, state, selected, cancellationToken)
+                    await SubmitFinalAsync(qn, key, state, selected, cancellationToken, sendContext)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -287,7 +317,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                await StopAndHandoffAsync(qn, key, state, StageName(state.Stage), ex, cancellationToken)
+                await StopAndHandoffAsync(qn, key, state, StageName(state.Stage), ex, cancellationToken, sendContext)
                     .ConfigureAwait(false);
                 return true;
             }
@@ -300,7 +330,8 @@ namespace Bot.ChromeNs
             string key,
             Session state,
             AccountCandidate selected,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SendContext sendContext)
         {
             if (selected == null) throw new Exception("最终账号选择为空");
             var duplicateKey = Hash(state.ShopKey + "|" + state.Seller + "|" + state.Buyer + "|" + state.OrderId);
@@ -308,6 +339,7 @@ namespace Bot.ChromeNs
             if (RecentSubmissions.TryGetValue(duplicateKey, out until) && until > DateTime.UtcNow)
                 throw new Exception("两分钟内检测到重复充值提交");
 
+            EnsureSendContextCurrent(qn, sendContext, cancellationToken, "最终充值提交前");
             var result = await PostControlPlaneAsync(
                 "/api/runtime/v1/manual-recharge/submit",
                 new JObject
@@ -335,7 +367,7 @@ namespace Bot.ChromeNs
                 qn,
                 state.Buyer,
                 "已经提交充值，通常几分钟后到账，稍后多刷新几次设备界面。",
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, sendContext).ConfigureAwait(false);
         }
 
         private static List<AccountCandidate> ParseAccounts(JArray items)
@@ -416,10 +448,11 @@ namespace Bot.ChromeNs
             return ConsentRegex.IsMatch(text) && !CancelRegex.IsMatch(text);
         }
 
-        private static bool TryFindRecentRedeemCode(string seller, string buyer, out string orderId)
+        private static bool TryFindRecentRedeemCode(
+            string seller, string buyer, string shopKey, out string orderId)
         {
             orderId = string.Empty;
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24, shopKey);
             foreach (var turn in turns
                 .Where(x => x != null && x.Role == "assistant" && !x.Withdrawn)
                 .OrderByDescending(x => x.Timestamp))
@@ -555,18 +588,74 @@ namespace Bot.ChromeNs
             QN qn,
             string buyer,
             string text,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SendContext sendContext)
         {
             var target = BuyerIdentityAliasService.ResolveInternalNick(
-                qn.Seller == null ? string.Empty : qn.Seller.Nick,
+                sendContext == null ? (qn.Seller == null ? string.Empty : qn.Seller.Nick) : sendContext.Seller,
                 buyer);
             var answer = BotOutboundMessageFormatter.EnsureAiMarker(text ?? string.Empty);
-            if (!await qn.SendTextWithRetryAsync(target, answer, 1, cancellationToken).ConfigureAwait(false))
+            Func<bool> preSendGuard = () =>
+            {
+                string reason;
+                return IsSendContextCurrent(qn, sendContext, cancellationToken, out reason);
+            };
+            if (!await qn.SendTextWithRetryAsync(
+                target, answer, 1, cancellationToken, preSendGuard).ConfigureAwait(false))
                 throw new Exception("代充安全提示消息发送失败");
             ReplyDeduplicationService.RememberDelivered(
-                qn.Seller == null ? string.Empty : qn.Seller.Nick,
+                sendContext == null ? (qn.Seller == null ? string.Empty : qn.Seller.Nick) : sendContext.Seller,
                 buyer,
-                answer);
+                answer,
+                sendContext == null ? string.Empty : sendContext.ShopKey);
+        }
+
+        private static bool IsSendContextCurrent(
+            QN qn, SendContext context, CancellationToken cancellationToken, out string reason)
+        {
+            reason = string.Empty;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                reason = "当前买家消息generation已取消";
+                return false;
+            }
+            if (context == null || qn == null || context.SourceClient == null
+                || context.SourceClient.IsInvalidated || context.SourceClient.IsShopIdentityRetired
+                || !ReferenceEquals(qn.CDP, context.SourceClient)
+                || !string.Equals(context.SourceClient.ShopKey, context.ShopKey, StringComparison.Ordinal)
+                || !string.Equals(context.SourceClient.SessionId, context.SourceSessionId, StringComparison.Ordinal))
+            {
+                reason = "原始ShopKey/CDP会话已变化";
+                return false;
+            }
+            if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+            {
+                reason = "Bot或自动回复开关已关闭";
+                return false;
+            }
+            ShopContext shop;
+            try { shop = ShopContextLocator.ResolveRuntimeByShopKey(context.ShopKey); }
+            catch { shop = null; }
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (shop == null
+                || !string.Equals(shop.SellerNick, context.Seller, StringComparison.Ordinal)
+                || server == null
+                || !server.IsAuthoritativeShopSession(context.ShopKey, context.SourceSessionId))
+            {
+                reason = "当前店铺身份不再是原始权威会话";
+                return false;
+            }
+            return ParallelReplyRelevanceGate.ShouldSend(
+                context.Seller, context.Buyer, context.Question, context.DetectedAt,
+                out reason, false, context.ShopKey);
+        }
+
+        private static void EnsureSendContextCurrent(
+            QN qn, SendContext context, CancellationToken cancellationToken, string stage)
+        {
+            string reason;
+            if (!IsSendContextCurrent(qn, context, cancellationToken, out reason))
+                throw new OperationCanceledException("人工代充在" + stage + "失去发送/执行资格：" + reason);
         }
 
         private static async Task StopAndHandoffAsync(
@@ -575,7 +664,8 @@ namespace Bot.ChromeNs
             Session state,
             string stage,
             Exception error,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SendContext sendContext)
         {
             Session ignored;
             Sessions.TryRemove(key, out ignored);
@@ -599,7 +689,8 @@ namespace Bot.ChromeNs
                     qn,
                     state == null ? string.Empty : state.Buyer,
                     "自动代充这一步没有通过安全校验，我已经停止自动操作，请稍等人工客服继续处理。",
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    sendContext).ConfigureAwait(false);
             }
             catch { }
 
