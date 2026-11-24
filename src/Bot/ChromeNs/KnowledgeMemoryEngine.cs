@@ -950,8 +950,13 @@ namespace Bot.ChromeNs
                 try { Bot.Knowledge.KnowledgeMemoryEngineUi.Initialize(); } catch { }
                 // BuyerStreamingReplyPipeline installs its wrapper very early (100ms). Start later
                 // and keep checking so Memory remains the outermost text decision layer even if a
-                // coordinator is created after startup.
-                _timer = new Timer(_ => PatchExisting(), null, 700, 700);
+                // coordinator is created after startup. V2 shutdown and timer creation share
+                // PatchSync so initialization cannot race past a completed V2 disable.
+                lock (PatchSync)
+                {
+                    if (Volatile.Read(ref _disabledForV2) != 0) return new object();
+                    _timer = new Timer(_ => PatchExisting(), null, 700, 700);
+                }
                 Log.Info("Knowledge Memory Engine v1已启动：权威知识库 + Working Memory + Learned Reliability；仅高置信本地直答，其他请求保持原Smart Reply/AI链路。");
             }
             return new object();
@@ -960,17 +965,17 @@ namespace Bot.ChromeNs
         public static void DisableForV2()
         {
             Interlocked.Exchange(ref _disabledForV2, 1);
-            try
-            {
-                var timer = Interlocked.Exchange(ref _timer, null);
-                if (timer != null) timer.Dispose();
-            }
-            catch { }
-
-            // Serialize with PatchExisting so a timer callback already in flight cannot
-            // re-install the V1 wrapper after this unpatch completes.
+            // Serialize timer disposal, initialization and handler unpatching with PatchExisting.
+            // This prevents a callback or late InitializeForApp from re-installing V1 after V2 starts.
             lock (PatchSync)
             {
+                try
+                {
+                    var timer = Interlocked.Exchange(ref _timer, null);
+                    if (timer != null) timer.Dispose();
+                }
+                catch { }
+
                 try
                 {
                     QN[] qns;
