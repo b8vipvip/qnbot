@@ -268,12 +268,18 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var cutoff = DateTime.Now.AddMinutes(-5);
+                // Use the withdrawal event's own timestamp, not processing time: delayed or
+                // replayed notices must never mark an image that arrived after the notice.
+                var noticeAt = GetObservedAt(notice);
+                var cutoff = noticeAt.AddMinutes(-5);
                 var candidate = Records.Values
                     .Where(x => x != null && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
-                    .Where(x => !x.Withdrawn && x.ObservedAt >= cutoff)
+                    .Where(x => !x.Withdrawn
+                        && x.ObservedAt >= cutoff
+                        && x.ObservedAt <= noticeAt.AddSeconds(2))
                     .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                     .OrderByDescending(x => x.ObservedAt)
+                    .ThenBy(x => x.MessageKey, StringComparer.Ordinal)
                     .FirstOrDefault();
                 if (candidate == null)
                 {
@@ -318,7 +324,7 @@ namespace Bot.ChromeNs
             shopKey = shop.ShopKey;
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, GetMessageText(message));
             Prime(message, GetMessageText(message), shopKey, browserClient);
-            var record = FindRecord(messageKey, url, shopKey);
+            var record = FindRecord(messageKey, url, shopKey, seller, GetBuyerNick(message, seller));
             if (record == null) return Fail("图片本地缓存任务未建立");
 
             CacheDownloadResult cached;
@@ -371,15 +377,11 @@ namespace Bot.ChromeNs
         {
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return true;
-            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey);
-            if (record != null) return record.Withdrawn;
-            return Records.Values
-                .Where(x => x != null && x.Withdrawn
-                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
-                .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
-                .OrderByDescending(x => x.ObservedAt)
-                .Take(1)
-                .Any();
+            var record = FindRecord(
+                messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey, seller, buyer);
+            // Withdrawal is a message-scoped tombstone. A previous withdrawn image in the
+            // same conversation must never suppress a later, unrelated image.
+            return record != null && record.Withdrawn;
         }
 
         internal static bool IsMessageKeyWithdrawn(
@@ -389,9 +391,8 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(seller, shopKey);
             if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
                 return true;
-            var record = FindRecord(messageKey, string.Empty, shop.ShopKey);
-            return record != null && record.Withdrawn
-                && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick);
+            var record = FindRecord(messageKey, string.Empty, shop.ShopKey, seller, buyer);
+            return record != null && record.Withdrawn;
         }
 
         public static bool HasCompleteCache(string messageKey, QNChatMessage message, string shopKey = null)
@@ -399,7 +400,8 @@ namespace Bot.ChromeNs
             var seller = GetSellerNick(message, shopKey);
             var shop = ResolveShop(seller, shopKey);
             if (shop == null) return false;
-            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey);
+            var record = FindRecord(
+                messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey, seller, GetBuyerNick(message, seller));
             return record != null && IsTaskSuccessful(record.DownloadTask);
         }
 
@@ -436,15 +438,24 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static CacheRecord FindRecord(string messageKey, string url, string shopKey)
+        private static CacheRecord FindRecord(
+            string messageKey, string url, string shopKey, string seller, string buyer)
         {
             CacheRecord record;
             var key = BuildKey(shopKey, messageKey, url);
-            if (Records.TryGetValue(key, out record)) return record;
+            if (Records.TryGetValue(key, out record))
+            {
+                return record != null
+                    && string.Equals(record.ShopKey, shopKey, StringComparison.Ordinal)
+                    && SameConversation(seller, buyer, record.SellerNick, record.BuyerNick)
+                    ? record
+                    : null;
+            }
             if (string.IsNullOrWhiteSpace(url)) return null;
             return Records.Values
                 .Where(x => x != null
                     && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                    && SameConversation(seller, buyer, x.SellerNick, x.BuyerNick)
                     && string.Equals(x.Url, url, StringComparison.Ordinal))
                 .OrderByDescending(x => x.ObservedAt)
                 .FirstOrDefault();
