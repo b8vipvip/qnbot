@@ -839,6 +839,12 @@ namespace Bot.ChromeNs
                 messageText,
                 decision,
                 shopKey);
+            Log.Info("买家消息路由决策: seller=" + sellerNick
+                + ", buyer=" + buyerNick
+                + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                + ", kind=" + (visionDecision == null ? "null" : visionDecision.Kind.ToString())
+                + ", label=" + (visionDecision == null ? string.Empty : visionDecision.QuestionLabel)
+                + ", note=" + (visionDecision == null ? string.Empty : visionDecision.Note));
 
             if (!Params.Robot.CanUseRobotReal)
             {
