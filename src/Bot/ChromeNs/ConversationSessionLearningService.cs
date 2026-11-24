@@ -510,7 +510,7 @@ namespace Bot.ChromeNs
             Initialize();
             reportId = (reportId ?? string.Empty).Trim();
             shopKey = (shopKey ?? string.Empty).Trim();
-            if (reportId.Length == 0 || shopKey.Length == 0) return false;
+            if (reportId.Length == 0) return false;
             try
             {
                 lock (DbSync)

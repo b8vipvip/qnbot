@@ -98,9 +98,10 @@ namespace Bot.ChromeNs
         private static bool ProcessReport(ConversationSessionLearningReportView report)
         {
             if (report == null) return true;
-            // A report without ShopKey may be a legacy row awaiting identity migration.
-            // Keep it pending rather than consuming it or guessing by seller nickname.
-            if (string.IsNullOrWhiteSpace(report.ShopKey)) return false;
+            // Completed legacy reports are not eligible for ResumePending (it only
+            // resumes CompletedAtTicks == 0 rows). Without ShopKey they cannot be safely
+            // rebound, so terminally skip them rather than retrying forever or guessing.
+            if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;
             if (string.IsNullOrWhiteSpace(report.Seller)
                 || string.IsNullOrWhiteSpace(report.Buyer) || string.IsNullOrWhiteSpace(report.SuggestionsJson)) return true;
 

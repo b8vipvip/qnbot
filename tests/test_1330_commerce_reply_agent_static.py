@@ -237,7 +237,7 @@ def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
     assert "if (!ProcessReport(report)) continue;" in latest
     assert "TryMarkCommerceScenarioProcessed(" in latest
     assert "if (shop == null) return false;" in process
-    assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return false;" in process
+    assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;" in process
     assert "return true;" in process
 
 
@@ -264,3 +264,16 @@ def test_commerce_report_retention_never_deletes_pending_postprocessing_work():
     assert cleanup.count("coalesce(Status,'') != '学习完成'") == 3
     assert "commerceScenarioMarkerAdded" in service
     assert "set CommerceScenarioProcessedAtTicks = CompletedAtTicks where CompletedAtTicks > 0" in service
+
+
+
+def test_completed_legacy_report_without_shopkey_can_be_terminally_marked_without_guessing():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    bridge = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    marker = service[service.index("public static bool TryMarkCommerceScenarioProcessed"):service.index("public static List<ConversationSessionLearningReportView> GetReportsForShop")]
+    process = bridge[bridge.index("private static bool ProcessReport"):bridge.index("private static bool ApplyScenarioScope")]
+
+    assert "if (reportId.Length == 0) return false;" in marker
+    assert "report.ShopKey, shopKey, StringComparison.Ordinal" in marker
+    assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;" in process
+    assert "ResolveRuntimeBySellerNick(report.Seller)" not in process
