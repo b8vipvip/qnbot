@@ -47,6 +47,7 @@ namespace Bot.ChromeNs
         {
             EnsureScope(shopKey, seller);
             EnsureSchema();
+            EnsureDefaultKugouPreset(shopKey, seller);
             lock (Sync)
                 return (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
                     "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc", shopKey, seller)
@@ -202,6 +203,37 @@ namespace Bot.ChromeNs
             var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             if (shop == null || !string.Equals(shop.SellerNick, seller, StringComparison.Ordinal))
                 throw new InvalidOperationException("视觉理解规则的 ShopKey 与店铺身份不匹配。");
+        }
+
+        private static void EnsureDefaultKugouPreset(string shopKey, string seller)
+        {
+            lock (Sync)
+            {
+                var exists = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
+                    "where ShopKey = ? and Seller = ? and Name = ? limit 1",
+                    shopKey, seller, "手机端酷狗账号中心") ?? new List<object>())
+                    .OfType<VisualUnderstandingRuleEntity>().FirstOrDefault();
+                if (exists != null) return;
+                var now = DateTime.Now.Ticks;
+                var preset = new VisualUnderstandingRuleEntity
+                {
+                    EntityId = "builtin-kugou-account-center",
+                    ShopKey = shopKey,
+                    Seller = seller,
+                    Name = "手机端酷狗账号中心",
+                    AppName = "酷狗音乐",
+                    ScreenName = "账号中心",
+                    RequiredKeywords = "帐号中心\\n酷狗ID\\n编辑资料\\n帐号与绑定\\n我的会员",
+                    OptionalKeywords = "主页隐私设置\\n我的酷币\\n已购音乐\\n超级VIP",
+                    ExcludedKeywords = "登录页\\n验证码",
+                    FieldPatterns = "酷狗ID|酷狗ID\\\\s*[:：]?\\\\s*([A-Za-z0-9_-]{5,})\\n昵称|帐号中心\\\\s*[\\\\r\\\\n]+([^\\\\r\\\\n]+)\\\\s*[\\\\r\\\\n]+酷狗ID\\n会员状态|我的会员\\\\s*[\\\\r\\\\n]+(超级VIP)\\n会员到期|超级VIP\\\\s*(\\\\d{4}-\\\\d{2}-\\\\d{2}到期)",
+                    Description = "识别手机端酷狗音乐账号中心页面；提取酷狗ID、昵称、会员等级和到期日期。账号ID、昵称等字段按 OCR 原文保留，不做通用长数字脱敏。",
+                    Enabled = true,
+                    CreatedAtTicks = now,
+                    UpdatedAtTicks = now
+                };
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { preset });
+            }
         }
 
         private static void EnsureSchema()
