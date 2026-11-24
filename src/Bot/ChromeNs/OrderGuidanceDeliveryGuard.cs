@@ -168,8 +168,15 @@ namespace Bot.ChromeNs
             // Do not discard non-Created/Paid facts here. OrderPlacedAutoReplyService only sends on
             // Created/Paid, but the commerce context must still learn a later refund/close/shipped
             // status so an early paid snapshot cannot remain the semantic truth forever.
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired)
+                {
+                    Log.ErrorWithMaxCount("订单账本跨进程锁不可用，未写入未确认订单事实", 10);
+                    return;
+                }
+                _state = null; // Reload latest durable state under cross-process lock.
                 if (!EnsureLoaded()) return;
                 CleanupInternal();
                 var record = FindInternal(shopKey, snapshot.Seller, snapshot.Buyer, snapshot.OrderId);
@@ -182,7 +189,10 @@ namespace Bot.ChromeNs
                 {
                     record.ObservedAt = DateTime.Now;
                     if (snapshot.EventTime > record.EventTime) record.EventTime = snapshot.EventTime;
-                    MergeSnapshot(record.Snapshot, snapshot);
+                    if (record.Snapshot == null)
+                        record.Snapshot = CloneSnapshot(snapshot);
+                    else
+                        MergeSnapshot(record.Snapshot, snapshot);
                 }
                 SaveInternal();
             }
@@ -213,8 +223,12 @@ namespace Bot.ChromeNs
             shopKey = ResolveShopKey(seller, shopKey);
             if (shopKey.Length == 0) return result;
             maxCount = Math.Max(1, Math.Min(20, maxCount));
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired)
+                    throw new IOException("订单账本跨进程锁不可用；禁止将读取失败视为没有订单");
+                _state = null;
                 if (!EnsureLoaded())
                     throw new IOException("订单账本无法读取；调用方必须按缺少可信订单证据处理");
                 CleanupInternal();
@@ -242,8 +256,11 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
             shopKey = ResolveShopKey(seller, shopKey);
             if (shopKey.Length == 0) return false;
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired) return false;
+                _state = null;
                 if (!EnsureLoaded()) return false;
                 CleanupInternal();
                 var record = FindLatestInternal(shopKey, seller, buyer);
@@ -276,8 +293,15 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired)
+                {
+                    reason = "订单账本跨进程锁不可用，已阻止自动补发";
+                    return false;
+                }
+                _state = null;
                 if (!EnsureLoaded())
                 {
                     reason = "订单账本无法读取，已阻止自动补发";
@@ -324,8 +348,15 @@ namespace Bot.ChromeNs
                 return true;
             }
 
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired)
+                {
+                    reason = "订单账本跨进程锁不可用，已阻止发送";
+                    return true;
+                }
+                _state = null;
                 if (!EnsureLoaded())
                 {
                     reason = "订单账本无法读取，已阻止发送";
@@ -410,8 +441,15 @@ namespace Bot.ChromeNs
         public static void MarkDelivered(OrderPlacedReplyPlan plan, string deliveredBy)
         {
             if (plan == null || string.IsNullOrWhiteSpace(plan.OrderId)) return;
+            using (var ledgerLease = CrossProcessAtomicStateFile.Acquire(GetPath(), "order-guidance-ledger", 5000))
             lock (Sync)
             {
+                if (!ledgerLease.Acquired)
+                {
+                    Log.ErrorWithMaxCount("订单发送完成后获取跨进程账本锁失败；不能确认去重状态已持久化", 10);
+                    return;
+                }
+                _state = null;
                 if (!EnsureLoaded())
                 {
                     Log.ErrorWithMaxCount("订单发送成功后无法读取持久订单账本，保留原文件并等待恢复", 10);
