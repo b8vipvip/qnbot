@@ -130,7 +130,7 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     var timeline = ConversationContextStore.BuildTimelineText(
-                        task.SellerNick, task.BuyerNick, task.CombinedQuestion, 12);
+                        knowledgeSeller, task.BuyerNick, task.CombinedQuestion, 12);
                     var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
