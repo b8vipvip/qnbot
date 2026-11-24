@@ -374,7 +374,8 @@ namespace Bot.ChromeNs
 
             string relevanceReason;
             if (!ParallelReplyRelevanceGate.ShouldSend(
-                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                out relevanceReason, false, burst.ShopKey))
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
                 Log.Info("Knowledge Engine V2发送前被并发相关性门控抑制: buyer="
@@ -390,11 +391,31 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
 
+            Func<bool> preSendGuard = () =>
+            {
+                if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                {
+                    Log.Info("Knowledge Engine V2实际发送前检测到Bot开关关闭，取消旧直答: buyer="
+                        + burst.BuyerNick);
+                    return false;
+                }
+                string latestRelevanceReason;
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                    burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
+                    out latestRelevanceReason, false, burst.ShopKey);
+                if (!shouldSend)
+                    Log.Info("Knowledge Engine V2等待发送资源期间会话已变化，阻止迟到直答: buyer="
+                        + burst.BuyerNick + ", reason=" + latestRelevanceReason);
+                return shouldSend;
+            };
+
             bool sendOk;
             try
             {
                 sendOk = await qn.SendTextWithRetryAsync(
-                    burst.BuyerNick, answer, 1, lease.CancellationToken);
+                    burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
             }
             catch (OperationCanceledException)
             {
