@@ -1163,6 +1163,7 @@ namespace Bot.ChromeNs
             };
             var sendOk = await qn.SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
+            var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
             if (sendOk)
             {
                 ReplyDeduplicationService.RememberDelivered(
@@ -1170,6 +1171,10 @@ namespace Bot.ChromeNs
                 if (decision.Best != null && decision.Best.Card != null && decision.Best.Card.Entry != null)
                     KnowledgePolicyProfileService.RecordRouteSelection(decision.Best.Card.Entry, true);
                 lease.MarkCompleted("knowledge_memory_send_completed");
+            }
+            else if (sendCancelled)
+            {
+                lease.MarkCompleted("knowledge_memory_send_cancelled");
             }
             else
             {
@@ -1181,12 +1186,18 @@ namespace Bot.ChromeNs
                     sendOk,
                     sendOk
                         ? "已发送（Knowledge Memory本地直答，无AI调用）"
-                        : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                        : sendCancelled
+                            ? "未发送：人工接管或会话状态变化，已安全取消"
+                            : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
             }
             Log.Info("Knowledge Memory本地直答完成: buyer=" + burst.BuyerNick
-                + ", success=" + sendOk
+                + ", success=" + sendOk + ", cancelled=" + sendCancelled
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "Knowledge Memory发送前会话门禁取消", burst.ShopKey);
+            else
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
     }
 }
