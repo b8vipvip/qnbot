@@ -7,6 +7,39 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+
+def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or_memory():
+    service = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+
+    resolve = service[
+        service.index("public static KnowledgeV2Decision ResolveWithEvidence"):
+        service.index("private static KnowledgeV2Decision ResolveInternal")
+    ]
+    internal = service[
+        service.index("private static KnowledgeV2Decision ResolveInternal"):
+        service.index("private static bool IsEligibleProductionMatch")
+    ]
+
+    assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject)" in resolve
+    assert "if (message.Length == 0 && !hasEvidence)" in internal
+    assert "if (IsMediaPlaceholder(message)) message = string.Empty;" in internal
+    assert internal.index("UpdateWorkingMemory(shop.ShopKey, seller, buyer, query)") < internal.index(
+        "ExtractEntities(evidenceText)"
+    )
+    assert 'StartsWith("product:", StringComparison.OrdinalIgnoreCase)' in internal
+    assert "query.Entities = (query.Entities ?? new List<string>())" in internal
+    assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
+    assert "decision.Query = query;" in internal
+
+    assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
+    assert "task.CombinedQuestion" in ocr
+    assert "ocr.Text + Environment.NewLine + visualMatch.ContextText" in ocr
+    assert "visualMatch.AppName" in ocr
+    assert "BuildKnowledgeQuestion" not in ocr
+    assert "BuildTimelineText" not in ocr
+
+
 def test_legacy_ai_generated_learning_is_candidate_and_never_a_legacy_production_answer():
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
     authority = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")

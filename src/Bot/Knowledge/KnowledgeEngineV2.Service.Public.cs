@@ -75,7 +75,20 @@ namespace Bot.Knowledge
 
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)
         {
-            return ResolveInternal(seller, buyer, message, false);
+            return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty);
+        }
+
+        // Visual/OCR evidence enriches entity recall without becoming the buyer's question.
+        // Intent, predicate, exact aliases, high-risk checks and working memory remain
+        // derived only from the buyer's own message.
+        public static KnowledgeV2Decision ResolveWithEvidence(
+            string seller,
+            string buyer,
+            string message,
+            string evidenceText,
+            string evidenceSubject)
+        {
+            return ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject);
         }
 
         // Simulator-specific safety evaluation: retain every knowledge, conflict,
@@ -83,10 +96,16 @@ namespace Bot.Knowledge
         // Never modify settings or authorize an outbound buyer message here.
         internal static KnowledgeV2Decision ResolveSandbox(string seller, string buyer, string message)
         {
-            return ResolveInternal(seller, buyer, message, true);
+            return ResolveInternal(seller, buyer, message, true, string.Empty, string.Empty);
         }
 
-        private static KnowledgeV2Decision ResolveInternal(string seller, string buyer, string message, bool sandbox)
+        private static KnowledgeV2Decision ResolveInternal(
+            string seller,
+            string buyer,
+            string message,
+            bool sandbox,
+            string evidenceText,
+            string evidenceSubject)
         {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
@@ -98,7 +117,9 @@ namespace Bot.Knowledge
                 return decision;
             }
             message = (message ?? string.Empty).Trim();
-            if (message.Length == 0 || IsMediaPlaceholder(message))
+            var hasEvidence = !string.IsNullOrWhiteSpace(evidenceText);
+            if (IsMediaPlaceholder(message)) message = string.Empty;
+            if (message.Length == 0 && !hasEvidence)
             {
                 decision.Reason = "空消息或媒体消息不走文本知识引擎";
                 decision.TotalMs = total.ElapsedMilliseconds;
@@ -109,8 +130,32 @@ namespace Bot.Knowledge
             var shop = ResolveShopRequired(seller);
             var memory = GetWorkingMemory(shop.ShopKey, seller, buyer);
             var query = KnowledgeEngineV2Semantics.Parse(message, memory);
-            decision.Query = query;
+            // Persist only buyer-authored query semantics. OCR/menu labels must never
+            // become the next turn's working-memory intent, predicate or subject.
             UpdateWorkingMemory(shop.ShopKey, seller, buyer, query);
+            if (hasEvidence)
+            {
+                var evidenceEntities = KnowledgeEngineV2Semantics.ExtractEntities(evidenceText)
+                    .Where(x => !string.IsNullOrWhiteSpace(x)
+                        && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                var configuredSubject = (evidenceSubject ?? string.Empty).Trim();
+                if (configuredSubject.Contains("{") || configuredSubject.Contains("}"))
+                    configuredSubject = string.Empty;
+                if (configuredSubject.Length >= 2)
+                    evidenceEntities.Insert(0, configuredSubject);
+                query.Entities = (query.Entities ?? new List<string>())
+                    .Concat(evidenceEntities)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(10)
+                    .ToList();
+                if (configuredSubject.Length >= 2)
+                    query.Subject = string.IsNullOrWhiteSpace(query.Subject)
+                        ? configuredSubject
+                        : configuredSubject + "/" + query.Subject;
+            }
+            decision.Query = query;
             decision.ParseMs = parseSw.ElapsedMilliseconds;
 
             var snapshot = GetSnapshot(seller);

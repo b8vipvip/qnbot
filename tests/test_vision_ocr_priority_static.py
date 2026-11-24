@@ -158,7 +158,10 @@ def test_ocr_knowledge_lookup_uses_authoritative_shop_seller_and_image_alias_is_
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert "knowledgeSeller = shop == null ? string.Empty" in decision
-    assert "KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question)" in decision
+    assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in decision
+    assert "task.CombinedQuestion" in decision
+    assert "ocr.Text + Environment.NewLine + visualMatch.ContextText" in decision
+    assert "visualMatch.AppName" in decision
     assert "BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer)" in decision
     assert "var isVisionItem = item.VisionDecision != null" in burst
     assert "(!isVisionItem && !sellerMatchesShop)" in burst

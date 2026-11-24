@@ -68,10 +68,14 @@ def test_agent_keeps_generation_boundary_separate_from_raw_events():
     assert "state.Generation++" not in record_body
 
 
-def test_image_ocr_prewarms_knowledge_v2_and_retrieves_with_conversation_context():
+def test_image_ocr_prewarms_knowledge_v2_and_separates_buyer_query_from_visual_evidence():
     local = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     assert "PrepareForVision(task.ShopKey, knowledgeSeller)" in local
     assert "SnapshotWarmWaitMs = 12000" in local
     assert "await Task.Delay(100, cancellationToken)" in local
-    assert "ConversationContextStore.BuildTimelineText" in local
-    assert "最近客服与买家对话（用于理解图片提交原因）" in local
+    assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in local
+    assert "task.CombinedQuestion" in local
+    assert "ocr.Text + Environment.NewLine + visualMatch.ContextText" in local
+    assert "visualMatch.AppName" in local
+    assert "ConversationContextStore.BuildTimelineText" not in local
+    assert "BuildKnowledgeQuestion" not in local
