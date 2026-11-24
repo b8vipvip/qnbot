@@ -75,7 +75,7 @@ namespace Bot.ChromeNs
             if (next == null) return;
             var burst = lease == null ? null : lease.Burst;
             if (burst == null || burst.Items == null || burst.Items.Count == 0) { await next(lease); return; }
-            var conversationKey = Key(burst.SellerNick, burst.BuyerNick);
+            var conversationKey = Key(burst.ShopKey, burst.SellerNick, burst.BuyerNick);
             var vision = burst.LatestVisionItem;
             if (vision != null && vision.Message != null) { Remember(conversationKey, vision); await next(lease); return; }
             RecentVisionContext recent;
@@ -151,9 +151,40 @@ namespace Bot.ChromeNs
             var compact = Normalize(text);
             if (string.IsNullOrWhiteSpace(compact) || compact.Length > 36) return false;
             if (compact == "对吗" || compact == "是吗" || compact == "这个吗" || compact == "是这个吗" || compact == "是这个不" || compact == "就是这个吗" || compact == "是不是这个" || compact == "是不是这个吗" || compact == "这个对吗" || compact == "这张吗" || compact == "是这张吗" || compact == "这里吗" || compact == "是这里吗" || compact == "这样吗" || compact == "是这样吗" || compact == "这种能使用吗" || compact == "这种能用吗" || compact == "这类能使用吗" || compact == "这类能用吗") return true;
+            if (IsSequentialWorkflowFollowUp(compact)) return true;
             var hasReference = compact.Contains("这个") || compact.Contains("这种") || compact.Contains("这类") || compact.Contains("这款") || compact.Contains("这张") || compact.Contains("这里") || compact.Contains("这样") || compact.Contains("图里") || compact.Contains("图片里") || compact.Contains("上面") || compact.Contains("界面") || compact.Contains("页面") || compact.Contains("设备") || compact.Contains("软件");
             var asksConfirmation = compact.Contains("吗") || compact.Contains("么") || compact.Contains("是不是") || compact.Contains("对不对") || compact.Contains("可以") || compact.Contains("行不行") || compact.Contains("能用") || compact.Contains("能使用") || compact.Contains("支持");
             return hasReference && asksConfirmation;
+        }
+
+        private static bool IsSequentialWorkflowFollowUp(string compact)
+        {
+            if (Regex.IsMatch(compact, "(充值|到账|付款|支付|发货|退款|退货|手机号|电话号码|人工|客服|投诉|密码|验证码)"))
+                return false;
+
+            if (new[]
+            {
+                "然后怎么弄", "然后怎么办", "然后怎么做", "然后怎么操作", "然后怎么用", "然后呢",
+                "接下来怎么弄", "接下来怎么办", "接下来怎么做", "接下来怎么操作", "接下来怎么用", "接下来呢",
+                "下一步怎么弄", "下一步怎么办", "下一步怎么做", "下一步怎么操作", "下一步呢",
+                "之后怎么弄", "之后怎么办", "之后怎么做", "之后怎么操作", "之后呢",
+                "那怎么弄", "那怎么办", "那怎么做", "那怎么操作", "那怎么用", "那然后呢",
+                "接着怎么弄", "接着怎么办", "接着怎么做", "接着怎么操作", "接着呢"
+            }.Contains(compact, StringComparer.Ordinal))
+                return true;
+
+            var hasTransition = compact.StartsWith("然后", StringComparison.Ordinal)
+                || compact.StartsWith("接下来", StringComparison.Ordinal)
+                || compact.StartsWith("下一步", StringComparison.Ordinal)
+                || compact.StartsWith("之后", StringComparison.Ordinal)
+                || compact.StartsWith("后面", StringComparison.Ordinal)
+                || compact.StartsWith("那", StringComparison.Ordinal)
+                || compact.StartsWith("接着", StringComparison.Ordinal);
+            var asksNext = compact.Contains("怎么") || compact.Contains("如何")
+                || compact.Contains("怎么办") || compact.Contains("呢")
+                || compact.Contains("弄") || compact.Contains("操作")
+                || compact.Contains("使用") || compact.Contains("用");
+            return hasTransition && asksNext;
         }
 
         internal static bool IsLikelyImageCaption(string text)
@@ -179,6 +210,7 @@ namespace Bot.ChromeNs
         {
             return new BuyerMessageBurstItem
             {
+                ShopKey = source.ShopKey,
                 SellerNick = source.SellerNick,
                 BuyerNick = source.BuyerNick,
                 MessageKey = source.MessageKey,
@@ -210,9 +242,11 @@ namespace Bot.ChromeNs
             return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
-        private static string Key(string seller, string buyer)
+        private static string Key(string shopKey, string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+            return (shopKey ?? string.Empty).Trim()
+                + "#" + (seller ?? string.Empty).Trim()
+                + "#" + (buyer ?? string.Empty).Trim();
         }
     }
 }
