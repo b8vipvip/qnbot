@@ -460,9 +460,8 @@ namespace Bot.ChromeNs
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(item.ShopKey);
-                if (shop == null
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
-                        (item.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+                var canonicalSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+                if (shop == null || canonicalSeller.Length == 0)
                 {
                     reason = "无法通过权威ShopKey确认商品话术所属店铺";
                     return true;
@@ -471,7 +470,7 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     var turns = ConversationContextStore.GetRecentTurns(
-                        item.SellerNick, item.BuyerNick, question, 24);
+                        canonicalSeller, item.BuyerNick, question, 24);
                     var newerBuyer = turns.Any(x => x != null
                         && x.Role == "user"
                         && !x.Withdrawn
@@ -502,7 +501,7 @@ namespace Bot.ChromeNs
                     // conversation timeline has caught up. Do not ignore it merely because
                     // it was marked stale against a newer buyer generation.
                     var snapshot = new BuyerSessionAgent().GetSnapshot(
-                        item.SellerNick, item.BuyerNick, item.ShopKey);
+                        canonicalSeller, item.BuyerNick, item.ShopKey);
                     var newerHuman = snapshot != null
                         && snapshot.RecentEvents != null
                         && snapshot.RecentEvents.Any(x => x != null
