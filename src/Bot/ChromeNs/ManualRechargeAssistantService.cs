@@ -673,22 +673,6 @@ namespace Bot.ChromeNs
             return value.Length <= max ? value : value.Substring(0, max);
         }
 
-        private static string MaskName(string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            if (value.Length == 0) return string.Empty;
-            if (value.Length == 1) return "*";
-            return value.Substring(0, 1) + new string('*', Math.Min(4, value.Length - 1));
-        }
-
-        private static string MaskId(string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            if (value.Length == 0) return string.Empty;
-            if (value.Length <= 4) return new string('*', value.Length);
-            return value.Substring(0, 2) + "***" + value.Substring(value.Length - 2);
-        }
-
         private static string OrderSuffix(string value)
         {
             value = (value ?? string.Empty).Trim();
