@@ -211,3 +211,36 @@ def test_resolved_browser_image_url_does_not_mutate_shared_cache_record():
     assert "record.Url = payload.resolvedUrl" not in browser
     assert "var originalUrl = record.Url" not in browser
 
+def test_withdrawal_tombstones_are_exact_message_and_conversation_scoped():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    withdrawn = cache[
+        cache.index("public static bool IsWithdrawn("):
+        cache.index("internal static bool IsMessageKeyWithdrawn")
+    ]
+    find = cache[
+        cache.index("private static CacheRecord FindRecord("):
+        cache.index("private static async Task<CacheDownloadResult> DownloadAndPersistAsync")
+    ]
+
+    assert "return record != null && record.Withdrawn;" in withdrawn
+    assert "return Records.Values" not in withdrawn
+    assert "FindRecord(" in withdrawn
+    assert "string seller, string buyer" in find
+    assert "SameConversation(seller, buyer, record.SellerNick, record.BuyerNick)" in find
+    assert "SameConversation(seller, buyer, x.SellerNick, x.BuyerNick)" in find
+    assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in find
+
+
+def test_delayed_withdrawal_notice_cannot_mark_an_image_that_arrived_after_the_notice():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    method = cache[
+        cache.index("public static void MarkLatestBuyerImageWithdrawn"):
+        cache.index("public static async Task<VisionImageResult> ResolveAsync")
+    ]
+
+    assert "var noticeAt = GetObservedAt(notice);" in method
+    assert "var cutoff = noticeAt.AddMinutes(-5);" in method
+    assert "x.ObservedAt <= noticeAt.AddSeconds(2)" in method
+    assert "SameConversation(seller, buyer, x.SellerNick, x.BuyerNick)" in method
+    assert "ThenBy(x => x.MessageKey, StringComparer.Ordinal)" in method
+
