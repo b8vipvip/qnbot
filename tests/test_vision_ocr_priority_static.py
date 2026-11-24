@@ -125,7 +125,7 @@ def test_image_messages_are_not_silently_skipped_by_ocr_preflight():
     assert "var shopScopeUsable = HasAuthoritativeShopScope(shopKey)" in decision
     assert "if (!localUsable && !externalUsable)" in decision
     assert "仍进入视觉处理链路" in decision
-    assert "由实际OCR请求记录连接失败" in decision
+    assert "由实际OCR处理阶段记录连接失败" in decision
     helper = decision.split("private static bool CanUseServerOcr", 1)[1].split(
         "private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints", 1
     )[0]
