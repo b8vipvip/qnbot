@@ -240,6 +240,7 @@ namespace Bot.Knowledge
             var items = new[]
             {
                 Nav("知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.All)),
+                Nav("视觉理解", () => new KnowledgeV2VisualUnderstandingPage(_seller, _shopKey)),
                 Nav("商品知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Product)),
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
