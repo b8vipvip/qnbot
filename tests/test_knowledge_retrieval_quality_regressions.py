@@ -360,3 +360,19 @@ def test_current_image_product_id_is_not_dropped_by_the_ten_entity_retrieval_bou
     assert ".Concat(queryEntities)" in internal
     assert ".Take(10)" in internal
 
+def test_knowledge_v2_and_legacy_memory_direct_sends_recheck_shop_scoped_relevance_at_last_mile():
+    v2 = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+
+    for source, method_name, send_anchor in [
+        (v2, "Knowledge Engine V2", "burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard"),
+        (memory, "Knowledge Memory", "burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard"),
+    ]:
+        assert "out relevanceReason, false, burst.ShopKey" in source
+        assert "Func<bool> preSendGuard = () =>" in source
+        assert "lease.CancellationToken.IsCancellationRequested" in source
+        assert "Params.Robot.CanUseRobotReal" in source
+        assert "Params.Robot.GetIsAutoReply()" in source
+        assert "out latestRelevanceReason, false, burst.ShopKey" in source
+        assert send_anchor in source
+
