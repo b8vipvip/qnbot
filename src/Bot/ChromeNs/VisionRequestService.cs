@@ -97,7 +97,7 @@ namespace Bot.ChromeNs
                 : task.CombinedQuestion.Trim();
             var timeline = BuildScopedTimelineText(task, currentQuestion, 16);
             var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
-                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick)
+                + ShopReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick)
                 + (knowledgeV2ContextAddon ?? string.Empty);
             if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
             {
@@ -210,7 +210,7 @@ namespace Bot.ChromeNs
 
                             string verifiedReply;
                             string policyReason;
-                            if (KugouReceptionPolicy.TryResolveVisual(
+                            if (ShopReceptionPolicy.TryResolveVisual(
                                 task.SellerNick, task.BuyerNick, currentQuestion,
                                 result.VisualSummary, result.LocalOcrText,
                                 out verifiedReply, out policyReason))
