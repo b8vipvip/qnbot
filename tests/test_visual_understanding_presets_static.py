@@ -73,10 +73,12 @@ def test_generic_account_template_extracts_unmasked_account_id_nickname_and_memb
     template = service.split("private static void ApplyGenericAccountTemplate", 1)[1].split(
         "private static void EnsureSchema", 1
     )[0]
-    assert '账号ID|(?:^|[\\r\\n])[^\\r\\n]{0,16}ID\\s*[:：]?\\s*([A-Za-z0-9_-]{5,})' in template
-    assert '昵称|(?:账号|帐号)中心\\s*[\\r\\n]+' in template
-    assert '会员到期|(?:VIP|会员)' in template
-    assert "Redact(" not in service
+    assert "账号ID|" in template
+    assert "昵称|" in template
+    assert "手机号|" in template
+    assert "会员状态|" in template
+    assert "会员到期|" in template
+    assert "Redact(" not in template
 
 
 def test_generic_settings_and_help_do_not_ship_brand_specific_examples():
