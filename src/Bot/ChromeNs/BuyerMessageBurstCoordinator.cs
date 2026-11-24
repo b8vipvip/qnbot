@@ -572,8 +572,28 @@ namespace Bot.ChromeNs
                     }
                 }
                 cancellationToken.ThrowIfCancellationRequested();
+                // Seller-human replies are observational and do not cancel the buyer generation.
+                // Fixed pre-merge replies therefore need the same last-mile relevance/takeover
+                // gate as streamed text replies, including every physical retry inside QN.
+                Func<bool> preSendGuard = () =>
+                {
+                    string relevanceReason;
+                    var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.DisplayText,
+                        detectedAt,
+                        out relevanceReason,
+                        false,
+                        item.ShopKey);
+                    if (!shouldSend)
+                        Log.Info(source + "固定回复最终发送门禁阻止旧答案: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", reason=" + relevanceReason);
+                    return shouldSend;
+                };
                 var ok = await qn.SendTextWithRetryAsync(
-                    item.BuyerNick, answer, 3, cancellationToken).ConfigureAwait(false);
+                    item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
                 if (ok)
                     ReplyDeduplicationService.RememberDelivered(item.SellerNick, item.BuyerNick, answer);
                 if (ctl != null)
