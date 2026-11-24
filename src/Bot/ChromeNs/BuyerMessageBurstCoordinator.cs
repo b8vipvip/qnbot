@@ -358,15 +358,12 @@ namespace Bot.ChromeNs
                 DateTime until;
                 if (!OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) || until <= DateTime.Now)
                 {
-                    var ok = await SendFixedAsync(
+                    var outcome = await SendFixedAsync(
                         qn, item, offHoursReply, "下班自动回复", cancellationToken).ConfigureAwait(false);
-                    OffHoursDeliveredUntil[buyerKey] = ok
+                    OffHoursDeliveredUntil[buyerKey] = outcome == CanonicalPreMergeOutcome.Consumed
                         ? DateTime.Now.AddMinutes(OffHoursRepeatMinutes)
                         : DateTime.Now.AddSeconds(15);
-                    return ok ? CanonicalPreMergeOutcome.Consumed
-                        : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
-                            ? CanonicalPreMergeOutcome.Cancelled
-                            : CanonicalPreMergeOutcome.Failed;
+                    return outcome;
                 }
                 return CanonicalPreMergeOutcome.Consumed;
             }
@@ -387,14 +384,11 @@ namespace Bot.ChromeNs
                     return CanonicalPreMergeOutcome.Consumed;
                 }
 
-                var productOk = await SendFixedAsync(
+                var productOutcome = await SendFixedAsync(
                     qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey), cancellationToken).ConfigureAwait(false);
                 Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick + ", success=" + productOk + ", aiCalled=false");
-                return productOk ? CanonicalPreMergeOutcome.Consumed
-                    : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
-                        ? CanonicalPreMergeOutcome.Cancelled
-                        : CanonicalPreMergeOutcome.Failed;
+                    + ", buyer=" + item.BuyerNick + ", outcome=" + productOutcome + ", aiCalled=false");
+                return productOutcome;
             }
 
             string firstReply;
@@ -402,14 +396,14 @@ namespace Bot.ChromeNs
                 item.SellerNick, item.BuyerNick, question, out firstReply, item.ShopKey);
             if (firstReserved)
             {
-                var firstOk = await SendFixedAsync(
+                var firstOutcome = await SendFixedAsync(
                     qn,
                     item,
                     firstReply,
                     "首条咨询固定回复",
                     cancellationToken,
                     FirstInquiryFixedReplyService.GetDelaySeconds(item.SellerNick, item.ShopKey)).ConfigureAwait(false);
-                if (firstOk)
+                if (firstOutcome == CanonicalPreMergeOutcome.Consumed)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick, item.ShopKey);
                 }
@@ -419,10 +413,7 @@ namespace Bot.ChromeNs
                         item.SellerNick,
                         item.BuyerNick,
                         qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason(), item.ShopKey);
-                    return cancellationToken.IsCancellationRequested
-                        || (qn.Rpa != null && qn.Rpa.LastSendWasCancelled)
-                        ? CanonicalPreMergeOutcome.Cancelled
-                        : CanonicalPreMergeOutcome.Failed;
+                    return firstOutcome;
                 }
             }
 
@@ -442,15 +433,12 @@ namespace Bot.ChromeNs
                                 + item.SellerNick + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase);
                             return CanonicalPreMergeOutcome.Continue;
                         }
-                        var localOk = await SendFixedAsync(
+                        var localOutcome = await SendFixedAsync(
                             qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
                         Log.Info("本地短消息精确命中: seller=" + item.SellerNick
                             + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
-                            + ", success=" + localOk + ", aiCalled=false");
-                        return localOk ? CanonicalPreMergeOutcome.Consumed
-                            : qn.Rpa != null && qn.Rpa.LastSendWasCancelled
-                                ? CanonicalPreMergeOutcome.Cancelled
-                                : CanonicalPreMergeOutcome.Failed;
+                            + ", outcome=" + localOutcome + ", aiCalled=false");
+                        return localOutcome;
                     }
                 }
             }
@@ -526,7 +514,7 @@ namespace Bot.ChromeNs
                 && (compact.Contains("光临") || compact.Contains("本店"));
         }
 
-        private static async Task<bool> SendFixedAsync(
+        private static async Task<CanonicalPreMergeOutcome> SendFixedAsync(
             QN qn,
             BuyerMessageBurstItem item,
             string answer,
@@ -535,16 +523,17 @@ namespace Bot.ChromeNs
             int delaySeconds = 0)
         {
             answer = BotOutboundMessageFormatter.EnsureAiMarker((answer ?? string.Empty).Trim());
-            if (string.IsNullOrWhiteSpace(answer)) return false;
+            if (string.IsNullOrWhiteSpace(answer)) return CanonicalPreMergeOutcome.Failed;
             string policyReason;
             if (ShopReceptionPolicy.BlockOutgoing(
                 item.SellerNick, item.BuyerNick, item.DisplayText, answer, out policyReason))
             {
                 Log.Info("接待规则阻止固定回复：" + policyReason);
-                return true; // consumed intentionally; do not retry an unsafe fixed answer
+                return CanonicalPreMergeOutcome.Consumed; // consumed intentionally; do not retry an unsafe fixed answer
             }
             cancellationToken.ThrowIfCancellationRequested();
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
+            var sendCancelled = false;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick, item.BuyerNick, item.DisplayText, detectedAt, item.ShopKey);
             try
@@ -568,7 +557,8 @@ namespace Bot.ChromeNs
                         || qn.CDP == null || qn.CDP.IsShopIdentityRetired)
                     {
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间Bot开关关闭或原店铺会话失效");
-                        return false;
+                        sendCancelled = true;
+                        return CanonicalPreMergeOutcome.Cancelled;
                     }
                     ShopContext verifiedShop;
                     try { verifiedShop = ShopContextLocator.ResolveRuntimeBySeller(qn); }
@@ -578,7 +568,8 @@ namespace Bot.ChromeNs
                         || !string.Equals(verifiedShop.SellerNick, item.SellerNick, StringComparison.Ordinal))
                     {
                         if (ctl != null) ctl.SetSendResult(false, "未发送：延迟期间店铺身份发生变化");
-                        return false;
+                        sendCancelled = true;
+                        return CanonicalPreMergeOutcome.Cancelled;
                     }
                 }
                 cancellationToken.ThrowIfCancellationRequested();
@@ -609,7 +600,7 @@ namespace Bot.ChromeNs
                 };
                 var ok = await qn.SendTextWithRetryAsync(
                     item.BuyerNick, answer, 3, cancellationToken, preSendGuard).ConfigureAwait(false);
-                var sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+                sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
                 if (ok)
                     ReplyDeduplicationService.RememberDelivered(
                         item.SellerNick, item.BuyerNick, answer, item.ShopKey);
@@ -621,23 +612,28 @@ namespace Bot.ChromeNs
                             : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
                 Log.Info(source + "前置真实发送完成: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + ok + ", cancelled=" + sendCancelled);
-                return ok;
+                return ok
+                    ? CanonicalPreMergeOutcome.Consumed
+                    : sendCancelled
+                        ? CanonicalPreMergeOutcome.Cancelled
+                        : CanonicalPreMergeOutcome.Failed;
             }
             catch (OperationCanceledException)
             {
+                sendCancelled = true;
                 if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
-                return false;
+                return CanonicalPreMergeOutcome.Cancelled;
             }
             catch (Exception ex)
             {
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(source + "前置发送异常: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", error=" + ex.Message, 20);
-                return false;
+                return CanonicalPreMergeOutcome.Failed;
             }
             finally
             {
-                if (qn.Rpa != null && qn.Rpa.LastSendWasCancelled)
+                if (sendCancelled)
                     ResponseProgressTracker.Cancel(
                         item.SellerNick, item.BuyerNick, "固定回复发送前会话门禁取消", item.ShopKey);
                 else
