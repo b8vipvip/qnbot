@@ -56,3 +56,10 @@ def test_product_link_preset_is_suppressed_after_newer_buyer_or_human_turn():
     assert "商品链接预设已被后续买家消息或人工客服指令取代" in canonical
     assert "BuyerSessionEventKind.SellerHumanReply" in canonical
     assert "买家已发送更新消息" in canonical
+
+
+def test_product_link_supersede_check_is_shop_scoped():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    helper = source[source.index("private static bool HasNewerSubstantiveConversationTurn"):source.index("private static bool IsNonSubstantiveSellerGreeting")]
+    assert "ResolveRuntimeByShopKey(item.ShopKey)" in helper
+    assert "ShopSettingsScope.Enter(shop, false)" in helper
