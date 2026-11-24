@@ -92,7 +92,7 @@ namespace Bot.ChromeNs
 
             using (ShopSettingsScope.Enter(shop))
             {
-                var turns = ConversationContextStore.GetRecentTurns(report.Seller, report.Buyer, string.Empty, 24);
+                var turns = ConversationContextStore.GetRecentTurns(report.Seller, report.Buyer, report.ShopKey, 24);
                 var state = ConversationStateService.Build(report.Seller, report.Buyer, string.Empty, turns);
                 var commerce = state.CommerceContext
                     ?? CommerceContextService.Build(report.Seller, report.Buyer, string.Empty, turns, state);
