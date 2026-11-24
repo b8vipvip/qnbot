@@ -126,7 +126,7 @@ def test_ocr_text_fallback_preserves_authoritative_shop_browser_session():
     service = read('src/Bot/ChromeNs/VisionRequestService.cs')
     fallback = service[service.index('private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync'):]
     assert 'task.ShopKey, task.BrowserClient' in fallback
-    assert 'LocalOcrService.TryGetCachedRecognition(image.LocalCachePath)' in fallback
+    assert 'LocalOcrService.TryGetCachedRecognition(image.LocalCachePath, task.ShopKey, task.BuyerNick)' in fallback
 
 
 def test_server_ocr_upload_requires_complete_client_image_cache_and_posts_binary():
