@@ -164,7 +164,7 @@ namespace Bot.ChromeNs
             foreach (var rule in Load(shopKey, seller).Where(x => x != null && x.Enabled))
             {
                 foreach (var candidate in (rule.AppName ?? string.Empty)
-                    .Split(new[] { '\\r', '\\n', ',', '，', ';', '；', '|' },
+                    .Split(new[] { '\r', '\n', ',', '，', ';', '；', '|' },
                         StringSplitOptions.RemoveEmptyEntries))
                 {
                     var name = (candidate ?? string.Empty).Trim();
@@ -189,7 +189,7 @@ namespace Bot.ChromeNs
 
         private static string NormalizeApplicationText(string value)
         {
-            return Regex.Replace((value ?? string.Empty).Trim(), @"\\s+", string.Empty)
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", string.Empty)
                 .ToLowerInvariant();
         }
 
