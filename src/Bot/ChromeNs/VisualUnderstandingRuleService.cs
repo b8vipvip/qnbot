@@ -134,6 +134,14 @@ namespace Bot.ChromeNs
                 },
                 new VisualUnderstandingFieldRule
                 {
+                    Key = "phone",
+                    Label = "绑定手机号",
+                    Pattern = @"(?:手机号|手机号码|绑定手机)\s*[:：]?\s*(1[3-9]\d{9})",
+                    GroupIndex = 1,
+                    Required = false
+                },
+                new VisualUnderstandingFieldRule
+                {
                     Key = "membership_status",
                     Label = "会员状态",
                     Pattern = @"我的会员[\s\S]{0,100}?(超级VIP|VIP|普通会员|会员已过期|非会员)",
