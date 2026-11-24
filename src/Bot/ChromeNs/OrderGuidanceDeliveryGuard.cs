@@ -537,7 +537,7 @@ namespace Bot.ChromeNs
             out string matched)
         {
             matched = string.Empty;
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24, shopKey);
             foreach (var turn in turns
                 .Where(x => x != null && x.Role == "assistant" && !x.Withdrawn)
                 .OrderByDescending(x => x.Timestamp))
