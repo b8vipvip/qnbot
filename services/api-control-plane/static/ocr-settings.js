@@ -133,7 +133,7 @@ async function resetOcrSettings(){
 }
 
 
-const ocrTaskState={page:1,pageSize:20,status:"all",generation:0};
+const ocrTaskState={page:1,pageSize:20,status:"all",generation:0,detailTaskId:"",detailData:null};
 const OCR_TASK_LABELS={
   queued:"排队中",running:"识别中",success:"成功",timeout:"超时",
   failed:"失败",rejected:"已拒绝",interrupted:"已中断"
@@ -172,7 +172,7 @@ function ocrRenderTaskRows(items){
   if(!items.length){
     const tr=document.createElement("tr");
     const td=document.createElement("td");
-    td.colSpan=9;
+    td.colSpan=10;
     td.className="ocr-task-empty";
     td.textContent="当前筛选条件下没有 OCR 任务";
     tr.appendChild(td);tbody.appendChild(tr);
@@ -194,9 +194,126 @@ function ocrRenderTaskRows(items){
       `${ocrSafeNumber(task.text_chars)} 字 / ${(ocrSafeNumber(task.confidence)*100).toFixed(1)}%`:"-");
     ocrTaskCell(tr,task.http_status?String(task.http_status):"-");
     ocrTaskCell(tr,OCR_TASK_ERRORS[task.error_code]||task.error_code||"-");
+    const actions=document.createElement("td");
+    actions.className="ocr-task-actions";
+    const view=document.createElement("button");
+    view.type="button";
+    view.className="secondary";
+    view.textContent="查看";
+    view.addEventListener("click",()=>viewOcrTask(task.task_id));
+    const exportButton=document.createElement("button");
+    exportButton.type="button";
+    exportButton.className="secondary";
+    exportButton.textContent="导出";
+    exportButton.addEventListener("click",()=>exportOcrTask(task.task_id));
+    actions.append(view,exportButton);
+    tr.appendChild(actions);
     tbody.appendChild(tr);
   });
 }
+function ocrTaskDetailSummaryCell(container,label,value){
+  const card=document.createElement("div");
+  const caption=document.createElement("span");
+  caption.textContent=label;
+  const strong=document.createElement("strong");
+  strong.textContent=String(value??"-");
+  card.append(caption,strong);
+  container.appendChild(card);
+}
+function ocrRenderTaskDetail(data){
+  const task=data&&data.task?data.task:{};
+  ocrTaskState.detailData=data||null;
+  ocrEl("ocrTaskDetailTitle").textContent="OCR 任务详情";
+  ocrEl("ocrTaskDetailSubtitle").textContent=task.task_id||"未知任务";
+  const summary=ocrEl("ocrTaskDetailSummary");
+  summary.replaceChildren();
+  ocrTaskDetailSummaryCell(summary,"开始时间",ocrTaskDate(task.started_at));
+  ocrTaskDetailSummaryCell(summary,"结束时间",ocrTaskDate(task.finished_at));
+  ocrTaskDetailSummaryCell(summary,"状态",OCR_TASK_LABELS[task.status]||task.status||"-");
+  ocrTaskDetailSummaryCell(summary,"处理阶段",OCR_TASK_PHASES[task.phase]||task.phase||"-");
+  ocrTaskDetailSummaryCell(summary,"识别引擎",task.engine||"-");
+  ocrTaskDetailSummaryCell(summary,"HTTP 响应",task.http_status||"-");
+  ocrTaskDetailSummaryCell(summary,"图片大小",(ocrSafeNumber(task.image_bytes)/1024).toFixed(1)+" KB");
+  ocrTaskDetailSummaryCell(summary,"SHA-256 前缀",task.image_hash_prefix||"-");
+  ocrTaskDetailSummaryCell(summary,"排队 / 推理 / 总耗时",ocrSafeNumber(task.queue_ms)+" / "+ocrSafeNumber(task.inference_ms)+" / "+ocrSafeNumber(task.elapsed_ms)+" ms");
+  ocrTaskDetailSummaryCell(summary,"识别字数 / 置信度",ocrSafeNumber(task.text_chars)+" 字 / "+(ocrSafeNumber(task.confidence)*100).toFixed(1)+"%");
+  ocrTaskDetailSummaryCell(summary,"原因代码",OCR_TASK_ERRORS[task.error_code]||task.error_code||"-");
+
+  const eventList=ocrEl("ocrTaskDetailEvents");
+  eventList.replaceChildren();
+  const events=Array.isArray(data&&data.events)?data.events:[];
+  if(!events.length){
+    const empty=document.createElement("li");
+    empty.textContent="没有保存处理事件";
+    eventList.appendChild(empty);
+  }else{
+    events.forEach(event=>{
+      const li=document.createElement("li");
+      const title=document.createElement("strong");
+      title.textContent=ocrTaskDate(event.created_at)+" · "+(OCR_TASK_PHASES[event.stage]||event.stage||"-")+" · "+(OCR_TASK_LABELS[event.status]||event.status||"-");
+      const message=document.createElement("small");
+      message.textContent=event.message||"-";
+      li.append(title,message);
+      const metadata=event.metadata&&Object.keys(event.metadata).length?document.createElement("pre"):null;
+      if(metadata)metadata.textContent=JSON.stringify(event.metadata,null,2);
+      if(metadata)li.appendChild(metadata);
+      eventList.appendChild(li);
+    });
+  }
+  const resultText=task.result_text||"没有可用的 OCR 识别文本（任务可能失败、超时或识别结果为空）";
+  ocrEl("ocrTaskDetailResult").textContent=resultText;
+  ocrEl("ocrTaskDetailExport").disabled=!task.task_id;
+}
+async function viewOcrTask(taskId){
+  if(!taskId)return;
+  ocrTaskState.detailTaskId=taskId;
+  ocrTaskState.detailData=null;
+  const dialog=ocrEl("ocrTaskDetailDialog");
+  ocrEl("ocrTaskDetailSubtitle").textContent="正在读取任务详情…";
+  ocrEl("ocrTaskDetailSummary").replaceChildren();
+  ocrEl("ocrTaskDetailEvents").replaceChildren();
+  ocrEl("ocrTaskDetailResult").textContent="正在读取 OCR 结果…";
+  ocrEl("ocrTaskDetailExport").disabled=true;
+  if(!dialog.open)dialog.showModal();
+  try{
+    const data=await ocrApi("/api/admin/ocr/tasks/"+encodeURIComponent(taskId));
+    if(ocrTaskState.detailTaskId!==taskId)return;
+    ocrRenderTaskDetail(data);
+  }catch(err){
+    if(ocrTaskState.detailTaskId===taskId){
+      ocrEl("ocrTaskDetailSubtitle").textContent=err.message||String(err);
+      ocrEl("ocrTaskDetailResult").textContent="读取任务详情失败";
+    }
+  }
+}
+async function exportOcrTask(taskId){
+  if(!taskId)return;
+  const button=ocrEl("ocrTaskDetailExport");
+  if(button)button.disabled=true;
+  try{
+    const data=await ocrApi("/api/admin/ocr/tasks/"+encodeURIComponent(taskId));
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const anchor=document.createElement("a");
+    anchor.href=url;
+    anchor.download="ocr-task-"+taskId+".json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(err){
+    const error=ocrEl("ocrTaskError");
+    error.textContent=err.message||String(err);
+    error.className="ocr-result bad";
+  }finally{
+    if(button&&ocrTaskState.detailData)button.disabled=false;
+  }
+}
+ocrEl("ocrTaskDetailClose").addEventListener("click",()=>ocrEl("ocrTaskDetailDialog").close());
+ocrEl("ocrTaskDetailExport").addEventListener("click",()=>{
+  if(ocrTaskState.detailTaskId)exportOcrTask(ocrTaskState.detailTaskId);
+});
+
 async function loadOcrTasks(){
   const current=++ocrTaskState.generation;
   const refresh=ocrEl("ocrTaskRefreshBtn");
