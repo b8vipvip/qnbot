@@ -47,7 +47,7 @@ namespace Bot.ChromeNs
         {
             EnsureScope(shopKey, seller);
             EnsureSchema();
-            EnsureDefaultKugouPreset(shopKey, seller);
+            EnsureDefaultMobileAccountTemplate(shopKey, seller);
             lock (Sync)
                 return (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
                     "where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc", shopKey, seller)
@@ -98,8 +98,8 @@ namespace Bot.ChromeNs
                     (id ?? string.Empty).Trim(), shopKey, seller) ?? new List<object>())
                     .OfType<VisualUnderstandingRuleEntity>().ToList();
                 if (rows.Count == 0) return false;
-                // Keep the built-in preset as a disabled row so it is not silently
-                // recreated on the next page refresh. Users can re-enable it explicitly.
+                // Keep the generic template as a disabled row so it is not silently
+                // recreated after the operator intentionally removes it.
                 rows[0].Enabled = false;
                 rows[0].UpdatedAtTicks = DateTime.Now.Ticks;
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { rows[0] });
@@ -171,9 +171,15 @@ namespace Bot.ChromeNs
 
         private static string BuildContext(VisualUnderstandingRuleEntity rule, Dictionary<string, string> fields)
         {
+            var appName = string.Equals(rule.AppName, "{应用名称}", StringComparison.Ordinal)
+                ? "应用名称未限定，由图片内容识别"
+                : (rule.AppName ?? string.Empty).Trim();
+            var screenName = string.Equals(rule.ScreenName, "{页面名称}", StringComparison.Ordinal)
+                ? "页面名称未限定，由图片内容识别"
+                : (rule.ScreenName ?? string.Empty).Trim();
             var lines = new List<string>
             {
-                "【视觉理解命中】" + rule.AppName + " / " + rule.ScreenName,
+                "【视觉理解命中】" + appName + " / " + screenName,
                 "页面判定：" + rule.Description
             };
             foreach (var field in fields) lines.Add(field.Key + "：" + field.Value);
@@ -208,38 +214,64 @@ namespace Bot.ChromeNs
                 throw new InvalidOperationException("视觉理解规则的 ShopKey 与店铺身份不匹配。");
         }
 
-        private static void EnsureDefaultKugouPreset(string shopKey, string seller)
+        private static void EnsureDefaultMobileAccountTemplate(string shopKey, string seller)
         {
             lock (Sync)
             {
-                var exists = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
-                    "where ShopKey = ? and Seller = ? and Name = ? limit 1",
-                    shopKey, seller, "手机端酷狗账号中心") ?? new List<object>())
-                    .OfType<VisualUnderstandingRuleEntity>().FirstOrDefault();
-                if (exists != null) return;
+                var rules = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
+                    "where ShopKey = ? and Seller = ?", shopKey, seller) ?? new List<object>())
+                    .OfType<VisualUnderstandingRuleEntity>().ToList();
+
+                // One-time conversion of the old automatically seeded sample. Only the
+                // exact built-in row is rewritten; operator-created rules remain untouched.
+                var legacy = rules.FirstOrDefault(x =>
+                    string.Equals(x.Name, "手机端酷狗账号中心", StringComparison.Ordinal)
+                    && string.Equals(x.AppName, "酷狗音乐", StringComparison.Ordinal));
+                if (legacy != null)
+                {
+                    ApplyGenericAccountTemplate(legacy);
+                    legacy.UpdatedAtTicks = DateTime.Now.Ticks;
+                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { legacy });
+                    rules = (DbHelper.Db.Select(typeof(VisualUnderstandingRuleEntity),
+                        "where ShopKey = ? and Seller = ?", shopKey, seller) ?? new List<object>())
+                        .OfType<VisualUnderstandingRuleEntity>().ToList();
+                }
+
+                if (rules.Any(x => string.Equals(x.Name, "移动端账号中心（通用模板）", StringComparison.Ordinal)))
+                    return;
+
                 var now = DateTime.Now.Ticks;
-                var preset = new VisualUnderstandingRuleEntity
+                var template = new VisualUnderstandingRuleEntity
                 {
                     EntityId = Guid.NewGuid().ToString("N"),
                     ShopKey = shopKey,
                     Seller = seller,
-                    Name = "手机端酷狗账号中心",
-                    AppName = "酷狗音乐",
-                    ScreenName = "账号中心",
-                    RequiredKeywords = string.Join(Environment.NewLine, new[] { "帐号中心", "酷狗ID", "编辑资料", "帐号与绑定", "我的会员" }),
-                    OptionalKeywords = string.Join(Environment.NewLine, new[] { "主页隐私设置", "我的酷币", "已购音乐", "超级VIP" }),
-                    ExcludedKeywords = string.Join(Environment.NewLine, new[] { "登录页", "验证码" }),
-                    FieldPatterns = @"酷狗ID|酷狗ID\s*[:：]?\s*([A-Za-z0-9_-]{5,})" + Environment.NewLine
-                        + @"昵称|帐号中心\s*[\r\n]+([^\r\n]+)\s*[\r\n]+酷狗ID" + Environment.NewLine
-                        + @"会员状态|我的会员\s*[\r\n]+(超级VIP)" + Environment.NewLine
-                        + @"会员到期|超级VIP\s*(\d{4}-\d{2}-\d{2}到期)",
-                    Description = "识别手机端酷狗音乐账号中心页面；提取酷狗ID、昵称、会员等级和到期日期。账号ID、昵称等字段按 OCR 原文保留，不做通用长数字脱敏。",
-                    Enabled = true,
                     CreatedAtTicks = now,
                     UpdatedAtTicks = now
                 };
-                DbHelper.Db.SaveRecordsInTransaction(new List<object> { preset });
+                ApplyGenericAccountTemplate(template);
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { template });
             }
+        }
+
+        private static void ApplyGenericAccountTemplate(VisualUnderstandingRuleEntity rule)
+        {
+            rule.Name = "移动端账号中心（通用模板）";
+            rule.AppName = "{应用名称}";
+            rule.ScreenName = "账号中心";
+            rule.RequiredKeywords = string.Join(Environment.NewLine, new[] { "编辑资料", "我的会员" });
+            rule.OptionalKeywords = string.Join(Environment.NewLine, new[]
+            {
+                "账号中心", "帐号中心", "账号与绑定", "帐号与绑定",
+                "主页隐私设置", "余额", "已购内容", "已购音乐", "VIP"
+            });
+            rule.ExcludedKeywords = string.Join(Environment.NewLine, new[] { "登录页", "验证码" });
+            rule.FieldPatterns = @"账号ID|(?:^|[\r\n])[^\r\n]{0,16}ID\s*[:：]?\s*([A-Za-z0-9_-]{5,})" + Environment.NewLine
+                + @"昵称|(?:账号|帐号)中心\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
+                + @"会员状态|我的会员\s*[\r\n]+([^\r\n]+)" + Environment.NewLine
+                + @"会员到期|(?:VIP|会员)[^\r\n]*?(\d{4}-\d{2}-\d{2}到期)";
+            rule.Description = "识别移动端账号中心页面；提取账号ID、昵称、会员等级和到期日期。应用名称由当前店铺规则配置，不绑定固定品牌。";
+            rule.Enabled = true;
         }
 
         private static void EnsureSchema()
