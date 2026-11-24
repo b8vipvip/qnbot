@@ -1,3 +1,4 @@
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -94,7 +95,7 @@ namespace Bot.ChromeNs
             var currentQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion)
                 ? "[图片]"
                 : task.CombinedQuestion.Trim();
-            var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
+            var timeline = BuildScopedTimelineText(task, currentQuestion, 16);
             var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
                 + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick)
                 + (knowledgeV2ContextAddon ?? string.Empty);
@@ -291,8 +292,7 @@ namespace Bot.ChromeNs
                 // The fallback model never receives pixels. It may explain
                 // readable OCR text but must not claim to have seen image details.
                 var question = (task.CombinedQuestion ?? "[图片]").Trim();
-                var timeline = ConversationContextStore.BuildTimelineText(
-                    task.SellerNick, task.BuyerNick, question, 12);
+                var timeline = BuildScopedTimelineText(task, question, 12);
                 timeline = (timeline ?? string.Empty).Trim();
                 if (timeline.Length > 3000) timeline = timeline.Substring(timeline.Length - 3000);
                 var evidence = ocr.Text.Length > 2500 ? ocr.Text.Substring(0, 2500) : ocr.Text;
@@ -353,6 +353,29 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("OCR文字AI兜底失败: " + ex.GetType().Name, 10);
                 return null;
+            }
+        }
+
+        private static string BuildScopedTimelineText(VisionReplyTask task, string question, int maxTurns)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.ShopKey)) return string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
+                if (shop == null
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                        (task.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    return string.Empty;
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    return ConversationContextStore.BuildTimelineText(
+                        task.SellerNick, task.BuyerNick, question, maxTurns);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("图片会话上下文读取失败，已按ShopKey隔离并返回空上下文: " + ex.Message, 10);
+                return string.Empty;
             }
         }
 
