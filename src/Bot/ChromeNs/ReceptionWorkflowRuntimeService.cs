@@ -332,13 +332,13 @@ namespace Bot.ChromeNs
             ShopContext shop = null;
             CatalogIndex catalog;
             List<OrderSnapshot> orders;
-            KugouReceptionConfig config;
+            ShopReceptionConfig config;
             try
             {
                 shop = ResolveShop(seller, shopKey);
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    config = KugouReceptionConfigService.GetConfig(shop);
+                    config = ShopReceptionConfigService.GetConfig(shop);
                     if (config == null || !config.Enabled || config.ProductIds == null || config.ProductIds.Count == 0)
                         return null;
                     if (!config.EnableAutoGuidance) return null;
@@ -955,11 +955,11 @@ namespace Bot.ChromeNs
             try
             {
                 CatalogIndex catalog;
-                KugouReceptionConfig config;
+                ShopReceptionConfig config;
                 List<OrderSnapshot> currentOrders;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    config = KugouReceptionConfigService.GetConfig(shop);
+                    config = ShopReceptionConfigService.GetConfig(shop);
                     catalog = LoadCatalog(decision.Seller, decision.ShopKey);
                     currentOrders = LoadRecentNonterminalOrders(
                         decision.Seller, decision.Buyer, decision.ShopKey);
