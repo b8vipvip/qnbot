@@ -272,7 +272,7 @@ namespace Bot.ChromeNs
             if (workflowDecision != null && workflowDecision.RequiresSend)
                 result.Answer = workflowDecision.ReplyText;
 
-            // OCR-first direct knowledge has already passed Knowledge Engine V2's production
+            // OCR-first direct knowledge and visual-preset-backed knowledge have already passed Knowledge Engine V2's production
             // authority gate. Running the generic dedupe/validator without preserveTrustedAnswer
             // can launch a hidden structured-AI repair and turn a ~250ms local answer into a 20s+
             // generation. Preserve that authoritative answer while still applying the common AI
@@ -281,7 +281,10 @@ namespace Bot.ChromeNs
             var trustedOcrKnowledge = workflowDecision == null && string.Equals(
                 result.MatchedVisualKnowledgeId,
                 "ocr-direct-knowledge-v2",
-                StringComparison.Ordinal);
+                StringComparison.Ordinal)
+                || (workflowDecision == null
+                    && (result.MatchedVisualKnowledgeId ?? string.Empty)
+                        .StartsWith("visual-rule:", StringComparison.Ordinal));
             var deduplication = workflowDecision != null && workflowDecision.RequiresSend
                 ? ReplyDeduplicationService.EnsureWorkflowReplyDistinct(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion,
@@ -294,7 +297,7 @@ namespace Bot.ChromeNs
                         burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, result.Answer));
             if (trustedOcrKnowledge)
             {
-                Log.Info("OCR-first权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
+                Log.Info("OCR/视觉理解规则权威知识直答已跳过隐藏AI校验/重答，保持本地快速路径: seller="
                     + burst.SellerNick + ", buyer=" + burst.BuyerNick);
             }
             var answer = deduplication.Answer;
