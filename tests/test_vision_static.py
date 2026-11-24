@@ -138,3 +138,11 @@ def test_server_ocr_upload_requires_complete_client_image_cache_and_posts_binary
     assert 'new ByteArrayContent(imageBytes)' in ocr
     assert 'HttpMethod.Post, NormalizeOcrUrl(endpoint.BaseUrl)' in ocr
     assert 'X-Image-Sha256' in ocr
+
+
+def test_ocr_text_fallback_includes_the_same_buyers_recent_conversation_context():
+    service = read('src/Bot/ChromeNs/VisionRequestService.cs')
+    fallback = service[service.index('private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync'):]
+    assert 'ConversationContextStore.BuildTimelineText' in fallback
+    assert '最近同一买家与客服对话（用于理解当前图片的上下文）' in fallback
+    assert 'OCR文字AI兜底未获得有效答案' in fallback
