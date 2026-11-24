@@ -135,7 +135,9 @@ def test_image_download_falls_back_to_authenticated_qianniu_browser_and_message_
     assert "im.singlemsg.GetRemoteHisMsg" in cache
     assert "resolvedUrl:candidates.length" not in cache
     assert "resolvedUrl:resolvedUrl" in cache
-    assert "record.Url = payload.resolvedUrl" in cache
+    assert "DownloadAndPersistDirectAsync(\n                            record, endpoint, payload.resolvedUrl)" in cache
+    assert "record.Url = payload.resolvedUrl" not in cache
+    assert "var sourceUrl = string.IsNullOrWhiteSpace(urlOverride) ? record.Url : urlOverride" in cache
     assert "IsHttpImageUrl(payload.resolvedUrl)" in cache
     assert "买家图片未能转存到客户端缓存，服务端OCR不会收到图片二进制" in cache
     assert "window._db&&window._db.msgDataMap" in cache
@@ -188,4 +190,24 @@ def test_inflight_image_download_refreshes_media_source_for_the_bounded_retry():
     assert prime.index("record.Url = url;") < prime.index("if (canRetry)")
     assert prime.index("record.Message = message;") < prime.index("if (canRetry)")
     assert "record.DownloadAttempts++;" in prime
+
+def test_resolved_browser_image_url_does_not_mutate_shared_cache_record():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    direct = cache[
+        cache.index("private static async Task<CacheDownloadResult> DownloadAndPersistDirectAsync"):
+        cache.index("private static async Task<byte[]> ReadWithLimitAsync")
+    ]
+    browser = cache[
+        cache.index("private static async Task<CacheDownloadResult> DownloadAndPersistFromBrowserAsync"):
+        cache.index("private static async Task<CacheDownloadResult> DownloadAndPersistDirectAsync")
+    ]
+
+    assert "string urlOverride = null" in direct
+    assert "var sourceUrl = string.IsNullOrWhiteSpace(urlOverride) ? record.Url : urlOverride" in direct
+    assert "Uri.TryCreate(sourceUrl" in direct
+    assert 'Sha256(record.Key + "|" + sourceUrl)' in direct
+    assert "DownloadAndPersistDirectAsync(" in browser
+    assert "payload.resolvedUrl" in browser
+    assert "record.Url = payload.resolvedUrl" not in browser
+    assert "var originalUrl = record.Url" not in browser
 
