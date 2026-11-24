@@ -759,16 +759,31 @@ def install(control_plane: Any) -> None:
             if supplied_hash and supplied_hash != image_hash:
                 raise HTTPException(status_code=400, detail="OCR图片哈希校验失败")
 
+            _update_task_record(
+                cp, task_id, "running", "validation",
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片通过大小限制与 SHA-256 校验",
+                event_metadata={"image_bytes": image_size, "image_hash_prefix": image_hash[:12]},
+            )
             stage = "admission"
+            _update_task_record(
+                cp, task_id, "running", "admission",
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片校验完成，等待 OCR 推理并发槽位",
+            )
             queued_at = time.perf_counter()
             await _acquire_ocr_slot(int(settings["max_concurrency"]))
             slot_owned = True
             queue_ms = int((time.perf_counter() - queued_at) * 1000)
             stage = "inference"
             inference_started = time.perf_counter()
-            _update_task_record(cp, task_id, "running", "inference",
-                                queue_ms=queue_ms, image_bytes=image_size,
-                                image_hash=image_hash)
+            _update_task_record(
+                cp, task_id, "running", "inference",
+                queue_ms=queue_ms, image_bytes=image_size, image_hash=image_hash,
+                engine="RapidOCR/ONNXRuntime",
+                event_message="已获得推理槽位，开始 RapidOCR/ONNXRuntime 推理",
+                event_metadata={"queue_ms": queue_ms, "max_concurrency": settings["max_concurrency"]},
+            )
             worker_task = asyncio.create_task(run_in_threadpool(_run_ocr, raw))
             try:
                 result = await asyncio.wait_for(
@@ -783,12 +798,24 @@ def install(control_plane: Any) -> None:
 
             inference_ms = int((time.perf_counter() - inference_started) * 1000)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            result_text = str(result.get("text", "") or "")
+            result_engine = _safe_engine(result.get("engine") or "RapidOCR/ONNXRuntime")
+            result_confidence = float(result.get("confidence", 0.0))
             _update_task_record(
                 cp, task_id, "success", "returned", http_status=200,
                 queue_ms=queue_ms, inference_ms=inference_ms, elapsed_ms=elapsed_ms,
                 image_bytes=image_size, image_hash=image_hash,
-                text_chars=len(result.get("text", "")),
-                confidence=float(result.get("confidence", 0.0)), terminal=True,
+                text_chars=len(result_text), confidence=result_confidence,
+                engine=result_engine, result_text=result_text,
+                event_message="OCR 推理完成并返回；详情中保留脱敏后的识别文本",
+                event_metadata={
+                    "text_chars": len(result_text),
+                    "confidence": result_confidence,
+                    "engine": result_engine,
+                    "inference_ms": inference_ms,
+                    "elapsed_ms": elapsed_ms,
+                },
+                terminal=True,
             )
             terminal = True
             return {
@@ -815,7 +842,15 @@ def install(control_plane: Any) -> None:
                     cp, task_id, state, stage, http_status=exc.status_code,
                     error_code=error_code, queue_ms=queue_ms,
                     inference_ms=inference_ms, elapsed_ms=elapsed_ms,
-                    image_bytes=image_size, image_hash=image_hash, terminal=True,
+                    image_bytes=image_size, image_hash=image_hash,
+                    event_message={
+                        400: "图片请求校验失败或哈希不匹配",
+                        413: "图片超过服务端大小限制",
+                        503: "OCR 服务已停用或推理暂不可用",
+                        504: "OCR 推理超时，任务已记录超时终态",
+                    }.get(exc.status_code, "OCR 请求失败"),
+                    event_metadata={"http_status": exc.status_code},
+                    terminal=True,
                 )
                 terminal = True
             raise
@@ -826,7 +861,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片格式或内容校验失败",
+                event_metadata={"http_status": 400},
+                terminal=True,
             )
             terminal = True
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -839,7 +877,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="客户端断开，请求已中断",
+                event_metadata={"http_status": 499},
+                terminal=True,
             )
             terminal = True
             raise
@@ -850,7 +891,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="OCR 内部处理失败；原始异常内容未写入任务日志",
+                event_metadata={"http_status": 503},
+                terminal=True,
             )
             terminal = True
             raise HTTPException(status_code=503, detail="服务端OCR暂不可用") from exc
