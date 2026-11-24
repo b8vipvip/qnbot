@@ -936,11 +936,14 @@ namespace Bot.ChromeNs
 
         private static Timer _timer;
         private static int _initialized;
+        private static int _disabledForV2;
+        private static readonly object PatchSync = new object();
 
         public static object InitializeForApp()
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
+                if (Volatile.Read(ref _disabledForV2) != 0) return new object();
                 try { Bot.Knowledge.KnowledgeMemoryEngineUi.Initialize(); } catch { }
                 // BuyerStreamingReplyPipeline installs its wrapper very early (100ms). Start later
                 // and keep checking so Memory remains the outermost text decision layer even if a
@@ -953,6 +956,7 @@ namespace Bot.ChromeNs
 
         public static void DisableForV2()
         {
+            Interlocked.Exchange(ref _disabledForV2, 1);
             try
             {
                 var timer = Interlocked.Exchange(ref _timer, null);
@@ -960,67 +964,77 @@ namespace Bot.ChromeNs
             }
             catch { }
 
-            try
+            // Serialize with PatchExisting so a timer callback already in flight cannot
+            // re-install the V1 wrapper after this unpatch completes.
+            lock (PatchSync)
             {
-                QN[] qns;
-                try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
-                catch { qns = new QN[0]; }
-
-                var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
-                var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
-                var wrapperType = typeof(KnowledgeMemoryRuntimeBridge).GetNestedType("MemoryHandlerWrapper", BindingFlags.NonPublic);
-                var innerField = wrapperType == null ? null : wrapperType.GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (coordinatorField == null || handlerField == null || wrapperType == null || innerField == null) return;
-
-                foreach (var qn in qns)
+                try
                 {
-                    if (qn == null) continue;
-                    var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
-                    if (coordinator == null) continue;
-                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
-                    if (current == null || current.Target == null || !wrapperType.IsInstanceOfType(current.Target)) continue;
-                    var inner = innerField.GetValue(current.Target) as Func<BuyerMessageBurstLease, Task>;
-                    if (inner == null) continue;
-                    handlerField.SetValue(coordinator, inner);
-                    Log.Info("Knowledge Memory V1包装器已卸载，恢复原消息处理链: seller="
-                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    QN[] qns;
+                    try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
+                    catch { qns = new QN[0]; }
+
+                    var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var wrapperType = typeof(KnowledgeMemoryRuntimeBridge).GetNestedType("MemoryHandlerWrapper", BindingFlags.NonPublic);
+                    var innerField = wrapperType == null ? null : wrapperType.GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (coordinatorField == null || handlerField == null || wrapperType == null || innerField == null) return;
+
+                    foreach (var qn in qns)
+                    {
+                        if (qn == null) continue;
+                        var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
+                        if (coordinator == null) continue;
+                        var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
+                        if (current == null || current.Target == null || !wrapperType.IsInstanceOfType(current.Target)) continue;
+                        var inner = innerField.GetValue(current.Target) as Func<BuyerMessageBurstLease, Task>;
+                        if (inner == null) continue;
+                        handlerField.SetValue(coordinator, inner);
+                        Log.Info("Knowledge Memory V1包装器已卸载，恢复原消息处理链: seller="
+                            + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("卸载Knowledge Memory V1包装器失败: " + ex.Message, 10);
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("卸载Knowledge Memory V1包装器失败: " + ex.Message, 10);
+                }
             }
         }
 
         private static void PatchExisting()
         {
-            try
+            if (Volatile.Read(ref _disabledForV2) != 0) return;
+            lock (PatchSync)
             {
-                QN[] qns;
-                try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
-                catch { return; }
-
-                var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
-                var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (coordinatorField == null || handlerField == null) return;
-
-                foreach (var qn in qns)
+                if (Volatile.Read(ref _disabledForV2) != 0) return;
+                try
                 {
-                    if (qn == null) continue;
-                    var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
-                    if (coordinator == null) continue;
-                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
-                    if (current == null || current.Target is MemoryHandlerWrapper) continue;
+                    QN[] qns;
+                    try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
+                    catch { return; }
 
-                    var wrapper = new MemoryHandlerWrapper(qn, current);
-                    handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
-                    Log.Info("已为客服实例挂载Knowledge Memory本地直答层: seller="
-                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (coordinatorField == null || handlerField == null) return;
+
+                    foreach (var qn in qns)
+                    {
+                        if (qn == null) continue;
+                        var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
+                        if (coordinator == null) continue;
+                        var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
+                        if (current == null || current.Target is MemoryHandlerWrapper) continue;
+
+                        var wrapper = new MemoryHandlerWrapper(qn, current);
+                        handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
+                        Log.Info("已为客服实例挂载Knowledge Memory本地直答层: seller="
+                            + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("安装Knowledge Memory运行时桥失败，继续原Smart Reply链路: " + ex.Message, 10);
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("安装Knowledge Memory运行时桥失败，继续原Smart Reply链路: " + ex.Message, 10);
+                }
             }
         }
 

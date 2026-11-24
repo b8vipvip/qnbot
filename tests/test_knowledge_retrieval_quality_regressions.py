@@ -164,4 +164,7 @@ def test_v2_startup_unwraps_already_installed_memory_v1_handler():
     assert 'GetNestedType("MemoryHandlerWrapper"' in disable
     assert 'GetField("_inner"' in disable
     assert "handlerField.SetValue(coordinator, inner);" in disable
+    assert "lock (PatchSync)" in disable
+    assert "Volatile.Read(ref _disabledForV2)" in memory
+    assert "lock (PatchSync)" in memory
     assert "KnowledgeMemoryRuntimeBridge.DisableForV2();" in runtime
