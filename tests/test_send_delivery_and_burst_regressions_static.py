@@ -219,7 +219,7 @@ def test_manual_takeover_blocks_current_send_but_does_not_cancel_other_buyer_gen
     assert "!ParallelReplyRelevanceGate.IsGreetingOnly(sellerEcho)" in manual
     assert greeting < block
     assert 'SetSendCancellation("人工接管"' in qnrpa
-    assert "自动发送因人工接管取消，禁止重试" in read("src/Bot/ChromeNs/QN.cs")
+    assert "自动发送因人工接管或发送前状态门禁取消，禁止重试" in read("src/Bot/ChromeNs/QN.cs")
 
 def test_manual_takeover_is_rechecked_at_each_last_mile_send_path():
     qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
@@ -416,4 +416,16 @@ def test_premerge_fixed_replies_recheck_manual_takeover_and_turn_relevance_on_ev
         "SendTextWithRetryAsync("
     )
     assert "item.BuyerNick, answer, 3, cancellationToken, preSendGuard" in method
+
+def test_failed_or_throwing_pre_send_guard_is_terminal_and_never_retried_as_transport_failure():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    helper = qn[
+        qn.index("private bool IsPreSendGuardSatisfied"):
+        qn.index("private bool IsCurrentShopScopeValidForSend")
+    ]
+
+    assert helper.count("rpa.SetSendCancellation(") == 2
+    assert "会话或业务证据在" in helper
+    assert "复核发生异常，已按安全策略阻止发送" in helper
+    assert "自动发送因人工接管或发送前状态门禁取消，禁止重试" in qn
 
