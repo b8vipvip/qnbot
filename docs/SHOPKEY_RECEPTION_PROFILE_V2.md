@@ -96,4 +96,4 @@ The example is deliberately disabled and contains placeholders, not a working me
 
 Older profiles stored under the former brand-specific filename and schema remain readable for compatibility. On first read, the application validates the old safety flags, converts the schema to the generic v3 format, and atomically writes `shop-reception-rules.json`. The original file is left intact as a rollback source. Legacy v1 migration remains fail-closed and keeps the profile disabled; legacy v2 settings are preserved only if the immutable safety flags are valid.
 
-The operator should review the migrated profile and confirm the current ShopKey before enabling it.
+The operator should review the migrated profile and confirm the current ShopKey before enabling it. The original legacy file remains intact as a rollback backup.
