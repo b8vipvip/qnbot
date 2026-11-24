@@ -34,7 +34,7 @@ def test_invalid_work_hours_never_fall_back_to_0900_1800():
 
 
 def test_server_ocr_can_route_images_without_external_vision_api_or_ready_knowledge():
-    assert 'var localUsable = CanUseServerOcr(seller, shopKey);' in VISION
+    assert 'var localUsable = CanUseServerOcr(shopKey);' in VISION
     assert 'var usable = localUsable || externalUsable;' in VISION
     assert 'Kind = VisionDecisionKind.Vision' in VISION
     assert '使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。' in VISION
