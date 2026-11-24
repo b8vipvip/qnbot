@@ -94,7 +94,7 @@
         <div id="versionUpdateStatus" class="hint">页面打开后自动刷新，更新任务执行期间每秒显示实时进度。</div>
       </section>
       <section class="panel">
-        <div class="panel-head"><div><h2>GitHub 下载代理</h2><p>可直接粘贴 VLESS 节点。只代理本控制面访问 GitHub API 和客户端 Release 安装包，不修改服务器默认路由、系统代理、DNS 或其他服务网络。</p></div><div id="githubProxyState">正在读取代理状态…</div></div>
+        <div class="panel-head"><div><h2>GitHub 下载代理</h2><p>可直接粘贴 VLESS 节点。用于 GitHub API、客户端 Release 安装包及主机服务端源码同步（支持新版更新代理时），不修改服务器默认路由、系统代理、DNS 或其他服务网络。</p></div><div id="githubProxyState">正在读取代理状态…</div></div>
         <div class="form-grid">
           <label class="span-2">VLESS 节点链接<input id="githubProxyVlessUrl" type="password" autocomplete="new-password" spellcheck="false" placeholder="vless://...（已配置时留空表示不修改）"></label>
           <label class="check"><input id="githubProxyEnabled" type="checkbox">启用 GitHub 下载代理</label>
@@ -163,7 +163,7 @@
 <script src="/static/message-traces.js?v=2"></script>
 <script src="/static/ai-requests.js?v=1"></script>
 <script src="/static/client-token-copy.js"></script>
-<script src="/static/version-update.js?v=4"></script>
+<script src="/static/version-update.js?v=4-vless-fetch"></script>
 <script src="/static/server-runtime-logs.js?v=1"></script>
 </body>
 </html>
