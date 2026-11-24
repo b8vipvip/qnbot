@@ -117,10 +117,22 @@ namespace Bot.ChromeNs
             }
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
+                var contextAddon = KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision);
                 Log.Info("OCR-first知识库未达到安全直答条件，继续视觉模型链路: seller=" + task.SellerNick
                     + ", buyer=" + task.BuyerNick
+                    + ", contextAvailable=" + !string.IsNullOrWhiteSpace(contextAddon)
                     + ", reason=" + (decision == null ? "无决策" : decision.Reason));
-                return null;
+                if (string.IsNullOrWhiteSpace(contextAddon)) return null;
+                return new VisionRequestResult
+                {
+                    Success = false,
+                    KnowledgeV2ContextPromptAddon = contextAddon,
+                    LocalOcrText = ocr.Text,
+                    LocalOcrConfidence = ocr.Confidence,
+                    LocalOcrLatencyMs = ocr.ElapsedMs,
+                    LocalOcrCacheHit = ocr.CacheHit,
+                    LocalOcrEngine = ocr.Engine
+                };
             }
 
             var answer = BotMessageSuffixService.Apply(task.SellerNick, decision.Answer);

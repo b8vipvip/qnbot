@@ -442,7 +442,7 @@ namespace Bot.ChromeNs
             return KnowledgeV2RuntimeResult.HandledResult();
         }
 
-        private static string BuildContextPromptAddon(KnowledgeV2Decision decision)
+        internal static string BuildContextPromptAddon(KnowledgeV2Decision decision)
         {
             if (decision == null || decision.HasConflict || decision.Query == null
                 || KnowledgeEngineV2Semantics.IsHighRisk(decision.Query.Original))

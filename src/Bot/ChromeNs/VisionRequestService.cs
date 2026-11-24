@@ -31,6 +31,7 @@ namespace Bot.ChromeNs
         public long LocalOcrLatencyMs { get; set; }
         public bool LocalOcrCacheHit { get; set; }
         public string LocalOcrEngine { get; set; }
+        public string KnowledgeV2ContextPromptAddon { get; set; }
     }
 
     internal sealed class VisionRequestService
@@ -57,7 +58,9 @@ namespace Bot.ChromeNs
             // A local miss is soft and preserves the existing vision route unchanged.
             Log.Info("[VisionRoute] image_received; route=ocr_first_precheck");
             var localDecision = await OcrFirstKnowledgeDecisionService.TryResolveAsync(task, cancellationToken);
-            if (localDecision != null)
+            var knowledgeV2ContextAddon = localDecision == null
+                ? string.Empty : localDecision.KnowledgeV2ContextPromptAddon ?? string.Empty;
+            if (localDecision != null && localDecision.Success)
             {
                 Log.Info("[VisionRoute] route=local_ocr_knowledge; confidence="
                     + localDecision.LocalOcrConfidence.ToString("0.000")
@@ -65,6 +68,8 @@ namespace Bot.ChromeNs
                     + ";visualAiCalled=false");
                 return localDecision;
             }
+            if (!string.IsNullOrWhiteSpace(knowledgeV2ContextAddon))
+                Log.Info("[VisionRoute] V2 approved contextual knowledge retained for visual/text AI fallback");
             Log.Info("[VisionRoute] ocr_direct_miss; checking_configured_multimodal_ai");
 
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
@@ -73,7 +78,7 @@ namespace Bot.ChromeNs
                 // This is explicitly an OCR-TEXT fallback, not an invented
                 // image-capable provider. Only reuse verified cached OCR text;
                 // failed OCR (especially HTTP 504) must never be retried here.
-                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken);
+                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon);
                 if (textFallback != null)
                 {
                     Log.Info("[VisionRoute] route=ocr_text_ai_fallback; visualAiCalled=false"
@@ -91,7 +96,8 @@ namespace Bot.ChromeNs
                 : task.CombinedQuestion.Trim();
             var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
             var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
-                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick);
+                + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick)
+                + (knowledgeV2ContextAddon ?? string.Empty);
             if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
             {
                 prompt += "\n\n买家本轮连续发送的消息如下，换行代表先后顺序。图片和这些文字属于同一轮，请合并理解后只回复一次：\n" + currentQuestion;
@@ -264,7 +270,7 @@ namespace Bot.ChromeNs
         }
 
         private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync(
-            VisionReplyTask task, CancellationToken cancellationToken)
+            VisionReplyTask task, CancellationToken cancellationToken, string knowledgeV2ContextAddon = null)
         {
             try
             {
@@ -291,6 +297,7 @@ namespace Bot.ChromeNs
                             + "不要声称已经看到图片的布局、Logo或设备；不得猜测商品兼容性、订单状态、充值是否成功。"
                             + "能确定的只说明文字显示的事实，不能确定时询问买家具体问题或请买家补充清晰截图。"
                             + "不要要求买家公开账号密码或验证码。只输出包含answer字段的JSON对象，内容为简洁自然的中文回复。"
+                            + (knowledgeV2ContextAddon ?? string.Empty)
                     },
                     new JObject
                     {
