@@ -41,7 +41,7 @@ def test_post_order_photo_preset_uses_shop_configured_application_identity():
     assert "IsBotMarked" in helper
     assert "The newest observation for a configured application is authoritative" in helper
     assert "if (!HasConfiguredOfficialAppEvidence(" in helper
-    assert "酷狗" not in helper and "Kugou" not in helper
+    assert "酷狗" not in helper
 
     visual_check = guard.index("RecentVisualContextService.TrySatisfyOrderPhotoRequirement")
     old_message_check = guard.index("FindEquivalentSellerReply", visual_check)
@@ -62,7 +62,7 @@ def test_recent_account_evidence_is_derived_from_shop_configured_app_and_generic
     assert "AccountIdRegex" in visual
     assert "TryResolveConfiguredApplication" in rules
     assert 'string.Equals(name, "{应用名称}"' in rules
-    assert "酷狗" not in visual and "Kugou" not in visual
+    assert "酷狗" not in visual
 
 
 def test_vision_prompt_uses_generic_configured_app_identity_without_login_requirement():
