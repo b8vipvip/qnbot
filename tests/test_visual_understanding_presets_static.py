@@ -91,7 +91,7 @@ def test_generic_settings_and_help_do_not_ship_brand_specific_examples():
     recharge_settings = read("services/api-control-plane/static/manual-recharge.html")
     vision_prompt = read("src/Bot/ChromeNs/VisionRequestService.cs")
     operator_ui = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
-    config = read("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = read("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     default_config = config.split("private static JObject DefaultDocument", 1)[1].split(
         "private static JObject MigrateLegacyV1", 1
     )[0]
@@ -107,7 +107,7 @@ def test_generic_settings_and_help_do_not_ship_brand_specific_examples():
 
 
 def test_new_shop_reception_settings_use_generic_schema_and_path_with_legacy_read_support():
-    config = read("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    config = read("src/Bot/ChromeNs/ShopReceptionConfigService.cs")
     default = config.split("private static JObject DefaultDocument", 1)[1].split(
         "private static JObject MigrateLegacyV1", 1
     )[0]
