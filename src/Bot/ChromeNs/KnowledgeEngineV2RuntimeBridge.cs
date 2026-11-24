@@ -426,26 +426,35 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick);
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
-            var failureReason = sendOk || qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason();
+            var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
+            var failureReason = sendOk || sendCancelled || qn.Rpa == null
+                ? string.Empty
+                : qn.Rpa.GetSendFailureReason();
             if (sendOk)
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
-            try
+                ReplyDeduplicationService.RememberDelivered(
+                    burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
+            // A relevance/manual-takeover cancellation is not evidence that the
+            // selected knowledge answer was wrong. Never feed it into V2 quality scores.
+            if (!sendCancelled)
             {
-                if (best != null && best.Record != null && !string.IsNullOrWhiteSpace(best.Record.Id))
+                try
                 {
-                    KnowledgeEngineV2FeedbackService.RecordDirectSend(
-                        burst.SellerNick,
-                        burst.BuyerNick,
-                        best.Record.Id,
-                        burst.CombinedQuestion,
-                        answer,
-                        sendOk,
-                        failureReason);
+                    if (best != null && best.Record != null && !string.IsNullOrWhiteSpace(best.Record.Id))
+                    {
+                        KnowledgeEngineV2FeedbackService.RecordDirectSend(
+                            burst.SellerNick,
+                            burst.BuyerNick,
+                            best.Record.Id,
+                            burst.CombinedQuestion,
+                            answer,
+                            sendOk,
+                            failureReason);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("记录Knowledge V2发送反馈失败: " + ex.Message, 10);
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("记录Knowledge V2发送反馈失败: " + ex.Message, 10);
+                }
             }
             if (ctl != null)
             {
@@ -453,16 +462,24 @@ namespace Bot.ChromeNs
                     sendOk,
                     sendOk
                         ? "已发送（Knowledge Engine V2本地直答，无AI调用）"
-                        : "发送失败：" + failureReason);
+                        : sendCancelled
+                            ? "未发送：人工接管或会话状态变化，已安全取消"
+                            : "发送失败：" + failureReason);
             }
             if (sendOk)
                 lease.MarkCompleted("knowledge_v2_send_completed");
+            else if (sendCancelled)
+                lease.MarkCompleted("knowledge_v2_send_cancelled");
             else
                 lease.MarkFailed("knowledge_v2_send_failed");
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
-                + ", success=" + sendOk
+                + ", success=" + sendOk + ", cancelled=" + sendCancelled
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "Knowledge V2发送前会话门禁取消", burst.ShopKey);
+            else
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
             return KnowledgeV2RuntimeResult.HandledResult();
         }
 
