@@ -124,9 +124,9 @@ def test_manual_visual_learning_accepts_canonical_seller_echo_with_stable_shop_i
 def test_recent_visual_context_initializes_out_values_when_shop_resolution_fails():
     source = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
     account = source.split(
-        "public static bool TryGetRecentKugouAccountEvidence(\n            string seller", 1
+        "public static bool TryGetRecentAccountEvidence(\n            string seller", 1
     )[1].split(
-        "public static bool TryGetRecentKugouAccountEvidence(\n            string shopKey", 1
+        "public static bool TryGetRecentAccountEvidence(\n            string shopKey", 1
     )[0]
     order_photo = source.split(
         "public static bool TrySatisfyOrderPhotoRequirement(\n            string seller", 1
