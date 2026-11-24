@@ -71,8 +71,8 @@ namespace Bot.ChromeNs
             rule.Description = Clean(rule.Description, 1200);
             if (rule.Name.Length == 0 || rule.RequiredKeywords.Length == 0)
                 throw new InvalidOperationException("规则名称和必需 OCR 关键词不能为空。");
-            if (rule.Enabled && (rule.AppName.Length == 0 || IsApplicationNamePlaceholder(rule.AppName)))
-                throw new InvalidOperationException("启用视觉理解规则前必须填写真实应用名称，不能使用占位符。");
+            if (rule.Enabled && !SplitApplicationNames(rule.AppName).Any())
+                throw new InvalidOperationException("启用视觉理解规则前必须填写至少一个真实应用名称，不能使用占位符或空值。");
             ValidatePatterns(rule.FieldPatterns);
             EnsureSchema();
             lock (Sync)
