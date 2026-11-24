@@ -37,7 +37,8 @@ def test_premerge_fixed_reply_passes_exact_generation_token_without_marking_send
     fixed = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     region = fixed.split("private static async Task<bool> SendFixedAsync", 1)[1].split("public static async Task<bool> TryHandleAsync", 1)[0]
     assert "GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration, item.ShopKey)" in region
-    assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in region
+    assert "item.BuyerNick, answer, 3, generationToken, preSendGuard" in region
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in region
     assert "catch (OperationCanceledException)" in region
     assert "BuyerSessionAgentState.Sending" not in region
 
