@@ -410,6 +410,11 @@ def test_premerge_fixed_replies_recheck_manual_takeover_and_turn_relevance_on_ev
     ]
 
     assert "Func<bool> preSendGuard = () =>" in method
+    assert "Params.Robot.CanUseRobotReal" in method
+    assert "Params.Robot.GetIsAutoReply()" in method
+    assert method.index("Params.Robot.GetIsAutoReply()") < method.index(
+        "ParallelReplyRelevanceGate.ShouldSend("
+    )
     assert "ParallelReplyRelevanceGate.ShouldSend(" in method
     assert "item.ShopKey" in method
     assert method.index("ParallelReplyRelevanceGate.ShouldSend(") < method.index(
