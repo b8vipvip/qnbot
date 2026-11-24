@@ -63,6 +63,10 @@ def test_account_matching_is_exact_and_never_defaults_to_first_candidate():
     assert "FindExactMatches" in service
     assert "NormalizeAccount(x.UserId) == userId" in service
     assert "NormalizeAccount(x.Nickname) == nickname" in service
+    assert "NormalizeAccount(x.PhoneNumber) == phoneNumber" in service
+    assert "&& (nickname.Length == 0 || NormalizeAccount(x.Nickname) == nickname)" in service
+    assert "MaskName(" not in service and "MaskId(" not in service
+    assert "fields.Add(\"手机号 \" + account.PhoneNumber.Trim())" in service
     assert "if (matches.Count == 1)" in service
     assert "state.Stage = Stage.AwaitAccountSelection" in service
     assert "accounts[0]" not in service
