@@ -71,7 +71,7 @@ namespace Bot.ChromeNs
             rule.Description = Clean(rule.Description, 1200);
             if (rule.Name.Length == 0 || rule.RequiredKeywords.Length == 0)
                 throw new InvalidOperationException("规则名称和必需 OCR 关键词不能为空。");
-            if (rule.Enabled && IsApplicationNamePlaceholder(rule.AppName))
+            if (rule.Enabled && (rule.AppName.Length == 0 || IsApplicationNamePlaceholder(rule.AppName)))
                 throw new InvalidOperationException("启用视觉理解规则前必须填写真实应用名称，不能使用占位符。");
             ValidatePatterns(rule.FieldPatterns);
             EnsureSchema();
@@ -123,7 +123,9 @@ namespace Bot.ChromeNs
             {
                 if (IsApplicationNamePlaceholder(rule.AppName)) continue;
                 var configuredNames = SplitApplicationNames(rule.AppName).ToList();
-                if (configuredNames.Count > 0 && !configuredNames.Any(name =>
+                // An enabled visual rule without a concrete application identity is ambiguous.
+                // Fail closed even if a legacy row bypassed the current Save validation.
+                if (configuredNames.Count == 0 || !configuredNames.Any(name =>
                     normalizedOcrText.IndexOf(NormalizeApplicationText(name), StringComparison.OrdinalIgnoreCase) >= 0))
                     continue;
 
