@@ -434,3 +434,14 @@ def test_failed_or_throwing_pre_send_guard_is_terminal_and_never_retried_as_tran
     assert "复核发生异常，已按安全策略阻止发送" in helper
     assert "自动发送因人工接管或发送前状态门禁取消，禁止重试" in qn
 
+def test_fixed_reply_guard_cancellation_is_not_reported_as_transport_failure():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    method = coordinator[
+        coordinator.index("private static async Task<bool> SendFixedAsync"):
+        coordinator.index("private static bool TryResolveOffHours")
+    ]
+    assert "var sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;" in method
+    assert "item.SellerNick, item.BuyerNick, answer, item.ShopKey" in method
+    assert "固定回复发送前会话门禁取消" in method
+    assert "CanonicalPreMergeOutcome.Cancelled" in coordinator
+
