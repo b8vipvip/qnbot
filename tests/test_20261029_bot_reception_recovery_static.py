@@ -41,6 +41,7 @@ def test_reply_context_menu_reports_provenance_and_edit_scope():
 
 def test_reception_can_wait_without_upstream_call_or_error():
     source = load("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    visual = load("src/Bot/ChromeNs/RecentVisualContextService.cs")
     assert "ReceptionFlowPolicy.TryChooseSilence(seller, buyer, question, out silentReason)" in source
     assert "return ReceptionFlowPolicy.SilentMarker + silentReason;" in source
     assert "answer.StartsWith(ReceptionFlowPolicy.SilentMarker" in source
@@ -49,7 +50,7 @@ def test_reception_can_wait_without_upstream_call_or_error():
     assert "ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);" in source
     assert "MobileOnly.IsMatch(input)" in source
     assert "RecentVisualContextService.LooksLikeConfiguredPhotoGuidance(instruction, config)" in source
-    assert "PhotoInstructionAllCues" in source
+    assert "PhotoInstructionAllCues" in visual
     assert 'instruction.IndexOf("手机号", StringComparison.Ordinal) >= 0' in source
 
 
