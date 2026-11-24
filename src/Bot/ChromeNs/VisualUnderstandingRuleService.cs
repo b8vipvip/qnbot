@@ -71,8 +71,8 @@ namespace Bot.ChromeNs
             rule.Description = Clean(rule.Description, 1200);
             if (rule.Name.Length == 0 || rule.RequiredKeywords.Length == 0)
                 throw new InvalidOperationException("规则名称和必需 OCR 关键词不能为空。");
-            if (rule.Enabled && IsApplicationNamePlaceholder(rule.AppName))
-                throw new InvalidOperationException("启用视觉理解规则前必须填写真实应用名称，不能使用占位符。");
+            if (rule.Enabled && !SplitApplicationNames(rule.AppName).Any())
+                throw new InvalidOperationException("启用视觉理解规则前必须填写至少一个真实应用名称，不能使用占位符或空值。");
             ValidatePatterns(rule.FieldPatterns);
             EnsureSchema();
             lock (Sync)
@@ -123,7 +123,9 @@ namespace Bot.ChromeNs
             {
                 if (IsApplicationNamePlaceholder(rule.AppName)) continue;
                 var configuredNames = SplitApplicationNames(rule.AppName).ToList();
-                if (configuredNames.Count > 0 && !configuredNames.Any(name =>
+                // An enabled visual rule without a concrete application identity is ambiguous.
+                // Fail closed even if a legacy row bypassed the current Save validation.
+                if (configuredNames.Count == 0 || !configuredNames.Any(name =>
                     normalizedOcrText.IndexOf(NormalizeApplicationText(name), StringComparison.OrdinalIgnoreCase) >= 0))
                     continue;
 
@@ -283,11 +285,9 @@ namespace Bot.ChromeNs
                     "where ShopKey = ? and Seller = ?", shopKey, seller) ?? new List<object>())
                     .OfType<VisualUnderstandingRuleEntity>().ToList();
 
-                // One-time conversion of the old automatically seeded sample. Only the
-                // exact built-in row is rewritten; operator-created rules remain untouched.
-                var legacy = rules.FirstOrDefault(x =>
-                    string.Equals(x.Name, "手机端酷狗账号中心", StringComparison.Ordinal)
-                    && string.Equals(x.AppName, "酷狗音乐", StringComparison.Ordinal));
+                // One-time conversion is limited to the byte-for-byte legacy seed values.
+                // If an operator edited any field, preserve that rule and all of its settings.
+                var legacy = rules.FirstOrDefault(IsLegacySeededMobileAccountRule);
                 if (legacy != null)
                 {
                     ApplyGenericAccountTemplate(legacy);
@@ -314,6 +314,32 @@ namespace Bot.ChromeNs
                 ApplyGenericAccountTemplate(template);
                 DbHelper.Db.SaveRecordsInTransaction(new List<object> { template });
             }
+        }
+
+        private static bool IsLegacySeededMobileAccountRule(VisualUnderstandingRuleEntity rule)
+        {
+            if (rule == null) return false;
+            return string.Equals(rule.Name, "手机端酷狗账号中心", StringComparison.Ordinal)
+                && string.Equals(rule.AppName, "酷狗音乐", StringComparison.Ordinal)
+                && string.Equals(rule.ScreenName, "账号中心", StringComparison.Ordinal)
+                && string.Equals(rule.RequiredKeywords,
+                    string.Join(Environment.NewLine, new[] { "帐号中心", "酷狗ID", "编辑资料", "帐号与绑定", "我的会员" }),
+                    StringComparison.Ordinal)
+                && string.Equals(rule.OptionalKeywords,
+                    string.Join(Environment.NewLine, new[] { "主页隐私设置", "我的酷币", "已购音乐", "超级VIP" }),
+                    StringComparison.Ordinal)
+                && string.Equals(rule.ExcludedKeywords,
+                    string.Join(Environment.NewLine, new[] { "登录页", "验证码" }),
+                    StringComparison.Ordinal)
+                && string.Equals(rule.FieldPatterns,
+                    @"酷狗ID|酷狗ID\s*[:：]?\s*([A-Za-z0-9_-]{5,})" + Environment.NewLine
+                        + @"昵称|帐号中心\s*[\r\n]+([^\r\n]+)\s*[\r\n]+酷狗ID" + Environment.NewLine
+                        + @"会员状态|我的会员\s*[\r\n]+(超级VIP)" + Environment.NewLine
+                        + @"会员到期|超级VIP\s*(\d{4}-\d{2}-\d{2}到期)",
+                    StringComparison.Ordinal)
+                && string.Equals(rule.Description,
+                    "识别手机端酷狗音乐账号中心页面；提取酷狗ID、昵称、会员等级和到期日期。账号ID、昵称等字段按 OCR 原文保留，不做通用长数字脱敏。",
+                    StringComparison.Ordinal);
         }
 
         private static void ApplyGenericAccountTemplate(VisualUnderstandingRuleEntity rule)
