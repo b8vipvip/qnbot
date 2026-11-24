@@ -25,12 +25,19 @@ namespace Bot.ChromeNs
         private static readonly DateTime StartedAt = DateTime.Now.AddSeconds(-5);
         private static int _initialized;
         private static int _processing;
+        private static int _pendingUpdates;
+        private static Timer _retryTimer;
 
         public static object InitializeForApp()
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 ConversationSessionLearningService.ReportsChanged += OnReportsChanged;
+                // Retry shop-unavailable reports after reconnect and reconcile notifications
+                // that arrived while the bridge was processing a previous report.
+                _retryTimer = new Timer(_ => OnReportsChanged(), null,
+                    TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+                OnReportsChanged();
                 Log.Info("Commerce知识学习桥已启动：人工纠错将按订单阶段/履约/商品场景分流，旧答案不再仅因问题文本相同而丢失。" );
             }
             return new object();
@@ -38,18 +45,33 @@ namespace Bot.ChromeNs
 
         private static void OnReportsChanged()
         {
-            if (Interlocked.Exchange(ref _processing, 1) != 0) return;
+            Interlocked.Exchange(ref _pendingUpdates, 1);
+            if (Interlocked.CompareExchange(ref _processing, 1, 0) != 0) return;
             Task.Run(() =>
             {
-                try { ProcessLatest(); }
+                try
+                {
+                    do
+                    {
+                        Interlocked.Exchange(ref _pendingUpdates, 0);
+                        ProcessLatest();
+                    } while (Interlocked.CompareExchange(ref _pendingUpdates, 0, 1) == 1);
+                }
                 catch (Exception ex) { Log.ErrorWithMaxCount("Commerce知识学习桥处理失败: " + ex.Message, 20); }
-                finally { Interlocked.Exchange(ref _processing, 0); }
+                finally
+                {
+                    Interlocked.Exchange(ref _processing, 0);
+                    // A notification arriving between the last drain and releasing the
+                    // gate must not be silently lost; the next worker owns that drain.
+                    if (Interlocked.CompareExchange(ref _pendingUpdates, 0, 0) != 0)
+                        OnReportsChanged();
+                }
             });
         }
 
         private static void ProcessLatest()
         {
-            var reports = ConversationSessionLearningService.GetReports(40)
+            var reports = ConversationSessionLearningService.GetReports(200)
                 .Where(x => x != null
                     && string.Equals(x.Status, "学习完成", StringComparison.Ordinal)
                     && x.CompletedAt != DateTime.MinValue
@@ -59,7 +81,16 @@ namespace Bot.ChromeNs
             foreach (var report in reports)
             {
                 if (string.IsNullOrWhiteSpace(report.Id) || !Processed.TryAdd(report.Id, 0)) continue;
-                try { ProcessReport(report); }
+                try
+                {
+                    if (!ProcessReport(report))
+                    {
+                        // An offline ShopKey is transient. Let the periodic retry load it
+                        // again instead of treating this report as already governed.
+                        byte ignored;
+                        Processed.TryRemove(report.Id, out ignored);
+                    }
+                }
                 catch (Exception ex)
                 {
                     byte ignored;
@@ -69,17 +100,17 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void ProcessReport(ConversationSessionLearningReportView report)
+        private static bool ProcessReport(ConversationSessionLearningReportView report)
         {
             if (report == null || string.IsNullOrWhiteSpace(report.Seller)
-                || string.IsNullOrWhiteSpace(report.Buyer) || string.IsNullOrWhiteSpace(report.SuggestionsJson)) return;
+                || string.IsNullOrWhiteSpace(report.Buyer) || string.IsNullOrWhiteSpace(report.SuggestionsJson)) return true;
 
             // The report already carries its authoritative ShopKey. Resolving by display nickname
             // is ambiguous when two accounts share the same seller nickname and can bind to the wrong
             // shop if a different account is currently active.
-            if (string.IsNullOrWhiteSpace(report.ShopKey)) return;
+            if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;
             var shop = ShopContextLocator.ResolveRuntimeByShopKey(report.ShopKey);
-            if (shop == null) return;
+            if (shop == null) return false;
             if (!string.Equals(
                 (shop.SellerNick ?? string.Empty).Trim(),
                 report.Seller.Trim(),
@@ -87,7 +118,7 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount(
                     "Commerce场景知识治理拒绝Seller与ShopKey不匹配的报告: report=" + report.Id, 10);
-                return;
+                return true;
             }
 
             using (ShopSettingsScope.Enter(shop))
@@ -97,11 +128,11 @@ namespace Bot.ChromeNs
                 var commerce = state.CommerceContext
                     ?? CommerceContextService.Build(report.Seller, report.Buyer, string.Empty, turns, state);
                 var scopeToken = CommerceContextService.BuildPolicyScopeToken(commerce);
-                if (string.IsNullOrWhiteSpace(scopeToken)) return;
+                if (string.IsNullOrWhiteSpace(scopeToken)) return true;
 
                 JArray suggestions;
                 try { suggestions = JArray.Parse(report.SuggestionsJson); }
-                catch { return; }
+                catch { return true; }
 
                 var changed = 0;
                 foreach (var suggestion in suggestions.OfType<JObject>())
@@ -122,6 +153,7 @@ namespace Bot.ChromeNs
                         + ", scenario=" + scopeToken);
                 }
             }
+            return true;
         }
 
         private static bool ApplyScenarioScope(
