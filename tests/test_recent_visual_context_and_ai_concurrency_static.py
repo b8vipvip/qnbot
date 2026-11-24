@@ -23,31 +23,46 @@ def test_recent_visual_semantics_are_injected_into_later_text_ai_context():
     assert "RecentVisualContextService.cs" in targets
 
 
-def test_post_order_photo_preset_is_suppressed_by_recent_official_kugou_app_visual_evidence():
+def test_post_order_photo_preset_uses_shop_configured_application_identity():
     helper = text("src/Bot/ChromeNs/RecentVisualContextService.cs")
     guard = text("src/Bot/ChromeNs/OrderGuidanceDeliveryGuard.cs")
 
     assert "TrySatisfyOrderPhotoRequirement" in helper
-    assert "LooksLikeKugouPhotoGuidance" in helper
-    assert "酷狗官方" in helper
-    assert "官方app" in helper
-    assert "酷狗音乐app" in helper
+    assert "LooksLikeConfiguredPhotoGuidance" in helper
+    assert "PhotoInstructionAllCues" in helper
+    assert "PhotoInstructionAnyCues" in helper
+    assert "TryResolveConfiguredApplication" in helper
+    assert "HasConfiguredOfficialAppEvidence" in helper
+    assert "ExplicitOfficialAppRegex" in helper
     assert "电视自带" in helper
     assert "系统内置" in helper
-    assert "Login state is deliberately not part of this decision" in helper
-    assert "TryFindHumanOfficialKugouConfirmation" in helper
-    assert "HumanOfficialKugouRegex" in helper
+    assert "TryFindHumanConfiguredAppConfirmation" in helper
     assert "人工客服已确认：" in helper
     assert "IsBotMarked" in helper
-    assert "The newest KuGou-related visual observation is authoritative" in helper
-    assert "if (!HasKugouOfficialAppEvidence(combined)) return false;" in helper
+    assert "The newest observation for a configured application is authoritative" in helper
+    assert "if (!HasConfiguredOfficialAppEvidence(" in helper
+    assert "酷狗" not in helper and "Kugou" not in helper
 
     visual_check = guard.index("RecentVisualContextService.TrySatisfyOrderPhotoRequirement")
     old_message_check = guard.index("FindEquivalentSellerReply", visual_check)
     assert visual_check < old_message_check
     assert "下单前图片已满足确认要求" in guard
-    assert "买家下单前已发送可确认的酷狗官方APP界面图片" in guard
+    assert "目标应用" in guard
+    assert "applicationName" in guard
     assert "if (!plan.IsBuyerFollowUp)" in guard
+
+
+def test_recent_account_evidence_is_derived_from_shop_configured_app_and_generic_field_labels():
+    visual = text("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    rules = text("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
+    assert "TryGetRecentAccountEvidence" in visual
+    assert "AccountVisualEvidence" in visual
+    assert "ApplicationName = applicationName" in visual
+    assert "AccountNicknameRegex" in visual
+    assert "AccountIdRegex" in visual
+    assert "TryResolveConfiguredApplication" in rules
+    assert 'string.Equals(name, "{应用名称}"' in rules
+    assert "酷狗" not in visual and "Kugou" not in visual
 
 
 def test_vision_prompt_uses_generic_configured_app_identity_without_login_requirement():
