@@ -54,16 +54,11 @@ namespace Bot.ChromeNs
 
         private static void StopLegacyMemoryTimer()
         {
-            try
+            try { KnowledgeMemoryRuntimeBridge.DisableForV2(); }
+            catch (Exception ex)
             {
-                var type = typeof(KnowledgeMemoryRuntimeBridge);
-                var timerField = type.GetField("_timer", BindingFlags.Static | BindingFlags.NonPublic);
-                var timer = timerField == null ? null : timerField.GetValue(null) as Timer;
-                if (timer == null) return;
-                try { timer.Dispose(); } catch { }
-                timerField.SetValue(null, null);
+                Log.ErrorWithMaxCount("关闭Knowledge Memory V1运行时包装器失败: " + ex.Message, 10);
             }
-            catch { }
         }
 
         private static void PrepareSeller(string shopKey, string seller)

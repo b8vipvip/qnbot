@@ -951,6 +951,47 @@ namespace Bot.ChromeNs
             return new object();
         }
 
+        public static void DisableForV2()
+        {
+            try
+            {
+                var timer = Interlocked.Exchange(ref _timer, null);
+                if (timer != null) timer.Dispose();
+            }
+            catch { }
+
+            try
+            {
+                QN[] qns;
+                try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
+                catch { qns = new QN[0]; }
+
+                var coordinatorField = typeof(QN).GetField("_buyerMessageBurstCoordinator", BindingFlags.Instance | BindingFlags.NonPublic);
+                var handlerField = typeof(BuyerMessageBurstCoordinator).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic);
+                var wrapperType = typeof(KnowledgeMemoryRuntimeBridge).GetNestedType("MemoryHandlerWrapper", BindingFlags.NonPublic);
+                var innerField = wrapperType == null ? null : wrapperType.GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (coordinatorField == null || handlerField == null || wrapperType == null || innerField == null) return;
+
+                foreach (var qn in qns)
+                {
+                    if (qn == null) continue;
+                    var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
+                    if (coordinator == null) continue;
+                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
+                    if (current == null || current.Target == null || !wrapperType.IsInstanceOfType(current.Target)) continue;
+                    var inner = innerField.GetValue(current.Target) as Func<BuyerMessageBurstLease, Task>;
+                    if (inner == null) continue;
+                    handlerField.SetValue(coordinator, inner);
+                    Log.Info("Knowledge Memory V1包装器已卸载，恢复原消息处理链: seller="
+                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("卸载Knowledge Memory V1包装器失败: " + ex.Message, 10);
+            }
+        }
+
         private static void PatchExisting()
         {
             try

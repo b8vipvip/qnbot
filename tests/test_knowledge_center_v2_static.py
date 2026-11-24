@@ -101,6 +101,7 @@ def test_working_memory_only_supplements_context_dependent_messages():
 def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     assert 'StopLegacyMemoryTimer();' in runtime
+    assert 'KnowledgeMemoryRuntimeBridge.DisableForV2();' in runtime
     assert 'TryHandleAsync(QN qn, BuyerMessageBurstLease lease)' in runtime
     assert 'if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))' in runtime
     assert 'ReplyModeService.IsLocalFirst' not in runtime

@@ -150,3 +150,18 @@ def test_verified_learning_accepts_short_standalone_procedures_but_blocks_volati
     assert 'ContainsVolatileCommerceFact(question + " " + answer)' in learning
     assert "支付成功|付款成功|充值成功|支付状态|付款状态|充值状态" in repository
     assert "支付成功|付款成功|充值成功|支付状态|付款状态|充值状态" in learning
+
+
+
+def test_v2_startup_unwraps_already_installed_memory_v1_handler():
+    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    disable = memory[
+        memory.index("public static void DisableForV2"):
+        memory.index("private static void PatchExisting")
+    ]
+    assert "timer.Dispose()" in disable
+    assert 'GetNestedType("MemoryHandlerWrapper"' in disable
+    assert 'GetField("_inner"' in disable
+    assert "handlerField.SetValue(coordinator, inner);" in disable
+    assert "KnowledgeMemoryRuntimeBridge.DisableForV2();" in runtime
