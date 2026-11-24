@@ -172,3 +172,20 @@ def test_withdrawn_image_cache_miss_fallback_rechecks_human_takeover_before_send
     assert "lifecycleLease.CancellationToken.IsCancellationRequested" in fallback
     assert "preSendGuard" in fallback
     assert "burst.BuyerNick, answer, 1, lifecycleLease.CancellationToken, preSendGuard" in fallback
+
+def test_inflight_image_download_refreshes_media_source_for_the_bounded_retry():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    prime = cache[
+        cache.index("public static void Prime("):
+        cache.index("private static void EnsureCleanupTimer")
+    ]
+
+    assert "var taskPending = record.DownloadTask != null && !record.DownloadTask.IsCompleted;" in prime
+    assert "if ((taskPending || canRetry) && !string.IsNullOrWhiteSpace(url))" in prime
+    assert "record.Url = url;" in prime
+    assert "if ((taskPending || canRetry) && message != null" in prime
+    assert "record.Message = message;" in prime
+    assert prime.index("record.Url = url;") < prime.index("if (canRetry)")
+    assert prime.index("record.Message = message;") < prime.index("if (canRetry)")
+    assert "record.DownloadAttempts++;" in prime
+
