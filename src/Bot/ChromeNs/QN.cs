@@ -271,7 +271,7 @@ namespace Bot.ChromeNs
                 var ok = await SendTextAsync(buyer, text, preSendGuard);
                 if (!ok && rpa.LastSendWasCancelled)
                 {
-                    Log.Info("自动发送因人工接管取消，禁止重试: buyer=" + buyer
+                    Log.Info("自动发送因人工接管或发送前状态门禁取消，禁止重试: buyer=" + buyer
                         + ", reason=" + rpa.GetSendFailureReason());
                     return false;
                 }
@@ -319,7 +319,7 @@ namespace Bot.ChromeNs
                     ok = await SendTextAsync(buyer, text, preSendGuard);
                     if (!ok && rpa.LastSendWasCancelled)
                     {
-                        Log.Info("自动发送重试期间检测到人工接管，立即停止后续重试: buyer=" + buyer
+                        Log.Info("自动发送重试期间人工接管或发送前状态门禁取消，立即停止后续重试: buyer=" + buyer
                             + ", reason=" + rpa.GetSendFailureReason());
                         return false;
                     }
@@ -367,7 +367,7 @@ namespace Bot.ChromeNs
             try
             {
                 if (preSendGuard()) return true;
-                rpa.SetSendFailure(
+                rpa.SetSendCancellation(
                     "发送前业务状态复核",
                     "会话或业务证据在" + (stage ?? "发送") + "前发生变化，已阻止发送");
                 Log.Info("可靠发送在最终业务状态复核处被抑制: stage=" + (stage ?? string.Empty));
@@ -375,7 +375,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                rpa.SetSendFailure(
+                rpa.SetSendCancellation(
                     "发送前业务状态复核",
                     "复核发生异常，已按安全策略阻止发送");
                 Log.ErrorWithMaxCount(
