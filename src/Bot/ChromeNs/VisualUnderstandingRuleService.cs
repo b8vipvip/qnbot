@@ -148,6 +148,51 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        public static bool TryResolveConfiguredApplication(
+            string shopKey,
+            string seller,
+            string visualText,
+            out string applicationName,
+            out VisualUnderstandingRuleEntity matchedRule)
+        {
+            applicationName = string.Empty;
+            matchedRule = null;
+            EnsureScope(shopKey, seller);
+            var normalizedText = NormalizeApplicationText(visualText);
+            if (normalizedText.Length == 0) return false;
+
+            foreach (var rule in Load(shopKey, seller).Where(x => x != null && x.Enabled))
+            {
+                foreach (var candidate in (rule.AppName ?? string.Empty)
+                    .Split(new[] { '\\r', '\\n', ',', '，', ';', '；', '|' },
+                        StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var name = (candidate ?? string.Empty).Trim();
+                    if (name.Length < 2
+                        || string.Equals(name, "{应用名称}", StringComparison.Ordinal)
+                        || string.Equals(name, "{品牌名称}", StringComparison.Ordinal)
+                        || name.Contains("{") || name.Contains("}"))
+                        continue;
+
+                    var normalizedName = NormalizeApplicationText(name);
+                    if (normalizedName.Length < 2
+                        || normalizedText.IndexOf(normalizedName, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+
+                    applicationName = name;
+                    matchedRule = rule;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static string NormalizeApplicationText(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\\s+", string.Empty)
+                .ToLowerInvariant();
+        }
+
         private static Dictionary<string, string> Extract(string patterns, string text)
         {
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
