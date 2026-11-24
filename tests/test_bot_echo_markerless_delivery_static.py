@@ -51,6 +51,19 @@ def test_first_inquiry_and_segmented_order_replies_share_the_reliable_send_path(
     qn = text("src/Bot/ChromeNs/QN.cs")
 
     assert "FirstInquiryFixedReplyService.TryResolve" in deterministic
-    assert "await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in deterministic
+    assert "item.BuyerNick, answer, 3, generationToken, preSendGuard" in deterministic
     assert 'const string segmentToken = "{分段符}"' in qn
     assert "await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)" in qn
+
+def test_legacy_fixed_reply_rechecks_manual_takeover_before_send_and_retry():
+    deterministic = text("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    method = deterministic[
+        deterministic.index("private static async Task<bool> SendFixedAsync"):
+        deterministic.index("public static async Task<bool> TryHandleAsync")
+    ]
+
+    assert "Func<bool> preSendGuard = () =>" in method
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in method
+    assert "item.ShopKey" in method
+    assert "item.BuyerNick, answer, 3, generationToken, preSendGuard" in method
+
