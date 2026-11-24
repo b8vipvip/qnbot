@@ -237,3 +237,16 @@ def test_existing_v2_records_keep_ai_generated_source_provenance_as_candidates()
     assert 'source.IndexOf("manual_ai_generated"' in candidate
     assert 'source.IndexOf("session"' in candidate
     assert 'source.IndexOf("人工回复"' in candidate
+
+
+
+def test_old_ai_source_records_are_normalized_to_candidate_status_without_disabling_them():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    helper = repository[
+        repository.index("private static void EnsureLegacyNonProductionMirrorsDisabled"):
+        repository.index("private static KnowledgeV2Record CloneAndNormalize")
+    ]
+    assert "KnowledgeV2AuthorityPolicy.IsCandidate(record)" in helper
+    assert '!string.Equals(record.Type, "learning_candidate"' in helper
+    assert 'record.Type = "learning_candidate";' in helper
+    assert 'record.Status = "candidate";' in helper
