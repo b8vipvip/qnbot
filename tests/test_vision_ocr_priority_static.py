@@ -126,9 +126,11 @@ def test_image_messages_are_not_silently_skipped_by_ocr_preflight():
     assert "if (!localUsable && !externalUsable)" in decision
     assert "仍进入视觉处理链路" in decision
     assert "由实际OCR请求记录连接失败" in decision
-    assert "message.toid.nick" not in decision.split("private static bool CanUseServerOcr", 1)[1].split(
-        "private static VisionMessageDecision Skip", 1
+    helper = decision.split("private static bool CanUseServerOcr", 1)[1].split(
+        "private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints", 1
     )[0]
+    assert "var sellerNick = message" not in helper
+    assert "LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey)" in helper
 
 
 def test_ocr_route_decision_is_logged_with_shop_scoped_capability_state():
