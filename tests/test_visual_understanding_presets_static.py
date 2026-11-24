@@ -83,11 +83,32 @@ def test_generic_settings_and_help_do_not_ship_brand_specific_examples():
     service = read("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
     help_window = read("src/Bot/Knowledge/KnowledgeCenterHelpWindow.cs")
     reception_page = read("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
-    assert "酷狗" not in service.split("private static void ApplyGenericAccountTemplate", 1)[1].split(
+    policy_profile = read("src/Bot/Knowledge/KnowledgePolicyProfileUi.cs")
+    correction_window = read("src/Bot/AssistWindow/Widget/Robot/ConversationEditWindow.cs")
+    reply_management = read("src/Bot/Knowledge/KnowledgeV2BotReplyManagementPage.cs")
+    memory_ui = read("src/Bot/Knowledge/KnowledgeMemoryEngineUi.cs")
+    operations_ui = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
+    recharge_settings = read("services/api-control-plane/static/manual-recharge.html")
+    vision_prompt = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    template = service.split("private static void ApplyGenericAccountTemplate", 1)[1].split(
         "private static void EnsureSchema", 1
     )[0]
-    assert "酷狗" not in help_window
-    assert "酷狗" not in reception_page
+    assert "酷狗" not in template
+    for surface in (help_window, reception_page, policy_profile, correction_window,
+                    reply_management, memory_ui, operations_ui, recharge_settings, vision_prompt):
+        assert "酷狗" not in surface
+
+
+def test_new_shop_reception_settings_use_generic_schema_and_path_with_legacy_read_support():
+    config = read("src/Bot/ChromeNs/KugouReceptionConfigService.cs")
+    default = config.split("private static JObject DefaultDocument", 1)[1].split(
+        "private static JObject MigrateLegacyV1", 1
+    )[0]
+    assert 'qnbot.shop.reception-rules.v3' in default
+    assert '"version"] = 3' in default
+    assert '"shop-reception-rules.json"' in config
+    assert "LegacySchemaV1" in config and "LegacySchemaV2" in config
+    assert "LegacyPathForShop" in config
 
 
 def test_visual_understanding_precedes_knowledge_v2_and_unmatched_images_fall_back_to_ai():
