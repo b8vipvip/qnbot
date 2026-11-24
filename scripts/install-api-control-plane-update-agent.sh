@@ -51,11 +51,52 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME"
-sleep 1
+
+if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+  echo "更新代理 systemd 服务未进入 active 状态。" >&2
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+  fi
+  exit 1
+fi
+
+HEARTBEAT_FILE="$DATA_DIR/server-update/agent.json"
+HEARTBEAT_OK=0
+for _ in {1..10}; do
+  if python3 - "$HEARTBEAT_FILE" <<'PY'
+from pathlib import Path
+import sys
+import time
+
+path = Path(sys.argv[1])
+try:
+    fresh = path.is_file() and time.time() - path.stat().st_mtime <= 10
+except OSError:
+    fresh = False
+raise SystemExit(0 if fresh else 1)
+PY
+  then
+    HEARTBEAT_OK=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$HEARTBEAT_OK" -ne 1 ]]; then
+  echo "更新代理进程已启动，但 API 数据目录没有收到新鲜心跳：$HEARTBEAT_FILE" >&2
+  echo "请检查 DATA_DIR 是否与 docker-compose.bt.yml 的 /data 挂载源一致。" >&2
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+  fi
+  exit 1
+fi
+
 systemctl --no-pager --full status "$SERVICE_NAME" || true
 
 echo
-echo "版本更新主机代理已安装。"
+echo "版本更新主机代理已安装并通过心跳检查。"
 echo "服务: $SERVICE_NAME"
 echo "状态目录: $DATA_DIR/server-update"
 echo "GitHub 源码通道: SSH $GITHUB_SSH_HOST:$GITHUB_SSH_PORT，失败最多重试 $GIT_FETCH_RETRIES 次"
