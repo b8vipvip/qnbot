@@ -578,12 +578,21 @@ namespace Bot.ChromeNs
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_cache_miss_fallback_cancelled");
                 return;
             }
+            var sendCancelled = !sent && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
             if (sent)
                 lifecycleLease.MarkCompleted("vision_cache_miss_fallback_sent");
+            else if (sendCancelled)
+                lifecycleLease.MarkCompleted("vision_cache_miss_fallback_cancelled");
             else
                 lifecycleLease.MarkFailed("vision_cache_miss_fallback_failed");
-            if (ctl != null) ctl.SetSendResult(sent, sent ? "已发送：图片未完整缓存，需要买家重发" : "发送失败");
-            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+            if (ctl != null) ctl.SetSendResult(sent, sent
+                ? "已发送：图片未完整缓存，需要买家重发"
+                : sendCancelled ? "未发送：人工接管或发送前会话门禁已取消" : "发送失败");
+            if (sendCancelled)
+                ResponseProgressTracker.Cancel(
+                    burst.SellerNick, burst.BuyerNick, "图片缓存兜底发送前会话门禁取消", burst.ShopKey);
+            else
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
         }
 
         private static bool TryRebindRecentCachedImage(
