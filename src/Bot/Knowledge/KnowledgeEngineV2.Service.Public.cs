@@ -339,7 +339,9 @@ namespace Bot.Knowledge
         {
             var snapshot = GetSnapshot(seller);
             var all = KnowledgeEngineV2Repository.LoadAll(seller)
-                .Where(x => x != null && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
+                .Where(x => x != null
+                    && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(x.SourceType, "visual_understanding_rule", StringComparison.OrdinalIgnoreCase))
                 .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead).ToList();
             return new KnowledgeV2Stats
             {
