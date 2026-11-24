@@ -187,9 +187,9 @@ namespace Bot.Knowledge
             document.Blocks.Add(LabelBlock("标题", "电视会员是什么"));
             document.Blocks.Add(LabelBlock("类型", "presale（售前事实）或 product_knowledge（明确绑定商品时）"));
             document.Blocks.Add(LabelBlock("Intent", "capability"));
-            document.Blocks.Add(LabelBlock("Subject", "酷狗音乐/电视/会员"));
+            document.Blocks.Add(LabelBlock("Subject", "{应用名称}/{设备类型}/{会员类型}"));
             document.Blocks.Add(LabelBlock("Predicate", "membership_type"));
-            document.Blocks.Add(LabelBlock("Entities", "酷狗音乐、电视、会员；建议每行一个"));
+            document.Blocks.Add(LabelBlock("Entities", "应用名称、设备类型、会员类型；建议每行一个"));
             document.Blocks.Add(LabelBlock("Aliases", "这个是电视会员吗 / TV版会员吗；把买家真实常用问法分行填写"));
             document.Blocks.Add(LabelBlock("标准答案", "只写已经确认的业务事实，不编造价格、库存、到账、物流或售后承诺"));
             document.Blocks.Add(LabelBlock("状态", "RiskLevel=normal，Enabled=true，Status=active"));
@@ -214,7 +214,7 @@ namespace Bot.Knowledge
             document.Blocks.Add(HeadingBlock("核心识别字段"));
             document.Blocks.Add(LabelBlock("标题", "这条知识解决的标准问题。写成买家会问的完整问题，不要只写“会员”或“售后”。"));
             document.Blocks.Add(LabelBlock("Intent", "买家的目的。常用值：general、capability、purchase、price、time、how_to、troubleshoot、requirements、after_sale。"));
-            document.Blocks.Add(LabelBlock("Subject", "业务对象，例如“酷狗音乐/电视/会员”。同一业务对象应保持相同写法，避免被拆成多个事实池。"));
+            document.Blocks.Add(LabelBlock("Subject", "业务对象，例如“{应用名称}/{设备类型}/{会员类型}”。同一业务对象应保持相同写法，避免被拆成多个事实池。"));
             document.Blocks.Add(LabelBlock("Predicate", "正在询问的属性。常用值：membership_type、purchase_channel、price、device_support、feature_support、activation_method、account_binding、refund_policy、time、troubleshooting、requirements。"));
             document.Blocks.Add(LabelBlock("Entities", "用于实体召回的品牌、平台、设备、会员、功能等关键词。商品 ID 需要参与问法检索时，也应保留对应实体/问法。"));
             document.Blocks.Add(LabelBlock("Aliases", "同义问法和常见口语；精确或近似精确 Alias 是本地直答的重要条件。不要把答案、无关关键词或不同业务问题混在同一条里。"));
