@@ -4432,8 +4432,8 @@ namespace Bot.ChromeNs
                 {
                     // Never delete completed reports whose commerce post-processing is
                     // still pending; an offline shop must not turn a retryable report into loss.
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 order by UpdatedAtTicks desc limit " + MaxReports + ")");
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and (coalesce(Status,'') != '学习完成' or CommerceScenarioProcessedAtTicks > 0) and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and (coalesce(Status,'') != '学习完成' or CommerceScenarioProcessedAtTicks > 0) and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and (coalesce(Status,'') != '学习完成' or CommerceScenarioProcessedAtTicks > 0) order by UpdatedAtTicks desc limit " + MaxReports + ")");
                 }
             }
             catch (Exception ex)

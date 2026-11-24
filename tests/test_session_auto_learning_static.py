@@ -555,8 +555,8 @@ def test_learning_cleanup_preserves_pending_reports_and_startup_can_retry_schema
         service.index("public static void Initialize()"):
         service.index("public static void ObserveLiveMessage")
     ]
-    assert "where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 and EntityId not in" in cleanup
-    assert "select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0" in cleanup
+    assert "where CompletedAtTicks > 0 and (coalesce(Status,'') != '学习完成' or CommerceScenarioProcessedAtTicks > 0) and EntityId not in" in cleanup
+    assert "select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and (coalesce(Status,'') != '学习完成' or CommerceScenarioProcessedAtTicks > 0)" in cleanup
     assert "Interlocked.CompareExchange(ref _initialized, 1, 0)" in init
     assert "Interlocked.Exchange(ref _initialized, 0);" in init
 

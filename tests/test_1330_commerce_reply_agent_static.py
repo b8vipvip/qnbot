@@ -261,5 +261,6 @@ def test_commerce_report_retention_never_deletes_pending_postprocessing_work():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     cleanup = service[service.index("private static void CleanupReports()"):service.index("private static void EnsureSchema()")]
     assert cleanup.count("CommerceScenarioProcessedAtTicks > 0") == 3
+    assert cleanup.count("coalesce(Status,'') != '学习完成'") == 3
     assert "commerceScenarioMarkerAdded" in service
     assert "set CommerceScenarioProcessedAtTicks = CompletedAtTicks where CompletedAtTicks > 0" in service
