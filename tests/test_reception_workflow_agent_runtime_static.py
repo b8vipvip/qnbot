@@ -258,7 +258,7 @@ def test_stale_cancel_cannot_release_a_newer_workflow_version_reservation():
 
 
 def test_workflow_send_is_blocked_if_auto_guidance_is_disabled_after_generation():
-    policy = read("src/Bot/ChromeNs/KugouReceptionPolicy.cs")
+    policy = read("src/Bot/ChromeNs/ShopReceptionPolicy.cs")
     guard = policy[
         policy.index("internal static bool BlockOutgoing("):
         policy.index("internal static bool IsScreenshotQuestion")
