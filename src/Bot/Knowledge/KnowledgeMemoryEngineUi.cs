@@ -117,7 +117,7 @@ namespace Bot.Knowledge
             {
                 Height = 32,
                 VerticalContentAlignment = VerticalAlignment.Center,
-                Text = "这个是电视机酷狗音乐会员吗？"
+                Text = "这个是电视机上的会员服务吗？"
             };
             Grid.SetRow(_question, 1);
             queryPanel.Children.Add(_question);
