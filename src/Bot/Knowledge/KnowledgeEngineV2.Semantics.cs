@@ -507,7 +507,7 @@ namespace Bot.Knowledge
             var result = new List<string>();
             var labeled = Regex.Matches(
                 text,
-                @"(?:商品\s*(?:ID|编号|编码)|宝贝\s*(?:ID|编号)|(?:product|item|goods)[_\s-]?id)\s*[""']?\s*[:：=#]?\s*[""']?(\d{8,20})",
+                @"(?:(?:商品|产品)\s*(?:ID|编号|编码)|宝贝\s*(?:ID|编号|编码)|(?:product|item|goods)[_\s-]?id)\s*[""']?\s*[:：=#]?\s*[""']?(\d{8,20})",
                 RegexOptions.IgnoreCase);
             result.AddRange(labeled.Cast<Match>()
                 .Where(x => x.Groups.Count > 1 && x.Groups[1].Success)
