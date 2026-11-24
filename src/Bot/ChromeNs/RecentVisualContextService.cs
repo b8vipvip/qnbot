@@ -252,7 +252,7 @@ namespace Bot.ChromeNs
             evidence = string.Empty;
             var shop = ResolveShop(shopKey, seller);
             if (shop == null) return false;
-            var config = KugouReceptionConfigService.GetConfig(shop);
+            var config = ShopReceptionConfigService.GetConfig(shop);
             if (config == null || !config.Enabled
                 || !LooksLikeConfiguredPhotoGuidance(guidanceText, config))
                 return false;
@@ -305,7 +305,7 @@ namespace Bot.ChromeNs
 
         internal static bool LooksLikeConfiguredPhotoGuidance(
             string guidanceText,
-            KugouReceptionConfig config)
+            ShopReceptionConfig config)
         {
             var text = (guidanceText ?? string.Empty).Trim();
             if (!PhotoRequestRegex.IsMatch(text) || config == null || !config.Enabled) return false;
