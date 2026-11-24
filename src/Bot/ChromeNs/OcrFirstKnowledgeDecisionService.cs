@@ -89,6 +89,7 @@ namespace Bot.ChromeNs
                     task.SellerNick,
                     task.ShopKey,
                     task.BuyerNick,
+                    task.MessageKey,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
