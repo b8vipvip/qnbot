@@ -98,8 +98,11 @@ namespace Bot.ChromeNs
                     (id ?? string.Empty).Trim(), shopKey, seller) ?? new List<object>())
                     .OfType<VisualUnderstandingRuleEntity>().ToList();
                 if (rows.Count == 0) return false;
-                DbHelper.Db.Execute("delete from VisualUnderstandingRuleEntity where EntityId = ? and ShopKey = ? and Seller = ?",
-                    rows[0].EntityId, shopKey, seller);
+                // Keep the built-in preset as a disabled row so it is not silently
+                // recreated on the next page refresh. Users can re-enable it explicitly.
+                rows[0].Enabled = false;
+                rows[0].UpdatedAtTicks = DateTime.Now.Ticks;
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { rows[0] });
                 return true;
             }
         }
