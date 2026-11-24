@@ -156,7 +156,7 @@ def test_ocr_and_priority_connections_use_authoritative_shopkey_not_ambient_nick
 def test_ocr_knowledge_lookup_uses_authoritative_shop_seller_and_image_alias_is_allowed():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    assert "var knowledgeSeller = shop == null ? string.Empty" in decision
+    assert "knowledgeSeller = shop == null ? string.Empty" in decision
     assert "KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question)" in decision
     assert "BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer)" in decision
     assert "var isVisionItem = item.VisionDecision != null" in burst
