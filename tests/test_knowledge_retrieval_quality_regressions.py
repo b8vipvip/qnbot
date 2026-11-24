@@ -43,7 +43,7 @@ def test_non_direct_v2_matches_are_forwarded_to_ai_as_approved_context():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     method = runtime[
         runtime.index("internal static async Task<KnowledgeV2RuntimeResult> TryHandleWithContextAsync"):
-        runtime.index("private static string BuildContextPromptAddon")
+        runtime.index("internal static string BuildContextPromptAddon")
     ]
     assert "BuildContextPromptAddon(decision)" in method
     assert "KnowledgeV2AuthorityPolicy.IsProductionApproved(match.Record)" in runtime
@@ -57,7 +57,7 @@ def test_non_direct_v2_matches_are_forwarded_to_ai_as_approved_context():
 def test_v2_context_handoff_excludes_conflict_candidate_and_high_risk_records():
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     helper = runtime[
-        runtime.index("private static string BuildContextPromptAddon"):
+        runtime.index("internal static string BuildContextPromptAddon"):
         runtime.index("private static string SafeContext")
     ]
     assert "decision.HasConflict" in helper
@@ -91,3 +91,18 @@ def test_legacy_candidate_filter_applies_to_all_fallback_retrieval_paths():
     assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in smart
     assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in local
     assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in embedding
+
+
+
+def test_ocr_non_direct_v2_context_reaches_multimodal_and_ocr_text_fallback():
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+
+    assert "KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision)" in ocr
+    assert "KnowledgeV2ContextPromptAddon = contextAddon" in ocr
+    assert "internal static string BuildContextPromptAddon" in runtime
+    assert "localDecision != null && localDecision.Success" in vision
+    assert "localDecision.KnowledgeV2ContextPromptAddon" in vision
+    assert "knowledgeV2ContextAddon ?? string.Empty" in vision
+    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon)" in vision

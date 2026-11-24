@@ -52,7 +52,8 @@ def test_no_multimodal_endpoint_can_use_ocr_text_only_with_strict_guards():
     vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
     gate = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     send = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
-    assert "TryOcrTextAiFallbackAsync(task, cancellationToken)" in vision
+    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon)" in vision
+    assert "knowledgeV2ContextAddon ?? string.Empty" in vision
     assert "LocalOcrService.TryGetCachedRecognition" in vision
     assert "ocr.Confidence < 0.88" in vision
     assert "MyOpenAI.CallStructuredChat(" in vision
