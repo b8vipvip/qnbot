@@ -65,6 +65,7 @@ def test_install_is_idempotent(monkeypatch):
     assert [(method, path) for method, path, _ in routes] == [
         ("GET", "/api/admin/ocr/settings"),
         ("GET", "/api/admin/ocr/tasks"),
+        ("GET", "/api/admin/ocr/tasks/{task_id}"),
         ("PUT", "/api/admin/ocr/settings"),
         ("POST", "/api/admin/ocr/settings/reset"),
         ("POST", "/api/runtime/v1/ocr"),

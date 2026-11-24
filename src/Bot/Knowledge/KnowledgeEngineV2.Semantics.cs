@@ -21,7 +21,7 @@ namespace Bot.Knowledge
             var text = (entry.Title ?? string.Empty) + " " + (entry.Keywords ?? string.Empty) + " " + (entry.Answer ?? string.Empty);
             var query = Parse(entry.Title ?? string.Empty, null);
             var type = ResolveType(entry.Category, query.Intent, query.Predicate, entry.Answer, entry.SourceType);
-            var isUnapprovedLearning = Bot.ChromeNs.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)
+            var isUnapprovedLearning = KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)
                 || IsPendingCandidate(entry.SourceType, entry.Category);
             if (isUnapprovedLearning) type = "learning_candidate";
             var entities = ExtractEntities(text);

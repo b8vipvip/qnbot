@@ -140,6 +140,10 @@ namespace Bot.ChromeNs
             var endpoint = ResolveControlPlaneEndpoint(sellerNick, shopKey);
             if (endpoint == null)
             {
+                Log.ErrorWithMaxCount(
+                    "服务端OCR未发起：当前ShopKey无法解析本店控制面连接或令牌: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", sha256=" + ShortHash(sha256), 20);
                 return Failure("未找到当前店铺可用的服务端控制面连接或令牌", startedAt, sha256);
             }
 
@@ -281,8 +285,10 @@ namespace Bot.ChromeNs
                 if (shopKey.Length > 0)
                 {
                     shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                    // The supplied ShopKey is the authoritative identity. Resolve and enter
+                    // that exact scope even when another shop is the ambient AsyncLocal context.
                     if (shop == null
-                        || (current != null && !string.Equals(current.ShopKey, shopKey, StringComparison.Ordinal)))
+                        || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
                         return null;
                 }
                 else if (current != null)
@@ -297,7 +303,7 @@ namespace Bot.ChromeNs
                 }
 
                 if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)
-                    || (sellerNick.Length > 0
+                    || (shopKey.Length == 0 && sellerNick.Length > 0
                         && !string.Equals((shop.SellerNick ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
                     || (shopKey.Length > 0
                         && !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)))

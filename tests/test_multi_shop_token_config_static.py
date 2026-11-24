@@ -199,15 +199,15 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
 
 def test_vision_model_selection_uses_exact_shopkey_and_never_global_fallback():
     source = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
-    assert "ResolveShopVisionEndpoints(message, shopKey)" in source
-    assert "CanUseServerOcr(seller, shopKey)" in source
+    assert "ResolveShopVisionEndpoints(shopKey)" in source
+    assert "CanUseServerOcr(shopKey)" in source
     assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in source
     assert "using (ShopSettingsScope.Enter(shop))" in source
     assert "AiEndpointStore.GetVisionEnabledEndpoints" in source
     assert "new AiEndpointConfig[0]" in source
     assert "fail-closed且不回退全局配置" in source
     assert "ResolveRuntimeBySellerNick" not in source
-    assert "本店未配置可用的视觉模型" in source
+    assert "已跳过：无法确认图片所属店铺身份" in source
 
 
 def test_recovered_buyer_messages_reenter_authoritative_shop_scope():

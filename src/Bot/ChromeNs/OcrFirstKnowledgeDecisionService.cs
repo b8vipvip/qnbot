@@ -76,6 +76,12 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("OCR-first服务端OCR失败，继续视觉模型链路: " + ex.Message, 20);
                 return null;
             }
+            if (ocr == null || !ocr.Success)
+            {
+                Log.Info("OCR-first服务端OCR未成功，继续视觉/文字兜底: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                    + ", resultAvailable=false");
+            }
             if (!IsHighConfidenceUsefulText(ocr))
             {
                 Log.Info("OCR-first未满足本地知识直答阈值，继续视觉模型链路: seller=" + task.SellerNick
@@ -87,27 +93,30 @@ namespace Bot.ChromeNs
 
             var question = BuildKnowledgeQuestion(task.CombinedQuestion, ocr.Text);
             KnowledgeV2Decision decision;
+            string knowledgeSeller = string.Empty;
             try
             {
                 var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
-                if (shop == null
-                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
-                        (task.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+                knowledgeSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+                if (shop == null || knowledgeSeller.Length == 0)
                 {
-                    Log.ErrorWithMaxCount("OCR已完成，但Knowledge V2缺少匹配的ShopKey，禁止跨店检索。", 20);
+                    Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析Knowledge V2店铺，禁止跨店检索。", 20);
                     return null;
                 }
 
+                // Message display nicknames can be aliases. Knowledge V2 must use the seller
+                // identity owned by the ShopKey, never the untrusted message.toid.nick value.
                 using (ShopSettingsScope.Enter(shop, false))
                 {
-                    if (!KnowledgeEngineV2Service.IsEnabled(task.SellerNick)
-                        || !KnowledgeEngineV2Service.IsSnapshotReady(task.SellerNick))
+                    if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller)
+                        || !KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
                     {
-                        Log.Info("服务端OCR已完成，但Knowledge V2尚未就绪；保留OCR缓存并继续视觉/文字兜底: seller="
-                            + task.SellerNick + ", buyer=" + task.BuyerNick);
+                        Log.Info("服务端OCR已完成，但Knowledge V2尚未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                            + ", buyer=" + task.BuyerNick);
                         return null;
                     }
-                    decision = KnowledgeEngineV2Service.Resolve(task.SellerNick, task.BuyerNick, question);
+                    decision = KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question);
                 }
             }
             catch (Exception ex)
@@ -135,9 +144,9 @@ namespace Bot.ChromeNs
                 };
             }
 
-            var answer = BotMessageSuffixService.Apply(task.SellerNick, decision.Answer);
+            var answer = BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer);
             KnowledgeLearningService.RegisterAnswerSource(
-                task.SellerNick,
+                knowledgeSeller,
                 task.BuyerNick,
                 task.CombinedQuestion,
                 answer,

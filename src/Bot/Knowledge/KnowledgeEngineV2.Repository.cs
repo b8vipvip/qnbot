@@ -1413,6 +1413,7 @@ namespace Bot.Knowledge
             {
                 foreach (var record in legacyCandidatesToNormalize)
                 {
+                    record.Type = "learning_candidate";
                     record.Status = "candidate";
                     record.UpdatedAt = DateTime.Now;
                 }
