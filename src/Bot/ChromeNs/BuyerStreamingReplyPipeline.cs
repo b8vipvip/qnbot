@@ -695,7 +695,7 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             try
             {
-                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24);
+                var recent = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24, shopKey);
                 // Use the typed BuyerSessionAgent event stream, not every unmarked seller
                 // bubble: Qianniu's automatic shop greetings can lack [A], and must not
                 // be mistaken for an intentional human takeover.
