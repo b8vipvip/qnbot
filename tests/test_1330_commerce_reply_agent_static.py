@@ -260,6 +260,6 @@ def test_commerce_learning_uses_a_durable_marker_for_restart_recovery():
 def test_commerce_report_retention_never_deletes_pending_postprocessing_work():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     cleanup = service[service.index("private static void CleanupReports()"):service.index("private static void EnsureSchema()")]
-    assert cleanup.count("CommerceScenarioProcessedAtTicks > 0") == 2
+    assert cleanup.count("CommerceScenarioProcessedAtTicks > 0") == 3
     assert "commerceScenarioMarkerAdded" in service
     assert "set CommerceScenarioProcessedAtTicks = CompletedAtTicks where CompletedAtTicks > 0" in service
