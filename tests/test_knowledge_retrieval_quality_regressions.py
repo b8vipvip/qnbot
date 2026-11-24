@@ -210,7 +210,7 @@ def test_legacy_ai_generated_flag_is_authoritative_even_when_source_metadata_is_
     ]
     assert "if (entry.AiGenerated) return true;" in helper
     assert "manual_ai_generated" in helper
-    assert "var isUnapprovedLearning = Bot.ChromeNs.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
+    assert "var isUnapprovedLearning = KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(entry)" in from_legacy
     assert 'if (isUnapprovedLearning) type = "learning_candidate";' in from_legacy
     assert "Status = isUnapprovedLearning ? \"candidate\" : \"active\"" in from_legacy
 
