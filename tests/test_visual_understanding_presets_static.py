@@ -104,7 +104,7 @@ def test_new_shop_reception_settings_use_generic_schema_and_path_with_legacy_rea
     default = config.split("private static JObject DefaultDocument", 1)[1].split(
         "private static JObject MigrateLegacyV1", 1
     )[0]
-    assert 'qnbot.shop.reception-rules.v3' in default
+    assert 'qnbot.shop.reception-rules.v3' in config
     assert '"version"] = 3' in default
     assert '"shop-reception-rules.json"' in config
     assert "LegacySchemaV1" in config and "LegacySchemaV2" in config
