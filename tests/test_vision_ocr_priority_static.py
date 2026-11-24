@@ -86,8 +86,13 @@ def test_server_ocr_runs_before_knowledge_readiness_and_uses_shopkey():
     assert "task.ShopKey," in decision
     assert "task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient" in decision
     assert "ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey)" in decision
-    assert "LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)" in vision_gate
-    assert "CanUseServerOcr" in vision_gate
+    assert "LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey)" in vision_gate
+    assert "CanUseServerOcr(shopKey)" in vision_gate
+    assert "HasAuthoritativeShopScope(shopKey)" in vision_gate
+    assert "if (!shopScopeUsable)" in vision_gate
+    assert "policy=attempt_and_record" in vision_gate
+    assert "if (!usable)" not in vision_gate
+    assert "ResolveShopVisionEndpoints(shopKey)" in vision_gate
 
 
 def test_ai_first_multimodal_path_still_attaches_shop_scoped_server_ocr():
@@ -112,3 +117,48 @@ def test_knowledge_source_label_identifies_server_ocr_not_local_ocr():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     assert '"服务端OCR+知识库V2"' in decision
     assert '"本地OCR+知识库V2"' not in decision
+
+
+
+def test_image_messages_are_not_silently_skipped_by_ocr_preflight():
+    decision = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    assert "var shopScopeUsable = HasAuthoritativeShopScope(shopKey)" in decision
+    assert "if (!localUsable && !externalUsable)" in decision
+    assert "仍进入视觉处理链路" in decision
+    assert "由实际OCR处理阶段记录连接失败" in decision
+    helper = decision.split("private static bool CanUseServerOcr", 1)[1].split(
+        "private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints", 1
+    )[0]
+    assert "var sellerNick = message" not in helper
+    assert "LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey)" in helper
+
+
+def test_ocr_route_decision_is_logged_with_shop_scoped_capability_state():
+    decision = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    assert "图片消息路由探测" in decision
+    assert "serverOcrConfigured=" in decision
+    assert "visionEndpoints=" in decision
+    assert "买家消息路由决策" in qn
+    assert "visionDecision.Kind" in qn
+
+
+
+def test_ocr_and_priority_connections_use_authoritative_shopkey_not_ambient_nickname():
+    local_ocr = read("src/Bot/ChromeNs/LocalOcrService.cs")
+    priority = read("src/Bot/ChromeNs/VisionOcrPriorityService.cs")
+    for source in (local_ocr, priority):
+        assert "ShopContextLocator.ResolveRuntimeByShopKey(shopKey)" in source
+        assert "shopKey.Length == 0 && sellerNick.Length > 0" in source
+        assert "current != null && !string.Equals(current.ShopKey, shopKey" not in source
+
+
+def test_ocr_knowledge_lookup_uses_authoritative_shop_seller_and_image_alias_is_allowed():
+    decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert "knowledgeSeller = shop == null ? string.Empty" in decision
+    assert "KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question)" in decision
+    assert "BotMessageSuffixService.Apply(knowledgeSeller, decision.Answer)" in decision
+    assert "var isVisionItem = item.VisionDecision != null" in burst
+    assert "(!isVisionItem && !sellerMatchesShop)" in burst
+    assert "图片消息使用权威ShopKey店铺作用域继续处理" in burst
