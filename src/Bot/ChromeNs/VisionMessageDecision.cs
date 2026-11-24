@@ -60,7 +60,7 @@ namespace Bot.ChromeNs
                 var shopScopeUsable = HasAuthoritativeShopScope(shopKey);
                 var localUsable = CanUseServerOcr(shopKey);
                 var selectedEndpoints = (ResolveShopVisionEndpoints(shopKey) ?? new AiEndpointConfig[0]).ToList();
-                var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
+                var externalUsable = selectedEndpoints.Any(
                     e => e != null
                         && e.Enabled
                         && e.SupportsVision
