@@ -44,7 +44,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     || string.IsNullOrWhiteSpace(parsed.Subject))
                 {
                     MessageBox.Show("请在“适用问题”中补充明确业务主体与场景。"
-                        + "\n例如：酷狗会员支持电视端使用吗？"
+                        + "\n例如：某品牌会员支持电视端使用吗？"
                         + "\n[图片]或“是电视用的吗？”不能对所有买家无条件优先回复。",
                         "人工最高优先直答范围", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
