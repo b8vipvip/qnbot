@@ -351,9 +351,9 @@ namespace Bot.ChromeNs
 
             string businessBlock;
             var businessBlocked = workflowDecision != null
-                ? KugouReceptionPolicy.BlockOutgoing(
+                ? ShopReceptionPolicy.BlockOutgoing(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock, burst.ShopKey)
-                : KugouReceptionPolicy.BlockOutgoing(
+                : ShopReceptionPolicy.BlockOutgoing(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, answer, out businessBlock);
             if (businessBlocked)
             {
@@ -643,10 +643,10 @@ namespace Bot.ChromeNs
             string seller, string buyer, string question, out string reason)
         {
             reason = string.Empty;
-            if (KugouReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
+            if (ShopReceptionPolicy.TryWaitForEvidence(seller, buyer, question, out reason))
                 return true;
-            if (!KugouReceptionPolicy.Applies(seller)
-                || !KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait)
+            if (!ShopReceptionPolicy.Applies(seller)
+                || !ShopReceptionConfigService.GetConfig(seller).EnablePhoneWait)
                 return false;
             var input = (question ?? string.Empty).Trim();
             if (!MobileOnly.IsMatch(input)) return false;
@@ -656,7 +656,7 @@ namespace Bot.ChromeNs
             if (lastSeller == null || lastSeller.Timestamp == DateTime.MinValue
                 || lastSeller.Timestamp < DateTime.Now.AddHours(-2)) return false;
             var instruction = lastSeller.Text ?? string.Empty;
-            var config = KugouReceptionConfigService.GetConfig(seller);
+            var config = ShopReceptionConfigService.GetConfig(seller);
             if (!RecentVisualContextService.LooksLikeConfiguredPhotoGuidance(instruction, config))
                 return false;
             // A later instruction to send a phone number is a different workflow step.
@@ -1105,7 +1105,7 @@ namespace Bot.ChromeNs
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
             dynamicSystemPrompt += knowledgeV2ContextAddon ?? string.Empty;
             dynamicSystemPrompt += ReceptionFlowPolicy.BuildPromptAddon(seller, buyer, question);
-            dynamicSystemPrompt += KugouReceptionPolicy.BuildPromptAddon(seller, buyer);
+            dynamicSystemPrompt += ShopReceptionPolicy.BuildPromptAddon(seller, buyer);
             dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
