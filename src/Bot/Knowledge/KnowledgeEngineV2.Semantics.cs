@@ -293,6 +293,23 @@ namespace Bot.Knowledge
                 return false;
             }
 
+            // ProductIds is a structured product scope as well as a recall key.
+            // A buyer may identify a product by name without supplying its numeric ID,
+            // so keep name-based retrieval available in that case. When the current
+            // message does contain an explicit product ID, however, never let a record
+            // bound to a different product answer or enter the approved context set.
+            var recordProductIds = NormalizeProductIds(record.ProductIds);
+            var queryProductIds = NormalizeProductIds(
+                (query.Entities ?? new List<string>())
+                    .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)));
+            if (recordProductIds.Count > 0 && queryProductIds.Count > 0
+                && !recordProductIds.Any(id => queryProductIds.Any(queryId =>
+                    string.Equals(id, queryId, StringComparison.OrdinalIgnoreCase))))
+            {
+                reason = "商品ID与当前问题中的商品不匹配";
+                return false;
+            }
+
             var exclusions = NormalizeScopeTerms(record.Exclusions);
             var excluded = exclusions.FirstOrDefault(x => ScopeTermMatches(x, query));
             if (!string.IsNullOrWhiteSpace(excluded))
@@ -342,6 +359,21 @@ namespace Bot.Knowledge
                 + "|c=" + conditions
                 + "|r=" + required
                 + "|x=" + exclusions;
+        }
+
+        private static List<string> NormalizeProductIds(IEnumerable<string> values)
+        {
+            return (values ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Select(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)
+                    ? x.Substring("product:".Length).Trim()
+                    : x)
+                .Select(Compact)
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(20)
+                .ToList();
         }
 
         private static List<string> NormalizeScopeTerms(IEnumerable<string> terms)
