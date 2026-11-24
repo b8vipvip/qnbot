@@ -446,9 +446,8 @@ namespace Bot.ChromeNs
                 if (shop == null) return "没有可用的店铺作用域，禁止跨店铺读取审计。";
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
-                    if (string.IsNullOrWhiteSpace(directory)) return "没有审计目录。";
-                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    var path = ExistingAuditPath();
+                    if (string.IsNullOrWhiteSpace(path)) return "没有审计目录。";
                     string error;
                     var content = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (!string.IsNullOrWhiteSpace(error)) return "读取审计失败：" + error;
@@ -473,9 +472,8 @@ namespace Bot.ChromeNs
                 if (shop == null) return string.Empty;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                    var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
-                    if (string.IsNullOrWhiteSpace(directory)) return string.Empty;
-                    var path = Path.Combine(directory, "kugou-reception-decisions.json");
+                    var path = ExistingAuditPath();
+                    if (string.IsNullOrWhiteSpace(path)) return string.Empty;
                     string error;
                     var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
                     if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
@@ -511,49 +509,98 @@ namespace Bot.ChromeNs
                 if (shop == null) return;
                 using (ShopSettingsScope.Enter(shop))
                 {
-                var basePath = BusinessPolicyProfileService.GetUserPath();
-                var directory = Path.GetDirectoryName(basePath);
-                if (string.IsNullOrWhiteSpace(directory)) return;
-                var path = Path.Combine(directory, "kugou-reception-decisions.json");
-                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "KugouReceptionAudit", 1500))
-                {
-                    if (lease == null || !lease.Acquired) return;
-                    string error;
-                    var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 2, 25, out error);
-                    if (!string.IsNullOrWhiteSpace(error))
-                        throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
-                    List<ReceptionAuditEntry> entries;
-                    if (string.IsNullOrWhiteSpace(raw))
+                    var path = AuditPath(false);
+                    var legacyPath = AuditPath(true);
+                    if (string.IsNullOrWhiteSpace(path)) return;
+
+                    using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionAudit", 1500))
                     {
-                        entries = new List<ReceptionAuditEntry>();
-                    }
-                    else
-                    {
-                        try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw); }
-                        catch (Exception ex)
+                        if (lease == null || !lease.Acquired) return;
+                        var sourcePath = File.Exists(path) ? path : legacyPath;
+                        if (!File.Exists(path) && File.Exists(legacyPath))
                         {
-                            throw new InvalidDataException("既有接待审计结构损坏，保留原文件不覆盖。", ex);
+                            // The legacy journal is read under its old lock while a new
+                            // generic journal is created. The original file is never deleted.
+                            using (var legacyLease = CrossProcessAtomicStateFile.Acquire(
+                                legacyPath, "KugouReceptionAudit", 1500))
+                            {
+                                if (legacyLease == null || !legacyLease.Acquired) return;
+                                AppendAuditEntry(path, sourcePath, seller, buyer, action, stage, evidence, ruleId);
+                            }
                         }
-                        if (entries == null)
-                            throw new InvalidDataException("既有接待审计不是有效数组，保留原文件不覆盖。");
+                        else
+                        {
+                            AppendAuditEntry(path, sourcePath, seller, buyer, action, stage, evidence, ruleId);
+                        }
                     }
-                    entries.Add(new ReceptionAuditEntry
-                    {
-                        AtUtc = DateTime.UtcNow, BuyerHash = HashBuyer(seller, buyer),
-                        Decision = action, Stage = stage, Evidence = evidence, RuleId = ruleId
-                    });
-                    entries = entries.Where(x => x != null && x.AtUtc > DateTime.UtcNow.AddDays(-7))
-                        .OrderByDescending(x => x.AtUtc).Take(300).ToList();
-                    if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
-                        path, JsonConvert.SerializeObject(entries, Formatting.Indented), 2, 25, out error))
-                        Log.ErrorWithMaxCount("接待决策审计保存失败: " + error, 10);
-                }
                 }
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("接待决策审计异常: " + ex.Message, 10);
             }
+        }
+
+        private static string AuditPath(bool legacy)
+        {
+            var directory = Path.GetDirectoryName(BusinessPolicyProfileService.GetUserPath());
+            if (string.IsNullOrWhiteSpace(directory)) return string.Empty;
+            return Path.Combine(directory, legacy
+                ? "kugou-reception-decisions.json"
+                : "shop-reception-decisions.json");
+        }
+
+        private static string ExistingAuditPath()
+        {
+            var current = AuditPath(false);
+            if (!string.IsNullOrWhiteSpace(current) && File.Exists(current)) return current;
+            return AuditPath(true);
+        }
+
+        private static void AppendAuditEntry(
+            string path,
+            string sourcePath,
+            string seller,
+            string buyer,
+            string action,
+            string stage,
+            string evidence,
+            string ruleId)
+        {
+            string error;
+            var raw = File.Exists(sourcePath)
+                ? CrossProcessAtomicStateFile.ReadAllTextShared(sourcePath, 2, 25, out error)
+                : string.Empty;
+            if (!File.Exists(sourcePath)) error = string.Empty;
+            if (!string.IsNullOrWhiteSpace(error))
+                throw new IOException("读取既有接待审计失败，保留原文件不覆盖：" + error);
+
+            List<ReceptionAuditEntry> entries;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                entries = new List<ReceptionAuditEntry>();
+            }
+            else
+            {
+                try { entries = JsonConvert.DeserializeObject<List<ReceptionAuditEntry>>(raw); }
+                catch (Exception ex)
+                {
+                    throw new InvalidDataException("既有接待审计结构损坏，保留原文件不覆盖。", ex);
+                }
+                if (entries == null)
+                    throw new InvalidDataException("既有接待审计不是有效数组，保留原文件不覆盖。");
+            }
+
+            entries.Add(new ReceptionAuditEntry
+            {
+                AtUtc = DateTime.UtcNow, BuyerHash = HashBuyer(seller, buyer),
+                Decision = action, Stage = stage, Evidence = evidence, RuleId = ruleId
+            });
+            entries = entries.Where(x => x != null && x.AtUtc > DateTime.UtcNow.AddDays(-7))
+                .OrderByDescending(x => x.AtUtc).Take(300).ToList();
+            if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                path, JsonConvert.SerializeObject(entries, Formatting.Indented), 2, 25, out error))
+                Log.ErrorWithMaxCount("接待决策审计保存失败: " + error, 10);
         }
 
         private static string HashBuyer(string seller, string buyer)
