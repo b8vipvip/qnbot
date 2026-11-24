@@ -221,8 +221,9 @@ def test_commerce_learning_does_not_drop_report_notifications_while_processing()
     assert "Interlocked.CompareExchange(ref _pendingUpdates, 0, 1)" in changed
     assert "Interlocked.Exchange(ref _processing, 0)" in changed
     assert "OnReportsChanged();" in changed
-    assert "ConversationSessionLearningService.GetReports(" in latest
+    assert "ConversationSessionLearningService.GetPendingCommerceReports(" in latest
     assert "ConversationSessionLearningService.MaxReports" in latest
+    assert "TryMarkCommerceScenarioProcessed(" in latest
 
 
 def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
@@ -233,18 +234,32 @@ def test_commerce_learning_retries_unavailable_shop_without_consuming_report():
 
     assert "_retryTimer = new Timer(_ => OnReportsChanged()" in init
     assert "TimeSpan.FromMinutes(1)" in init
-    assert "if (!ProcessReport(report))" in latest
-    assert "Processed.TryRemove(report.Id, out ignored)" in latest
+    assert "if (!ProcessReport(report)) continue;" in latest
+    assert "TryMarkCommerceScenarioProcessed(" in latest
     assert "if (shop == null) return false;" in process
+    assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return false;" in process
     assert "return true;" in process
 
 
 
-def test_commerce_learning_replays_the_full_retained_report_window_after_restart():
+def test_commerce_learning_uses_a_durable_marker_for_restart_recovery():
     source = read("src/Bot/ChromeNs/CommerceKnowledgeLearningBridge.cs")
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     latest = source[source.index("private static void ProcessLatest()"):source.index("private static bool ProcessReport(")]
+    pending = service[service.index("public static List<ConversationSessionLearningReportView> GetPendingCommerceReports"):service.index("public static List<ConversationSessionLearningReportView> GetReportsForShop")]
 
-    assert "ConversationSessionLearningService.MaxReports" in latest
-    assert "CompletedAt >= StartedAt" not in latest
+    assert "GetPendingCommerceReports(" in latest
+    assert "TryMarkCommerceScenarioProcessed(" in latest
+    assert "CommerceScenarioProcessedAtTicks" in service
+    assert "CommerceScenarioProcessedAtTicks <= 0" in pending
+    assert "CommerceScenarioProcessedAtTicks integer not null default 0" in service
     assert "StartedAt" not in source
     assert "OrderBy(x => x.CompletedAt)" in latest
+
+
+def test_commerce_report_retention_never_deletes_pending_postprocessing_work():
+    service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    cleanup = service[service.index("private static void CleanupReports()"):service.index("private static void EnsureSchema()")]
+    assert cleanup.count("CommerceScenarioProcessedAtTicks > 0") == 2
+    assert "commerceScenarioMarkerAdded" in service
+    assert "set CommerceScenarioProcessedAtTicks = CompletedAtTicks where CompletedAtTicks > 0" in service

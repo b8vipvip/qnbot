@@ -46,6 +46,7 @@ namespace Bot.ChromeNs
         public long CompletedAtTicks { get; set; }
         public long CreatedAtTicks { get; set; }
         public long UpdatedAtTicks { get; set; }
+        public long CommerceScenarioProcessedAtTicks { get; set; }
     }
 
     internal sealed class StoreReplyStyleProfileEntity
@@ -476,6 +477,64 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("读取接待自动学习记录失败：" + ex.Message, 10);
                 return new List<ConversationSessionLearningReportView>();
+            }
+        }
+
+        public static List<ConversationSessionLearningReportView> GetPendingCommerceReports(int maxCount)
+        {
+            Initialize();
+            var take = Math.Max(1, Math.Min(MaxReports, maxCount <= 0 ? MaxReports : maxCount));
+            try
+            {
+                lock (DbSync)
+                {
+                    return (DbHelper.Db.Select(
+                        typeof(ConversationSessionLearningReportEntity),
+                        "where Status = ? and CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks <= 0 order by UpdatedAtTicks asc limit " + take,
+                        "学习完成") ?? new List<object>())
+                        .OfType<ConversationSessionLearningReportEntity>()
+                        .Where(x => x != null)
+                        .Select(ToView)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取待执行Commerce场景学习报告失败：" + ex.Message, 10);
+                return new List<ConversationSessionLearningReportView>();
+            }
+        }
+
+        public static bool TryMarkCommerceScenarioProcessed(string reportId, string shopKey)
+        {
+            Initialize();
+            reportId = (reportId ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            if (reportId.Length == 0 || shopKey.Length == 0) return false;
+            try
+            {
+                lock (DbSync)
+                {
+                    var report = (DbHelper.Db.Select(
+                        typeof(ConversationSessionLearningReportEntity),
+                        "where EntityId = ? limit 1", reportId) ?? new List<object>())
+                        .OfType<ConversationSessionLearningReportEntity>()
+                        .FirstOrDefault();
+                    if (report == null
+                        || !string.Equals(report.ShopKey, shopKey, StringComparison.Ordinal)
+                        || report.CompletedAtTicks <= 0
+                        || !string.Equals(report.Status, "学习完成", StringComparison.Ordinal))
+                        return false;
+                    if (report.CommerceScenarioProcessedAtTicks > 0) return true;
+                    report.CommerceScenarioProcessedAtTicks = DateTime.Now.Ticks;
+                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { report });
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("持久化Commerce场景学习报告完成标记失败：" + ex.Message, 10);
+                return false;
             }
         }
 
@@ -4371,8 +4430,10 @@ namespace Bot.ChromeNs
             {
                 lock (DbSync)
                 {
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
-                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 order by UpdatedAtTicks desc limit " + MaxReports + ")");
+                    // Never delete completed reports whose commerce post-processing is
+                    // still pending; an offline shop must not turn a retryable report into loss.
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 and UpdatedAtTicks < ?", DateTime.Now.AddDays(-ReportRetentionDays).Ticks);
+                    DbHelper.Db.Execute("delete from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 and EntityId not in (select EntityId from ConversationSessionLearningReportEntity where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks > 0 order by UpdatedAtTicks desc limit " + MaxReports + ")");
                 }
             }
             catch (Exception ex)
@@ -4387,7 +4448,7 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists ConversationSessionLearningReportEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,CCode text,Status text,Summary text,StyleBefore text,StyleAfter text,SuggestionsJson text,InputCoverageJson text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,RetryCount integer not null default 0,SessionStartedAtTicks integer not null default 0,LastBuyerAtTicks integer not null default 0,LastActivityAtTicks integer not null default 0,CompletedAtTicks integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0,CommerceScenarioProcessedAtTicks integer not null default 0)");
                 try
                 {
                     DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column ShopKey text");
@@ -4404,6 +4465,27 @@ namespace Bot.ChromeNs
                 {
                     // Existing installations already have the coverage column.
                 }
+                var commerceScenarioMarkerAdded = false;
+                try
+                {
+                    DbHelper.Db.Execute("alter table ConversationSessionLearningReportEntity add column CommerceScenarioProcessedAtTicks integer not null default 0");
+                    commerceScenarioMarkerAdded = true;
+                }
+                catch (Exception ex)
+                {
+                    // Existing installations already have the marker column. Do not
+                    // mark the schema ready for unrelated migration/locking failures.
+                    if ((ex.Message ?? string.Empty).IndexOf("duplicate column name", StringComparison.OrdinalIgnoreCase) < 0)
+                        throw;
+                }
+                if (commerceScenarioMarkerAdded)
+                {
+                    // Reports completed before this bridge marker existed are historical.
+                    // Do not replay them against today's knowledge rules; new reports remain
+                    // pending (zero) and are recoverable across process restarts.
+                    DbHelper.Db.Execute("update ConversationSessionLearningReportEntity set CommerceScenarioProcessedAtTicks = CompletedAtTicks where CompletedAtTicks > 0 and CommerceScenarioProcessedAtTicks = 0");
+                }
+                DbHelper.Db.Execute("create index if not exists IX_ConversationSessionLearning_CommercePending on ConversationSessionLearningReportEntity(Status,CompletedAtTicks,CommerceScenarioProcessedAtTicks,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create index if not exists IX_ConversationSessionLearning_Updated on ConversationSessionLearningReportEntity(UpdatedAtTicks)");
                 DbHelper.Db.Execute("create table if not exists StoreReplyStyleProfileEntity (Seller text primary key not null,Profile text,LearnedSessions integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 Volatile.Write(ref _schemaReady, 1);

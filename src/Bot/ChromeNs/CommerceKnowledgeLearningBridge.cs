@@ -3,7 +3,6 @@ using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -20,8 +19,6 @@ namespace Bot.ChromeNs
     /// </summary>
     internal static class CommerceKnowledgeLearningBridge
     {
-        private static readonly ConcurrentDictionary<string, byte> Processed =
-            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static int _initialized;
         private static int _processing;
         private static int _pendingUpdates;
@@ -70,33 +67,29 @@ namespace Bot.ChromeNs
 
         private static void ProcessLatest()
         {
-            // The report store retains at most MaxReports completed reports. Replay the
-            // full retained window after startup so a crash/restart cannot strand a report
-            // that completed before this process began. ApplyScenarioScope is idempotent.
-            var reports = ConversationSessionLearningService.GetReports(
+            // The durable marker is written only after the ShopKey-scoped operation finishes.
+            // A crash before the marker leaves the report pending for the next process; old
+            // reports are migrated as historical so current rules are never replayed onto them.
+            var reports = ConversationSessionLearningService.GetPendingCommerceReports(
                     ConversationSessionLearningService.MaxReports)
-                .Where(x => x != null
-                    && string.Equals(x.Status, "学习完成", StringComparison.Ordinal)
-                    && x.CompletedAt != DateTime.MinValue)
+                .Where(x => x != null && x.CompletedAt != DateTime.MinValue)
                 .OrderBy(x => x.CompletedAt)
                 .ToList();
             foreach (var report in reports)
             {
-                if (string.IsNullOrWhiteSpace(report.Id) || !Processed.TryAdd(report.Id, 0)) continue;
+                if (string.IsNullOrWhiteSpace(report.Id)) continue;
                 try
                 {
-                    if (!ProcessReport(report))
+                    if (!ProcessReport(report)) continue;
+                    if (!ConversationSessionLearningService.TryMarkCommerceScenarioProcessed(
+                        report.Id, report.ShopKey))
                     {
-                        // An offline ShopKey is transient. Let the periodic retry load it
-                        // again instead of treating this report as already governed.
-                        byte ignored;
-                        Processed.TryRemove(report.Id, out ignored);
+                        Log.ErrorWithMaxCount(
+                            "Commerce场景学习报告处理结果未能持久化，等待自动重试: report=" + report.Id, 10);
                     }
                 }
                 catch (Exception ex)
                 {
-                    byte ignored;
-                    Processed.TryRemove(report.Id, out ignored);
                     Log.ErrorWithMaxCount("Commerce场景知识治理失败: report=" + report.Id + ", error=" + ex.Message, 20);
                 }
             }
@@ -104,13 +97,16 @@ namespace Bot.ChromeNs
 
         private static bool ProcessReport(ConversationSessionLearningReportView report)
         {
-            if (report == null || string.IsNullOrWhiteSpace(report.Seller)
+            if (report == null) return true;
+            // A report without ShopKey may be a legacy row awaiting identity migration.
+            // Keep it pending rather than consuming it or guessing by seller nickname.
+            if (string.IsNullOrWhiteSpace(report.ShopKey)) return false;
+            if (string.IsNullOrWhiteSpace(report.Seller)
                 || string.IsNullOrWhiteSpace(report.Buyer) || string.IsNullOrWhiteSpace(report.SuggestionsJson)) return true;
 
             // The report already carries its authoritative ShopKey. Resolving by display nickname
             // is ambiguous when two accounts share the same seller nickname and can bind to the wrong
             // shop if a different account is currently active.
-            if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;
             var shop = ShopContextLocator.ResolveRuntimeByShopKey(report.ShopKey);
             if (shop == null) return false;
             if (!string.Equals(
