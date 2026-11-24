@@ -71,7 +71,7 @@ def test_unconfigured_account_template_cannot_match_or_claim_an_application_iden
         "private static IEnumerable<string> SplitApplicationNames", 1
     )[0]
     assert "IsApplicationNamePlaceholder(rule.AppName)" in match
-    assert "configuredNames.Count > 0" in match
+    assert "configuredNames.Count == 0 || !configuredNames.Any" in match
     assert "SplitApplicationNames(rule.AppName)" in resolver
     assert 'return name.Contains("{") || name.Contains("}");' in service
     assert 'rule.AppName = "{应用名称}";' in service
