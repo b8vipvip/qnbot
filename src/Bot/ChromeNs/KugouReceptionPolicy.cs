@@ -439,7 +439,7 @@ namespace Bot.ChromeNs
 
         public static string GetAuditJson(string seller)
         {
-            if (!Applies(seller)) return "当前店铺尚未识别为该酷狗业务店铺，未启用专属接待审计。";
+            if (!Applies(seller)) return "当前店铺尚未满足专属接待规则条件，未启用接待审计。";
             try
             {
                 var shop = ResolveShopForSeller(seller);

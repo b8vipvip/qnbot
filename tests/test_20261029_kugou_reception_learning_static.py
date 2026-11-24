@@ -86,7 +86,7 @@ def test_shop_rule_editor_is_validated_versioned_and_reversible():
     ui = text("src/Bot/Knowledge/KnowledgeV2ReceptionRulesPage.cs")
     nav = text("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     target = text("src/Directory.Build.targets")
-    assert "qnbot.kugou.reception-rules.v2" in rules
+    assert "qnbot.shop.reception-rules.v3" in rules
     assert 'obj.Value<bool?>("manual_review_required") != true' in rules
     assert 'obj.Value<bool?>("automatic_recharge_enabled") != false' in rules
     assert "IsHttpsUrl" in rules

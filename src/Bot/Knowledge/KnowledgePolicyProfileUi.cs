@@ -323,7 +323,7 @@ namespace Bot.Knowledge
             AddLabel(form, "意图（可选）");
             _intent = AddBox(form, false, 32, "例如 capability / how_to / troubleshoot；留空使用自动识别。");
             AddLabel(form, "业务实体（逗号分隔）");
-            _entities = AddBox(form, false, 32, "例如 电视会员,手机端,酷狗；用于知识重排。");
+            _entities = AddBox(form, false, 32, "例如 电视会员,手机端,品牌名称；用于知识重排。");
             AddLabel(form, "适用条件");
             _applyWhen = AddBox(form, true, 74, "每行或分号分隔。满足时提高相关度；未满足时不会直接回复。例：当前商品为电视会员");
             AddLabel(form, "禁用条件");

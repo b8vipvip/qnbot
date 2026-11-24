@@ -50,12 +50,14 @@ def test_post_order_photo_preset_is_suppressed_by_recent_official_kugou_app_visu
     assert "if (!plan.IsBuyerFollowUp)" in guard
 
 
-def test_vision_prompt_distinguishes_official_app_from_tv_built_in_without_login_requirement():
+def test_vision_prompt_uses_generic_configured_app_identity_without_login_requirement():
     vision = text("src/Bot/ChromeNs/VisionRequestService.cs")
     assert "品牌官方APP/官方电视版" in vision
     assert "电视系统自带、第三方聚合或仿版" in vision
-    assert "酷狗官方APP/酷狗音乐电视端" in vision
+    assert "视觉理解" in vision and "配置的应用名称" in vision
+    assert "不得猜测品牌或官方身份" in vision
     assert "不要求买家必须已经登录账号" in vision
+    assert "酷狗" not in vision
 
 
 def test_visual_analysis_continues_after_reply_lease_becomes_stale_and_persists_semantics():

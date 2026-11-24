@@ -964,7 +964,7 @@ namespace Bot.Knowledge
             Grid.SetRow(questionInput, 3); editor.Children.Add(questionInput);
             var questionHint = new TextBlock
             {
-                Text = "例如：投影仪 A 型号是否支持酷狗 APP？（不要只写 [图片]）",
+                Text = "例如：投影仪 A 型号是否支持某应用？（不要只写 [图片]）",
                 Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap
             };
             Grid.SetRow(questionHint, 2); editor.Children.Add(questionHint);

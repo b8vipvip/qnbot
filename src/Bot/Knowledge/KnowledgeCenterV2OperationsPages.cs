@@ -225,7 +225,7 @@ namespace Bot.Knowledge
             query.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             query.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             query.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _question = new TextBox { Height = 34, VerticalContentAlignment = VerticalAlignment.Center, Text = "这个是电视机酷狗音乐会员吗？" };
+            _question = new TextBox { Height = 34, VerticalContentAlignment = VerticalAlignment.Center, Text = "这个是电视机上的会员服务吗？" };
             query.Children.Add(_question);
             var test = new Button { Content = "测试检索", Width = 90, Height = 34, Margin = new Thickness(8, 0, 0, 0) };
             test.Click += async delegate { await RunOneAsync(); };
