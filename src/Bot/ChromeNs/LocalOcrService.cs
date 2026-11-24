@@ -65,6 +65,7 @@ namespace Bot.ChromeNs
         private const long MaxImageBytes = 8L * 1024L * 1024L;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(24);
         private static readonly HttpClient Http = CreateHttpClient();
+        private static int _legacyCacheCleanupAttempted;
 
         public static Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
@@ -425,6 +426,7 @@ namespace Bot.ChromeNs
         {
             try
             {
+                CleanupLegacyUnscopedCache();
                 var path = GetCachePath(sha256, shopKey, buyerNick, messageKey);
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
                 var envelope = JsonConvert.DeserializeObject<LocalOcrCacheEnvelope>(File.ReadAllText(path, Encoding.UTF8));
@@ -449,6 +451,7 @@ namespace Bot.ChromeNs
                 || string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(messageKey)) return;
             try
             {
+                CleanupLegacyUnscopedCache();
                 var path = GetCachePath(result.ImageSha256, shopKey, buyerNick, messageKey);
                 if (string.IsNullOrWhiteSpace(path)) return;
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -468,6 +471,30 @@ namespace Bot.ChromeNs
             catch
             {
             }
+        }
+
+        private static void CleanupLegacyUnscopedCache()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _legacyCacheCleanupAttempted, 1) != 0) return;
+            try
+            {
+                var legacyRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "QianniuAiBot",
+                    "ocr-cache");
+                if (!Directory.Exists(legacyRoot)) return;
+                // Old releases stored raw OCR text in root-level, cross-shop cache files.
+                // Remove only those legacy root files; scoped shop/buyer/message folders remain.
+                foreach (var file in Directory.GetFiles(legacyRoot, "*.json", SearchOption.TopDirectoryOnly))
+                {
+                    try { File.Delete(file); } catch { }
+                }
+                foreach (var file in Directory.GetFiles(legacyRoot, "*.tmp", SearchOption.TopDirectoryOnly))
+                {
+                    try { File.Delete(file); } catch { }
+                }
+            }
+            catch { }
         }
 
         private static string GetCachePath(string sha256, string shopKey, string buyerNick, string messageKey)
