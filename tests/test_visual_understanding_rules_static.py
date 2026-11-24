@@ -87,3 +87,14 @@ def test_ocr_admin_ledger_redaction_does_not_redact_runtime_response_payload():
     assert '"text": text' in runtime
     assert '"**result"' in runtime or "**result," in runtime
     assert "Text = Limit(remote.text)" in local
+
+def test_raw_ocr_cache_is_isolated_per_shop_and_buyer_and_has_short_retention():
+    local = read("src/Bot/ChromeNs/LocalOcrService.cs")
+    assert "CacheTtl = TimeSpan.FromHours(24)" in local
+    assert "TryReadCache(sha256, shopKey, buyerNick)" in local
+    assert "TryWriteCache(result, shopKey, buyerNick)" in local
+    assert "TryGetCachedRecognition(string imagePath, string shopKey, string buyerNick)" in local
+    assert "GetCachePath(string sha256, string shopKey, string buyerNick)" in local
+    assert "ScopeHash(shopKey)" in local
+    assert "ScopeHash(buyerNick)" in local
+    assert "string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(buyerNick)" in local
