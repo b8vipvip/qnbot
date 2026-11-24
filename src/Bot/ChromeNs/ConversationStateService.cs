@@ -176,7 +176,8 @@ namespace Bot.ChromeNs
             if (compactContext.Length == 0) return new List<string>();
             var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var knowledge = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-            foreach (var item in knowledge.Where(x => x != null && x.Enabled))
+            foreach (var item in knowledge.Where(x => x != null && x.Enabled
+                && !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)))
             {
                 foreach (var term in CandidateEntityTerms(item))
                 {

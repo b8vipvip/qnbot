@@ -168,3 +168,13 @@ def test_v2_startup_unwraps_already_installed_memory_v1_handler():
     assert "Volatile.Read(ref _disabledForV2)" in memory
     assert "lock (PatchSync)" in memory
     assert "KnowledgeMemoryRuntimeBridge.DisableForV2();" in runtime
+
+
+
+def test_unapproved_legacy_learning_does_not_pollute_conversation_entities_or_v1_memory():
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    memory = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in state
+    assert "KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x)" in memory
+    assert "var signature = ComputeSignature(knowledge);" in memory

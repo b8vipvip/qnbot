@@ -326,7 +326,10 @@ namespace Bot.ChromeNs
         {
             var shop = ResolveShop(seller);
             var key = shop == null ? NormalizeSeller(seller) : shop.ShopKey;
-            var knowledge = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+            var knowledge = (BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>())
+                .Where(x => x != null && x.Enabled
+                    && !Bot.Knowledge.KnowledgeV2AuthorityPolicy.IsUnapprovedLegacyLearningEntry(x))
+                .ToList();
             var signature = ComputeSignature(knowledge);
             MemoryIndex existing;
             if (Indexes.TryGetValue(key, out existing)
@@ -338,7 +341,7 @@ namespace Bot.ChromeNs
             }
 
             var cards = knowledge
-                .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
+                .Where(x => !string.IsNullOrWhiteSpace(x.Answer))
                 .Select(BuildCard)
                 .Where(x => x != null)
                 .ToList();
