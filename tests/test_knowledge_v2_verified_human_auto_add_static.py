@@ -466,7 +466,8 @@ def test_verified_auto_add_persists_native_qianniu_ids_not_synthesized_message_k
     )[0]
 
     assert "questionTurn.NativeAliases" in candidate
-    assert "answerTurn.NativeAliases" in candidate
+    assert "humanReplyTurn.NativeAliases" in candidate
+    assert "nativeHumanReplyIds.AddRange(nativeIds)" in candidate
     assert "original_native_message_id_missing" in candidate
     assert "buyerMessageIds.Contains(nativeQuestionId)" in candidate
     assert "humanMessageIds.Contains(nativeAnswerId)" in candidate
