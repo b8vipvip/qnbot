@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
+import re
 import os
 import threading
 import time
@@ -222,11 +224,77 @@ def _settings_payload(settings: Dict[str, Any], source: str, updated_at: str = "
 
 
 
-# OCR task ledger deliberately contains NO image bytes, extracted text, buyer identity,
-# API credentials or client-provided arbitrary strings. Admin-only, bounded history.
+# OCR task ledger keeps no image bytes, buyer identity, API credentials or raw request headers.
+# Admin-only, bounded history stores a redacted OCR result so operators can verify recognition.
 _TASK_RETENTION = 5000
 _TASK_STATES = {"queued", "running", "success", "timeout", "failed", "rejected", "interrupted"}
 _TASK_FILTERS = _TASK_STATES | {"all"}
+_OCR_TEXT_MAX_CHARS = 12000
+
+
+def _sanitize_ocr_text(value: Any, max_chars: int = _OCR_TEXT_MAX_CHARS):
+    text = str(value or "")[:max(0, int(max_chars))]
+    redacted = False
+    patterns = (
+        (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "[手机号已脱敏]"),
+        (re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE), "[邮箱已脱敏]"),
+        (re.compile(r"(?i)(验证码\s*[:：]?\s*)\d{4,8}"), r"\1[已脱敏]"),
+        (re.compile(r"(?i)((?:密码|password|passwd)\s*[:：=]\s*)[^\s,，;；]{1,64}"), r"\1[已脱敏]"),
+        (re.compile(r"(?<!\d)\d{8,}(?!\d)"), "[长数字ID已脱敏]"),
+    )
+    for pattern, replacement in patterns:
+        updated = pattern.sub(replacement, text)
+        if updated != text:
+            redacted = True
+            text = updated
+    return text, redacted
+
+
+def _safe_engine(value: Any) -> str:
+    engine = str(value or "RapidOCR/ONNXRuntime").strip()
+    engine = re.sub(r"[^A-Za-z0-9._/+ -]", "", engine)
+    return engine[:80] or "RapidOCR/ONNXRuntime"
+
+
+def _append_task_event(conn: Any, cp: Any, task_id: str, stage: str,
+                       state: str, message: str,
+                       metadata: Optional[Dict[str, Any]] = None) -> None:
+    allowed = {
+        "image_bytes", "image_hash_prefix", "queue_ms", "inference_ms",
+        "elapsed_ms", "text_chars", "confidence", "http_status",
+        "engine", "max_concurrency",
+    }
+    safe_metadata: Dict[str, Any] = {}
+    for key, value in (metadata or {}).items():
+        if key not in allowed:
+            continue
+        if key == "engine":
+            safe_metadata[key] = _safe_engine(value)
+        elif key == "image_hash_prefix":
+            candidate = str(value or "").lower()
+            safe_metadata[key] = candidate[:12] if re.fullmatch(r"[a-f0-9]{0,64}", candidate) else ""
+        elif key == "confidence":
+            try:
+                safe_metadata[key] = max(0.0, min(1.0, float(value)))
+            except (TypeError, ValueError):
+                safe_metadata[key] = 0.0
+        else:
+            try:
+                safe_metadata[key] = max(0, int(value))
+            except (TypeError, ValueError):
+                safe_metadata[key] = 0
+    conn.execute(
+        """
+        INSERT INTO runtime_ocr_task_events(
+            task_id, created_at, stage, status, message, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task_id, cp.iso_now(), str(stage or "")[:40], str(state or "")[:24],
+            str(message or "")[:240],
+            json.dumps(safe_metadata, ensure_ascii=False, separators=(",", ":")),
+        ),
+    )
 
 
 def _create_task_record(cp: Any, request_id: str) -> None:
@@ -239,16 +307,28 @@ def _create_task_record(cp: Any, request_id: str) -> None:
             """,
             (request_id, cp.iso_now()),
         )
-        # Keep the newest 5000 entries across restarts. Prune in small batches.
-        count = conn.execute("SELECT COUNT(*) FROM runtime_ocr_task_records").fetchone()[0]
+        _append_task_event(
+            conn, cp, request_id, "admission", "queued",
+            "已收到服务端 OCR 请求，等待图片校验与排队",
+        )
+        # Keep the newest 5000 entries and their events across restarts.
+        count = int(conn.execute("SELECT COUNT(*) FROM runtime_ocr_task_records").fetchone()[0])
         if count > _TASK_RETENTION:
-            conn.execute(
-                """DELETE FROM runtime_ocr_task_records WHERE task_id IN (
-                    SELECT task_id FROM runtime_ocr_task_records
-                    ORDER BY started_at ASC, rowid ASC LIMIT ?
-                )""",
+            expired = conn.execute(
+                """SELECT task_id FROM runtime_ocr_task_records
+                   ORDER BY started_at ASC, rowid ASC LIMIT ?""",
                 (count - _TASK_RETENTION,),
-            )
+            ).fetchall()
+            expired_ids = [str(row["task_id"]) for row in expired]
+            if expired_ids:
+                conn.executemany(
+                    "DELETE FROM runtime_ocr_task_events WHERE task_id = ?",
+                    [(task_id,) for task_id in expired_ids],
+                )
+                conn.executemany(
+                    "DELETE FROM runtime_ocr_task_records WHERE task_id = ?",
+                    [(task_id,) for task_id in expired_ids],
+                )
 
 
 def _update_task_record(cp: Any, request_id: str, status_value: str,
@@ -257,25 +337,69 @@ def _update_task_record(cp: Any, request_id: str, status_value: str,
                         inference_ms: int = 0, elapsed_ms: int = 0,
                         image_bytes: int = 0, image_hash: str = "",
                         text_chars: int = 0, confidence: float = 0.0,
+                        engine: Optional[str] = None,
+                        result_text: Optional[str] = None,
+                        event_message: str = "",
+                        event_metadata: Optional[Dict[str, Any]] = None,
                         terminal: bool = False) -> None:
     if status_value not in _TASK_STATES:
         raise ValueError("invalid_ocr_task_state")
-    # error_code is selected from fixed strings at call-sites (never upstream text).
+    # error_code and event messages are selected from fixed call-site values;
+    # raw exception messages, OCR headers, and request bodies are never logged.
+    sanitized_text, text_redacted = _sanitize_ocr_text(result_text or "")
+    safe_engine = _safe_engine(engine) if engine is not None else ""
+    if not event_message:
+        event_message = {
+            ("running", "validation"): "图片通过基础校验",
+            ("running", "admission"): "等待 OCR 推理并发槽位",
+            ("running", "inference"): "开始 RapidOCR/ONNXRuntime 推理",
+            ("success", "returned"): "OCR 识别完成并返回",
+            ("timeout", "inference"): "OCR 推理超时",
+            ("interrupted", "server_restarted"): "服务重启，未完成任务已标记中断",
+            ("interrupted", "admission"): "客户端断开，请求已中断",
+            ("failed", "inference"): "OCR 推理失败",
+            ("rejected", "validation"): "图片校验未通过",
+        }.get((status_value, phase), "OCR 任务状态已更新")
     with cp.db() as conn:
         conn.execute(
             """
             UPDATE runtime_ocr_task_records SET
                 status=?, phase=?, http_status=?, error_code=?, queue_ms=?,
                 inference_ms=?, elapsed_ms=?, image_bytes=?, image_hash_prefix=?,
-                text_chars=?, confidence=?, finished_at=?
+                text_chars=?, confidence=?, engine=?, result_text=?,
+                result_text_redacted=?, finished_at=?
             WHERE task_id=?
             """,
-            (status_value, phase, http_status, error_code,
-             max(0, int(queue_ms)), max(0, int(inference_ms)),
-             max(0, int(elapsed_ms)), max(0, int(image_bytes)),
-             image_hash[:12], max(0, int(text_chars)),
-             max(0.0, min(1.0, float(confidence))),
-             cp.iso_now() if terminal else None, request_id),
+            (
+                status_value, phase, http_status, error_code,
+                max(0, int(queue_ms)), max(0, int(inference_ms)),
+                max(0, int(elapsed_ms)), max(0, int(image_bytes)),
+                image_hash[:12], max(0, int(text_chars)),
+                max(0.0, min(1.0, float(confidence))),
+                safe_engine, sanitized_text, 1 if text_redacted else 0,
+                cp.iso_now() if terminal else None, request_id,
+            ),
+        )
+        metadata = dict(event_metadata or {})
+        metadata.setdefault("http_status", http_status)
+        if image_bytes:
+            metadata.setdefault("image_bytes", image_bytes)
+        if image_hash:
+            metadata.setdefault("image_hash_prefix", image_hash[:12])
+        if queue_ms:
+            metadata.setdefault("queue_ms", queue_ms)
+        if inference_ms:
+            metadata.setdefault("inference_ms", inference_ms)
+        if elapsed_ms:
+            metadata.setdefault("elapsed_ms", elapsed_ms)
+        if text_chars:
+            metadata.setdefault("text_chars", text_chars)
+        if confidence:
+            metadata.setdefault("confidence", confidence)
+        if safe_engine:
+            metadata.setdefault("engine", safe_engine)
+        _append_task_event(
+            conn, cp, request_id, phase, status_value, event_message, metadata
         )
 
 
@@ -294,7 +418,7 @@ def _list_task_records(cp: Any, page: int, page_size: int,
             """SELECT task_id, started_at, finished_at, status, phase,
                       http_status, error_code, queue_ms, inference_ms,
                       elapsed_ms, image_bytes, image_hash_prefix,
-                      text_chars, confidence
+                      text_chars, confidence, engine, result_text_redacted
                FROM runtime_ocr_task_records""" + clause
             + " ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?",
             args + (page_size, offset),
@@ -308,11 +432,44 @@ def _list_task_records(cp: Any, page: int, page_size: int,
         "status": state,
         "counts": {str(row["status"]): int(row["total"]) for row in summary_rows},
         "retention_limit": _TASK_RETENTION,
-        # This ledger reflects OCR inference only. Client-side knowledge lookup
-        # and actual buyer-message delivery are intentionally not asserted here.
         "scope": "server_ocr_only",
     }
 
+
+def _get_task_detail(cp: Any, task_id: str) -> Dict[str, Any]:
+    task_id = (task_id or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", task_id):
+        raise HTTPException(status_code=400, detail="无效 OCR 任务 ID")
+    with cp.db() as conn:
+        row = conn.execute(
+            "SELECT * FROM runtime_ocr_task_records WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="OCR 任务不存在或已过期")
+        event_rows = conn.execute(
+            """SELECT created_at, stage, status, message, metadata_json
+               FROM runtime_ocr_task_events WHERE task_id = ?
+               ORDER BY event_id ASC""",
+            (task_id,),
+        ).fetchall()
+    events = []
+    for event in event_rows:
+        item = dict(event)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        except (TypeError, ValueError):
+            item["metadata"] = {}
+            item.pop("metadata_json", None)
+        events.append(item)
+    task = dict(row)
+    task["result_text_redacted"] = bool(task.get("result_text_redacted", 0))
+    return {
+        "task": task,
+        "events": events,
+        "scope": "server_ocr_only",
+        "privacy": "OCR result text is bounded and redacted; source image and buyer identity are not stored.",
+    }
 
 def init_db(control_plane: Optional[Any] = None) -> None:
     cp = control_plane or _CONTROL_PLANE
@@ -368,9 +525,44 @@ def init_db(control_plane: Optional[Any] = None) -> None:
                 image_bytes INTEGER NOT NULL DEFAULT 0,
                 image_hash_prefix TEXT NOT NULL DEFAULT '',
                 text_chars INTEGER NOT NULL DEFAULT 0,
-                confidence REAL NOT NULL DEFAULT 0
+                confidence REAL NOT NULL DEFAULT 0,
+                engine TEXT NOT NULL DEFAULT '',
+                result_text TEXT NOT NULL DEFAULT '',
+                result_text_redacted INTEGER NOT NULL DEFAULT 0
             )
             """
+        )
+        # Add detail columns to existing installations without rebuilding task history.
+        task_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(runtime_ocr_task_records)").fetchall()
+        }
+        for column, definition in (
+            ("engine", "TEXT NOT NULL DEFAULT ''"),
+            ("result_text", "TEXT NOT NULL DEFAULT ''"),
+            ("result_text_redacted", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in task_columns:
+                conn.execute(
+                    "ALTER TABLE runtime_ocr_task_records ADD COLUMN "
+                    + column + " " + definition
+                )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_ocr_task_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ocr_task_events_task "
+            "ON runtime_ocr_task_events(task_id, event_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ocr_task_started "
@@ -380,13 +572,23 @@ def init_db(control_plane: Optional[Any] = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_ocr_task_status_started "
             "ON runtime_ocr_task_records(status, started_at DESC)"
         )
-        # A service restart interrupts in-flight tasks from the previous process.
+        # A service restart interrupts in-flight tasks from the previous process
+        # and adds an auditable event to each affected task.
+        unfinished = conn.execute(
+            "SELECT task_id FROM runtime_ocr_task_records WHERE status IN ('queued','running')"
+        ).fetchall()
         conn.execute(
             """UPDATE runtime_ocr_task_records SET status='interrupted',
                phase='server_restarted', error_code='server_restarted',
                finished_at=? WHERE status IN ('queued','running')""",
             (now,),
         )
+        for unfinished_row in unfinished:
+            _append_task_event(
+                conn, cp, str(unfinished_row["task_id"]), "server_restarted",
+                "interrupted", "服务重启，未完成任务已标记中断",
+                {"http_status": 503},
+            )
         row = conn.execute("SELECT * FROM runtime_ocr_settings WHERE id = 1").fetchone()
         # Upgrade only the untouched old 8s bootstrap default. Never override
         # an administrator-defined timeout, even when it equals eight seconds.
@@ -437,6 +639,13 @@ def install(control_plane: Any) -> None:
         admin_username: str = Depends(require_admin),
     ) -> Dict[str, Any]:
         return _list_task_records(control_plane, page, page_size, status_filter)
+
+    @app.get("/api/admin/ocr/tasks/{task_id}")
+    async def get_runtime_ocr_task_detail(
+        task_id: str,
+        admin_username: str = Depends(require_admin),
+    ) -> Dict[str, Any]:
+        return _get_task_detail(control_plane, task_id)
 
     @app.put("/api/admin/ocr/settings")
     async def update_runtime_ocr_settings(
@@ -551,16 +760,31 @@ def install(control_plane: Any) -> None:
             if supplied_hash and supplied_hash != image_hash:
                 raise HTTPException(status_code=400, detail="OCR图片哈希校验失败")
 
+            _update_task_record(
+                cp, task_id, "running", "validation",
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片通过大小限制与 SHA-256 校验",
+                event_metadata={"image_bytes": image_size, "image_hash_prefix": image_hash[:12]},
+            )
             stage = "admission"
+            _update_task_record(
+                cp, task_id, "running", "admission",
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片校验完成，等待 OCR 推理并发槽位",
+            )
             queued_at = time.perf_counter()
             await _acquire_ocr_slot(int(settings["max_concurrency"]))
             slot_owned = True
             queue_ms = int((time.perf_counter() - queued_at) * 1000)
             stage = "inference"
             inference_started = time.perf_counter()
-            _update_task_record(cp, task_id, "running", "inference",
-                                queue_ms=queue_ms, image_bytes=image_size,
-                                image_hash=image_hash)
+            _update_task_record(
+                cp, task_id, "running", "inference",
+                queue_ms=queue_ms, image_bytes=image_size, image_hash=image_hash,
+                engine="RapidOCR/ONNXRuntime",
+                event_message="已获得推理槽位，开始 RapidOCR/ONNXRuntime 推理",
+                event_metadata={"queue_ms": queue_ms, "max_concurrency": settings["max_concurrency"]},
+            )
             worker_task = asyncio.create_task(run_in_threadpool(_run_ocr, raw))
             try:
                 result = await asyncio.wait_for(
@@ -575,12 +799,24 @@ def install(control_plane: Any) -> None:
 
             inference_ms = int((time.perf_counter() - inference_started) * 1000)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            result_text = str(result.get("text", "") or "")
+            result_engine = _safe_engine(result.get("engine") or "RapidOCR/ONNXRuntime")
+            result_confidence = float(result.get("confidence", 0.0))
             _update_task_record(
                 cp, task_id, "success", "returned", http_status=200,
                 queue_ms=queue_ms, inference_ms=inference_ms, elapsed_ms=elapsed_ms,
                 image_bytes=image_size, image_hash=image_hash,
-                text_chars=len(result.get("text", "")),
-                confidence=float(result.get("confidence", 0.0)), terminal=True,
+                text_chars=len(result_text), confidence=result_confidence,
+                engine=result_engine, result_text=result_text,
+                event_message="OCR 推理完成并返回；详情中保留脱敏后的识别文本",
+                event_metadata={
+                    "text_chars": len(result_text),
+                    "confidence": result_confidence,
+                    "engine": result_engine,
+                    "inference_ms": inference_ms,
+                    "elapsed_ms": elapsed_ms,
+                },
+                terminal=True,
             )
             terminal = True
             return {
@@ -607,7 +843,15 @@ def install(control_plane: Any) -> None:
                     cp, task_id, state, stage, http_status=exc.status_code,
                     error_code=error_code, queue_ms=queue_ms,
                     inference_ms=inference_ms, elapsed_ms=elapsed_ms,
-                    image_bytes=image_size, image_hash=image_hash, terminal=True,
+                    image_bytes=image_size, image_hash=image_hash,
+                    event_message={
+                        400: "图片请求校验失败或哈希不匹配",
+                        413: "图片超过服务端大小限制",
+                        503: "OCR 服务已停用或推理暂不可用",
+                        504: "OCR 推理超时，任务已记录超时终态",
+                    }.get(exc.status_code, "OCR 请求失败"),
+                    event_metadata={"http_status": exc.status_code},
+                    terminal=True,
                 )
                 terminal = True
             raise
@@ -618,7 +862,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="图片格式或内容校验失败",
+                event_metadata={"http_status": 400},
+                terminal=True,
             )
             terminal = True
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -631,7 +878,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="客户端断开，请求已中断",
+                event_metadata={"http_status": 499},
+                terminal=True,
             )
             terminal = True
             raise
@@ -642,7 +892,10 @@ def install(control_plane: Any) -> None:
                 inference_ms=int((time.perf_counter() - inference_started) * 1000)
                 if inference_started else 0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                image_bytes=image_size, image_hash=image_hash, terminal=True,
+                image_bytes=image_size, image_hash=image_hash,
+                event_message="OCR 内部处理失败；原始异常内容未写入任务日志",
+                event_metadata={"http_status": 503},
+                terminal=True,
             )
             terminal = True
             raise HTTPException(status_code=503, detail="服务端OCR暂不可用") from exc
