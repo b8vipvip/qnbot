@@ -375,6 +375,15 @@ namespace Bot.ChromeNs
             if (ConversationContextStore.TryTakeProductLinkReply(
                 item.SellerNick, item.BuyerNick, question, out productLinkReply, item.ShopKey))
             {
+                string supersededReason;
+                if (HasNewerSubstantiveConversationTurn(item, question, out supersededReason))
+                {
+                    Log.Info("商品链接预设已被后续买家消息或人工客服指令取代，丢弃旧话术: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", reason=" + supersededReason);
+                    return CanonicalPreMergeOutcome.Consumed;
+                }
+
                 var productOk = await SendFixedAsync(
                     qn, item, productLinkReply, BotReplyPresetService.ResolveSourceLabel(item.SellerNick, productLinkReply, item.ShopKey), cancellationToken).ConfigureAwait(false);
                 Log.Info("商品链接预设回复由统一买家生命周期消费: seller=" + item.SellerNick
@@ -437,6 +446,79 @@ namespace Bot.ChromeNs
             }
 
             return CanonicalPreMergeOutcome.Continue;
+        }
+
+        private static bool HasNewerSubstantiveConversationTurn(
+            BuyerMessageBurstItem item,
+            string question,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (item == null) return false;
+            var dispatchedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
+            var cutoff = dispatchedAt.AddMilliseconds(120);
+            try
+            {
+                var turns = ConversationContextStore.GetRecentTurns(
+                    item.SellerNick, item.BuyerNick, question, 24);
+                var newerBuyer = turns.Any(x => x != null
+                    && x.Role == "user"
+                    && !x.Withdrawn
+                    && x.Timestamp != DateTime.MinValue
+                    && x.Timestamp > cutoff
+                    && !string.IsNullOrWhiteSpace(x.Text));
+                if (newerBuyer)
+                {
+                    reason = "买家已发送更新消息";
+                    return true;
+                }
+
+                var newerSeller = turns.Any(x => x != null
+                    && x.Role == "assistant"
+                    && !x.Withdrawn
+                    && x.Timestamp != DateTime.MinValue
+                    && x.Timestamp > cutoff
+                    && !string.IsNullOrWhiteSpace(x.Text)
+                    && !x.Text.TrimEnd().EndsWith("[A]", StringComparison.OrdinalIgnoreCase)
+                    && !IsNonSubstantiveSellerGreeting(x.Text));
+                if (newerSeller)
+                {
+                    reason = "客服已发送后续实质指令或回复";
+                    return true;
+                }
+
+                // The event ledger can observe a real human reply before the mirrored
+                // conversation timeline has caught up. Do not ignore it merely because
+                // it was marked stale against a newer buyer generation.
+                var snapshot = new BuyerSessionAgent().GetSnapshot(
+                    item.SellerNick, item.BuyerNick, item.ShopKey);
+                var newerHuman = snapshot != null
+                    && snapshot.RecentEvents != null
+                    && snapshot.RecentEvents.Any(x => x != null
+                        && x.Kind == BuyerSessionEventKind.SellerHumanReply
+                        && x.SourceTimestamp != DateTime.MinValue
+                        && x.SourceTimestamp > cutoff);
+                if (newerHuman)
+                {
+                    reason = "事件账本检测到更新的人工客服回复";
+                    return true;
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                reason = "无法确认最新会话状态，按安全策略丢弃旧商品话术";
+                Log.ErrorWithMaxCount("商品链接预设发送前会话新旧状态检查失败: " + ex.Message, 10);
+                return true;
+            }
+        }
+
+        private static bool IsNonSubstantiveSellerGreeting(string text)
+        {
+            if (ParallelReplyRelevanceGate.IsGreetingOnly(text)) return true;
+            var compact = Regex.Replace((text ?? string.Empty).Trim(), @"\s+", string.Empty);
+            return compact.StartsWith("欢迎", StringComparison.Ordinal)
+                && (compact.Contains("光临") || compact.Contains("本店"));
         }
 
         private static async Task<bool> SendFixedAsync(
