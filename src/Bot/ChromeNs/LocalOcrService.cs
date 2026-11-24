@@ -140,6 +140,10 @@ namespace Bot.ChromeNs
             var endpoint = ResolveControlPlaneEndpoint(sellerNick, shopKey);
             if (endpoint == null)
             {
+                Log.ErrorWithMaxCount(
+                    "服务端OCR未发起：当前ShopKey无法解析本店控制面连接或令牌: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", sha256=" + ShortHash(sha256), 20);
                 return Failure("未找到当前店铺可用的服务端控制面连接或令牌", startedAt, sha256);
             }
 
