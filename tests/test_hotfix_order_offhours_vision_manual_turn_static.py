@@ -40,7 +40,7 @@ def test_server_ocr_can_route_images_without_external_vision_api_or_ready_knowle
     assert 'if (!usable)' not in VISION
     assert 'Kind = VisionDecisionKind.Vision' in VISION
     assert '使用服务端OCR，并在Knowledge V2就绪时进行知识直答；无需外部视觉模型。' in VISION
-    assert 'LocalOcrService.IsServerOcrConfigured(sellerNick, shopKey)' in VISION
+    assert 'LocalOcrService.IsServerOcrConfigured(shop.SellerNick, shopKey)' in VISION
     assert 'KnowledgeEngineV2Service.IsEnabled(sellerNick)' not in VISION
     assert 'KnowledgeEngineV2Service.IsSnapshotReady(sellerNick)' not in VISION
     assert 'ReplyModeService.IsLocalFirst(sellerNick)' not in VISION
