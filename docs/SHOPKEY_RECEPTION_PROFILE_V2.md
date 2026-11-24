@@ -1,6 +1,6 @@
-# ShopKey Reception Profile v2
+# ShopKey Reception Profile v3
 
-This file documents the private per-shop configuration edited from Knowledge Center → 接待规则. The runtime file is stored under the current stable ShopKey's private rules directory as `kugou-reception-rules.json`; it is not a repository asset and must not be copied between shops.
+This document describes the generic private per-shop reception profile edited from Knowledge Center → 接待规则. The current runtime file is stored under the active stable ShopKey's private rules directory as `shop-reception-rules.json`. It contains only shop-configured data and is never copied between shops.
 
 ## Safety and rollout
 
@@ -12,6 +12,7 @@ This file documents the private per-shop configuration edited from Knowledge Cen
 - `manual_review_required` must remain `true`; `automatic_recharge_enabled` must remain `false`. The validator rejects attempts to change either value.
 - Saving creates a backup and uses an atomic write. Restore validates the backup before replacing the current file.
 - Do not put customer messages, account credentials, payment details, tokens or other personal data in this file.
+- Application names, products, platform names, device types, visual cues and customer-facing text are shop-owned variables. The shipped profile does not assume a particular brand or application.
 
 ## Schema fields
 
@@ -51,8 +52,8 @@ Example structure (replace all sample values with reviewed values from this shop
 
 ```json
 {
-  "schema": "qnbot.kugou.reception-rules.v2",
-  "version": 2,
+  "schema": "qnbot.shop.reception-rules.v3",
+  "version": 3,
   "enabled": false,
   "product_ids": [],
   "quarantine_knowledge_ids": [],
@@ -91,12 +92,8 @@ Example structure (replace all sample values with reviewed values from this shop
 
 The example is deliberately disabled and contains placeholders, not a working merchant configuration. Do not enable it without replacing the placeholders with verified shop-owned values and testing against the actual shop's message and image examples.
 
-## Legacy v1 migration
+## Legacy profile migration
 
-A v1 profile is presented as a v2 draft on read. Migration:
-- keeps the profile disabled;
-- resets auto-guidance and phone-wait to false;
-- preserves only an existing valid HTTPS guide URL;
-- does not copy the old source-code product IDs, knowledge IDs, visual cues, fixed replies or business prompt into the private profile.
+Older profiles stored under the former brand-specific filename and schema remain readable for compatibility. On first read, the application validates the old safety flags, converts the schema to the generic v3 format, and atomically writes `shop-reception-rules.json`. The original file is left intact as a rollback source. Legacy v1 migration remains fail-closed and keeps the profile disabled; legacy v2 settings are preserved only if the immutable safety flags are valid.
 
-The operator must review and populate the private profile, then save it. The original v1 file is backed up (备份) by the first save. Do not assume the migrated draft is production-ready.
+The operator should review the migrated profile and confirm the current ShopKey before enabling it.
