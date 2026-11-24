@@ -384,12 +384,12 @@ namespace Bot.ChromeNs
                 (flow["steps"] as JArray ?? new JArray()).OfType<JObject>().Any(step =>
                     (step["required_evidence"] as JArray ?? new JArray())
                         .Any(x => Convert.ToString(x) == "account_evidence")));
-            KugouAccountEvidence accountEvidence = null;
+            AccountVisualEvidence accountEvidence = null;
             if (needsAccountEvidence)
             {
                 try
                 {
-                    RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                    RecentVisualContextService.TryGetRecentAccountEvidence(
                         shopKey, seller, buyer, out accountEvidence);
                 }
                 catch (Exception ex)
@@ -990,8 +990,8 @@ namespace Bot.ChromeNs
                         || VisualKnowledgeLearningService.IsObservationWithdrawn(
                             decision.ShopKey, decision.Seller, decision.Buyer, decision.AccountEvidenceMessageKey))
                         return false;
-                    KugouAccountEvidence currentAccountEvidence;
-                    if (!RecentVisualContextService.TryGetRecentKugouAccountEvidence(
+                    AccountVisualEvidence currentAccountEvidence;
+                    if (!RecentVisualContextService.TryGetRecentAccountEvidence(
                             decision.ShopKey, decision.Seller, decision.Buyer, out currentAccountEvidence)
                         || currentAccountEvidence == null
                         || !string.Equals(currentAccountEvidence.MessageKey, decision.AccountEvidenceMessageKey,
