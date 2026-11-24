@@ -56,9 +56,9 @@ def test_order_photo_wait_only_advances_after_confirmed_delivery():
     assert "ObserveDeliveredOrderInstruction(string seller, string buyer, string text)" in policy
     assert "verified_order_photo_instruction_delivered" in policy
     assert "GetRecentStage(seller, buyer)" in policy
-    assert order.count("KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);") == 2
+    assert order.count("ShopReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);") == 2
     assert order.index("if (sent)") < order.index(
-        "KugouReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);"
+        "ShopReceptionPolicy.ObserveDeliveredOrderInstruction(plan.Seller, plan.Buyer, text);"
     )
     assert "RemoteSellerEchoVerification.Delivered" in order
 
@@ -66,7 +66,7 @@ def test_ai_and_observed_human_learning_cannot_publish_store_policy():
     learn = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     policy = text(POLICY)
     assert "RequiresManualKnowledgeReview(string seller, string question, string answer)" in policy
-    assert learn.count("KugouReceptionPolicy.RequiresManualKnowledgeReview(") == 2
+    assert learn.count("ShopReceptionPolicy.RequiresManualKnowledgeReview(") == 2
     assert "店铺业务知识自动学习改为会话复盘待审核" in learn
     assert 'string.Equals(sourceType, "人工修改", StringComparison.Ordinal)' in learn
     assert "等待人工审核，未自动写入" in learn
@@ -76,7 +76,7 @@ def test_knowledge_center_exposes_scoped_read_only_audit():
     audit = text("src/Bot/Knowledge/KnowledgeV2ReceptionAuditPage.cs")
     build = text("src/Directory.Build.targets")
     assert 'Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller))' in ui
-    assert "KugouReceptionPolicy.GetAuditJson(_seller)" in audit
+    assert "ShopReceptionPolicy.GetAuditJson(_seller)" in audit
     assert "IsReadOnly = true" in audit
     assert "导出脱敏JSON" in audit
     assert "KnowledgeV2ReceptionAuditPage.cs" in build
@@ -97,10 +97,10 @@ def test_shop_rule_editor_is_validated_versioned_and_reversible():
     assert "CrossProcessAtomicStateFile.WriteAllTextAtomic(" in rules
     assert ".backup." in rules
     assert "RestoreLatestBackup(" in rules
-    assert "KugouReceptionPolicy.ResolveShopForSeller(seller)" in rules
+    assert "ShopReceptionPolicy.ResolveShopForSeller(seller)" in rules
     assert 'Nav("接待规则", () => new KnowledgeV2ReceptionRulesPage(_seller))' in nav
-    assert "KugouReceptionConfigService.SaveJson(_seller, _editor.Text)" in ui
-    assert "KugouReceptionConfigService.RestoreLatestBackup(_seller)" in ui
+    assert "ShopReceptionConfigService.SaveJson(_seller, _editor.Text)" in ui
+    assert "ShopReceptionConfigService.RestoreLatestBackup(_seller)" in ui
     assert "KugouReceptionConfigService.cs" in target
     assert "KnowledgeV2ReceptionRulesPage.cs" in target
 
@@ -109,9 +109,9 @@ def test_optional_guidance_flags_never_disable_critical_safety():
     chat = text("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     assert "EnablePhoneWait" in policy
     assert "EnableAutoGuidance" in policy
-    assert "KugouReceptionConfigService.GetConfig(seller).EnablePhoneWait" in chat
-    assert "KugouReceptionPolicy.BlockOutgoing(" in chat
-    assert "KugouReceptionPolicy.IsQuarantined" in text(
+    assert "ShopReceptionConfigService.GetConfig(seller).EnablePhoneWait" in chat
+    assert "ShopReceptionPolicy.BlockOutgoing(" in chat
+    assert "ShopReceptionPolicy.IsQuarantined" in text(
         "src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs"
     )
 
