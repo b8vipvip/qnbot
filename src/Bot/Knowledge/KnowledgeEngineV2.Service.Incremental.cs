@@ -144,7 +144,7 @@ namespace Bot.Knowledge
             {
                 var exact = KnowledgeEngineV2Semantics.Compact(alias);
                 if (exact.Length >= 2) Add(snapshot.Exact, exact, id);
-                foreach (var gram in KnowledgeEngineV2Semantics.Ngrams(exact, 2).Take(24))
+                foreach (var gram in KnowledgeEngineV2Semantics.RecallNgrams(exact, 2, 24))
                     Add(snapshot.Ngram, gram, id);
             }
         }
@@ -160,7 +160,7 @@ namespace Bot.Knowledge
             {
                 var exact = KnowledgeEngineV2Semantics.Compact(alias);
                 if (exact.Length >= 2) Remove(snapshot.Exact, exact, id);
-                foreach (var gram in KnowledgeEngineV2Semantics.Ngrams(exact, 2).Take(24))
+                foreach (var gram in KnowledgeEngineV2Semantics.RecallNgrams(exact, 2, 24))
                     Remove(snapshot.Ngram, gram, id);
             }
         }

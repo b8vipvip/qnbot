@@ -58,7 +58,7 @@ namespace Bot.Knowledge
                 {
                     var exact = KnowledgeEngineV2Semantics.Compact(alias);
                     if (exact.Length >= 2) Add(snapshot.Exact, exact, i);
-                    foreach (var gram in KnowledgeEngineV2Semantics.Ngrams(exact, 2).Take(24)) Add(snapshot.Ngram, gram, i);
+                    foreach (var gram in KnowledgeEngineV2Semantics.RecallNgrams(exact, 2, 24)) Add(snapshot.Ngram, gram, i);
                 }
             }
             return snapshot;
@@ -75,7 +75,7 @@ namespace Bot.Knowledge
                 AddFromIndex(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), result);
 
             var gramVotes = new Dictionary<int, int>();
-            foreach (var gram in KnowledgeEngineV2Semantics.Ngrams(query.Normalized, 2).Take(24))
+            foreach (var gram in KnowledgeEngineV2Semantics.RecallNgrams(query.Normalized, 2, 24))
             {
                 HashSet<int> ids;
                 if (!snapshot.Ngram.TryGetValue(gram, out ids)) continue;

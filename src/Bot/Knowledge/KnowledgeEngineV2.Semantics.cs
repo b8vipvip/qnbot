@@ -219,6 +219,32 @@ namespace Bot.Knowledge
             return set;
         }
 
+        public static List<string> RecallNgrams(string value, int n, int maxCount)
+        {
+            value = Compact(value);
+            var ordered = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (n <= 0 || value.Length < n || maxCount <= 0) return ordered;
+            for (var i = 0; i <= value.Length - n; i++)
+            {
+                var gram = value.Substring(i, n);
+                if (seen.Add(gram)) ordered.Add(gram);
+            }
+            if (ordered.Count <= maxCount) return ordered;
+            if (maxCount == 1) return new List<string> { ordered[ordered.Count / 2] };
+
+            // Deterministic even sampling preserves beginning/middle/end coverage.
+            // HashSet enumeration order must never decide which query terms get indexed.
+            var sampled = new List<string>(maxCount);
+            for (var i = 0; i < maxCount; i++)
+            {
+                var index = (int)Math.Round((double)i * (ordered.Count - 1) / (maxCount - 1));
+                var gram = ordered[index];
+                if (!sampled.Contains(gram)) sampled.Add(gram);
+            }
+            return sampled;
+        }
+
         public static bool IsContextDependent(string message)
         {
             var compact = (message ?? string.Empty).Trim();

@@ -106,3 +106,20 @@ def test_ocr_non_direct_v2_context_reaches_multimodal_and_ocr_text_fallback():
     assert "localDecision.KnowledgeV2ContextPromptAddon" in vision
     assert "knowledgeV2ContextAddon ?? string.Empty" in vision
     assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon)" in vision
+
+
+
+def test_v2_ngram_recall_uses_deterministic_even_sampling_not_hashset_order():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+
+    assert "public static List<string> RecallNgrams(string value, int n, int maxCount)" in semantics
+    assert "for (var i = 0; i <= value.Length - n; i++)" in semantics
+    assert "Math.Round((double)i * (ordered.Count - 1) / (maxCount - 1))" in semantics
+    assert "Ngrams(exact, 2).Take(24)" not in index
+    assert "Ngrams(query.Normalized, 2).Take(24)" not in index
+    assert "Ngrams(exact, 2).Take(24)" not in incremental
+    assert "RecallNgrams(exact, 2, 24)" in index
+    assert "RecallNgrams(query.Normalized, 2, 24)" in index
+    assert "RecallNgrams(exact, 2, 24)" in incremental
