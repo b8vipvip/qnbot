@@ -116,5 +116,5 @@ def test_equivalent_seller_reply_dedup_never_reads_another_shop_timeline():
     compare = source[source.index("private static bool FindEquivalentSellerReply"):source.index("internal static bool EquivalentGuidance")]
     assert "FindEquivalentSellerReply(plan.ShopKey, plan.Seller, plan.Buyer, answer, since, out matched)" in presend
     assert "string shopKey," in compare
-    assert "ConversationContextStore.GetRecentTurns(seller, buyer, shopKey, 24)" in compare
+    assert "ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24, shopKey)" in compare
     assert "GetRecentTurns(seller, buyer, string.Empty" not in compare
