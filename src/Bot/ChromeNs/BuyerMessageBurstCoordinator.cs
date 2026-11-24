@@ -497,22 +497,6 @@ namespace Bot.ChromeNs
                         return true;
                     }
 
-                    // The event ledger can observe a real human reply before the mirrored
-                    // conversation timeline has caught up. Do not ignore it merely because
-                    // it was marked stale against a newer buyer generation.
-                    var snapshot = new BuyerSessionAgent().GetSnapshot(
-                        canonicalSeller, item.BuyerNick, item.ShopKey);
-                    var newerHuman = snapshot != null
-                        && snapshot.RecentEvents != null
-                        && snapshot.RecentEvents.Any(x => x != null
-                            && x.Kind == BuyerSessionEventKind.SellerHumanReply
-                            && x.SourceTimestamp != DateTime.MinValue
-                            && x.SourceTimestamp > cutoff);
-                    if (newerHuman)
-                    {
-                        reason = "事件账本检测到更新的人工客服回复";
-                        return true;
-                    }
                     return false;
                 }
             }
