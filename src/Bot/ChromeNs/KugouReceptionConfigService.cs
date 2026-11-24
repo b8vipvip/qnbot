@@ -517,7 +517,7 @@ namespace Bot.ChromeNs
             ReadDocument(shop); // migrate an existing legacy profile before the first generic write
             var validated = Validate(raw).ToString(Formatting.Indented);
             var path = PathForShop(shop);
-            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules, 3000))
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("配置锁未获取，未修改任何规则。");
                 var directory = Path.GetDirectoryName(path);
@@ -541,7 +541,7 @@ namespace Bot.ChromeNs
             var shop = ResolveShop(seller);
             var path = PathForShop(shop);
             string selectedBackup = null;
-            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules, 3000))
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ShopReceptionRules", 3000))
             {
                 if (lease == null || !lease.Acquired) throw new IOException("恢复锁未获取。");
                 var directory = Path.GetDirectoryName(path);
