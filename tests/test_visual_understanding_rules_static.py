@@ -86,4 +86,4 @@ def test_ocr_admin_ledger_redaction_does_not_redact_runtime_response_payload():
     assert '"result_text_redacted"' in runtime
     assert '"text": text' in runtime
     assert '"**result"' in runtime or "**result," in runtime
-    assert "Text = Limit(remote.Text)" in local
+    assert "Text = Limit(remote.text)" in local
