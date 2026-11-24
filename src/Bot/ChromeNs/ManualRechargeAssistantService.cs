@@ -60,6 +60,7 @@ namespace Bot.ChromeNs
         {
             public string Nickname;
             public string UserId;
+            public string PhoneNumber;
             public string Selector;
         }
 
@@ -348,11 +349,14 @@ namespace Bot.ChromeNs
                 if (!Regex.IsMatch(selector, @"^zh([1-9]|1[0-2])$")) continue;
                 var nickname = CleanAccount(item.Value<string>("nickname"), 120);
                 var userId = CleanAccount(item.Value<string>("userid"), 120);
-                if (nickname.Length == 0 && userId.Length == 0) continue;
+                var phoneNumber = CleanAccount(
+                    item.Value<string>("phone") ?? item.Value<string>("mobile") ?? item.Value<string>("mobile_phone"), 32);
+                if (nickname.Length == 0 && userId.Length == 0 && phoneNumber.Length == 0) continue;
                 result.Add(new AccountCandidate
                 {
                     Nickname = nickname,
                     UserId = userId,
+                    PhoneNumber = phoneNumber,
                     Selector = selector
                 });
             }
@@ -366,10 +370,18 @@ namespace Bot.ChromeNs
             if (evidence == null) return new List<AccountCandidate>();
             var nickname = NormalizeAccount(evidence.Nickname);
             var userId = NormalizeAccount(evidence.UserId);
+            var phoneNumber = NormalizeAccount(evidence.PhoneNumber);
+            if (nickname.Length == 0 && userId.Length == 0 && phoneNumber.Length == 0)
+                return new List<AccountCandidate>();
+
+            // Every OCR field that is present must match. An ID mismatch must not be
+            // overridden by a coincidentally equal nickname, and missing API phone data
+            // cannot satisfy an OCR phone requirement.
             return (accounts ?? Enumerable.Empty<AccountCandidate>())
                 .Where(x =>
-                    (userId.Length > 0 && NormalizeAccount(x.UserId) == userId)
-                    || (nickname.Length > 0 && NormalizeAccount(x.Nickname) == nickname))
+                    (nickname.Length == 0 || NormalizeAccount(x.Nickname) == nickname)
+                    && (userId.Length == 0 || NormalizeAccount(x.UserId) == userId)
+                    && (phoneNumber.Length == 0 || NormalizeAccount(x.PhoneNumber) == phoneNumber))
                 .ToList();
         }
 
@@ -403,11 +415,12 @@ namespace Bot.ChromeNs
 
         private static string DisplayAccount(AccountCandidate account)
         {
-            var name = MaskName(account == null ? string.Empty : account.Nickname);
-            var id = MaskId(account == null ? string.Empty : account.UserId);
-            if (name.Length == 0) return "ID " + id;
-            if (id.Length == 0) return name;
-            return name + "（ID " + id + "）";
+            if (account == null) return "账号信息未提供";
+            var fields = new List<string>();
+            if (!string.IsNullOrWhiteSpace(account.Nickname)) fields.Add("昵称 " + account.Nickname.Trim());
+            if (!string.IsNullOrWhiteSpace(account.UserId)) fields.Add("ID " + account.UserId.Trim());
+            if (!string.IsNullOrWhiteSpace(account.PhoneNumber)) fields.Add("手机号 " + account.PhoneNumber.Trim());
+            return fields.Count == 0 ? "账号信息未提供" : string.Join(" / ", fields);
         }
 
         private static bool HasExplicitConsent(string text)
