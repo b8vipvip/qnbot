@@ -1025,7 +1025,7 @@ namespace Bot.ChromeNs
             var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
                 if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
                 {
                     KnowledgeLearningService.QueueLearn(
