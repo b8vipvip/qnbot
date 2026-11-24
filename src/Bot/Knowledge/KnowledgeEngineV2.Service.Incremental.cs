@@ -138,7 +138,7 @@ namespace Bot.Knowledge
             if (snapshot == null || record == null || !record.Enabled) return;
             Add(snapshot.Intent, record.Intent, id);
             Add(snapshot.Predicate, record.Predicate, id);
-            foreach (var entity in record.Entities ?? new List<string>())
+            foreach (var entity in RecordEntities(record))
                 Add(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), id);
             foreach (var alias in (record.Aliases ?? new List<string>()).Concat(new[] { record.Title }))
             {
@@ -154,7 +154,7 @@ namespace Bot.Knowledge
             if (snapshot == null || record == null) return;
             Remove(snapshot.Intent, record.Intent, id);
             Remove(snapshot.Predicate, record.Predicate, id);
-            foreach (var entity in record.Entities ?? new List<string>())
+            foreach (var entity in RecordEntities(record))
                 Remove(snapshot.Entity, KnowledgeEngineV2Semantics.Compact(entity), id);
             foreach (var alias in (record.Aliases ?? new List<string>()).Concat(new[] { record.Title }))
             {
