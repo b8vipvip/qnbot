@@ -1,3 +1,4 @@
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -94,7 +95,7 @@ namespace Bot.ChromeNs
             var currentQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion)
                 ? "[图片]"
                 : task.CombinedQuestion.Trim();
-            var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
+            var timeline = BuildScopedTimelineText(task, currentQuestion, 16);
             var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick)
                 + KugouReceptionPolicy.BuildPromptAddon(task.SellerNick, task.BuyerNick)
                 + (knowledgeV2ContextAddon ?? string.Empty);
@@ -275,7 +276,11 @@ namespace Bot.ChromeNs
             try
             {
                 var textEndpoints = AiEndpointStore.GetEnabledEndpoints();
-                if (textEndpoints == null || textEndpoints.Count == 0) return null;
+                if (textEndpoints == null || textEndpoints.Count == 0)
+                {
+                    Log.Info("OCR文字AI兜底未执行：没有启用的文本AI接口");
+                    return null;
+                }
                 var image = await _resolver.ResolveAsync(
                     task.Message, null, cancellationToken, task.ShopKey, task.BrowserClient);
                 if (image == null || !image.Success) return null;
@@ -287,6 +292,9 @@ namespace Bot.ChromeNs
                 // The fallback model never receives pixels. It may explain
                 // readable OCR text but must not claim to have seen image details.
                 var question = (task.CombinedQuestion ?? "[图片]").Trim();
+                var timeline = BuildScopedTimelineText(task, question, 12);
+                timeline = (timeline ?? string.Empty).Trim();
+                if (timeline.Length > 3000) timeline = timeline.Substring(timeline.Length - 3000);
                 var evidence = ocr.Text.Length > 2500 ? ocr.Text.Substring(0, 2500) : ocr.Text;
                 var messages = new JArray
                 {
@@ -302,7 +310,10 @@ namespace Bot.ChromeNs
                     new JObject
                     {
                         ["role"] = "user",
-                        ["content"] = "买家本轮文字：" + question + "\\n图片OCR文字（可能识别有误）：\\n" + evidence
+                        ["content"] = "最近同一买家与客服对话（用于理解当前图片的上下文）：\n"
+                            + (timeline.Length == 0 ? "（无）" : timeline)
+                            + "\n买家本轮文字：\n" + question
+                            + "\n图片OCR文字（可能识别有误）：\n" + evidence
                     }
                 };
                 // Use the customer's existing text AI configuration, without
@@ -310,7 +321,12 @@ namespace Bot.ChromeNs
                 var ai = await Task.Run(() => MyOpenAI.CallStructuredChat(
                     messages, 260, 0.1, 25, cancellationToken), cancellationToken);
                 if (ai == null || !ai.Success || string.IsNullOrWhiteSpace(ai.Answer))
+                {
+                    Log.Info("OCR文字AI兜底未获得有效答案: buyer=" + task.BuyerNick
+                        + ", resultNull=" + (ai == null)
+                        + ", success=" + (ai != null && ai.Success));
                     return null;
+                }
                 JObject obj;
                 try { obj = JObject.Parse(ai.Answer.Trim()); }
                 catch { return null; }
@@ -337,6 +353,27 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("OCR文字AI兜底失败: " + ex.GetType().Name, 10);
                 return null;
+            }
+        }
+
+        private static string BuildScopedTimelineText(VisionReplyTask task, string question, int maxTurns)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.ShopKey)) return string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
+                var canonicalSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+                if (shop == null || canonicalSeller.Length == 0) return string.Empty;
+                using (ShopSettingsScope.Enter(shop, false))
+                {
+                    return ConversationContextStore.BuildTimelineText(
+                        canonicalSeller, task.BuyerNick, question, maxTurns);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("图片会话上下文读取失败，已按ShopKey隔离并返回空上下文: " + ex.Message, 10);
+                return string.Empty;
             }
         }
 

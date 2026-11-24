@@ -138,3 +138,27 @@ def test_server_ocr_upload_requires_complete_client_image_cache_and_posts_binary
     assert 'new ByteArrayContent(imageBytes)' in ocr
     assert 'HttpMethod.Post, NormalizeOcrUrl(endpoint.BaseUrl)' in ocr
     assert 'X-Image-Sha256' in ocr
+
+
+def test_ocr_text_fallback_includes_the_same_buyers_recent_conversation_context():
+    service = read('src/Bot/ChromeNs/VisionRequestService.cs')
+    fallback = service[service.index('private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync'):]
+    assert 'BuildScopedTimelineText(task, question, 12)' in fallback
+    assert '最近同一买家与客服对话（用于理解当前图片的上下文）' in fallback
+    assert 'OCR文字AI兜底未获得有效答案' in fallback
+
+
+def test_vision_timeline_reads_are_shopkey_scoped():
+    service = read('src/Bot/ChromeNs/VisionRequestService.cs')
+    assert 'BuildScopedTimelineText(task, currentQuestion, 16)' in service
+    assert 'BuildScopedTimelineText(task, question, 12)' in service
+    helper = service[service.index('private static string BuildScopedTimelineText'):service.index('public static JObject BuildVisionPayload')]
+    assert 'ResolveRuntimeByShopKey(task.ShopKey)' in helper
+    assert 'ShopSettingsScope.Enter(shop, false)' in helper
+
+
+def test_cached_image_rebinding_preserves_shop_key_in_both_paths():
+    followup = read('src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs')
+    withdrawal = read('src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs')
+    assert 'ShopKey = source.ShopKey' in followup
+    assert 'ShopKey = burst.ShopKey' in withdrawal

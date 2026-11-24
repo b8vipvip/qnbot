@@ -85,6 +85,14 @@ namespace Bot.ChromeNs
             QueueWarm(shopKey, seller);
         }
 
+        // Image messages can be the first substantive turn in a conversation. Start the
+        // same ShopKey-scoped V2 warmup before OCR completes so the image path does not
+        // race a cold snapshot and silently skip local retrieval.
+        internal static void PrepareForVision(string shopKey, string seller)
+        {
+            PrepareSeller(shopKey, seller);
+        }
+
         private static void QueueWarm(string shopKey, string seller)
         {
             shopKey = (shopKey ?? string.Empty).Trim();

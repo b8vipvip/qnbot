@@ -618,6 +618,7 @@ namespace Bot.ChromeNs
                 .Min();
             var synthetic = new BuyerMessageBurstItem
             {
+                ShopKey = burst.ShopKey,
                 SellerNick = burst.SellerNick,
                 BuyerNick = burst.BuyerNick,
                 MessageKey = recent.MessageKey,

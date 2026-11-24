@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
     {
         private const double DirectKnowledgeMinOcrConfidence = 0.88d;
         private const int MinUsefulTextChars = 4;
+        private const int SnapshotWarmWaitMs = 12000;
 
         public static async Task<VisionRequestResult> TryResolveAsync(
             VisionReplyTask task,
@@ -49,6 +50,30 @@ namespace Bot.ChromeNs
             }
 
             var sw = Stopwatch.StartNew();
+            ShopContext shop = null;
+            string knowledgeSeller = string.Empty;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
+                knowledgeSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
+                if (shop != null && knowledgeSeller.Length > 0)
+                {
+                    using (ShopSettingsScope.Enter(shop, false))
+                    {
+                        if (KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
+                        {
+                            KnowledgeEngineV2RuntimeBridge.PrepareForVision(task.ShopKey, knowledgeSeller);
+                            Log.Info("图片OCR已提前触发本店Knowledge V2索引预热: shopRef="
+                                + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("图片OCR提前预热Knowledge V2失败，仍继续OCR和视觉兜底: " + ex.Message, 10);
+            }
+
             VisionImageResult image;
             try
             {
@@ -91,33 +116,63 @@ namespace Bot.ChromeNs
                 return null;
             }
 
-            var question = BuildKnowledgeQuestion(task.CombinedQuestion, ocr.Text);
+            if (shop == null || knowledgeSeller.Length == 0)
+            {
+                Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析Knowledge V2店铺，禁止跨店检索。", 20);
+                return null;
+            }
+
             KnowledgeV2Decision decision;
-            string knowledgeSeller = string.Empty;
             try
             {
-                var shop = ShopContextLocator.ResolveRuntimeByShopKey(task.ShopKey);
-                knowledgeSeller = shop == null ? string.Empty : (shop.SellerNick ?? string.Empty).Trim();
-                if (shop == null || knowledgeSeller.Length == 0)
-                {
-                    Log.ErrorWithMaxCount("OCR已完成，但无法通过权威ShopKey解析Knowledge V2店铺，禁止跨店检索。", 20);
-                    return null;
-                }
-
                 // Message display nicknames can be aliases. Knowledge V2 must use the seller
                 // identity owned by the ShopKey, never the untrusted message.toid.nick value.
                 using (ShopSettingsScope.Enter(shop, false))
                 {
-                    if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller)
-                        || !KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
+                    var timeline = ConversationContextStore.BuildTimelineText(
+                        knowledgeSeller, task.BuyerNick, task.CombinedQuestion, 12);
+                    var question = BuildKnowledgeQuestion(task.CombinedQuestion, timeline, ocr.Text);
+                    if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
-                        Log.Info("服务端OCR已完成，但Knowledge V2尚未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
+                        Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
+                        return null;
+                    }
+
+                    if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
+                    {
+                        var warmWait = Stopwatch.StartNew();
+                        Log.Info("图片OCR等待Knowledge V2索引就绪: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                            + ", timeoutMs=" + SnapshotWarmWaitMs);
+                        while (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller)
+                            && warmWait.ElapsedMilliseconds < SnapshotWarmWaitMs)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            KnowledgeEngineV2RuntimeBridge.PrepareForVision(task.ShopKey, knowledgeSeller);
+                            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                        }
+                        warmWait.Stop();
+                        Log.Info("图片OCR Knowledge V2索引预热等待结束: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
+                            + ", ready=" + KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller)
+                            + ", waitMs=" + warmWait.ElapsedMilliseconds);
+                    }
+
+                    if (!KnowledgeEngineV2Service.IsSnapshotReady(knowledgeSeller))
+                    {
+                        Log.Info("服务端OCR已完成，但Knowledge V2索引在等待窗口内仍未就绪；保留OCR缓存并继续视觉/文字兜底: shopRef="
                             + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey)
                             + ", buyer=" + task.BuyerNick);
                         return null;
                     }
+
                     decision = KnowledgeEngineV2Service.Resolve(knowledgeSeller, task.BuyerNick, question);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -190,15 +245,25 @@ namespace Bot.ChromeNs
             return semanticChars >= 2;
         }
 
-        private static string BuildKnowledgeQuestion(string combinedQuestion, string ocrText)
+        private static string BuildKnowledgeQuestion(string combinedQuestion, string timeline, string ocrText)
         {
             var sb = new StringBuilder();
             var question = (combinedQuestion ?? string.Empty).Trim();
             if (question.Length > 0 && !string.Equals(question, "[图片]", StringComparison.Ordinal))
             {
-                sb.AppendLine(question);
+                sb.AppendLine("买家本轮文字：").AppendLine(question);
             }
-            sb.Append((ocrText ?? string.Empty).Trim());
+
+            timeline = (timeline ?? string.Empty).Trim();
+            if (timeline.Length > 3000) timeline = timeline.Substring(timeline.Length - 3000);
+            if (timeline.Length > 0)
+            {
+                sb.AppendLine("最近客服与买家对话（用于理解图片提交原因）：")
+                    .AppendLine(timeline);
+            }
+
+            sb.AppendLine("图片OCR文字（仅为文字证据）：")
+                .Append((ocrText ?? string.Empty).Trim());
             return sb.ToString().Trim();
         }
 
