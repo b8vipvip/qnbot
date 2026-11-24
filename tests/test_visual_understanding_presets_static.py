@@ -43,7 +43,16 @@ def test_legacy_visual_preset_is_converted_to_generic_values_without_overwriting
     assert "ApplyGenericAccountTemplate(legacy)" in migration
     assert "legacy.Enabled = false;" in migration
     assert "UpdatedAtTicks" in migration
-    assert "rules.FirstOrDefault" in migration
+    assert "rules.FirstOrDefault(IsLegacySeededMobileAccountRule)" in migration
+
+    legacy_guard = service.split("private static bool IsLegacySeededMobileAccountRule", 1)[1].split(
+        "private static void ApplyGenericAccountTemplate", 1
+    )[0]
+    for field in ("Name", "AppName", "ScreenName", "RequiredKeywords", "OptionalKeywords",
+                  "ExcludedKeywords", "FieldPatterns", "Description"):
+        assert "rule." + field in legacy_guard
+    assert "StringComparison.Ordinal" in legacy_guard
+    assert "If an operator edited any field, preserve that rule and all of its settings." in service
 
 
 def test_visual_understanding_requires_all_required_ocr_keywords_and_honors_exclusions():
