@@ -250,7 +250,8 @@ namespace Bot.ChromeNs
 
             // Account evidence is derived only from a recent, non-withdrawn observation
             // whose application identity matches this shop's enabled Visual Understanding rules.
-            // Never send the raw nickname or account ID to the model.
+            // Raw nickname, account ID and phone remain in the shop-scoped evidence store and
+            // are not exposed to the model; membership status/expiry may be used as factual context.
             try
             {
                 AccountVisualEvidence accountEvidence;
@@ -266,7 +267,11 @@ namespace Bot.ChromeNs
                         + (string.IsNullOrWhiteSpace(accountEvidence.Nickname) ? "账号昵称未识别" : "账号昵称字段")
                         + "、"
                         + (string.IsNullOrWhiteSpace(accountEvidence.UserId) ? "账号ID未识别" : "账号ID字段")
-                        + "；原始昵称和ID已脱敏，不包含可直接识别账号的原值。";
+                        + "、"
+                        + (string.IsNullOrWhiteSpace(accountEvidence.PhoneNumber) ? "手机号未识别" : "手机号字段")
+                        + "；会员状态：" + Clean(accountEvidence.MembershipStatus, 80)
+                        + "；会员到期：" + Clean(accountEvidence.MembershipExpiry, 80)
+                        + "；原始昵称、ID和手机号保留在本店结构化证据中，不向模型暴露原值。";
                     context.References[alias] = new ReceptionWorkflowEvidenceReference
                     {
                         Alias = alias,
