@@ -96,7 +96,7 @@ namespace Bot.Knowledge
             _excluded.Text = item == null ? "" : item.ExcludedKeywords;
             _patterns.Text = item == null ? "" : item.FieldPatterns;
             _description.Text = item == null ? "" : item.Description;
-            _enabled.IsChecked = item == null || item.Enabled;
+            _enabled.IsChecked = item != null && item.Enabled;
         }
 
         private void Save()

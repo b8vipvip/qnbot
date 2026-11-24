@@ -62,7 +62,8 @@ def test_recent_account_evidence_is_derived_from_shop_configured_app_and_generic
     assert "AccountNicknameRegex" in visual
     assert "AccountIdRegex" in visual
     assert "TryResolveConfiguredApplication" in rules
-    assert 'string.Equals(name, "{应用名称}"' in rules
+    assert ".Where(x => x.Length >= 2 && !IsApplicationNamePlaceholder(x))" in rules
+    assert 'name.Contains("{") || name.Contains("}")' in rules
     assert "酷狗" not in visual and "Kugou" not in visual
 
 
