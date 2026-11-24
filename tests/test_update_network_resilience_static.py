@@ -92,3 +92,19 @@ def test_server_updater_bootstraps_host_agent_after_successful_deploy():
     assert "HEARTBEAT_FILE" in installer
     assert "systemctl is-active --quiet" in installer
     assert "journalctl -u" in installer
+
+
+def test_host_fetch_reuses_container_loopback_without_exporting_credentials():
+    script = read(ROOT / "scripts" / "update-api-control-plane.sh")
+    agent = read(ROOT / "scripts" / "api-control-plane-update-agent.sh")
+    js = read(SERVICE / "static" / "version-update.js")
+    assert 'nsenter --target "$pid" --net --' in script
+    assert 'proxy="socks5h://127.0.0.1:$port"' in script
+    assert 'http.sslVerify=true' in script
+    assert 'GIT_TERMINAL_PROMPT=0' in script
+    assert 'fetch --progress --prune "$url" "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"' in script
+    assert 'if github_fetch_via_console_proxy; then return 0; fi' in script
+    assert 'git -C "$REPO_DIR" fetch --prune origin "$BRANCH"' in script
+    assert 'supports_console_vless' in agent
+    assert 'VLESS HTTPS 同步源码' in agent
+    assert 'console_vless_preferred' in js
