@@ -28,6 +28,8 @@ def test_visual_understanding_is_shop_scoped_and_uses_only_a_generic_template():
     assert "账号ID" in template and "会员到期" in template
     assert "EnsureDefaultMobileAccountTemplate" in service
     assert "EnsureDefaultKugouPreset" not in service
+    assert "rule.Enabled = false;" in template
+    assert "_enabled.IsChecked = item != null && item.Enabled;" in page
     assert 'Nav("视觉理解"' in shell
     assert "KnowledgeV2VisualUnderstandingPage.cs" in targets
     assert "新增预设" in page and "保存规则" in page and "删除规则" in page
@@ -39,6 +41,7 @@ def test_legacy_visual_preset_is_converted_to_generic_values_without_overwriting
         "if (rules.Any", 1
     )[0]
     assert "ApplyGenericAccountTemplate(legacy)" in migration
+    assert "legacy.Enabled = false;" in migration
     assert "UpdatedAtTicks" in migration
     assert "rules.FirstOrDefault" in migration
 
@@ -51,8 +54,28 @@ def test_visual_understanding_requires_all_required_ocr_keywords_and_honors_excl
     assert "required.Any" in match
     assert "excluded.Any" in match
     assert ".Where(x => x.Enabled)" in match
+    assert "IsApplicationNamePlaceholder(rule.AppName)" in match
+    assert "configuredNames.Any" in match
+    assert "NormalizeApplicationText(name)" in match
+    assert "启用视觉理解规则前必须填写真实应用名称" in service
     assert "Extract(best.FieldPatterns, ocrText)" in match
 
+
+
+def test_unconfigured_account_template_cannot_match_or_claim_an_application_identity():
+    service = read("src/Bot/ChromeNs/VisualUnderstandingRuleService.cs")
+    match = service.split("public static bool TryMatch", 1)[1].split(
+        "private static Dictionary<string, string> Extract", 1
+    )[0]
+    resolver = service.split("public static bool TryResolveConfiguredApplication", 1)[1].split(
+        "private static IEnumerable<string> SplitApplicationNames", 1
+    )[0]
+    assert "IsApplicationNamePlaceholder(rule.AppName)" in match
+    assert "configuredNames.Count > 0" in match
+    assert "SplitApplicationNames(rule.AppName)" in resolver
+    assert 'return name.Contains("{") || name.Contains("}");' in service
+    assert 'rule.AppName = "{应用名称}";' in service
+    assert "rule.Enabled = false;" in service
 
 def test_ocr_visual_template_precedes_knowledge_v2_and_ai_receives_extracted_facts_on_miss():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
