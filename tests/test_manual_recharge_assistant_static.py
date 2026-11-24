@@ -132,3 +132,27 @@ def test_module_is_packaged_and_admin_switch_is_visible():
     assert "该功能默认关闭" in page
     assert "固定 HTTPS 白名单根地址" in page
     assert "/api/admin/manual-recharge/settings" in page
+
+def test_recharge_status_reply_is_bound_to_original_shop_session_and_rechecks_live_takeover():
+    service = read(SERVICE)
+    claim = service[
+        service.index("private static void TryClaimAndQuery"):
+        service.index("public static bool TryConsumeHandled")
+    ]
+    query = service[
+        service.index("private static async Task QueryAndReplyAsync"):
+        service.index("private static async Task<JObject> QueryServerAsync")
+    ]
+
+    assert "ShopContextLocator.ResolveRuntimeBySeller(qn)" in claim
+    assert "sourceClient = qn.CDP" in claim
+    assert "IsAuthoritativeShopSession(shop.ShopKey, sourceClient.SessionId)" in claim
+    assert "shop.ShopKey, out code, out codeTime" in claim
+    assert "Task.Run(async () => await QueryAndReplyAsync(" in claim
+    assert "GetRecentTurns(seller, buyer, currentQuestion, 24, shopKey)" in service
+    assert "IsSourceSessionCurrent(qn, shopKey, sourceClient, sourceSessionId, seller)" in query
+    assert "ParallelReplyRelevanceGate.ShouldSend(" in query
+    assert "out relevanceReason, false, shopKey" in query
+    assert "out latestReason, false, shopKey" in query
+    assert "buyer, answer, 1, CancellationToken.None, preSendGuard" in query
+
