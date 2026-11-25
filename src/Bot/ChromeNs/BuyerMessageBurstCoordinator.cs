@@ -426,7 +426,8 @@ namespace Bot.ChromeNs
                             "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
                         || firstFailureReason.IndexOf(
                             "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
-                        || (qn.Rpa != null
+                        || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
+                            && qn.Rpa != null
                             && qn.Rpa.LastSendWasCancelled
                             && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0);
                     var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
