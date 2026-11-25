@@ -3,6 +3,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using Bot.ChromeNs;
 using Bot.Knowledge;
 using Bot.ShopScope;
@@ -69,6 +72,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private bool _canResend = true;
         private DateTime _questionDetectedAt = DateTime.MinValue;
         private DateTime _answerReadyAt = DateTime.MinValue;
+        private VisionCachedImageReference _imageReference;
 
         public event EventHandler<ConversationResendEventArgs> ResendRequested;
         public event EventHandler<ConversationEditEventArgs> EditRequested;
@@ -108,6 +112,7 @@ namespace Bot.AssistWindow.Widget.Robot
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
             txtStatus.Foreground = new SolidColorBrush(isAutoReply ? Color.FromRgb(47, 128, 237) : Color.FromRgb(107, 114, 128));
             UpdateTimingText();
+            RefreshQuestionContextMenu();
         }
 
         public void SetQuestion(string question, DateTime detectedAt)
@@ -118,6 +123,7 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 txtQuestion.Text = _question;
                 UpdateTimingText();
+                RefreshQuestionContextMenu();
             });
         }
 
@@ -354,6 +360,144 @@ namespace Bot.AssistWindow.Widget.Robot
             if (gridQuestion != null)
             {
                 gridQuestion.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private bool IsImageQuestion
+        {
+            get
+            {
+                var value = _question ?? string.Empty;
+                return value.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                    || value.IndexOf("[图片消息]", StringComparison.OrdinalIgnoreCase) >= 0
+                    || value.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+        }
+
+        private void RefreshQuestionContextMenu()
+        {
+            if (txtQuestion == null) return;
+            _imageReference = null;
+            if (IsImageQuestion && !string.IsNullOrWhiteSpace(_shopKey))
+            {
+                try
+                {
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                    using (ShopSettingsScope.Enter(shop))
+                    {
+                        VisionCachedImageReference reference;
+                        if (VisionImageCacheService.TryGetNearestReference(
+                            _seller, _buyer, _questionDetectedAt,
+                            TimeSpan.FromMinutes(5), _shopKey, out reference)
+                            && reference != null && !reference.Withdrawn)
+                            _imageReference = reference;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("绑定买家图片上下文菜单失败：" + ex.Message, 5);
+                }
+            }
+
+            txtQuestion.ContextMenu = CreateQuestionContextMenu(txtQuestion);
+            Stylus.SetIsPressAndHoldEnabled(txtQuestion, true);
+        }
+
+        private ContextMenu CreateQuestionContextMenu(FrameworkElement placementTarget)
+        {
+            var menu = new ContextMenu();
+            var copy = new MenuItem { Header = "复制" };
+            copy.Click += (s, args) =>
+            {
+                try { Clipboard.SetText(_question ?? string.Empty); }
+                catch { }
+            };
+            menu.Items.Add(copy);
+
+            if (IsImageQuestion)
+            {
+                var import = new MenuItem { Header = "导入图片知识" };
+                import.Click += async (s, args) => await ImportImageKnowledgeAsync();
+                menu.Items.Add(import);
+            }
+            menu.PlacementTarget = placementTarget ?? txtQuestion;
+            return menu;
+        }
+
+        private async Task ImportImageKnowledgeAsync()
+        {
+            if (!IsImageQuestion)
+            {
+                MessageBox.Show(Window.GetWindow(this), "当前消息不是图片消息。",
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_shopKey))
+            {
+                MessageBox.Show(Window.GetWindow(this), "无法确认图片消息所属店铺，已阻止跨店导入。",
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var reference = _imageReference;
+            if (reference == null || reference.Message == null
+                || Math.Abs((reference.ObservedAt - _questionDetectedAt).TotalMinutes) > 5)
+            {
+                reference = null;
+                try
+                {
+                    var shopForLookup = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                    using (ShopSettingsScope.Enter(shopForLookup))
+                    {
+                        VisionCachedImageReference latest;
+                        if (VisionImageCacheService.TryGetNearestReference(
+                            _seller, _buyer, _questionDetectedAt,
+                            TimeSpan.FromMinutes(5), _shopKey, out latest)
+                            && latest != null && !latest.Withdrawn)
+                            reference = latest;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
+            }
+
+            if (reference == null || reference.Message == null || reference.Withdrawn)
+            {
+                MessageBox.Show(Window.GetWindow(this),
+                    "未找到与这条买家图片消息对应的原始图片缓存。请在图片消息到达后尽快导入；不会用其他消息的图片代替。",
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(_shopKey);
+                VisionImageResult image;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    image = await VisionImageCacheService.ResolveAsync(
+                        reference.Message, null, CancellationToken.None, _shopKey);
+                }
+                if (image == null || !image.Success
+                    || string.IsNullOrWhiteSpace(image.LocalCachePath)
+                    || !File.Exists(image.LocalCachePath))
+                    throw new InvalidOperationException(image == null ? "图片缓存未返回结果。" : image.Error);
+
+                var extension = (Path.GetExtension(image.LocalCachePath) ?? string.Empty).ToLowerInvariant();
+                if (extension != ".jpg" && extension != ".jpeg" && extension != ".png"
+                    && extension != ".webp" && extension != ".gif")
+                    extension = ".png";
+                var imageName = "买家图片_" + reference.ObservedAt.ToString("yyyyMMdd_HHmmss") + extension;
+                KnowledgeCenterV2UiBridge.ShowImageKnowledgeImport(
+                    Window.GetWindow(this), _seller, _shopKey, image.LocalCachePath, imageName);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("导入买家图片知识失败：" + ex.Message, 10);
+                MessageBox.Show(Window.GetWindow(this), "无法导入原始图片：" + ex.Message,
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
