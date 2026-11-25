@@ -49,9 +49,12 @@ def test_cloud_image_knowledge_is_bound_to_client_shop_and_uses_revisioned_tombs
     assert "conflicts" in api
     assert "revision" in api
     assert "upserts: List[Dict[str, Any]] = Field(default_factory=list, max_length=5)" in api
-    assert "bot_web_image_knowledge" in binding
-    assert "bot_web_image_knowledge_tombstones" in binding
-    assert "bot_web_image_knowledge_sync_state" in binding
+    scoped_cleanup = binding.split("TOKEN_SCOPED_STATE_TABLES", 1)[1].split(")", 1)[0]
+    assert "bot_web_image_knowledge" not in scoped_cleanup
+    assert "bot_web_image_knowledge_tombstones" not in scoped_cleanup
+    assert "bot_web_image_knowledge_sync_state" not in scoped_cleanup
+    # The records and cursors remain partitioned by ShopKey, so token rebinds
+    # hide the old shop rather than destroying its image knowledge.
 
 
 def test_web_image_knowledge_uses_the_same_shop_scoped_cloud_records_as_windows_sync():
