@@ -35,3 +35,9 @@ def test_web_image_knowledge_ui_supports_long_press_import_auto_ocr_and_editing(
     assert 'prepareImageKnowledgeFile' in script
     assert 'loadImageKnowledge' in script
     assert 'importImageKnowledgeAction' in script
+    assert "function bindLongPress()" in script
+    assert 'addEventListener("touchstart"' in script
+    assert 'addEventListener("contextmenu"' in script
+    assert "m.attachment_sha256" in script
+    assert "importImageKnowledgeFromMessage" in script
+    assert "await prepareImageKnowledgeFile(file)" in script
