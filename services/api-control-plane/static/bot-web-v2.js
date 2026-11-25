@@ -41,12 +41,30 @@ function openNewImageKnowledge(){resetImageKnowledgeEditor();$("imageKnowledgeFi
 function imageKnowledgeScope(){const status=state.snapshot?.status||{};return{shop_key:String(status.shop_key||status.authorization?.shop_key||"").trim(),seller:String(state.active?.seller||status.current_seller||(status.seller_nicks||[])[0]||"").trim()}}
 function imageKnowledgeScopeQuery(){const scope=imageKnowledgeScope();if(!scope.shop_key||!scope.seller)throw new Error("等待 Windows Bot 同步当前店铺身份，暂时无法访问图片知识");return new URLSearchParams(scope)}
 async function importImageKnowledgeFromMessage(){const m=state.selectedMessage;closeActionSheet();if(!m||m.role!=="user"||m.withdrawn)return;resetImageKnowledgeEditor();$("imageKnowledgeHint").textContent="正在从这条买家消息读取原始图片…";try{const data=await fetchMessageAttachment(m);const binary=atob(data.image_base64||"");const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);const file=new File([bytes],data.file_name||("buyer-image-"+m.id+".jpg"),{type:data.mime_type||"image/jpeg"});await prepareImageKnowledgeFile(file)}catch(err){$("imageKnowledgeHint").textContent="原始图片导入失败："+err.message;toast(err.message)}}
+async function sniffImageKnowledgeMime(file){
+  const bytes=new Uint8Array(await file.slice(0,16).arrayBuffer());
+  if(bytes.length>=2&&bytes[0]===0x42&&bytes[1]===0x4d)return "image/bmp";
+  if(bytes.length>=4&&bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47)return "image/png";
+  if(bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return "image/jpeg";
+  if(bytes.length>=3&&bytes[0]===0x47&&bytes[1]===0x49&&bytes[2]===0x46)return "image/gif";
+  if(bytes.length>=12&&bytes[0]===0x52&&bytes[1]===0x49&&bytes[2]===0x46&&bytes[3]===0x46&&bytes[8]===0x57&&bytes[9]===0x45&&bytes[10]===0x42&&bytes[11]===0x50)return "image/webp";
+  if(bytes.length>=12&&bytes[4]===0x66&&bytes[5]===0x74&&bytes[6]===0x79&&bytes[7]===0x70){
+    const brand=String.fromCharCode(bytes[8],bytes[9],bytes[10],bytes[11]).toLowerCase();
+    if(["heic","heix","hevc","hevx","heim","heis","hevm","hevs"].includes(brand))return "image/heic";
+    if(brand==="mif1"||brand==="msf1")return "image/heif";
+  }
+  return "";
+}
 async function normalizeImageKnowledgeFile(file){
-  const type=String(file?.type||"").toLowerCase(),name=String(file?.name||"").toLowerCase();
-  if(/^image\/(jpeg|png|webp|gif)$/.test(type))return file;
+  const declaredType=String(file?.type||"").toLowerCase(),name=String(file?.name||"").toLowerCase();
+  const type=(await sniffImageKnowledgeMime(file))||declaredType;
   const bmp=type==="image/bmp"||type==="image/x-ms-bmp"||type==="image/x-bmp"||name.endsWith(".bmp");
   const heif=/^image\/(heic|heif)(-sequence)?$/.test(type)||name.endsWith(".heic")||name.endsWith(".heif");
-  if(!bmp&&!heif)return file;
+  if(!bmp&&!heif){
+    if(/^image\/(jpeg|png|webp|gif)$/.test(type)&&type!==declaredType)
+      return new File([file],file.name||"buyer-image",{type,lastModified:file.lastModified||Date.now()});
+    return file;
+  }
   if(file.size<1||file.size>8*1024*1024)throw new Error("图片必须为 1 字节至 8 MB");
   if(typeof createImageBitmap!=="function")throw new Error("当前浏览器不支持图片格式转换，请先转为 JPG 或 PNG");
   if(bmp){
