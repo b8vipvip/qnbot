@@ -189,6 +189,12 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        public static bool HasEntries(string shopKey)
+        {
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            return Load(shop.ShopKey, shop.SellerNick).Count > 0;
+        }
+
         public static bool TryMatch(
             string shopKey,
             string seller,
@@ -279,7 +285,13 @@ namespace Bot.ChromeNs
 
         private static string Normalize(string value)
         {
-            return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty);
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            // Account IDs, phone numbers, dates and other per-buyer values vary between
+            // screenshots. Ignore numeric/mixed identifiers while retaining their OCR labels.
+            value = Regex.Replace(value,
+                @"(?<![a-z0-9])(?=[a-z0-9_-]{5,}(?![a-z0-9]))(?=[a-z0-9_-]*\d)[a-z0-9_-]+", " ");
+            value = Regex.Replace(value, @"(?<!\d)\d{4,}(?!\d)", " ");
+            return Regex.Replace(value, @"[\s\p{P}\p{S}]+", string.Empty);
         }
 
         private static ShopContext ResolveScope(string shopKey, string seller)
