@@ -14,7 +14,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
-import bot_client_shop_binding as shop_binding
 
 
 router = APIRouter()
@@ -328,6 +327,7 @@ class KnowledgeSyncInput(BaseModel):
 
 
 def _require_image_shop_scope(client_id: int, shop_key: str, seller: str) -> str:
+    import bot_client_shop_binding as shop_binding
     shop_key = _safe_text(shop_key, 64)
     seller = _safe_text(seller, 160)
     if not shop_key or not seller:
