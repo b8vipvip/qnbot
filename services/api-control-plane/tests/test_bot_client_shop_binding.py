@@ -44,6 +44,9 @@ def setup_cp(tmp_path):
             CREATE TABLE bot_commands(client_id INTEGER);
             CREATE TABLE bot_client_state(client_id INTEGER);
             CREATE TABLE bot_conversation_reads(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge_sync_state(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge_tombstones(client_id INTEGER);
             CREATE TABLE bot_knowledge_state(client_id INTEGER);
             CREATE TABLE bot_knowledge_v2_state(
                 client_id INTEGER PRIMARY KEY,
@@ -166,6 +169,9 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_commands",
             "bot_client_state",
             "bot_conversation_reads",
+            "bot_web_image_knowledge",
+            "bot_web_image_knowledge_sync_state",
+            "bot_web_image_knowledge_tombstones",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
             "bot_store_rule_state",
