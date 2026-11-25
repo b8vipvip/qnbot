@@ -528,6 +528,40 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        public static bool TryGetReferenceByMessageKey(
+            string seller,
+            string buyer,
+            string messageKey,
+            string shopKey,
+            out VisionCachedImageReference reference)
+        {
+            reference = null;
+            messageKey = (messageKey ?? string.Empty).Trim();
+            if (messageKey.Length == 0) return false;
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null) return false;
+            var record = Records.Values
+                .Where(x => x != null && x.Message != null
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                    && string.Equals(x.MessageKey, messageKey, StringComparison.Ordinal))
+                .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
+                .OrderByDescending(x => x.ObservedAt)
+                .FirstOrDefault();
+            if (record == null) return false;
+            reference = new VisionCachedImageReference
+            {
+                ShopKey = record.ShopKey,
+                SellerNick = record.SellerNick,
+                BuyerNick = record.BuyerNick,
+                MessageKey = record.MessageKey,
+                Message = record.Message,
+                ObservedAt = record.ObservedAt,
+                Withdrawn = record.Withdrawn,
+                CacheComplete = IsTaskSuccessful(record.DownloadTask)
+            };
+            return true;
+        }
+
         private static CacheRecord FindRecord(
             string messageKey, string url, string shopKey, string seller, string buyer)
         {
