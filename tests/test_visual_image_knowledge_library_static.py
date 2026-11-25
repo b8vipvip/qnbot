@@ -37,7 +37,7 @@ def test_image_knowledge_matches_ocr_while_ignoring_per_buyer_identifiers():
     assert "string.Equals(item.ImageSha256, imageSha256" in match
     assert "MatchThreshold = 0.78d" in service
     assert "ocrConfidence < 0.55d" in match
-    assert "numeric/mixed identifiers vary between" in normalize
+    assert "Ignore numeric/mixed identifiers" in normalize
     assert r"\d{4,}" in normalize
 
 
@@ -86,6 +86,8 @@ def test_image_knowledge_context_reaches_multimodal_and_ocr_text_ai():
     assert "localDecision.VisualSummary" in vision
     assert "localDecision.ImageKnowledgeScore" in vision
     assert "image-knowledge" in vision
+    assert "已匹配的人工图片知识说明" in vision
+    assert "请买家重新发送正确界面" in vision
 
 
 def test_image_knowledge_editor_has_only_image_ocr_and_description_workflow():
