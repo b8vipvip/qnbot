@@ -158,6 +158,15 @@ namespace Bot.ChromeNs
                 {
                     var processId = process.Id;
                     var processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+                    string activeShopKey;
+                    string activeSessionId;
+                    bool activeFocusProofFresh;
+                    int? activeFocusProofAgeSeconds;
+                    ActiveShopSessionRegistry.GetReadOnlyAcceptanceState(
+                        out activeShopKey,
+                        out activeSessionId,
+                        out activeFocusProofFresh,
+                        out activeFocusProofAgeSeconds);
                     lock (_sellerSessionSync)
                     {
                         var mappedSessionIds = new HashSet<string>(_sessionShopKeys.Keys, StringComparer.Ordinal);
@@ -230,6 +239,10 @@ namespace Bot.ChromeNs
                             CollectedAtUtc = nowUtc.ToString("o"),
                             ProcessId = processId,
                             ProcessStartTimeUtcTicks = processStartTimeUtcTicks,
+                            ActiveShopRef = RuntimeAcceptanceDiagnosticRef("shop", activeShopKey),
+                            ActiveSessionRef = RuntimeAcceptanceDiagnosticRef("session", activeSessionId),
+                            ActiveFocusProofFresh = activeFocusProofFresh,
+                            ActiveFocusProofAgeSeconds = activeFocusProofAgeSeconds,
                             Counts = new
                             {
                                 ConnectedSessions = _connectedSessions.Count,
