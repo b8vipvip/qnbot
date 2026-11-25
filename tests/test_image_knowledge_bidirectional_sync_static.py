@@ -231,3 +231,15 @@ def test_web_mirror_only_treats_real_image_flags_or_exact_media_placeholders_as_
     assert 'string.Equals(normalizedPlaceholder, "[image]"' in capture
     assert 'text.IndexOf("[图片]"' not in capture
     assert 'text.IndexOf("图片消息"' not in capture
+
+
+def test_windows_buyer_image_import_menu_does_not_match_image_mentions_in_plain_text():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    menu = mirror.split("private ContextMenu BuildMessageMirrorBuyerContextMenu", 1)[1].split(
+        "private async Task AddBuyerDirectAnswerFromMirror", 1
+    )[0]
+    assert "turn.HasImage" in menu
+    assert 'string.Equals(normalizedQuestion, "[图片]"' in menu
+    assert 'string.Equals(normalizedQuestion, "图片消息"' in menu
+    assert 'question.IndexOf("[图片]"' not in menu
+    assert 'question.IndexOf("图片消息"' not in menu
