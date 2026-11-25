@@ -19,6 +19,8 @@ def test_right_panel_never_silently_renders_an_empty_bot_tab_host():
     assert "CreateRobotInitializationErrorContent" in panel
     assert "Bot工作台初始化失败" in panel
     assert "忽略无法识别的右侧面板标签配置" in panel
+    assert "robotTab.Visibility != Visibility.Visible" in panel
+    assert "Params.Panel.GetRobotIsVisible(Wnd.Desk.WndTitle)" in panel
     assert 'case "工作台":' in panel
     assert 'case "机器人":' in panel
     assert 'case "Bot":' in panel
