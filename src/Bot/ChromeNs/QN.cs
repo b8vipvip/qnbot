@@ -429,7 +429,10 @@ namespace Bot.ChromeNs
                 || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal)
                 || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
             {
-                reason = "当前CDP会话不属于显式ShopSettingsScope，已阻止跨店发送";
+                reason = "当前CDP会话不属于显式ShopSettingsScope，已阻止跨店发送: expectedShopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client == null ? string.Empty : client.ShopKey)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client == null ? string.Empty : client.SessionId);
                 return false;
             }
 
@@ -488,7 +491,14 @@ namespace Bot.ChromeNs
                 if (client != null
                     && !string.IsNullOrWhiteSpace(client.ShopKey)
                     && !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal))
-                    return "当前QN实例绑定了其他ShopKey，已阻止跨店发送";
+                {
+                    var mismatchReason = "当前QN实例绑定了其他ShopKey，已阻止跨店发送";
+                    Log.Info((stage ?? "发送") + "作用域复核发现CDP ShopKey不匹配: expectedShopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client.ShopKey)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client.SessionId));
+                    return mismatchReason;
+                }
 
                 var authoritative = client != null
                     && !client.IsInvalidated
