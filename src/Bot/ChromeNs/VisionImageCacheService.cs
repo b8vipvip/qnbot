@@ -528,6 +528,43 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        public static bool TryGetNearestReference(
+            string seller,
+            string buyer,
+            DateTime targetTime,
+            TimeSpan tolerance,
+            string shopKey,
+            out VisionCachedImageReference reference)
+        {
+            reference = null;
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null || targetTime == DateTime.MinValue) return false;
+            var maxSeconds = Math.Max(1d, Math.Min(900d, Math.Abs(tolerance.TotalSeconds)));
+            var record = Records.Values
+                .Where(x => x != null && x.Message != null
+                    && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
+                .Select(x => new { Record = x, Delta = Math.Abs((x.ObservedAt - targetTime).TotalSeconds) })
+                .Where(x => x.Delta <= maxSeconds)
+                .OrderBy(x => x.Delta)
+                .ThenByDescending(x => x.Record.ObservedAt)
+                .Select(x => x.Record)
+                .FirstOrDefault();
+            if (record == null) return false;
+            reference = new VisionCachedImageReference
+            {
+                ShopKey = record.ShopKey,
+                SellerNick = record.SellerNick,
+                BuyerNick = record.BuyerNick,
+                MessageKey = record.MessageKey,
+                Message = record.Message,
+                ObservedAt = record.ObservedAt,
+                Withdrawn = record.Withdrawn,
+                CacheComplete = IsTaskSuccessful(record.DownloadTask)
+            };
+            return true;
+        }
+
         public static bool TryGetReferenceByMessageKey(
             string seller,
             string buyer,
