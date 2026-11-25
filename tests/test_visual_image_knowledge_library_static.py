@@ -83,3 +83,16 @@ def test_buyer_image_message_menu_imports_exact_shop_scoped_cached_original():
     assert "TryGetCachedImagePathAsync" in cache
     assert "ImportBuyerImage" in mirror
     assert "shell.OpenImageKnowledge(imagePath)" in bridge
+
+
+def test_recent_visual_account_evidence_requires_real_image_flag_or_exact_placeholder():
+    context = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    method = context.split("public static bool TryGetRecentAccountEvidence", 1)[1].split(
+        "private static bool IsBotMarked", 1
+    )[0]
+    assert "turns[i].HasImage" in method
+    assert 'string.Equals(text, "[图片]"' in method
+    assert 'string.Equals(text, "【图片】"' in method
+    assert 'string.Equals(text, "图片消息"' in method
+    assert 'text.Contains("[图片]")' not in method
+    assert 'text.Contains("【图片】")' not in method

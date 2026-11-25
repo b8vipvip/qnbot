@@ -367,9 +367,11 @@ namespace Bot.ChromeNs
                 text = text.Substring(0, text.Length - botEchoMarker.Length).TrimEnd();
                 isBot = text.Length > 0;
             }
+            var normalizedPlaceholder = (text ?? string.Empty).Trim();
             var isImage = turn.HasImage
-                || text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
-                || text.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0;
+                || string.Equals(normalizedPlaceholder, "[图片]", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedPlaceholder, "图片消息", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(normalizedPlaceholder, "[image]", StringComparison.OrdinalIgnoreCase);
             if (turn.Withdrawn && string.IsNullOrWhiteSpace(text))
                 text = "已撤回一条消息";
             if (text.Length == 0 && isImage) text = "[图片]";

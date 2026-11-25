@@ -47,3 +47,14 @@ def test_web_image_knowledge_ui_supports_long_press_import_auto_ocr_and_editing(
     assert prepare.index('$("saveImageKnowledgeBtn").disabled=true') < prepare.index('if(file.size<1')
     assert '25000000' in script
     assert 'image/bmp,image/heic,image/heif,.bmp,.heic,.heif' in html
+
+
+def test_web_image_import_action_uses_attachment_flag_or_exact_placeholder_only():
+    script = read("services/api-control-plane/static/bot-web-v2.js")
+    action = script.split("function openActionSheet()", 1)[1].split(
+        "function closeActionSheet", 1
+    )[0]
+    assert 'm.message_type==="image"' in action
+    assert '!!m.attachment_sha256' in action
+    assert '["[图片]","图片消息","[image]"].includes(String(m.text||"").trim())' in action
+    assert r'/\[图片\]|图片消息/.test' not in action
