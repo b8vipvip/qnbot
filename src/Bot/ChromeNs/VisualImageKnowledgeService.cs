@@ -65,7 +65,7 @@ namespace Bot.ChromeNs
     internal static class VisualImageKnowledgeService
     {
         public const int MaxImageBytes = 8 * 1024 * 1024;
-        public const int MaxOcrChars = 6000;
+        public const int MaxOcrChars = 12000;
         public const int MaxDescriptionChars = 1200;
         public const int MaxEntriesPerShop = 500;
         public const double MatchThreshold = 0.78d;
