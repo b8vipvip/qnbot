@@ -346,9 +346,26 @@ namespace Bot.ChromeNs
                 return string.IsNullOrWhiteSpace(messageText) ? "[商品链接]" : messageText.Trim();
             }
             var unsupportedType = DetectUnsupportedType(message, messageText);
+            if (string.Equals(unsupportedType, "图片", StringComparison.Ordinal))
+                return PreserveImageCaption(messageText);
             if (!string.IsNullOrWhiteSpace(unsupportedType)) return "[" + unsupportedType + "]";
             var text = (messageText ?? string.Empty).Trim();
             return string.IsNullOrWhiteSpace(text) ? "[空白或未知消息]" : text;
+        }
+
+        private static string PreserveImageCaption(string value)
+        {
+            var caption = (value ?? string.Empty).Trim();
+            if (caption == "[图片]" || caption == "图片消息" || caption == "[image]")
+                return "[图片]";
+
+            // Keep buyer-authored text when the same message also carries an image.
+            // Strip only standalone transport placeholders, never words inside a sentence.
+            caption = caption.Replace("[图片]", " ").Replace("[image]", " ");
+            var words = caption.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(x => !string.Equals(x, "图片消息", StringComparison.OrdinalIgnoreCase));
+            caption = string.Join(" ", words).Trim();
+            return string.IsNullOrWhiteSpace(caption) ? "[图片]" : caption + " [图片]";
         }
 
         public static bool IsMediaPlaceholder(string value)
