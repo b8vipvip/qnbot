@@ -480,5 +480,5 @@ def test_legacy_qn_text_and_vision_fallback_paths_keep_last_mile_shop_scoped_gua
         assert "rpa.LastSendWasCancelled" in region
         assert "ResponseProgressTracker.Cancel(" in region
     assert "lease.MarkSending(\"legacy_text_send_started\")" in text_path
-    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in " ".join(qn.split())
+    assert "RememberDelivered(burst.SellerNick,burst.BuyerNick,answer,burst.ShopKey)" in "".join(qn.split())
 
