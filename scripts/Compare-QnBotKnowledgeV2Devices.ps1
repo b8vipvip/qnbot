@@ -12,6 +12,7 @@ param(
     [string]$DeviceAShopRef = '',
     [string]$DeviceBShopRef = '',
     [ValidateRange(1, 60)][int]$MaxSampleSkewMinutes = 5,
+    [ValidateRange(1, 240)][int]$MaxSampleAgeMinutes = 15,
     [string]$OutputDirectory = ''
 )
 
@@ -113,10 +114,16 @@ $deviceB = Get-LatestDeviceShopState -Path $DeviceBCsv -RequestedShopRef $Device
 
 $timeA = [DateTimeOffset]::Parse($deviceA.SampleTimeUtc)
 $timeB = [DateTimeOffset]::Parse($deviceB.SampleTimeUtc)
+$nowUtc = [DateTimeOffset]::UtcNow
 $sampleSkewSeconds = [math]::Abs(($timeA - $timeB).TotalSeconds)
+$sampleAgeASeconds = ($nowUtc - $timeA).TotalSeconds
+$sampleAgeBSeconds = ($nowUtc - $timeB).TotalSeconds
 $maxSkewSeconds = $MaxSampleSkewMinutes * 60
+$maxAgeSeconds = $MaxSampleAgeMinutes * 60
 
 $checks = @(
+    [pscustomobject]@{ Name = 'Device A sample is recent'; Passed = ($sampleAgeASeconds -ge -60 -and $sampleAgeASeconds -le $maxAgeSeconds) }
+    [pscustomobject]@{ Name = 'Device B sample is recent'; Passed = ($sampleAgeBSeconds -ge -60 -and $sampleAgeBSeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device A cloud sync converged'; Passed = ($deviceA.Converged -eq $true) }
     [pscustomobject]@{ Name = 'Device B cloud sync converged'; Passed = ($deviceB.Converged -eq $true) }
     [pscustomobject]@{ Name = 'Cloud revision matches'; Passed = ($deviceA.CloudRevision -eq $deviceB.CloudRevision) }
@@ -145,7 +152,10 @@ $report = [ordered]@{
     CollectedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
     Result = $result
     SampleSkewSeconds = [math]::Round($sampleSkewSeconds, 1)
+    SampleAgeASeconds = [math]::Round($sampleAgeASeconds, 1)
+    SampleAgeBSeconds = [math]::Round($sampleAgeBSeconds, 1)
     MaxSampleSkewSeconds = $maxSkewSeconds
+    MaxSampleAgeSeconds = $maxAgeSeconds
     DeviceA = $deviceA
     DeviceB = $deviceB
     Checks = $checks
@@ -165,6 +175,7 @@ $markdown = @(
     ''
     ('- Result: **' + $result + '**')
     ('- Sample skew: ' + [math]::Round($sampleSkewSeconds, 1) + ' seconds')
+    ('- Sample age A / B: ' + [math]::Round($sampleAgeASeconds, 1) + ' / ' + [math]::Round($sampleAgeBSeconds, 1) + ' seconds')
     ''
     '## Device A'
     ('- ShopRef: ' + $deviceA.ShopRef)
