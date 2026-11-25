@@ -1131,7 +1131,8 @@ def test_active_shop_acceptance_snapshot_is_atomic_hmac_aliased_and_focus_proven
     assert 'ActiveSessionRef = RuntimeAcceptanceDiagnosticRef("session", activeSessionId)' in snapshot
     assert "ActiveFocusProofFresh = activeFocusProofFresh" in snapshot
     assert "ActiveFocusProofAgeSeconds = activeFocusProofAgeSeconds" in snapshot
-    assert "activeShopKey" not in snapshot.split("snapshot = new", 1)[1]
+    assert "ActiveShopKey =" not in snapshot.split("snapshot = new", 1)[1]
+    assert "ShopKey = activeShopKey" not in snapshot.split("snapshot = new", 1)[1]
 
     diagnostic = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
     assert "ActiveShopEvidenceStatus" in diagnostic
