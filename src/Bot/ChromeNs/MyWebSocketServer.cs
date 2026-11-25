@@ -1108,6 +1108,19 @@ namespace Bot.ChromeNs
                         + DiagnosticRef("shop", shopKey)
                         + ", sellerRef=" + DiagnosticRef("seller", sellerNick));
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
+                var connectionSnapshot = BotConnectionDiagnostics.GetSnapshot();
+                if (!string.Equals(connectionSnapshot.AccessibilityStatus, "可用", StringComparison.Ordinal)
+                    || !connectionSnapshot.ButtonStatus.StartsWith("已识别发送按钮", StringComparison.Ordinal))
+                {
+                    RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID).ContinueWith(
+                        completed =>
+                        {
+                            if (completed.IsFaulted)
+                                Log.ErrorWithMaxCount("状态事件重绑定后UIA刷新任务异常: "
+                                    + completed.Exception.GetBaseException().Message, 10);
+                        },
+                        TaskScheduler.Default);
+                }
             }
             catch (Exception ex)
             {
