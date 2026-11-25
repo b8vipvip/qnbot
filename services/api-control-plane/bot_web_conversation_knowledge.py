@@ -259,7 +259,11 @@ async def web_image_knowledge_recognize(request: Request, client: Dict[str, Any]
     if not settings.get("enabled", True):
         raise HTTPException(status_code=503, detail="服务端 OCR 当前已关闭")
     try:
-        result = await run_in_threadpool(runtime_ocr._run_ocr, raw)
+        await runtime_ocr._acquire_ocr_slot(int(settings.get("max_concurrency", 2)))
+        try:
+            result = await run_in_threadpool(runtime_ocr._run_ocr, raw)
+        finally:
+            runtime_ocr._release_ocr_slot()
     except Exception as exc:
         raise HTTPException(status_code=422, detail="服务端 OCR 识别失败：" + str(exc)[:240])
     return {
