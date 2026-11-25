@@ -92,7 +92,7 @@ def test_all_supported_image_extensions_enter_the_buyer_image_route():
     chat = read('src/Bot/ChatRecord/ChatResponse.cs')
     extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif']
     image_list = safety.split('ImageExtensions =', 1)[1].split(';', 1)[0]
-    chat_image = chat.split('public bool IsImage(string txt)', 1)[1].split('\\n        }\\n', 1)[0]
+    chat_image = chat.split('public bool IsImage(string txt)', 1)[1].split('\n        }\n', 1)[0]
     for extension in extensions:
         assert extension in image_list
         assert extension in chat_image
