@@ -70,7 +70,7 @@ def test_ocr_image_knowledge_match_precedes_knowledge_v2_and_is_context_only_wit
 def test_image_knowledge_is_matched_even_when_vision_priority_is_ai_first():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
 
-    assert "VisualOcrPriorityService.IsAiFirst(priority)" in decision
+    assert "VisionOcrPriorityService.IsAiFirst(priority)" in decision
     assert "VisualImageKnowledgeService.HasEntries(task.ShopKey)" in decision
     assert "if (!hasImageKnowledge)" in decision
     assert "先执行服务端OCR匹配再交给视觉AI" in decision
