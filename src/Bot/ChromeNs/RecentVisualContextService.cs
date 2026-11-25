@@ -387,8 +387,12 @@ namespace Bot.ChromeNs
                     for (var i = turns.Count - 1; i >= 0; i--)
                     {
                         if (turns[i].Role != "user") continue;
-                        var text = turns[i].Text ?? string.Empty;
-                        if (text.Contains("[图片]") || text.Contains("【图片】"))
+                        var text = (turns[i].Text ?? string.Empty).Trim();
+                        if (turns[i].HasImage
+                            || string.Equals(text, "[图片]", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(text, "【图片】", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(text, "图片消息", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(text, "[image]", StringComparison.OrdinalIgnoreCase))
                         {
                             imageIndex = i;
                             break;
