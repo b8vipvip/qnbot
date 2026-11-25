@@ -315,6 +315,12 @@ class ImageKnowledgeSaveInput(BaseModel):
     enabled: bool = True
 
 
+class ImageKnowledgeLegacyMigrationInput(BaseModel):
+    shop_key: str = Field(min_length=1, max_length=64)
+    seller: str = Field(min_length=1, max_length=160)
+    confirmed: bool = False
+
+
 class ImageKnowledgeSyncInput(BaseModel):
     shop_key: str = Field(min_length=1, max_length=64)
     seller: str = Field(min_length=1, max_length=160)
@@ -614,6 +620,55 @@ def web_image_knowledge_delete(
             (client_id, shop_key, image_id, revision, now),
         )
     return {"ok": True, "revision": revision}
+
+
+@router.post("/api/bot-web/image-knowledge/migrate-legacy")
+def web_image_knowledge_migrate_legacy(
+    data: ImageKnowledgeLegacyMigrationInput,
+    client: Dict[str, Any] = Depends(core._web_client),
+):
+    if not data.confirmed:
+        raise HTTPException(status_code=400, detail="迁移旧版图片知识必须明确确认归属当前店铺")
+    client_id = int(client["id"])
+    canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
+    migrated = []
+    skipped_duplicates = []
+    now = _now()
+    with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        legacy_rows = conn.execute(
+            """SELECT id,image_sha256 FROM bot_web_image_knowledge
+               WHERE client_id=? AND shop_key='' ORDER BY created_at ASC""",
+            (client_id,),
+        ).fetchall()
+        for row in legacy_rows:
+            duplicate = conn.execute(
+                """SELECT id FROM bot_web_image_knowledge
+                   WHERE client_id=? AND shop_key=? AND image_sha256=?""",
+                (client_id, data.shop_key, row["image_sha256"]),
+            ).fetchone()
+            if duplicate:
+                skipped_duplicates.append({"legacy_id": row["id"], "existing_id": duplicate["id"]})
+                continue
+            revision = _next_image_revision(conn, client_id, data.shop_key)
+            cursor = conn.execute(
+                """UPDATE bot_web_image_knowledge
+                   SET shop_key=?,seller=?,revision=?,updated_by='manual-legacy-migration',updated_at=?
+                   WHERE client_id=? AND id=? AND shop_key=''""",
+                (data.shop_key, canonical, revision, now, client_id, row["id"]),
+            )
+            if cursor.rowcount:
+                conn.execute(
+                    "DELETE FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
+                    (client_id, data.shop_key, row["id"]),
+                )
+                migrated.append(row["id"])
+    return {
+        "ok": True,
+        "shop_key": data.shop_key,
+        "migrated_count": len(migrated),
+        "migrated_ids": migrated,
+        "skipped_duplicates": skipped_duplicates,
+    }
 
 
 @router.post("/api/runtime/v1/bot-web/image-knowledge/sync")
