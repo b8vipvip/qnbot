@@ -151,7 +151,7 @@ namespace Bot.Knowledge
             var uploadRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 4) };
             var upload = Button("上传图片");
             upload.MinWidth = 92;
-            upload.Click += async delegate { UploadImage(); };
+            upload.Click += delegate { UploadImage(); };
             DockPanel.SetDock(upload, Dock.Left);
             uploadRow.Children.Add(upload);
             var namePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 0, 0, 0) };
@@ -341,7 +341,8 @@ namespace Bot.Knowledge
                 ImageName = _imageName.Text,
                 ImageSha256 = _currentImageSha256,
                 OcrText = _ocrText.Text,
-                Description = _description.Text
+                Description = _description.Text,
+                Enabled = _selected == null || _selected.Enabled
             };
             _saveButton.IsEnabled = false;
             _status.Text = "正在保存图片、名称、OCR 结果和图片说明…";
@@ -372,7 +373,7 @@ namespace Bot.Knowledge
             if (_selected == null) return;
             if (MessageBox.Show(
                 Window.GetWindow(this),
-                "确定删除选中的图片知识及其本地图片文件吗？",
+                "确定删除选中的图片知识吗？",
                 "删除图片知识",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question) != MessageBoxResult.Yes) return;
