@@ -13,9 +13,8 @@ using System.Windows.Media.Imaging;
 namespace Bot.Knowledge
 {
     /// <summary>
-    /// Operator-managed image knowledge. A reference image is uploaded, server OCR is
-    /// editable, and the operator supplies a concise semantic description for later
-    /// OCR-similarity matching and conversation-aware answer generation.
+    /// Operator-managed image knowledge. Upload immediately starts server OCR;
+    /// OCR evidence and the operator description are saved as one shop-scoped entry.
     /// </summary>
     internal sealed class KnowledgeV2VisualUnderstandingPage : UserControl, IKnowledgeV2Refreshable
     {
@@ -25,17 +24,18 @@ namespace Bot.Knowledge
             new ObservableCollection<VisualImageKnowledgeEntry>();
         private DataGrid _grid;
         private Image _preview;
+        private TextBox _imageName;
         private TextBox _ocrText;
         private TextBox _description;
         private TextBlock _status;
-        private Button _recognizeButton;
         private Button _saveButton;
-        private Button _deleteButton;
+        private MenuItem _deleteMenuItem;
         private VisualImageKnowledgeEntry _selected;
         private string _currentImagePath = string.Empty;
         private string _currentImageSha256 = string.Empty;
         private bool _ocrRecognized;
         private bool _suppressSelection;
+        private int _recognizeGeneration;
 
         public KnowledgeV2VisualUnderstandingPage(string seller, string shopKey)
         {
@@ -67,42 +67,39 @@ namespace Bot.Knowledge
 
                     var selected = _items.FirstOrDefault(x =>
                         string.Equals(x.EntityId, selectedId, StringComparison.Ordinal));
-                    _grid.SelectedItem = selected;
-                    Select(selected);
-                    _status.Text = "共 " + _items.Count + " 条图片知识；仅当前店铺可用。";
+                    if (selected != null)
+                    {
+                        _grid.SelectedItem = selected;
+                        Select(selected);
+                    }
+                    else if (_selected == null && !string.IsNullOrWhiteSpace(_currentImagePath)
+                        && File.Exists(_currentImagePath))
+                    {
+                        // A message-context import may arrive while the initial list load
+                        // is still in flight. Do not let that refresh clear the unsaved image.
+                        _status.Text = "图片已载入；OCR 识别或编辑中的内容已保留。";
+                    }
+                    else
+                    {
+                        _grid.SelectedItem = null;
+                        Select(null);
+                    }
+
+                    _status.Text = "共 " + _items.Count + " 条图片知识；仅当前店铺可用。"
+                        + (selected == null && File.Exists(_currentImagePath) ? " 当前有一张待保存图片。" : string.Empty);
                 })));
         }
 
         private void Build()
         {
             var root = new Grid { Background = Brushes.White };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            var upload = Button("上传图片");
-            upload.Click += delegate { UploadImage(); };
-            _recognizeButton = Button("识别图片");
-            _recognizeButton.Click += async delegate { await RecognizeImageAsync(); };
-            _saveButton = Button("保存图片知识");
-            _saveButton.Click += async delegate { await SaveAsync(); };
-            _deleteButton = Button("删除图片知识");
-            _deleteButton.Click += async delegate { await DeleteAsync(); };
-            var refresh = Button("刷新");
-            refresh.Click += delegate { RefreshView(); };
-            toolbar.Children.Add(upload);
-            toolbar.Children.Add(_recognizeButton);
-            toolbar.Children.Add(_saveButton);
-            toolbar.Children.Add(_deleteButton);
-            toolbar.Children.Add(refresh);
-            Grid.SetRow(toolbar, 0);
-            root.Children.Add(toolbar);
 
             var body = new Grid();
             body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40, GridUnitType.Star) });
             body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60, GridUnitType.Star) });
-            Grid.SetRow(body, 1);
+            Grid.SetRow(body, 0);
             root.Children.Add(body);
 
             _grid = new DataGrid
@@ -118,6 +115,12 @@ namespace Bot.Knowledge
             };
             _grid.Columns.Add(new DataGridTextColumn
             {
+                Header = "图片名称",
+                Binding = new System.Windows.Data.Binding("ImageName"),
+                Width = new DataGridLength(150)
+            });
+            _grid.Columns.Add(new DataGridTextColumn
+            {
                 Header = "图片说明",
                 Binding = new System.Windows.Data.Binding("Description"),
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
@@ -128,6 +131,15 @@ namespace Bot.Knowledge
                 Binding = new System.Windows.Data.Binding("OcrText"),
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
             });
+            var listMenu = new ContextMenu();
+            _deleteMenuItem = new MenuItem { Header = "删除图片知识" };
+            _deleteMenuItem.Click += async delegate { await DeleteAsync(); };
+            listMenu.Items.Add(_deleteMenuItem);
+            _grid.ContextMenu = listMenu;
+            _grid.ContextMenuOpening += delegate
+            {
+                _deleteMenuItem.IsEnabled = _grid.SelectedItem is VisualImageKnowledgeEntry;
+            };
             _grid.SelectionChanged += delegate
             {
                 if (!_suppressSelection) Select(_grid.SelectedItem as VisualImageKnowledgeEntry);
@@ -136,6 +148,31 @@ namespace Bot.Knowledge
             body.Children.Add(_grid);
 
             var editor = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            var uploadRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 4) };
+            var upload = Button("上传图片");
+            upload.MinWidth = 92;
+            upload.Click += async delegate { UploadImage(); };
+            DockPanel.SetDock(upload, Dock.Left);
+            uploadRow.Children.Add(upload);
+            var namePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 0, 0, 0) };
+            namePanel.Children.Add(new TextBlock
+            {
+                Text = "图片名称",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                Foreground = Brushes.DimGray
+            });
+            _imageName = new TextBox
+            {
+                MinWidth = 180,
+                Height = 27,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "显示在图片知识列表中的名称；留空时自动生成名称"
+            };
+            namePanel.Children.Add(_imageName);
+            uploadRow.Children.Add(namePanel);
+            editor.Children.Add(uploadRow);
+
             editor.Children.Add(Label("图片预览"));
             var previewBorder = new Border
             {
@@ -150,12 +187,19 @@ namespace Bot.Knowledge
             editor.Children.Add(previewBorder);
 
             editor.Children.Add(Label("OCR 识别结果（可编辑、可删除文字）"));
-            _ocrText = Multi(220);
+            _ocrText = Multi(190);
             editor.Children.Add(_ocrText);
 
             editor.Children.Add(Label("图片说明（用于后续图片匹配和上下文理解）"));
             _description = Multi(88);
             editor.Children.Add(_description);
+
+            _saveButton = Button("保存图片知识");
+            _saveButton.MinWidth = 112;
+            _saveButton.HorizontalAlignment = HorizontalAlignment.Left;
+            _saveButton.Margin = new Thickness(0, 8, 0, 0);
+            _saveButton.Click += async delegate { await SaveAsync(); };
+            editor.Children.Add(_saveButton);
 
             var editorScroll = new ScrollViewer
             {
@@ -170,14 +214,14 @@ namespace Bot.Knowledge
             {
                 Margin = new Thickness(0, 8, 0, 0),
                 Foreground = Brushes.DimGray,
-                Text = "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+                Text = "上传图片后自动调用服务端 OCR；编辑识别结果并填写图片说明，最后保存。"
             };
-            Grid.SetRow(_status, 2);
+            Grid.SetRow(_status, 1);
             root.Children.Add(_status);
             Content = root;
         }
 
-        private void UploadImage()
+        private async void UploadImage()
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
@@ -185,14 +229,26 @@ namespace Bot.Knowledge
                 Filter = "图片文件 (*.jpg;*.jpeg;*.png;*.webp;*.gif)|*.jpg;*.jpeg;*.png;*.webp;*.gif"
             };
             if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+            await ImportImageAndRecognizeAsync(dialog.FileName, Path.GetFileName(dialog.FileName));
+        }
 
+        /// <summary>
+        /// Used by the Bot conversation context menu. The supplied local cache image
+        /// is imported directly and OCR starts without another file picker or button.
+        /// </summary>
+        internal async Task ImportImageAndRecognizeAsync(string imagePath, string imageName = null)
+        {
             try
             {
-                var info = new FileInfo(dialog.FileName);
+                imagePath = (imagePath ?? string.Empty).Trim();
+                if (imagePath.Length == 0 || !File.Exists(imagePath))
+                    throw new InvalidOperationException("找不到待导入的图片文件。");
+
+                var info = new FileInfo(imagePath);
                 if (info.Length <= 0 || info.Length > VisualImageKnowledgeService.MaxImageBytes)
                     throw new InvalidOperationException("图片大小必须在 1 字节至 8 MB 之间。");
 
-                var extension = (Path.GetExtension(dialog.FileName) ?? string.Empty).ToLowerInvariant();
+                var extension = (Path.GetExtension(imagePath) ?? string.Empty).ToLowerInvariant();
                 if (extension != ".jpg" && extension != ".jpeg" && extension != ".png"
                     && extension != ".webp" && extension != ".gif")
                     throw new InvalidOperationException("仅支持 JPG、PNG、WEBP、GIF 图片。");
@@ -201,17 +257,23 @@ namespace Bot.Knowledge
                 _grid.SelectedItem = null;
                 _suppressSelection = false;
                 _selected = null;
-                _currentImagePath = dialog.FileName;
+                _currentImagePath = Path.GetFullPath(imagePath);
                 _currentImageSha256 = string.Empty;
                 _ocrRecognized = false;
                 _ocrText.Clear();
                 _description.Clear();
+                var safeName = Path.GetFileName((imageName ?? string.Empty).Trim());
+                _imageName.Text = string.IsNullOrWhiteSpace(safeName)
+                    ? "图片知识_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension
+                    : safeName;
                 LoadPreview(_currentImagePath);
-                _status.Text = "图片已选择，请点击“识别图片”调用服务端 OCR。";
+                await RecognizeImageAsync();
             }
             catch (Exception ex)
             {
-                _status.Text = "选择图片失败：" + ex.Message;
+                _status.Text = "导入图片知识失败：" + ex.Message;
+                MessageBox.Show(Window.GetWindow(this), ex.Message, "导入图片知识",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -219,16 +281,17 @@ namespace Bot.Knowledge
         {
             if (string.IsNullOrWhiteSpace(_currentImagePath) || !File.Exists(_currentImagePath))
             {
-                _status.Text = "请先上传或选择一张图片。";
+                _status.Text = "请先上传或导入一张图片。";
                 return;
             }
 
-            _recognizeButton.IsEnabled = false;
-            _status.Text = "正在上传图片并调用服务端 OCR，请稍候…";
+            var generation = Interlocked.Increment(ref _recognizeGeneration);
+            _status.Text = "正在上传图片并自动调用服务端 OCR，请稍候…";
             try
             {
                 var result = await LocalOcrService.TryRecognizeAsync(
                     _currentImagePath, _seller, _shopKey, CancellationToken.None);
+                if (generation != _recognizeGeneration) return;
                 if (result == null || !result.Success)
                 {
                     _ocrRecognized = false;
@@ -243,16 +306,13 @@ namespace Bot.Knowledge
                     + result.Confidence.ToString("0.000")
                     + "，引擎 " + (result.Engine ?? "服务端 OCR")
                     + (result.CacheHit ? "（缓存命中）" : string.Empty)
-                    + "。可修改识别文字后填写图片说明并保存。";
+                    + "。可修改识别文字、图片名称和图片说明后保存。";
             }
             catch (Exception ex)
             {
+                if (generation != _recognizeGeneration) return;
                 _ocrRecognized = false;
                 _status.Text = "服务端 OCR 调用异常：" + ex.Message;
-            }
-            finally
-            {
-                _recognizeButton.IsEnabled = true;
             }
         }
 
@@ -265,12 +325,12 @@ namespace Bot.Knowledge
             }
             if (!_ocrRecognized)
             {
-                _status.Text = "请先点击“识别图片”并等待服务端 OCR 成功后再保存。";
+                _status.Text = "图片尚未完成服务端 OCR，识别成功后才能保存。";
                 return;
             }
             if (string.IsNullOrWhiteSpace(_description.Text))
             {
-                _status.Text = "请填写图片说明，例如：这是手机端的账户界面截图。";
+                _status.Text = "请填写图片说明，例如：这是某种设备上的账户界面截图。";
                 _description.Focus();
                 return;
             }
@@ -278,12 +338,13 @@ namespace Bot.Knowledge
             var item = new VisualImageKnowledgeEntry
             {
                 EntityId = _selected == null ? string.Empty : _selected.EntityId,
+                ImageName = _imageName.Text,
                 ImageSha256 = _currentImageSha256,
                 OcrText = _ocrText.Text,
                 Description = _description.Text
             };
             _saveButton.IsEnabled = false;
-            _status.Text = "正在保存图片、OCR 结果和图片说明…";
+            _status.Text = "正在保存图片、名称、OCR 结果和图片说明…";
             try
             {
                 var saved = await Task.Run(() =>
@@ -291,6 +352,7 @@ namespace Bot.Knowledge
                 _selected = saved;
                 _currentImagePath = saved.ImagePath;
                 _currentImageSha256 = saved.ImageSha256;
+                _imageName.Text = saved.ImageName ?? string.Empty;
                 _ocrRecognized = true;
                 RefreshView();
                 _status.Text = "图片知识已保存，后续买家发送相似图片时会结合当前对话和知识库进行判断。";
@@ -316,7 +378,7 @@ namespace Bot.Knowledge
                 MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
             var id = _selected.EntityId;
-            _deleteButton.IsEnabled = false;
+            if (_deleteMenuItem != null) _deleteMenuItem.IsEnabled = false;
             try
             {
                 var deleted = await Task.Run(() =>
@@ -332,7 +394,7 @@ namespace Bot.Knowledge
             }
             finally
             {
-                _deleteButton.IsEnabled = true;
+                if (_deleteMenuItem != null) _deleteMenuItem.IsEnabled = true;
             }
         }
 
@@ -342,13 +404,14 @@ namespace Bot.Knowledge
             _currentImagePath = item == null ? string.Empty : item.ImagePath ?? string.Empty;
             _currentImageSha256 = item == null ? string.Empty : item.ImageSha256 ?? string.Empty;
             _ocrRecognized = item != null;
+            _imageName.Text = item == null ? string.Empty : item.ImageName ?? string.Empty;
             _ocrText.Text = item == null ? string.Empty : item.OcrText ?? string.Empty;
             _description.Text = item == null ? string.Empty : item.Description ?? string.Empty;
             LoadPreview(_currentImagePath);
-            _deleteButton.IsEnabled = item != null;
+            _deleteMenuItem.IsEnabled = item != null;
             _status.Text = item == null
-                ? "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
-                : "已载入图片知识。可修改 OCR 文字或图片说明后保存。";
+                ? "上传图片后自动调用服务端 OCR；编辑识别结果并填写图片说明，最后保存。"
+                : "已载入图片知识。可修改名称、OCR 文字或图片说明后保存；右键列表可删除。";
         }
 
         private void LoadPreview(string path)
