@@ -214,7 +214,7 @@ def test_windows_memory_sampler_tracks_a_b_a_only_with_fresh_active_focus_proof(
 
 
 def test_auto_delivery_diagnostics_are_read_only_aggregate_and_privacy_minimized():
-    script = read("scripts/Invoke-QnBotAutoDeliveryDiagnostics.ps1")
+    script = source("scripts/Invoke-QnBotAutoDeliveryDiagnostics.ps1")
     assert "virtual-goods-auto-delivery-queue.json" in script
     assert "virtual-goods-auto-delivery-confirmation-ledger.json" in script
     assert "virtual-goods-auto-delivery-event-cursor.json" in script
