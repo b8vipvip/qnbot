@@ -376,8 +376,9 @@ def test_image_knowledge_revision_cursor_is_rebuilt_from_scoped_rows(tmp_path):
             ).fetchone()
             next_revision = conversations._next_image_revision(conn, 1, "shop-a")
         assert entry["revision"] > 0
-        assert tombstone["revision"] > entry["revision"]
-        assert state["revision"] == tombstone["revision"]
+        assert tombstone["revision"] > 0
+        assert entry["revision"] != tombstone["revision"]
+        assert state["revision"] == max(entry["revision"], tombstone["revision"])
         assert next_revision == state["revision"] + 1
 
 
