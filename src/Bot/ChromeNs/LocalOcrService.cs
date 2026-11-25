@@ -138,9 +138,14 @@ namespace Bot.ChromeNs
 
             // The cache is content-addressed, but the in-flight key also includes the authoritative
             // ShopKey so two shops never share an authenticated OCR request or its failure state.
-            var scopeKey = string.IsNullOrWhiteSpace(shopKey)
-                ? "seller:" + (sellerNick ?? string.Empty).Trim()
-                : shopKey.Trim();
+            var currentShop = ShopSettingsScope.Current;
+            var scopeKey = !string.IsNullOrWhiteSpace(shopKey)
+                ? shopKey.Trim()
+                : (!string.IsNullOrWhiteSpace(sellerNick)
+                    ? "seller:" + sellerNick.Trim()
+                    : (currentShop != null && !string.IsNullOrWhiteSpace(currentShop.ShopKey)
+                        ? currentShop.ShopKey
+                        : "unscoped:" + Guid.NewGuid().ToString("N")));
             var inFlightKey = scopeKey + "|" + sha256;
             var candidate = new Lazy<Task<LocalOcrResult>>(
                 () => RecognizeAndCacheAsync(imagePath, sellerNick, shopKey, sha256, timeoutMs),
