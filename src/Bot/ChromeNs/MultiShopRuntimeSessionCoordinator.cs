@@ -110,7 +110,9 @@ namespace Bot.ChromeNs
         private static void QueueActiveShopProbe(IList<QN> snapshot)
         {
             if (snapshot == null || snapshot.Count == 0) return;
-            if ((DateTime.UtcNow - _lastProbeStartedUtc).TotalMilliseconds < 900) return;
+            // Focus proof remains valid for five seconds; probing every 900ms needlessly
+            // competes with message/history CDP calls on the same serialized WebSocket lane.
+            if ((DateTime.UtcNow - _lastProbeStartedUtc).TotalMilliseconds < 2500) return;
             if (Interlocked.CompareExchange(ref _probeRunning, 1, 0) != 0) return;
             _lastProbeStartedUtc = DateTime.UtcNow;
             Task.Run(async () =>
