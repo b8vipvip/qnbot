@@ -192,3 +192,18 @@ def test_windows_memory_sampler_includes_150_message_and_restart_checkpoint_metr
     assert "KnowledgeV2LatestSourceFingerprintPrefix" in collector
     assert "KnowledgeV2LatestTranscriptFingerprintPrefix" in collector
     assert "KnowledgeV2LearningReportStates" in collector
+
+
+def test_windows_memory_sampler_tracks_a_b_a_only_with_fresh_active_focus_proof():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "ActiveShopRef" in collector
+    assert "ActiveSessionRef" in collector
+    assert "ActiveFocusProofFresh" in collector
+    assert "RuntimeActiveShopRef" in collector
+    assert "RuntimeActiveFocusProofFresh" in collector
+    assert "RuntimeActiveShopChangedSincePreviousSample" in collector
+    assert "RuntimeActiveShopTransitions" in collector
+    assert "RuntimeActiveShopSequence" in collector
+    assert "if ($runtimeActiveFocusProofFresh -eq $true" in collector
+    assert "$activeShopSequence.Clear()" in collector
+    assert "while ($activeShopSequence.Count -gt 32)" in collector
