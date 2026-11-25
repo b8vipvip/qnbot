@@ -665,7 +665,8 @@ namespace Bot.ChromeNs
                 using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
                 using (var http = new HttpClient(handler))
                 {
-                    http.Timeout = TimeSpan.FromSeconds(25);
+                    // A single original image attachment may add up to 8 MB to this request.
+                    http.Timeout = TimeSpan.FromSeconds(45);
                     using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
                         state.Shop,
                         token,
