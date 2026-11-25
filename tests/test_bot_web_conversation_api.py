@@ -53,11 +53,17 @@ def loaded_modules():
         def __getattr__(self, name):
             return 200
 
+    class DummyHTTPException(Exception):
+        def __init__(self, status_code, detail=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
     fastapi = types.ModuleType("fastapi")
     fastapi.__path__ = []
     fastapi.APIRouter = DummyRouter
     fastapi.Depends = lambda *args, **kwargs: None
-    fastapi.HTTPException = type("HTTPException", (Exception,), {})
+    fastapi.HTTPException = DummyHTTPException
     fastapi.Query = lambda default=None, **kwargs: default
     fastapi.Request = type("Request", (), {})
     fastapi.status = DummyStatus()
