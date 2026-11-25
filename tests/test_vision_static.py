@@ -66,8 +66,26 @@ def test_image_resolver_downloads_caches_and_validates_every_image():
         assert mime in combined
     assert 'image/svg' not in combined
     assert '图片超过大小限制' in combined
-    assert 'MIME 类型不支持' in combined
+    assert '图片 MIME 与实际内容不一致' in combined
     assert '图片数据损坏或格式不支持' in combined
+
+def test_bmp_and_decodable_heif_buyer_images_are_normalized_before_vision_and_ocr():
+    resolver = read('src/Bot/ChromeNs/VisionImageResolver.cs')
+    cache = read('src/Bot/ChromeNs/VisionImageCacheService.cs')
+    safety = read('src/Bot/ChromeNs/IncomingMessageSafety.cs')
+
+    assert '".bmp"' in safety and '".heic"' in safety
+    assert 'return "image/bmp"' in resolver
+    assert 'return "image/heic"' in resolver
+    assert 'return "image/heif"' in resolver
+    assert 'BitmapDecoder.Create(' in resolver
+    assert 'new PngBitmapEncoder()' in resolver
+    assert 'TryNormalizeForVision(' in cache
+    assert cache.count('TryNormalizeForVision(') >= 2
+    assert 'normalizedBytes.LongLength > maxBytes' in cache
+    assert '当前 Windows 未安装可用的 HEIC/HEIF 解码组件' in resolver
+    assert 'image/bmp' not in cache.split('private static readonly string[] AllowedMimeTypes', 1)[1].split('};', 1)[0]
+
     assert 'data:" + detectedMime + ";base64,"' in combined
     assert 'message.originalData.url.Trim()' in resolver
     assert 'message.originalData.fileId.Trim()' in resolver
