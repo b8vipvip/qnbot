@@ -316,6 +316,8 @@ namespace Bot.ChromeNs
 
             var upserts = response["upserts"] as JArray ?? new JArray();
             var conflicts = response["conflicts"] as JArray ?? new JArray();
+            if (conflicts.Count > 0)
+                Log.ErrorWithMaxCount("图片知识检测到另一端并发修改，已按云端版本进行冲突收敛；请检查本轮编辑是否需要重新提交。", 10);
             foreach (var item in upserts.Concat(conflicts).OfType<JObject>())
             {
                 var kind = (string)item["kind"] ?? "upsert";
@@ -339,6 +341,8 @@ namespace Bot.ChromeNs
             var revision = response.Value<long?>("revision") ?? 0;
             lock (Sync)
             {
+                var previous = SelectSyncState(shop.ShopKey, seller);
+                if (previous != null) revision = Math.Max(revision, previous.LastCloudRevision);
                 DbHelper.Db.Execute(
                     "insert or replace into VisualImageKnowledgeSyncState(ShopKey,Seller,LastCloudRevision,UpdatedAtTicks) values(?,?,?,?)",
                     shop.ShopKey, seller, revision, DateTime.Now.Ticks);
