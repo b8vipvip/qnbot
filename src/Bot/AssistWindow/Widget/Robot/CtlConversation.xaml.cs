@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bot.ChromeNs;
 using Bot.Knowledge;
+using BotLib;
 using Bot.ShopScope;
 
 namespace Bot.AssistWindow.Widget.Robot
