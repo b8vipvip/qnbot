@@ -269,5 +269,5 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 1. 在真实千牛会话中完成 150+ 条消息、完整 Knowledge V2 语料覆盖、重启断点恢复及跨设备同步验收。
 2. 完成同昵称多店铺 A→B→A、WebSocket/CDP 断线重连和长时间运行验收。
 3. 验证自动回复的人工接管、撤回、失败重试、并发与防重复发送。
-4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认。
+4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认；验收后运行 `powershell.exe -NoProfile -File scripts\\Invoke-QnBotAutoDeliveryDiagnostics.ps1 -OutputDirectory .\\acceptance`，检查四个持久状态文件均为 readable，pending/intent/uncertain 与 ledger resolved/unresolved 计数符合预期，且 `SafetyAssessment` 不为 `REVIEW_REQUIRED`。报告只包含聚合计数，不包含 ShopKey、店铺昵称、买家姓名、订单号或事件正文。
 5. 对 Reception Agent 已实现的状态机进行真实千牛图文/订单流程、同昵称多店铺、重启、转人工通知、异常回滚和长期运行验收；另行完成 GPTAuto Reconcile 真实终态验收。
