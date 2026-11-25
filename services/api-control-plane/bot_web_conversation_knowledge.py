@@ -684,6 +684,11 @@ def runtime_image_knowledge_sync(
     canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
     conflicts: List[Dict[str, Any]] = []
     with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        initial_state = conn.execute(
+            "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
+            (client_id, data.shop_key),
+        ).fetchone()
+        initial_revision = int(initial_state["revision"] or 0) if initial_state else 0
         for item in data.upserts:
             image_id = _safe_text(item.get("id"), 80)
             if not image_id:
@@ -789,6 +794,22 @@ def runtime_image_knowledge_sync(
             (client_id, data.shop_key),
         ).fetchone()
         current_revision = int(state["revision"] or 0) if state else 0
+        if data.since_revision > initial_revision:
+            # A restored/rebuilt cloud database can legitimately have a lower revision
+            # than a Windows cursor. Tell the client to re-stage local rows and perform
+            # a full reconciliation instead of pinning it forever at a future cursor.
+            return {
+                "ok": True,
+                "shop_key": data.shop_key,
+                "seller": canonical,
+                "revision": 0,
+                "current_revision": current_revision,
+                "reset_cursor": True,
+                "has_more": True,
+                "upserts": [],
+                "deletes": [],
+                "conflicts": conflicts,
+            }
         event_rows = conn.execute(
             "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND revision>? ORDER BY revision ASC",
             (client_id, data.shop_key, data.since_revision),
@@ -829,6 +850,7 @@ def runtime_image_knowledge_sync(
         "revision": page_revision,
         "current_revision": current_revision,
         "has_more": has_more,
+        "reset_cursor": False,
         "upserts": upserts,
         "deletes": deletes,
         "conflicts": conflicts,
