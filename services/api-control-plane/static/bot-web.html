@@ -67,11 +67,25 @@
       <div class="knowledge-toolbar"><input id="knowledgeSearch" placeholder="搜索问题、答案或关键词"><select id="knowledgeCategory"><option value="">全部分类</option></select><button id="refreshKnowledgeBtn">刷新</button></div>
       <div class="knowledge-toolbar knowledge-import-toolbar"><button id="knowledgeExportBtn">导出 JSON</button><button id="knowledgeMergeImportBtn">合并导入</button><button id="knowledgeReplaceImportBtn" class="danger">替换导入</button><button id="knowledgeBackupsBtn">版本备份</button><input id="knowledgeImportFile" class="hidden" type="file" accept=".json,application/json"></div>
       <div id="knowledgeMeta" class="knowledge-meta"></div>
-      <section class="panel"><div class="panel-head"><div><h3>Knowledge Center V2</h3><small>原生结构化知识 · 与 Windows V2 引擎双向同步</small></div><button id="addKnowledgeV2Btn" class="primary">新增 V2 知识</button></div><div class="knowledge-toolbar"><input id="knowledgeV2Search" placeholder="搜索标题、答案、意图、主体或实体"><button id="refreshKnowledgeV2Btn">刷新 V2</button></div><div class="knowledge-toolbar"><textarea id="knowledgeV2SmartImportText" rows="3" maxlength="20000" placeholder="粘贴商品说明、售前售后规则、发货说明等资料，AI 将在 Windows Bot 使用当前本店 AI 接口整理成原生 V2 结构"></textarea><button id="knowledgeV2SmartImportBtn" class="primary">AI 智能导入</button></div><div id="knowledgeV2SmartImportHint" class="hint"></div>
-      <div class="knowledge-toolbar"><strong>V2 运行策略</strong><button id="refreshKnowledgeV2SettingsBtn">读取 Windows 设置</button></div>
-      <div class="knowledge-toolbar"><label class="remember"><input id="knowledgeV2RuntimeEnabled" type="checkbox">启用 V2</label><label>模式<select id="knowledgeV2RuntimeMode"><option value="production">Production（允许安全直答）</option><option value="shadow">Shadow（只计算不直答）</option></select></label></div>
+      <section class="panel image-knowledge-panel">
+        <div class="panel-head"><div><h3>图片知识</h3><small>上传后自动执行服务端 OCR；Windows 与 Web 双向同步</small></div><span id="imageKnowledgeMeta" class="hint">加载中</span></div>
+        <div class="image-knowledge-layout">
+          <div id="imageKnowledgeList" class="image-knowledge-list"><div class="empty">暂无图片知识</div></div>
+          <div class="image-knowledge-editor">
+            <div class="image-knowledge-upload-row"><button id="uploadImageKnowledgeBtn" class="secondary" type="button">上传图片</button><span id="imageKnowledgeFileName" class="hint">尚未选择图片</span><input id="imageKnowledgeFile" class="hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></div>
+            <div class="image-knowledge-preview"><img id="imageKnowledgePreview" alt="图片预览" class="hidden"><span id="imageKnowledgePreviewEmpty" class="hint">图片预览</span></div>
+            <label>图片名称<input id="imageKnowledgeName" maxlength="200" placeholder="上传时自动读取文件名，可修改"></label>
+            <label>OCR 识别结果（可编辑、可删除文字）<textarea id="imageKnowledgeOcr" rows="7" maxlength="6000" placeholder="上传图片后自动识别"></textarea></label>
+            <label>图片说明（用于后续图片匹配和上下文理解）<textarea id="imageKnowledgeDescription" rows="3" maxlength="1200" placeholder="例如：这是某设备上的账户界面截图"></textarea></label>
+            <div class="image-knowledge-save-row"><button id="saveImageKnowledgeBtn" class="primary" type="button" disabled>保存图片知识</button><span id="imageKnowledgeHint" class="hint"></span></div>
+          </div>
+        </div>
+      </section>
+      <section class="panel"><div class="panel-head"><div><h3>知识库</h3><small>原生结构化知识 · 与 Windows 客户端双向同步</small></div><button id="addKnowledgeV2Btn" class="primary">新增结构化知识</button></div><div class="knowledge-toolbar"><input id="knowledgeV2Search" placeholder="搜索标题、答案、意图、主体或实体"><button id="refreshKnowledgeV2Btn">刷新</button></div><div class="knowledge-toolbar"><textarea id="knowledgeV2SmartImportText" rows="3" maxlength="20000" placeholder="粘贴商品说明、售前售后规则、发货说明等资料，AI 将在 Windows Bot 使用当前本店 AI 接口整理成原生结构化知识"></textarea><button id="knowledgeV2SmartImportBtn" class="primary">AI 智能导入</button></div><div id="knowledgeV2SmartImportHint" class="hint"></div>
+      <div class="knowledge-toolbar"><strong>知识库运行策略</strong><button id="refreshKnowledgeV2SettingsBtn">读取 Windows 设置</button></div>
+      <div class="knowledge-toolbar"><label class="remember"><input id="knowledgeV2RuntimeEnabled" type="checkbox">启用结构化知识</label><label>模式<select id="knowledgeV2RuntimeMode"><option value="production">Production（允许安全直答）</option><option value="shadow">Shadow（只计算不直答）</option></select></label></div>
       <div class="knowledge-toolbar"><label>本地直答阈值<input id="knowledgeV2DirectThreshold" type="number" min="0.70" max="0.96" step="0.01" value="0.82"></label><label>最低可信度<input id="knowledgeV2MinConfidence" type="number" min="0.50" max="0.95" step="0.01" value="0.72"></label><button id="saveKnowledgeV2SettingsBtn" class="primary">保存运行策略</button></div>
-      <div id="knowledgeV2SettingsHint" class="hint">设置保存在当前 Windows 店铺作用域；Production 仍受冲突、高风险、上下文和发送安全门控限制。</div><div class="knowledge-toolbar"><strong>运行策略审计</strong><button id="refreshKnowledgeV2SettingsAuditBtn">刷新审计</button></div><div id="knowledgeV2SettingsAudit" class="knowledge-list"><div class="empty">暂无运行策略操作记录</div></div><div id="knowledgeV2Meta" class="knowledge-meta">等待 V2 同步</div><div id="knowledgeV2List" class="knowledge-list"><div class="empty">暂无 V2 结构化知识</div></div></section>
+      <div id="knowledgeV2SettingsHint" class="hint">设置保存在当前 Windows 店铺作用域；Production 仍受冲突、高风险、上下文和发送安全门控限制。</div><div class="knowledge-toolbar"><strong>运行策略审计</strong><button id="refreshKnowledgeV2SettingsAuditBtn">刷新审计</button></div><div id="knowledgeV2SettingsAudit" class="knowledge-list"><div class="empty">暂无运行策略操作记录</div></div><div id="knowledgeV2Meta" class="knowledge-meta">等待同步</div><div id="knowledgeV2List" class="knowledge-list"><div class="empty">暂无结构化知识</div></div></section>
       <div id="knowledgeList" class="knowledge-list"><div class="empty">暂无云端知识</div></div>
     </section>
 
@@ -130,7 +144,7 @@
 <!-- Backward-compatible marker retained for older packaging tests; the active list is chatMessageList. -->
 <div id="messageList" class="hidden" aria-hidden="true"></div>
 
-<div id="messageActionSheet" class="sheet-backdrop hidden"><div class="action-sheet"><div id="actionMessagePreview" class="sheet-preview"></div><button id="copyMessageAction">复制消息</button><button id="saveKnowledgeAction">保存为知识问答</button><button id="searchKnowledgeAction">搜索相关知识</button><button id="cancelMessageAction" class="cancel">取消</button></div></div>
+<div id="messageActionSheet" class="sheet-backdrop hidden"><div class="action-sheet"><div id="actionMessagePreview" class="sheet-preview"></div><button id="copyMessageAction">复制消息</button><button id="saveKnowledgeAction">保存为知识问答</button><button id="searchKnowledgeAction">搜索相关知识</button><button id="importImageKnowledgeAction" class="hidden">导入图片知识</button><button id="cancelMessageAction" class="cancel">取消</button></div></div>
 
 <dialog id="knowledgeDialog" class="knowledge-dialog">
   <form method="dialog" id="knowledgeForm">
