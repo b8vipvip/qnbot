@@ -29,9 +29,12 @@ def test_visual_understanding_is_shop_scoped_and_uses_only_a_generic_template():
     assert "EnsureDefaultMobileAccountTemplate" in service
     assert "EnsureDefaultKugouPreset" not in service
     assert "rule.Enabled = false;" in template
-    assert 'Nav("视觉理解"' in shell
+    assert 'Nav("图片知识"' in shell
     assert "KnowledgeV2VisualUnderstandingPage.cs" in targets
-    assert "上传图片" in page and "识别图片" in page
+    assert 'Text = "知识库", FontSize = 22' in shell
+    assert 'window.Title = "AI客服 - 知识库"' in shell
+    assert "上传图片" in page and "await RecognizeImageAsync();" in page
+    assert "识别图片" not in page
     assert "保存图片知识" in page and "删除图片知识" in page
     assert "OCR 识别结果（可编辑、可删除文字）" in page
     assert "图片说明（用于后续图片匹配和上下文理解）" in page
