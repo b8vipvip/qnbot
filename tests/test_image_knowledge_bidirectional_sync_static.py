@@ -37,6 +37,8 @@ def test_cloud_image_knowledge_is_bound_to_client_shop_and_uses_revisioned_tombs
     assert "UNIQUE(client_id,shop_key,image_sha256)" in api
     assert "legacy_unbound_count" in api
     assert "quarantined" in api
+    assert '@router.post("/api/bot-web/image-knowledge/migrate-legacy")' in api
+    assert "data.confirmed" in api
     assert "_require_image_shop_scope" in api
     assert "shop_scope_mismatch" in api
     assert "seller_scope_mismatch" in api
@@ -56,6 +58,7 @@ def test_web_image_knowledge_uses_the_same_shop_scoped_cloud_records_as_windows_
     assert "shop_key" in script
     assert "base_revision" in script
     assert "imageKnowledgeScopeQuery()" in script
+    assert "migrateLegacyImageKnowledgeBtn" in script
     assert "shop_key: str = Query" in api
     assert "seller: str = Query" in api
     assert "def web_image_knowledge_list(" in api
