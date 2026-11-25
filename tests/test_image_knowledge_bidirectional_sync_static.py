@@ -202,3 +202,21 @@ def test_windows_sqlite_enforces_shopkey_image_knowledge_id_and_hash_boundaries(
     assert "currentGlobalId" in final_write
     assert "currentDuplicate" in final_write
     assert final_write.index("currentDuplicate") < final_write.index("SaveRecordsInTransaction")
+
+
+def test_captioned_buyer_images_keep_their_question_and_offer_import_action():
+    safety = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
+    display = safety.split("public static string GetDisplayText", 1)[1].split(
+        "public static bool IsMediaPlaceholder", 1
+    )[0]
+    preserve = safety.split("private static string PreserveImageCaption", 1)[1].split(
+        "public static bool IsMediaPlaceholder", 1
+    )[0]
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    menu = mirror.split("private ContextMenu BuildMessageMirrorBuyerContextMenu", 1)[1].split(
+        "private async Task AddBuyerDirectAnswerFromMirror", 1
+    )[0]
+    assert "PreserveImageCaption(messageText)" in display
+    assert 'caption + " [图片]"' in preserve
+    assert "turn.HasImage" in menu
+    assert 'Header = "导入图片知识"' in menu
