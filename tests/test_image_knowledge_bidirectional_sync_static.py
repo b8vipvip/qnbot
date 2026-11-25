@@ -198,3 +198,7 @@ def test_windows_sqlite_enforces_shopkey_image_knowledge_id_and_hash_boundaries(
     assert "图片知识ID已属于其他ShopKey" in save
     assert 'where ShopKey = ? and ImageSha256 = ? and EntityId <> ? limit 1' in save
     assert "当前ShopKey已存在这张图片" in save
+    final_write = save.split("try", 1)[1].split("catch", 1)[0]
+    assert "currentGlobalId" in final_write
+    assert "currentDuplicate" in final_write
+    assert final_write.index("currentDuplicate") < final_write.index("SaveRecordsInTransaction")
