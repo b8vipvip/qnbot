@@ -147,7 +147,14 @@ namespace Bot.ChromeNs
                     entry.EntityId, shop.ShopKey, seller).FirstOrDefault();
                 var duplicate = Select("where ShopKey = ? and Seller = ? and ImageSha256 = ? and EntityId <> ? limit 1",
                     shop.ShopKey, seller, sha256, entry.EntityId).FirstOrDefault();
-                if (duplicate != null)
+                if (duplicate != null && duplicate.Deleted)
+                {
+                    // Re-adding a previously deleted image revives its tombstoned ID
+                    // so the unique shop/image index remains valid and cloud peers converge.
+                    entry.EntityId = duplicate.EntityId;
+                    old = duplicate;
+                }
+                else if (duplicate != null)
                     throw new InvalidOperationException("当前店铺已存在这张图片，请在左侧列表中编辑已有图片知识。");
             }
             entry.Enabled = old == null ? true : entry.Enabled;
