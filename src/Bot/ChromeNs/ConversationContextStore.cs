@@ -26,6 +26,7 @@ namespace Bot.ChromeNs
         public long PreciseTimeTicks { get; set; }
         public bool SeenLive { get; set; }
         public bool SeenHistory { get; set; }
+        public bool HasImage { get; set; }
     }
 
     internal sealed class ConversationMirrorSnapshot
@@ -787,6 +788,7 @@ namespace Bot.ChromeNs
                 {
 
                     MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
+                    exact.HasImage = exact.HasImage || IsImageMessage(message);
                     return exact.MessageKey ?? string.Empty;
                 }
 
@@ -804,6 +806,7 @@ namespace Bot.ChromeNs
                 {
 
                     MergeObservedIdentity(precisePeers[0], aliases, preciseTime, timestamp, fromHistory);
+                    precisePeers[0].HasImage = precisePeers[0].HasImage || IsImageMessage(message);
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
                         + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
@@ -829,6 +832,7 @@ namespace Bot.ChromeNs
                     {
 
                         MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory);
+                        opposite[0].HasImage = opposite[0].HasImage || IsImageMessage(message);
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
                             + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
@@ -846,11 +850,20 @@ namespace Bot.ChromeNs
                     PreciseTimeTicks = preciseTime,
                     SeenLive = !fromHistory,
                     SeenHistory = fromHistory,
+                    HasImage = IsImageMessage(message),
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
                 return messageKey;
             }
+        }
+
+        private static bool IsImageMessage(QNChatMessage message)
+        {
+            if (message == null) return false;
+            if (message.HasImage) return true;
+            try { return !string.IsNullOrWhiteSpace(VisionImageResolver.ExtractUrl(message)); }
+            catch { return false; }
         }
 
         private static string[] GetNativeMessageAliases(QNChatMessage message)
@@ -1540,7 +1553,8 @@ namespace Bot.ChromeNs
                     ? new string[0] : (string[])source.NativeAliases.Clone(),
                 PreciseTimeTicks = source.PreciseTimeTicks,
                 SeenLive = source.SeenLive,
-                SeenHistory = source.SeenHistory
+                SeenHistory = source.SeenHistory,
+                HasImage = source.HasImage
             };
         }
 
