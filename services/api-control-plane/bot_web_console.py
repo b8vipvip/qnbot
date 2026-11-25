@@ -381,24 +381,26 @@ def _decode_message_attachment(item: Dict[str, Any], withdrawn: bool):
     if withdrawn:
         return None, None, None, None
     attachment = item.get("attachment")
-    if not isinstance(attachment, dict):
+    if attachment is None:
         return None, None, None, None
+    if not isinstance(attachment, dict):
+        raise HTTPException(status_code=400, detail="消息图片附件结构无效")
     encoded = str(attachment.get("data_base64") or "")
     if not encoded or len(encoded) > 12 * 1024 * 1024:
-        return None, None, None, None
+        raise HTTPException(status_code=413, detail="消息图片附件大小无效")
     try:
         raw = base64.b64decode(encoded, validate=True)
     except Exception:
-        return None, None, None, None
+        raise HTTPException(status_code=400, detail="消息图片附件Base64编码无效")
     if not raw or len(raw) > 8 * 1024 * 1024:
-        return None, None, None, None
+        raise HTTPException(status_code=413, detail="消息图片附件必须为 1 字节至 8 MB")
     mime = str(attachment.get("mime_type") or "").lower()
     allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
     if mime not in allowed:
-        return None, None, None, None
+        raise HTTPException(status_code=415, detail="消息图片附件MIME类型不受支持")
     digest = hashlib.sha256(raw).hexdigest()
     if digest != str(attachment.get("sha256") or "").lower():
-        return None, None, None, None
+        raise HTTPException(status_code=409, detail="消息图片附件SHA-256校验失败")
     try:
         import io
         from PIL import Image
@@ -406,9 +408,11 @@ def _decode_message_attachment(item: Dict[str, Any], withdrawn: bool):
             image.verify()
             detected = Image.MIME.get(image.format)
         if detected != mime:
-            return None, None, None, None
+            raise HTTPException(status_code=415, detail="消息图片附件MIME与文件内容不匹配")
+    except HTTPException:
+        raise
     except Exception:
-        return None, None, None, None
+        raise HTTPException(status_code=422, detail="消息图片附件格式无效或文件损坏")
     name = _safe(attachment.get("file_name") or ("image-" + digest[:12]), 180)
     return mime, name, digest, raw
 
