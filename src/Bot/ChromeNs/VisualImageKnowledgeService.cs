@@ -450,7 +450,7 @@ namespace Bot.ChromeNs
                 }
                 var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
-                if (localDelete != null && localDelete.SyncDirty)
+                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt)
                 {
                     // A delete performed during the upload wins over the older in-flight upsert.
                     DbHelper.Db.Execute(
