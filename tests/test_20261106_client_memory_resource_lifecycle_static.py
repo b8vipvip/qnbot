@@ -211,3 +211,27 @@ def test_windows_memory_sampler_tracks_a_b_a_only_with_fresh_active_focus_proof(
     assert "if ($runtimeActiveFocusProofFresh -eq $true -and $runtimeActiveShopMappingValid)" in collector
     assert "$activeShopSequence.Clear()" in collector
     assert "while ($activeShopSequence.Count -gt 32)" in collector
+
+
+def test_auto_delivery_diagnostics_are_read_only_aggregate_and_privacy_minimized():
+    script = read("scripts/Invoke-QnBotAutoDeliveryDiagnostics.ps1")
+    assert "virtual-goods-auto-delivery-queue.json" in script
+    assert "virtual-goods-auto-delivery-confirmation-ledger.json" in script
+    assert "virtual-goods-auto-delivery-event-cursor.json" in script
+    assert "order-event-state.json" in script
+    assert "ConfirmationIntentCount" in script
+    assert "ConfirmationUncertainCount" in script
+    assert "UnresolvedCount" in script
+    assert "EnabledShopCount" in script
+    assert "EventCount" in script
+    assert "REVIEW_REQUIRED" in script
+    assert "NO_UNRESOLVED_CONFIRMATION_INTENTS" in script
+    assert "RawShopKeysIncluded = $false" in script
+    assert "SellerNicknamesIncluded = $false" in script
+    assert "BuyerNamesIncluded = $false" in script
+    assert "OrderIdsIncluded = $false" in script
+    assert "EventPayloadsIncluded = $false" in script
+    assert "ConfirmationKeysIncluded = $false" in script
+    assert "ReadAllText" in script
+    assert "WriteAllText" in script
+    assert "Remove-Item" not in script
