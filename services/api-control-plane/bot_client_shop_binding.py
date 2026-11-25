@@ -286,15 +286,18 @@ def ensure_binding(
         # Runtime middleware verifies ShopKey on every request but intentionally has
         # no seller header. An empty seller must preserve the existing seller binding
         # for the same ShopKey rather than erasing it on every poll.
-        if row is not None and bound == shop_key and not seller:
+        seller_was_supplied = bool(seller)
+        if row is not None and bound == shop_key and not seller_was_supplied:
             seller = str(row["seller"] or "").strip()
-
-        # Normal claims remain fail-closed on seller mismatch. A force claim is different: it is
-        # emitted only after the Windows settings UI has shown an explicit confirmation dialog.
-        # That path must be able to repair telemetry contaminated by the older active-seller bug.
-        seller_identity_corrected = _validate_runtime_seller_identity(
-            conn, client_id, seller, allow_confirmed_correction=bool(force)
-        )
+            # A ShopKey-only runtime heartbeat is not a new seller claim. Preserve
+            # the already-validated binding without reinterpreting stale telemetry.
+            seller_identity_corrected = False
+        else:
+            # Normal explicit claims remain fail-closed on seller mismatch. A force claim is
+            # emitted only after the Windows settings UI has shown an explicit confirmation dialog.
+            seller_identity_corrected = _validate_runtime_seller_identity(
+                conn, client_id, seller, allow_confirmed_correction=bool(force)
+            )
         if bound and bound != shop_key and not force:
             raise HTTPException(status_code=409, detail=_conflict_detail(bound))
 
