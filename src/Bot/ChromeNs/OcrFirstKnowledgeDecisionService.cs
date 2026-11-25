@@ -11,10 +11,10 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// OCR-first local decision layer for image messages. It resolves the already-cached image,
-    /// calls the authenticated server OCR control-plane endpoint. Direct replies additionally
-    /// require a configured visual rule to confirm application/screen identity and Knowledge V2
-    /// to pass its existing CanDirectReply safety gate. OCR evidence can still enrich V2 retrieval
-    /// when no visual rule matches; that path is context-only and yields to AI for the final answer.
+    /// calls the authenticated server OCR control-plane endpoint. A saved image-knowledge match
+    /// or legacy visual rule may identify the image context, but direct replies still require
+    /// Knowledge V2 to pass its existing CanDirectReply safety gate. A description match alone
+    /// is context-only and yields to AI for the final answer.
     /// When the server selects AI-first and a usable vision endpoint exists, this early layer yields
     /// immediately so visual AI remains primary; OCR is attached later as auxiliary evidence.
     /// </summary>
