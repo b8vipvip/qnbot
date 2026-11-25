@@ -129,7 +129,7 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - 该工具不能证明真实消息已送达；真实买家消息、切店、重连和知识学习仍需现场验收。
 
 已有可选长时采样脚本：
-- `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程；同时按采样周期读取 Bot 的伪名化 `runtime-snapshot.json`，记录店铺 owner 会话变化、重复/未映射会话、standby 能力、Bot 进程重启，以及活动店铺/会话引用和最近 5 秒的前台焦点证明。活动店铺序列只在焦点证明有效且活动 session 与已连接、已初始化的权威 owner 一致时计入，进程重启会重置序列，避免把旧焦点或 standby 误判为 A→B→A。
+- `scripts/Collect-QnBotMemory.ps1`：只读采样系统/进程内存、CPU、句柄和线程；同时按采样周期读取 Bot 的伪名化 `runtime-snapshot.json`，记录店铺 owner 会话变化、重复/未映射会话、standby 能力、Bot 进程重启，以及活动店铺/会话引用和最近 5 秒的前台焦点证明。每次验证过的前台会话变化都会异步刷新只读快照，避免 30 秒周期采样错过 5 秒焦点证明；活动店铺序列只在焦点证明有效且活动 session 与已连接、已初始化的权威 owner 一致时计入，进程重启会重置序列，避免把旧焦点或 standby 误判为 A→B→A。
 - Knowledge V2 云同步服务写出 `knowledge-v2-sync-snapshot.json`，仅含 ShopRef、云端 revision、记录数、截断指纹、收敛状态和最近同步状态；采样脚本会校验它与当前 Bot 进程身份一致后再记录。
 - Knowledge V2 全量学习服务写出 `knowledge-v2-learning-snapshot.json`，仅含会话/店铺伪名、历史消息数量、语料记录数、已审查记录数、批次完成数、覆盖率、断点恢复次数和指纹前缀，不包含聊天正文、买家昵称、卖家昵称或知识内容。
 - 150+ 消息验收：检查 `KnowledgeV2LatestHistoryMessagesInWindow >= 150`、`KnowledgeV2LatestCorpusComplete=True`、`KnowledgeV2LatestRecordsReviewed = KnowledgeV2LatestCorpusRecords`、`KnowledgeV2LatestBatchesCompleted = KnowledgeV2LatestBatchCount`。重启恢复验收还需看到 `KnowledgeV2LatestResumeCount` 增长，并在最终完成后重新满足上述完整性条件。
