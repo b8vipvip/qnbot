@@ -29,10 +29,13 @@ def test_visual_understanding_is_shop_scoped_and_uses_only_a_generic_template():
     assert "EnsureDefaultMobileAccountTemplate" in service
     assert "EnsureDefaultKugouPreset" not in service
     assert "rule.Enabled = false;" in template
-    assert 'Nav("视觉理解"' in shell
+    assert 'Nav("图片知识"' in shell
     assert "KnowledgeV2VisualUnderstandingPage.cs" in targets
-    assert "上传图片" in page and "识别图片" in page
+    assert "上传图片" in page and "识别图片" not in page
+    assert "自动调用服务端 OCR" in page
+    assert "ImportImageAndRecognizeAsync" in page
     assert "保存图片知识" in page and "删除图片知识" in page
+    assert "图片名称" in page
     assert "OCR 识别结果（可编辑、可删除文字）" in page
     assert "图片说明（用于后续图片匹配和上下文理解）" in page
     assert "LocalOcrService.TryRecognizeAsync" in page
