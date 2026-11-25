@@ -35,3 +35,15 @@ def test_web_image_knowledge_ui_supports_long_press_import_auto_ocr_and_editing(
     assert 'prepareImageKnowledgeFile' in script
     assert 'loadImageKnowledge' in script
     assert 'importImageKnowledgeAction' in script
+    assert 'async function sniffImageKnowledgeMime(file)' in script
+    assert 'await sniffImageKnowledgeMime(file)' in script
+    assert 'bytes[0]===0x42&&bytes[1]===0x4d' in script
+    assert 'async function normalizeImageKnowledgeFile(file)' in script
+    assert 'createImageBitmap(file)' in script
+    assert 'canvas.toBlob(resolve,"image/png")' in script
+    assert 'await normalizeImageKnowledgeFile(file)' in script
+    prepare = script.split('async function prepareImageKnowledgeFile(file)', 1)[1].split('async function loadImageKnowledge', 1)[0]
+    assert prepare.index('state.imageKnowledgeBase64=""') < prepare.index('if(file.size<1')
+    assert prepare.index('$("saveImageKnowledgeBtn").disabled=true') < prepare.index('if(file.size<1')
+    assert '25000000' in script
+    assert 'image/bmp,image/heic,image/heif,.bmp,.heic,.heif' in html

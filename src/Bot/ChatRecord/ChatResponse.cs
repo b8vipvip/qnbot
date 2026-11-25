@@ -213,7 +213,7 @@ namespace Bot.ChatRecord
         public bool IsImage(string txt)
         {
             if (string.IsNullOrEmpty(txt)) return false;
-            var imgExts = new string[] { ".jpg",".jpeg",".png",".gif",".bmp" };
+            var imgExts = new string[] { ".jpg",".jpeg",".png",".gif",".bmp",".webp",".heic",".heif" };
             return imgExts.Any(ext => txt.ToLower().EndsWith(ext));
         }
 

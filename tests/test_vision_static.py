@@ -87,6 +87,17 @@ def test_image_resolver_downloads_caches_and_validates_every_image():
     assert 'Log.Info(image.ImageUrl' not in all_changed
 
 
+def test_all_supported_image_extensions_enter_the_buyer_image_route():
+    safety = read('src/Bot/ChromeNs/IncomingMessageSafety.cs')
+    chat = read('src/Bot/ChatRecord/ChatResponse.cs')
+    extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif']
+    image_list = safety.split('ImageExtensions =', 1)[1].split(';', 1)[0]
+    chat_image = chat.split('public bool IsImage(string txt)', 1)[1].split('\n        }\n', 1)[0]
+    for extension in extensions:
+        assert extension in image_list
+        assert extension in chat_image
+
+
 def test_bmp_and_decodable_heif_buyer_images_are_normalized_before_vision_and_ocr():
     resolver = read('src/Bot/ChromeNs/VisionImageResolver.cs')
     cache = read('src/Bot/ChromeNs/VisionImageCacheService.cs')
