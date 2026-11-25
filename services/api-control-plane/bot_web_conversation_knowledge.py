@@ -45,7 +45,7 @@ def init_db() -> None:
                 updated_by TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE(client_id, image_sha256),
+                UNIQUE(client_id, shop_key, image_sha256),
                 FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
             );
 
@@ -97,6 +97,46 @@ def init_db() -> None:
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE bot_web_image_knowledge ADD COLUMN {name} {declaration}")
+        table_info = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='bot_web_image_knowledge'"
+        ).fetchone()
+        table_sql = " ".join(str(table_info["sql"] or "").lower().split()) if table_info else ""
+        if "unique(client_id, image_sha256)" in table_sql:
+            # Replace the earlier client_id-only uniqueness constraint. The old
+            # rows stay intact (including quarantined ShopKey-less rows), but a
+            # digest in one ShopKey no longer blocks the same image in another.
+            conn.execute("ALTER TABLE bot_web_image_knowledge RENAME TO bot_web_image_knowledge_legacy_unique")
+            conn.execute(
+                """CREATE TABLE bot_web_image_knowledge (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    shop_key TEXT NOT NULL DEFAULT '',
+                    seller TEXT NOT NULL DEFAULT '',
+                    image_name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    image_sha256 TEXT NOT NULL,
+                    image_bytes BLOB NOT NULL,
+                    ocr_text TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    updated_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(client_id,shop_key,image_sha256),
+                    FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,
+                    description,enabled,revision,updated_by,created_at,updated_at)
+                   SELECT id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,
+                          description,enabled,revision,updated_by,created_at,updated_at
+                   FROM bot_web_image_knowledge_legacy_unique"""
+            )
+            conn.execute("DROP TABLE bot_web_image_knowledge_legacy_unique")
+
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS bot_web_image_knowledge_sync_state (
