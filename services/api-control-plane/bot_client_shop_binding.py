@@ -173,6 +173,9 @@ TOKEN_SCOPED_STATE_TABLES = (
     "bot_commands",
     "bot_client_state",
     "bot_conversation_reads",
+    "bot_web_image_knowledge",
+    "bot_web_image_knowledge_sync_state",
+    "bot_web_image_knowledge_tombstones",
     "bot_knowledge_state",
     # Knowledge Center V2 cloud snapshots are token-scoped too. A confirmed
     # token rebind must not expose the previous shop's corpus to the new shop.
@@ -278,15 +281,23 @@ def ensure_binding(
 
     now = core._now()
     with _cp.db() as conn:
-        # Normal claims remain fail-closed on seller mismatch. A force claim is different: it is
-        # emitted only after the Windows settings UI has shown an explicit confirmation dialog.
-        # That path must be able to repair telemetry contaminated by the older active-seller bug.
-        seller_identity_corrected = _validate_runtime_seller_identity(
-            conn, client_id, seller, allow_confirmed_correction=bool(force)
-        )
-
         row = _binding_row(conn, client_id)
         bound = ((row["shop_key"] if row else "") or "").strip()
+        # Runtime middleware verifies ShopKey on every request but intentionally has
+        # no seller header. An empty seller must preserve the existing seller binding
+        # for the same ShopKey rather than erasing it on every poll.
+        seller_was_supplied = bool(seller)
+        if row is not None and bound == shop_key and not seller_was_supplied:
+            seller = str(row["seller"] or "").strip()
+            # A ShopKey-only runtime heartbeat is not a new seller claim. Preserve
+            # the already-validated binding without reinterpreting stale telemetry.
+            seller_identity_corrected = False
+        else:
+            # Normal explicit claims remain fail-closed on seller mismatch. A force claim is
+            # emitted only after the Windows settings UI has shown an explicit confirmation dialog.
+            seller_identity_corrected = _validate_runtime_seller_identity(
+                conn, client_id, seller, allow_confirmed_correction=bool(force)
+            )
         if bound and bound != shop_key and not force:
             raise HTTPException(status_code=409, detail=_conflict_detail(bound))
 
@@ -303,14 +314,24 @@ def ensure_binding(
                 (client_id, shop_key, seller, now, now),
             )
         else:
-            conn.execute(
-                """
-                UPDATE bot_client_shop_binding
-                SET shop_key=?,seller=?,updated_at=?
-                WHERE client_id=?
-                """,
-                (shop_key, seller, now, client_id),
-            )
+            if rebound:
+                conn.execute(
+                    """
+                    UPDATE bot_client_shop_binding
+                    SET shop_key=?,seller=?,bound_at=?,updated_at=?
+                    WHERE client_id=?
+                    """,
+                    (shop_key, seller, now, now, client_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE bot_client_shop_binding
+                    SET shop_key=?,seller=?,updated_at=?
+                    WHERE client_id=?
+                    """,
+                    (shop_key, seller, now, client_id),
+                )
 
     return {
         "ok": True,

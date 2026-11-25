@@ -17,7 +17,7 @@ def test_web_image_knowledge_api_is_authenticated_shop_client_scoped_and_uses_se
     assert 'Depends(core._web_client)' in api
     assert 'runtime_ocr._run_ocr' in api
     assert 'hashlib.sha256(raw).hexdigest()' in api
-    assert 'UNIQUE(client_id, image_sha256)' in api
+    assert 'UNIQUE(client_id, shop_key, image_sha256)' in api
     assert '8 * 1024 * 1024' in api
 
 

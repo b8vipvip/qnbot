@@ -44,6 +44,9 @@ def setup_cp(tmp_path):
             CREATE TABLE bot_commands(client_id INTEGER);
             CREATE TABLE bot_client_state(client_id INTEGER);
             CREATE TABLE bot_conversation_reads(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge_sync_state(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge_tombstones(client_id INTEGER);
             CREATE TABLE bot_knowledge_state(client_id INTEGER);
             CREATE TABLE bot_knowledge_v2_state(
                 client_id INTEGER PRIMARY KEY,
@@ -142,6 +145,10 @@ def test_first_claim_binds_token_and_second_shop_gets_structured_409(tmp_path):
     assert result["shop_key"] == "shop_a"
     assert result["rebound"] is False
 
+    # Runtime sync middleware sends ShopKey but not seller; this must not erase
+    # the seller identity established by the explicit Windows token-binding claim.
+    binding.ensure_binding(1, "shop_a", False, "")
+
     with pytest.raises(HTTPException) as caught:
         binding.ensure_binding(1, "shop_b", False, "seller-b")
     assert caught.value.status_code == 409
@@ -166,6 +173,9 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_commands",
             "bot_client_state",
             "bot_conversation_reads",
+            "bot_web_image_knowledge",
+            "bot_web_image_knowledge_sync_state",
+            "bot_web_image_knowledge_tombstones",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
             "bot_store_rule_state",
@@ -199,6 +209,9 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_commands",
             "bot_client_state",
             "bot_conversation_reads",
+            "bot_web_image_knowledge",
+            "bot_web_image_knowledge_sync_state",
+            "bot_web_image_knowledge_tombstones",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
             "bot_knowledge_backups",

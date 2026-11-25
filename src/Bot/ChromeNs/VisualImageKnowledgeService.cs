@@ -1,6 +1,7 @@
 using Bot.ShopScope;
 using BotLib;
 using BotLib.Db.Sqlite;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -24,6 +25,26 @@ namespace Bot.ChromeNs
         public bool Enabled { get; set; }
         public long CreatedAtTicks { get; set; }
         public long UpdatedAtTicks { get; set; }
+        public bool SyncDirty { get; set; }
+        public long CloudRevision { get; set; }
+    }
+
+    internal sealed class VisualImageKnowledgeSyncTombstone
+    {
+        [PrimaryKey] public string EntityId { get; set; }
+        public string ShopKey { get; set; }
+        public string Seller { get; set; }
+        public long DeletedAtTicks { get; set; }
+        public bool SyncDirty { get; set; }
+        public long CloudRevision { get; set; }
+    }
+
+    internal sealed class VisualImageKnowledgeSyncState
+    {
+        [PrimaryKey] public string ShopKey { get; set; }
+        public string Seller { get; set; }
+        public long LastCloudRevision { get; set; }
+        public long UpdatedAtTicks { get; set; }
     }
 
     internal sealed class VisualImageKnowledgeMatch
@@ -44,7 +65,7 @@ namespace Bot.ChromeNs
     internal static class VisualImageKnowledgeService
     {
         public const int MaxImageBytes = 8 * 1024 * 1024;
-        public const int MaxOcrChars = 6000;
+        public const int MaxOcrChars = 12000;
         public const int MaxDescriptionChars = 1200;
         public const int MaxEntriesPerShop = 500;
         public const double MatchThreshold = 0.78d;
@@ -148,11 +169,15 @@ namespace Bot.ChromeNs
             entry.ImagePath = targetPath;
             entry.CreatedAtTicks = old == null ? now : old.CreatedAtTicks;
             entry.UpdatedAtTicks = now;
+            entry.CloudRevision = old == null ? entry.CloudRevision : old.CloudRevision;
+            entry.SyncDirty = true;
             try
             {
                 lock (Sync)
                 {
                     DbHelper.Db.SaveRecordsInTransaction(new List<object> { entry });
+                    DbHelper.Db.Execute("delete from VisualImageKnowledgeSyncTombstone where EntityId = ? and ShopKey = ? and Seller = ?",
+                        entry.EntityId, shop.ShopKey, seller);
                 }
             }
             catch
@@ -186,6 +211,9 @@ namespace Bot.ChromeNs
                     id, shop.ShopKey, seller).FirstOrDefault();
                 if (item == null) return false;
                 DbHelper.Db.Execute(
+                    "insert or replace into VisualImageKnowledgeSyncTombstone(EntityId,ShopKey,Seller,DeletedAtTicks,SyncDirty,CloudRevision) values(?,?,?,?,1,?)",
+                    item.EntityId, shop.ShopKey, seller, DateTime.Now.Ticks, item.CloudRevision);
+                DbHelper.Db.Execute(
                     "delete from VisualImageKnowledgeEntry where EntityId = ? and ShopKey = ? and Seller = ?",
                     id, shop.ShopKey, seller);
             }
@@ -193,6 +221,272 @@ namespace Bot.ChromeNs
             Log.Info("图片知识已删除: shopRef="
                 + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey) + ", knowledgeId=" + id);
             return true;
+        }
+
+        /// <summary>
+        /// Build one bounded delta request. Images are sent one at a time so the normal
+        /// three-second status/message sync cannot accidentally create multi-megabyte bursts.
+        /// </summary>
+        public static JObject BuildCloudSyncRequest(string shopKey, string seller)
+        {
+            var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
+            EnsureSchema();
+            lock (Sync)
+            {
+                var state = SelectSyncState(shop.ShopKey, seller);
+                var pendingItems = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc limit 50",
+                    shop.ShopKey, seller);
+                var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
+                    shop.ShopKey, seller);
+                var upserts = new JArray();
+                foreach (var pending in pendingItems)
+                {
+                    try
+                    {
+                        if (!IsManagedImagePath(pending.ImagePath, GetImageDirectory(shop)) || !File.Exists(pending.ImagePath))
+                        {
+                            Log.ErrorWithMaxCount("图片知识原图缺失，保留待同步记录并继续处理其他图片: " + pending.EntityId, 5);
+                            continue;
+                        }
+                        var bytes = File.ReadAllBytes(pending.ImagePath);
+                        if (bytes.Length <= 0 || bytes.Length > MaxImageBytes)
+                        {
+                            Log.ErrorWithMaxCount("图片知识原图超过同步大小限制，保留待同步记录: " + pending.EntityId, 5);
+                            continue;
+                        }
+                        var digest = ComputeSha256(bytes);
+                        if (!string.Equals(digest, pending.ImageSha256, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
+                            continue;
+                        }
+                        upserts.Add(new JObject
+                        {
+                            ["id"] = pending.EntityId,
+                            ["base_revision"] = pending.CloudRevision,
+                            ["image_name"] = pending.ImageName ?? Path.GetFileName(pending.ImagePath),
+                            ["mime_type"] = VisionImageResolver.DetectMime(bytes),
+                            ["image_sha256"] = digest,
+                            ["image_base64"] = Convert.ToBase64String(bytes),
+                            ["ocr_text"] = pending.OcrText ?? string.Empty,
+                            ["description"] = pending.Description ?? string.Empty,
+                            ["enabled"] = pending.Enabled,
+                            ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
+                        });
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("读取待同步图片知识失败，跳过此条并继续：" + pending.EntityId + " " + ex.Message, 5);
+                    }
+                }
+
+                var deletes = new JArray(tombstones.Select(x => new JObject
+                {
+                    ["id"] = x.EntityId,
+                    ["base_revision"] = x.CloudRevision,
+                    ["deleted_at"] = ToUtcIso(x.DeletedAtTicks)
+                }));
+                return new JObject
+                {
+                    ["shop_key"] = shop.ShopKey,
+                    ["seller"] = seller,
+                    ["since_revision"] = state == null ? 0 : state.LastCloudRevision,
+                    ["upserts"] = upserts,
+                    ["deletes"] = deletes
+                };
+            }
+        }
+
+        /// <summary>
+        /// Apply a server delta/conflict snapshot only after all files have been verified.
+        /// Each image is written through a temporary file inside the current shop's managed
+        /// directory; Save() then applies the same validation and atomic file ownership rules
+        /// as a locally uploaded image.
+        /// </summary>
+        public static void ApplyCloudSyncResponse(string shopKey, string seller, JObject response)
+        {
+            var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
+            if (response == null) throw new ArgumentNullException(nameof(response));
+            if (!string.Equals((string)response["shop_key"], shop.ShopKey, StringComparison.Ordinal))
+                throw new InvalidOperationException("云端图片知识响应的ShopKey不匹配。");
+            EnsureSchema();
+
+            var upserts = response["upserts"] as JArray ?? new JArray();
+            var conflicts = response["conflicts"] as JArray ?? new JArray();
+            if (conflicts.Count > 0)
+                Log.ErrorWithMaxCount("图片知识检测到另一端并发修改，已按云端版本进行冲突收敛；请检查本轮编辑是否需要重新提交。", 10);
+            foreach (var item in upserts.Concat(conflicts).OfType<JObject>())
+            {
+                var kind = (string)item["kind"] ?? "upsert";
+                var data = item["item"] as JObject ?? item;
+                var duplicateLocalId = Clean((string)item["local_id"], 80);
+                var cloudId = Clean((string)data["id"], 80);
+                if (duplicateLocalId.Length > 0 && cloudId.Length > 0
+                    && !string.Equals(duplicateLocalId, cloudId, StringComparison.Ordinal))
+                    RemoveLocalDuplicate(shop, seller, duplicateLocalId);
+                if (string.Equals(kind, "delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyCloudDelete(shop, seller, data);
+                    continue;
+                }
+                ApplyCloudUpsert(shop, seller, data);
+            }
+            var deletes = response["deletes"] as JArray ?? new JArray();
+            foreach (var item in deletes.OfType<JObject>())
+                ApplyCloudDelete(shop, seller, item);
+
+            var revision = response.Value<long?>("revision") ?? 0;
+            lock (Sync)
+            {
+                var previous = SelectSyncState(shop.ShopKey, seller);
+                if (previous != null) revision = Math.Max(revision, previous.LastCloudRevision);
+                DbHelper.Db.Execute(
+                    "insert or replace into VisualImageKnowledgeSyncState(ShopKey,Seller,LastCloudRevision,UpdatedAtTicks) values(?,?,?,?)",
+                    shop.ShopKey, seller, revision, DateTime.Now.Ticks);
+            }
+        }
+
+        private static void RemoveLocalDuplicate(ShopContext shop, string seller, string id)
+        {
+            lock (Sync)
+            {
+                var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (local == null) return;
+                DbHelper.Db.Execute(
+                    "delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
+                    id, shop.ShopKey, seller);
+                TryDeleteManagedImage(local.ImagePath, GetImageDirectory(shop));
+            }
+        }
+
+        private static void ApplyCloudUpsert(ShopContext shop, string seller, JObject data)
+        {
+            var id = Clean((string)data["id"], 80);
+            var base64 = (string)data["image_base64"] ?? string.Empty;
+            if (id.Length == 0 || base64.Length == 0) throw new InvalidOperationException("云端图片知识缺少图片数据。");
+            byte[] bytes;
+            try { bytes = Convert.FromBase64String(base64); }
+            catch { throw new InvalidOperationException("云端图片知识Base64无效。"); }
+            if (bytes.Length <= 0 || bytes.Length > MaxImageBytes)
+                throw new InvalidOperationException("云端图片知识大小无效。");
+            var sha = ComputeSha256(bytes);
+            if (!string.Equals(sha, Clean((string)data["image_sha256"], 64), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("云端图片知识SHA-256校验失败。");
+            var mime = VisionImageResolver.DetectMime(bytes);
+            if (!string.Equals(mime, Clean((string)data["mime_type"], 40), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("云端图片知识MIME与文件内容不匹配。");
+
+            var root = GetImageDirectory(shop);
+            Directory.CreateDirectory(root);
+            var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));
+            try
+            {
+                File.WriteAllBytes(temp, bytes);
+                var imageName = Clean((string)data["image_name"], 180);
+                if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
+                var entry = new VisualImageKnowledgeEntry
+                {
+                    EntityId = id,
+                    ShopKey = shop.ShopKey,
+                    Seller = seller,
+                    ImageName = imageName,
+                    ImageSha256 = sha,
+                    OcrText = Clean((string)data["ocr_text"], MaxOcrChars),
+                    Description = Clean((string)data["description"], MaxDescriptionChars),
+                    Enabled = data.Value<bool?>("enabled") ?? true
+                };
+                Save(shop.ShopKey, seller, entry, temp);
+                var revision = data.Value<long?>("revision") ?? 0;
+                lock (Sync)
+                {
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeEntry set SyncDirty=0,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        revision, id, shop.ShopKey, seller);
+                    DbHelper.Db.Execute(
+                        "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
+                        id, shop.ShopKey, seller);
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+        }
+
+        private static void ApplyCloudDelete(ShopContext shop, string seller, JObject data)
+        {
+            var id = Clean((string)data["id"], 80);
+            if (id.Length == 0) return;
+            var revision = data.Value<long?>("revision") ?? 0;
+            var deletedAt = ParseUtcTicks((string)data["deleted_at"]);
+            VisualImageKnowledgeEntry old;
+            lock (Sync)
+            {
+                old = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (old != null)
+                {
+                    DbHelper.Db.Execute("delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
+                        id, shop.ShopKey, seller);
+                    TryDeleteManagedImage(old.ImagePath, GetImageDirectory(shop));
+                }
+                DbHelper.Db.Execute(
+                    "insert or replace into VisualImageKnowledgeSyncTombstone(EntityId,ShopKey,Seller,DeletedAtTicks,SyncDirty,CloudRevision) values(?,?,?,?,0,?)",
+                    id, shop.ShopKey, seller, deletedAt > 0 ? deletedAt : DateTime.Now.Ticks, revision);
+            }
+        }
+
+        private static VisualImageKnowledgeSyncState SelectSyncState(string shopKey, string seller)
+        {
+            return (DbHelper.Db.Select(typeof(VisualImageKnowledgeSyncState),
+                "where ShopKey = ? and Seller = ? limit 1", shopKey, seller) ?? new List<object>())
+                .OfType<VisualImageKnowledgeSyncState>().FirstOrDefault();
+        }
+
+        private static List<VisualImageKnowledgeSyncTombstone> SelectTombstones(string clause, params object[] args)
+        {
+            return (DbHelper.Db.Select(typeof(VisualImageKnowledgeSyncTombstone), clause, args) ?? new List<object>())
+                .OfType<VisualImageKnowledgeSyncTombstone>().ToList();
+        }
+
+        private static string ToUtcIso(long ticks)
+        {
+            try { return new DateTime(ticks, DateTimeKind.Local).ToUniversalTime().ToString("o"); }
+            catch { return DateTime.UtcNow.ToString("o"); }
+        }
+
+        private static long ParseUtcTicks(string value)
+        {
+            DateTimeOffset parsed;
+            return DateTimeOffset.TryParse(value ?? string.Empty, out parsed)
+                ? parsed.LocalDateTime.Ticks : DateTime.Now.Ticks;
+        }
+
+        private static string ExtensionForMime(string mime)
+        {
+            switch ((mime ?? string.Empty).ToLowerInvariant())
+            {
+                case "image/jpeg": return ".jpg";
+                case "image/png": return ".png";
+                case "image/webp": return ".webp";
+                case "image/gif": return ".gif";
+                default: throw new InvalidOperationException("不支持的图片MIME类型。");
+            }
+        }
+
+        private static string ComputeSha256(byte[] bytes)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var hash = sha.ComputeHash(bytes);
+                var result = new StringBuilder(hash.Length * 2);
+                foreach (var value in hash) result.Append(value.ToString("x2"));
+                return result.ToString();
+            }
         }
 
         public static bool HasEntries(string shopKey)
@@ -395,8 +689,12 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0,SyncDirty integer not null default 1,CloudRevision integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column ImageName text not null default ''"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column SyncDirty integer not null default 1"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column CloudRevision integer not null default 0"); } catch { }
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeSyncTombstone (EntityId text primary key not null,ShopKey text not null,Seller text not null,DeletedAtTicks integer not null default 0,SyncDirty integer not null default 1,CloudRevision integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeSyncState (ShopKey text primary key not null,Seller text not null,LastCloudRevision integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 DbHelper.Db.Execute("create index if not exists IX_VisualImageKnowledge_ShopSeller on VisualImageKnowledgeEntry(ShopKey,Seller,Enabled,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create unique index if not exists UX_VisualImageKnowledge_ShopSellerImage on VisualImageKnowledgeEntry(ShopKey,Seller,ImageSha256)");
                 System.Threading.Volatile.Write(ref _schemaReady, 1);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -113,6 +114,10 @@ def init_bot_web_db() -> None:
                 message_type TEXT NOT NULL DEFAULT 'text',
                 is_bot INTEGER NOT NULL DEFAULT 0,
                 withdrawn INTEGER NOT NULL DEFAULT 0,
+                attachment_mime TEXT,
+                attachment_name TEXT,
+                attachment_sha256 TEXT,
+                attachment_bytes BLOB,
                 occurred_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(client_id, message_key),
@@ -144,6 +149,14 @@ def init_bot_web_db() -> None:
             conn.execute("ALTER TABLE bot_messages ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
         if "withdrawn" not in message_columns:
             conn.execute("ALTER TABLE bot_messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0")
+        if "attachment_mime" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_mime TEXT")
+        if "attachment_name" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_name TEXT")
+        if "attachment_sha256" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_sha256 TEXT")
+        if "attachment_bytes" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_bytes BLOB")
 
 
 def _bearer(request: Request) -> str:
@@ -364,6 +377,42 @@ def _command_rows(client_id: int) -> List[Dict[str, Any]]:
     ]
 
 
+def _decode_message_attachment(item: Dict[str, Any], withdrawn: bool):
+    if withdrawn:
+        return None, None, None, None
+    attachment = item.get("attachment")
+    if not isinstance(attachment, dict):
+        return None, None, None, None
+    encoded = str(attachment.get("data_base64") or "")
+    if not encoded or len(encoded) > 12 * 1024 * 1024:
+        return None, None, None, None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except Exception:
+        return None, None, None, None
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        return None, None, None, None
+    mime = str(attachment.get("mime_type") or "").lower()
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if mime not in allowed:
+        return None, None, None, None
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != str(attachment.get("sha256") or "").lower():
+        return None, None, None, None
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as image:
+            image.verify()
+            detected = Image.MIME.get(image.format)
+        if detected != mime:
+            return None, None, None, None
+    except Exception:
+        return None, None, None, None
+    name = _safe(attachment.get("file_name") or ("image-" + digest[:12]), 180)
+    return mime, name, digest, raw
+
+
 def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     seller = _safe(item.get("seller"), 120)
     buyer = _safe(item.get("buyer"), 120)
@@ -384,12 +433,18 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     if not message_key:
         seed = f"{seller}|{buyer}|{role}|{occurred}|{text}"
         message_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    attachment_mime, attachment_name, attachment_sha, attachment_bytes = _decode_message_attachment(item, bool(withdrawn))
+    if attachment_bytes is not None:
+        message_type = "image"
+    elif withdrawn:
+        attachment_mime = attachment_name = attachment_sha = attachment_bytes = None
     with _cp.db() as conn:
         conn.execute(
             """
             INSERT INTO bot_messages(
-                client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,occurred_at,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,
+                attachment_mime,attachment_name,attachment_sha256,attachment_bytes,occurred_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(client_id,message_key) DO UPDATE SET
                 seller=excluded.seller,
                 buyer=excluded.buyer,
@@ -398,11 +453,16 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
                 message_type=excluded.message_type,
                 is_bot=excluded.is_bot,
                 withdrawn=excluded.withdrawn,
+                attachment_mime=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_mime,bot_messages.attachment_mime) END,
+                attachment_name=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_name,bot_messages.attachment_name) END,
+                attachment_sha256=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_sha256,bot_messages.attachment_sha256) END,
+                attachment_bytes=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_bytes,bot_messages.attachment_bytes) END,
                 occurred_at=excluded.occurred_at
             """,
             (
                 client_id, message_key, seller, buyer, role, text, message_type,
-                is_bot, withdrawn, occurred, _now(),
+                is_bot, withdrawn, attachment_mime, attachment_name, attachment_sha,
+                attachment_bytes, occurred, _now(),
             ),
         )
 
@@ -550,12 +610,12 @@ def bot_web_snapshot(
         state_row = conn.execute("SELECT * FROM bot_client_state WHERE client_id=?", (client_id,)).fetchone()
         if after_id > 0:
             rows = conn.execute(
-                "SELECT * FROM bot_messages WHERE client_id=? AND id>? ORDER BY id ASC LIMIT 500",
+                "SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at FROM bot_messages WHERE client_id=? AND id>? ORDER BY id ASC LIMIT 500",
                 (client_id, after_id),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT 300",
+                "SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT 300",
                 (client_id,),
             ).fetchall()
             rows = list(reversed(rows))
@@ -567,6 +627,20 @@ def bot_web_snapshot(
             (client_id,),
         ).fetchall()
     status_data = _parse(state_row["status_json"], {}) if state_row else {}
+    try:
+        with _cp.db() as conn:
+            binding_row = conn.execute(
+                "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+                (client_id,),
+            ).fetchone()
+    except Exception:
+        binding_row = None
+    if binding_row:
+        # The binding is the authoritative tenant boundary; telemetry is only a
+        # presentation fallback and must never switch the selected ShopKey.
+        status_data["shop_key"] = str(binding_row["shop_key"] or "")
+        if not str(status_data.get("current_seller") or "").strip():
+            status_data["current_seller"] = str(binding_row["seller"] or "")
     last_seen = state_row["last_seen_at"] if state_row else None
     settings = _settings_for(client_id)
     return {
@@ -583,6 +657,29 @@ def bot_web_snapshot(
         "messages": [dict(row) for row in rows],
         "commands": [dict(row) for row in command_rows],
         "server_time": _now(),
+    }
+
+
+@router.get("/api/bot-web/conversation/messages/{message_id}/attachment")
+def bot_web_conversation_message_attachment(
+    message_id: int,
+    seller: str = Query(..., min_length=1, max_length=120),
+    buyer: str = Query(..., min_length=1, max_length=120),
+    client: Dict[str, Any] = Depends(_web_client),
+) -> Dict[str, Any]:
+    with _cp.db() as conn:
+        row = conn.execute(
+            """SELECT attachment_mime,attachment_name,attachment_sha256,attachment_bytes
+               FROM bot_messages WHERE client_id=? AND id=? AND seller=? AND buyer=? AND withdrawn=0""",
+            (int(client["id"]), message_id, seller.strip(), buyer.strip()),
+        ).fetchone()
+    if not row or not row["attachment_bytes"]:
+        raise HTTPException(status_code=404, detail="该消息的原始图片附件尚未同步或已撤回")
+    return {
+        "mime_type": row["attachment_mime"],
+        "file_name": row["attachment_name"],
+        "sha256": row["attachment_sha256"],
+        "image_base64": base64.b64encode(bytes(row["attachment_bytes"])).decode("ascii"),
     }
 
 

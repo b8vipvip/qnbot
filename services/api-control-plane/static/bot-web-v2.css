@@ -5,3 +5,9 @@
 .ai-endpoint-card .field-row input{max-width:58%;text-align:right}
 .ai-prompt-field{display:flex;flex-direction:column;gap:8px;margin:12px 0}
 .ai-prompt-field textarea{width:100%;box-sizing:border-box;resize:vertical}
+
+
+/* Original buyer image attachments in the Bot Web conversation mirror. */
+.message-attachment{margin-top:8px;max-width:min(320px,72vw);border-radius:10px;overflow:hidden;background:#f1f4f8;}
+.message-attachment img{display:block;max-width:100%;max-height:360px;object-fit:contain;}
+.message-attachment-unavailable{margin-top:6px;padding:8px;color:#8a5b14;background:#fff7e6;border-radius:8px;font-size:12px;}

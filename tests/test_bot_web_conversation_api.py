@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sqlite3
 import sys
@@ -110,6 +111,10 @@ def create_message_schema(cp: FakeControlPlane) -> None:
                 message_type TEXT NOT NULL DEFAULT 'text',
                 is_bot INTEGER NOT NULL DEFAULT 0,
                 withdrawn INTEGER NOT NULL DEFAULT 0,
+                attachment_mime TEXT,
+                attachment_name TEXT,
+                attachment_sha256 TEXT,
+                attachment_bytes BLOB,
                 occurred_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(client_id, message_key)
@@ -229,3 +234,82 @@ def test_buyer_inbox_and_message_history_api_page_without_dropping_messages(tmp_
         merged_ids = [x["id"] for x in older["messages"] + latest["messages"]]
         assert len(merged_ids) == 130
         assert len(set(merged_ids)) == 130
+
+
+
+def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_withdrawal(tmp_path, monkeypatch):
+    class FakeImage:
+        format = "PNG"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def verify(self):
+            return None
+
+    class FakeImageModule:
+        MIME = {"PNG": "image/png"}
+
+        @staticmethod
+        def open(_):
+            return FakeImage()
+
+    pil = types.ModuleType("PIL")
+    pil.Image = FakeImageModule
+    monkeypatch.setitem(sys.modules, "PIL", pil)
+
+    with loaded_modules() as (core, _):
+        cp = FakeControlPlane(tmp_path / "message-attachments.db")
+        core._cp = cp
+        create_message_schema(cp)
+
+        raw = b"\\x89PNG\\r\\n\\x1a\\noriginal-buyer-image-bytes"
+        digest = __import__("hashlib").sha256(raw).hexdigest()
+        core._save_message(1, {
+            "message_key": "buyer-image-1",
+            "seller": "seller",
+            "buyer": "buyer",
+            "role": "user",
+            "text": "[图片]",
+            "message_type": "image",
+            "attachment": {
+                "mime_type": "image/png",
+                "file_name": "buyer.png",
+                "sha256": digest,
+                "data_base64": base64.b64encode(raw).decode("ascii"),
+            },
+        })
+
+        with cp.db() as conn:
+            row = conn.execute(
+                "SELECT id,message_type,attachment_sha256,attachment_bytes FROM bot_messages WHERE message_key='buyer-image-1'"
+            ).fetchone()
+        assert row["message_type"] == "image"
+        assert row["attachment_sha256"] == digest
+        assert bytes(row["attachment_bytes"]) == raw
+
+        result = core.bot_web_conversation_message_attachment(
+            message_id=row["id"], seller="seller", buyer="buyer", client={"id": 1}
+        )
+        assert result["mime_type"] == "image/png"
+        assert base64.b64decode(result["image_base64"]) == raw
+
+        core._save_message(1, {
+            "message_key": "buyer-image-1",
+            "seller": "seller",
+            "buyer": "buyer",
+            "role": "user",
+            "text": "已撤回一条消息",
+            "message_type": "image",
+            "withdrawn": True,
+        })
+        with cp.db() as conn:
+            withdrawn = conn.execute(
+                "SELECT withdrawn,attachment_bytes,attachment_sha256 FROM bot_messages WHERE message_key='buyer-image-1'"
+            ).fetchone()
+        assert withdrawn["withdrawn"] == 1
+        assert withdrawn["attachment_bytes"] is None
+        assert withdrawn["attachment_sha256"] is None
