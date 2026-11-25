@@ -62,6 +62,7 @@ def test_failed_first_greeting_does_not_swallow_short_reply_or_image_vision():
     assert "var firstDelivered = false;" in coordinator
     assert "firstDelivered = true;" in coordinator
     assert "failedBeforeSend" in coordinator
+    assert 'string.Equals(question, "[图片]"' in coordinator
     assert "已释放首条资格并继续当前消息的后续规则/视觉理解" in coordinator
     assert "LocalShortReplyService.TryResolve(" in coordinator
     assert "if (firstDelivered)" in coordinator
