@@ -81,6 +81,10 @@ namespace Bot.AssistWindow.Widget.Robot
             ctl.txtStatus.ToolTip = entity.StatusDetail ?? string.Empty;
             ApplyHistoryStatusColor(ctl.txtStatus, statusKind);
             ctl.UpdateTimingText();
+            // Setup initially runs with the current time; bind the context menu again
+            // after restoring the historical question timestamp so an old [图片]
+            // card can never import a newer image from the same buyer.
+            ctl.RefreshQuestionContextMenu();
             ctl._historyRestoreMode = false;
             return ctl;
         }
