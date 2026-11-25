@@ -134,7 +134,7 @@ powershell.exe -NoProfile -File scripts\Invoke-QnBotAcceptanceDiagnostics.ps1
 - Knowledge V2 全量学习服务写出 `knowledge-v2-learning-snapshot.json`，仅含会话/店铺伪名、历史消息数量、语料记录数、已审查记录数、批次完成数、覆盖率、断点恢复次数和指纹前缀，不包含聊天正文、买家昵称、卖家昵称或知识内容。
 - 150+ 消息验收：检查 `KnowledgeV2LatestHistoryMessagesInWindow >= 150`、`KnowledgeV2LatestCorpusComplete=True`、`KnowledgeV2LatestRecordsReviewed = KnowledgeV2LatestCorpusRecords`、`KnowledgeV2LatestBatchesCompleted = KnowledgeV2LatestBatchCount`。重启恢复验收还需看到 `KnowledgeV2LatestResumeCount` 增长，并在最终完成后重新满足上述完整性条件。
 - A/B 切店与重连采样示例：`powershell.exe -NoProfile -File scripts\\Collect-QnBotMemory.ps1 -Minutes 60 -IntervalSeconds 5 -ScenarioTag shop-switch`。运行期间手动执行 A→B→A 切换和断线重连；CSV 的 `RuntimeActiveShopSequence` 应出现 `shop#…>shop#…>shop#…` 且首尾引用相同、`RuntimeActiveShopTransitions` 至少为 2；每次计入的切换都要求 `RuntimeActiveFocusProofFresh=True`。同时检查 `RuntimeShopOwners`、`RuntimeDuplicateSessions`、`RuntimeUnmappedConnectedSessions`，并确认断线后 owner 重新连接。5 秒采样是为了不漏掉 5 秒有效期的焦点证明。
-- 跨设备 Knowledge V2 对比：在两台设备分别运行采样，确认同一店铺的 CloudRevision、LocalFingerprintPrefix、CloudFingerprintPrefix 一致且 Converged=True。ShopRef 是进程本地伪名，重启后会轮换，不用于跨设备匹配。
+- 跨设备 Knowledge V2 对比：在两台设备分别运行 `Collect-QnBotMemory.ps1`，完成真实双设备编辑/同步后，使用 `scripts/Compare-QnBotKnowledgeV2Devices.ps1 -DeviceACsv <设备A的CSV> -DeviceBCsv <设备B的CSV>`。若任一设备采样了多个店铺，再分别传入该设备自己的 `-DeviceAShopRef` / `-DeviceBShopRef`。比较器要求两个快照均为 fresh、采样时间差不超过 5 分钟、云 revision 和本地/云端指纹一致且两端 Converged=True；它不会把设备本地 ShopRef 当成跨设备身份，也不会读取或输出原始 ShopKey、买家消息或知识内容。
 - `scripts/Collect-QnBotGcTrace.ps1`：管理员权限下有界 CLR GC ETW；ETL 可能含同机其他 .NET 程序事件，分享前需自行审查。
 
 ### 4.1 2026-11-20 Windows diagnostic follow-up
