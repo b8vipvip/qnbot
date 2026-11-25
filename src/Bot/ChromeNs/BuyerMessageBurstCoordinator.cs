@@ -409,10 +409,25 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
+                    var firstFailureReason = qn.Rpa == null
+                        ? "首条咨询固定回复发送失败"
+                        : qn.Rpa.GetSendFailureReason();
                     FirstInquiryFixedReplyService.ReleaseReservation(
                         item.SellerNick,
                         item.BuyerNick,
-                        qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason(), item.ShopKey);
+                        firstFailureReason, item.ShopKey);
+                    if (allowLocalShortReply)
+                    {
+                        string shortReplyAnswer;
+                        string shortReplyPhrase;
+                        if (LocalShortReplyService.TryResolve(
+                            item.SellerNick, question, out shortReplyAnswer, out shortReplyPhrase))
+                        {
+                            Log.Info("首条咨询固定回复未确认送达；本地短消息规则已匹配但本轮不再发送另一条模板，等待安全发送链路恢复: seller="
+                                + item.SellerNick + ", buyer=" + item.BuyerNick
+                                + ", phrase=" + shortReplyPhrase + ", reason=" + firstFailureReason);
+                        }
+                    }
                     return firstOutcome;
                 }
             }
