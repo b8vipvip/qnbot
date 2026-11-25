@@ -717,7 +717,7 @@ def runtime_image_knowledge_sync(
             else:
                 deletes.append(_image_tombstone_payload(row))
             page_revision = revision
-            if len(upserts) >= 1 or len(deletes) >= 50:
+            if len(upserts) >= 5 or len(deletes) >= 50:
                 break
         if not events or page_revision == data.since_revision:
             page_revision = current_revision
