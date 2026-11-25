@@ -15,7 +15,9 @@ def test_image_knowledge_is_persisted_with_shop_scope_and_managed_image_files():
     for field in ("ShopKey", "Seller", "ImageSha256", "ImagePath", "OcrText", "Description"):
         assert field in service
     assert "ResolveRuntimeByShopKey(shopKey)" in service
-    assert "string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller" in service
+    assert "string.Equals(shop.ShopKey, shopKey" in service
+    assert "seller = (shop.SellerNick ?? string.Empty).Trim();" in service
+    assert "ShopKey is the authoritative identity" in service
     assert 'Paths.GetKnowledgeRoot(shop)' in service
     assert "VisualImageKnowledgeEntry" in service
     assert "create unique index if not exists UX_VisualImageKnowledge_ShopSellerImage" in service
