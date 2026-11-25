@@ -39,6 +39,13 @@ def test_authoritative_cdp_reconnect_refreshes_uia_and_invalid_hwnd_clears_stale
         server.index("public class ConnectionDiagnosticsSnapshot")
     ]
     assert "RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID)" in init
+    status_bind = server[
+        server.index("private async Task TryBindStatusConversation"):
+        server.index("private async Task TryInitSession")
+    ]
+    assert "connectionSnapshot.AccessibilityStatus" in status_bind
+    assert "connectionSnapshot.ButtonStatus" in status_bind
+    assert "RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID)" in status_bind
     assert "IsAuthoritativeShopSession(shopKey, sessionId)" in refresh
     assert "RefreshChatControlsAsync(true)" in refresh
 
