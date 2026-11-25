@@ -61,12 +61,21 @@ namespace Bot.AssistWindow.Widget
         private void RightPanel_Loaded(object sender, RoutedEventArgs e)
         {
             // The header is independent from the dynamically-created tab content. Recover
-            // the Bot tab if a stale/empty persisted tab order left the panel body blank.
+            // initialization if the host did not finish the normal Init path.
+            if (_wndDontUse == null)
+            {
+                var parent = this.xFindParentWindow() as WndAssist;
+                if (parent != null) Init(parent);
+            }
+
+            // Recover the Bot tab if a stale/empty persisted tab order left the panel body blank.
             if (tabControl.Items.Count == 0 && _wndDontUse != null)
             {
                 Log.ErrorWithMaxCount("右侧Bot面板没有任何有效Tab，Loaded阶段自动恢复工作台。", 10);
                 EnsureRobotTab("Loaded");
             }
+            if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
+                tabControl.SelectedIndex = 0;
             RefreshSwitches();
         }
 
