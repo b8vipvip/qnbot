@@ -505,6 +505,12 @@ def web_image_knowledge_save(data: ImageKnowledgeSaveInput, client: Dict[str, An
     image_id = _safe_text(data.id, 80) or uuid.uuid4().hex
     now = _now()
     with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        global_id = conn.execute(
+            "SELECT client_id,shop_key FROM bot_web_image_knowledge WHERE id=?",
+            (image_id,),
+        ).fetchone()
+        if global_id and (int(global_id["client_id"]) != client_id or str(global_id["shop_key"] or "") != data.shop_key):
+            raise HTTPException(status_code=409, detail="图片知识ID已属于其他客户端或店铺")
         current = conn.execute(
             "SELECT revision FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
             (client_id, data.shop_key, canonical, image_id),
@@ -601,6 +607,12 @@ def runtime_image_knowledge_sync(
                 str(item.get("image_sha256") or ""),
             )
             base_revision = max(0, int(item.get("base_revision") or 0))
+            global_id = conn.execute(
+                "SELECT client_id,shop_key FROM bot_web_image_knowledge WHERE id=?",
+                (image_id,),
+            ).fetchone()
+            if global_id and (int(global_id["client_id"]) != client_id or str(global_id["shop_key"] or "") != data.shop_key):
+                raise HTTPException(status_code=409, detail="图片知识ID已属于其他客户端或店铺")
             current = conn.execute(
                 "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
                 (client_id, data.shop_key, canonical, image_id),
