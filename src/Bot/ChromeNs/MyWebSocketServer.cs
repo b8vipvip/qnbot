@@ -1112,14 +1112,7 @@ namespace Bot.ChromeNs
                 if (!string.Equals(connectionSnapshot.AccessibilityStatus, "可用", StringComparison.Ordinal)
                     || !connectionSnapshot.ButtonStatus.StartsWith("已识别发送按钮", StringComparison.Ordinal))
                 {
-                    RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID).ContinueWith(
-                        completed =>
-                        {
-                            if (completed.IsFaulted)
-                                Log.ErrorWithMaxCount("状态事件重绑定后UIA刷新任务异常: "
-                                    + completed.Exception.GetBaseException().Message, 10);
-                        },
-                        TaskScheduler.Default);
+                    _ = RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID);
                 }
             }
             catch (Exception ex)
@@ -1213,14 +1206,7 @@ namespace Bot.ChromeNs
                 Log.Info("千牛CDP初始化成功, sellerRef=" + DiagnosticRef("seller", qn.Seller.Nick)
                     + ", buyerRef=" + DiagnosticRef("buyer", buyerNick)
                     + ", version=" + qn.QnVersion + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
-                RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID).ContinueWith(
-                    completed =>
-                    {
-                        if (completed.IsFaulted)
-                            Log.ErrorWithMaxCount("权威CDP重连后UIA刷新任务异常: "
-                                + completed.Exception.GetBaseException().Message, 10);
-                    },
-                    TaskScheduler.Default);
+                _ = RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID);
             }
             catch (Exception ex)
             {
