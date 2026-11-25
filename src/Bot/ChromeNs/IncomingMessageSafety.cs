@@ -401,13 +401,30 @@ namespace Bot.ChromeNs
             return new IncomingMessageDecision { ShouldCallAi = false, MessageLabel = label, Note = note };
         }
 
+        internal static bool IsImageMessage(QNChatMessage message, string messageText)
+        {
+            if (message == null) return false;
+            try
+            {
+                if (message.HasImage) return true;
+            }
+            catch { }
+            return string.Equals(
+                DetectUnsupportedType(message, messageText),
+                "图片",
+                StringComparison.Ordinal);
+        }
+
         private static string DetectUnsupportedType(QNChatMessage message, string messageText)
         {
             if (message == null) return "未知类型";
             var original = message.originalData;
             var fileId = original == null ? string.Empty : (original.fileId ?? string.Empty);
             var url = original == null ? string.Empty : (original.url ?? string.Empty);
-            var combined = ((messageText ?? string.Empty) + " " + (message.summary ?? string.Empty)).Trim().ToLowerInvariant();
+            var headerSummary = original == null || original.header == null ? string.Empty : (original.header.summary ?? string.Empty);
+            var headerTitle = original == null || original.header == null ? string.Empty : (original.header.title ?? string.Empty);
+            var combined = ((messageText ?? string.Empty) + " " + (message.summary ?? string.Empty)
+                + " " + headerSummary + " " + headerTitle).Trim().ToLowerInvariant();
 
             if (HasExtension(fileId, ImageExtensions) || HasExtension(url, ImageExtensions) || ContainsMarker(combined, "图片", "image", "photo")) return "图片";
             if (HasExtension(fileId, VideoExtensions) || HasExtension(url, VideoExtensions) || ContainsMarker(combined, "视频", "video")) return "视频";
