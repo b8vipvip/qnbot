@@ -123,35 +123,19 @@ def init_db() -> None:
             ON bot_web_image_knowledge_tombstones(client_id,shop_key,revision);
             """
         )
-        # Bind legacy image records to the token's authoritative ShopKey once. Rows
-        # without a verified binding remain invisible and are not guessed into a shop.
+        # Legacy rows from the earlier client_id-only schema have no provable ShopKey.
+        # Do not attach them to the token's current binding: the token may have been
+        # rebound before this migration. Keep them quarantined and preserve the bytes.
         try:
-            legacy = conn.execute(
-                "SELECT id,client_id,created_at FROM bot_web_image_knowledge WHERE shop_key=''"
-            ).fetchall()
-            for item in legacy:
-                binding = conn.execute(
-                    "SELECT shop_key,seller,bound_at FROM bot_client_shop_binding WHERE client_id=?",
-                    (int(item["client_id"]),),
-                ).fetchone()
-                # The previous schema did not persist ShopKey. Only migrate records
-                # created after the current binding epoch; older rows may belong to a
-                # shop that was rebound before this version and must remain quarantined.
-                if (binding and str(binding["shop_key"] or "").strip()
-                    and str(item["created_at"] or "") >= str(binding["bound_at"] or "")):
-                    conn.execute(
-                        "UPDATE bot_web_image_knowledge SET shop_key=?,seller=?,revision=CASE WHEN revision=0 THEN 1 ELSE revision END,updated_by='legacy-bound' WHERE client_id=? AND id=?",
-                        (binding["shop_key"], binding["seller"] or "", int(item["client_id"]), item["id"]),
-                    )
-                    conn.execute(
-                        """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
-                           VALUES(?,?,1,?) ON CONFLICT(client_id,shop_key) DO UPDATE SET
-                           revision=MAX(revision,1),updated_at=excluded.updated_at""",
-                        (int(item["client_id"]), binding["shop_key"], _now()),
-                    )
+            legacy_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM bot_web_image_knowledge WHERE shop_key=''"
+            ).fetchone()["count"]
+            if legacy_count:
+                core.logger.warning(
+                    "bot_web_image_knowledge_legacy_quarantined client_id_scoped_rows=%s",
+                    int(legacy_count),
+                )
         except Exception:
-            # The binding module can be in its schema-upgrade window during startup;
-            # unbound legacy rows stay hidden and the migration is retried on next init.
             pass
 
 
@@ -474,8 +458,12 @@ def web_image_knowledge_list(
             "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
             (client_id, shop_key),
         ).fetchone()
+        legacy_unbound_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=''",
+            (client_id,),
+        ).fetchone()["count"]
     return {"shop_key": shop_key, "seller": canonical, "revision": int(state["revision"] or 0) if state else 0,
-            "items": [dict(row) for row in rows]}
+            "legacy_unbound_count": int(legacy_unbound_count or 0), "items": [dict(row) for row in rows]}
 
 
 @router.get("/api/bot-web/image-knowledge/{image_id}/image")
