@@ -182,6 +182,18 @@ namespace Bot.ChromeNs
             {
                 lock (Sync)
                 {
+                    // Recheck inside the same critical section as the write. The earlier
+                    // validation is only a fast failure path; another seller alias may have
+                    // inserted the same ShopKey/hash while this image was being copied.
+                    var currentGlobalId = Select("where EntityId = ? limit 1", entry.EntityId).FirstOrDefault();
+                    if (currentGlobalId != null
+                        && !string.Equals(currentGlobalId.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                        throw new InvalidOperationException("图片知识ID已属于其他ShopKey，拒绝跨店覆盖。");
+                    var currentDuplicate = Select("where ShopKey = ? and ImageSha256 = ? and EntityId <> ? limit 1",
+                        shop.ShopKey, sha256, entry.EntityId).FirstOrDefault();
+                    if (currentDuplicate != null)
+                        throw new InvalidOperationException("当前ShopKey已存在这张图片，请编辑已有图片知识。");
+
                     DbHelper.Db.SaveRecordsInTransaction(new List<object> { entry });
                     DbHelper.Db.Execute("delete from VisualImageKnowledgeSyncTombstone where EntityId = ? and ShopKey = ? and Seller = ?",
                         entry.EntityId, shop.ShopKey, seller);
