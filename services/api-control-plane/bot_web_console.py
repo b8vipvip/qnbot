@@ -627,11 +627,14 @@ def bot_web_snapshot(
             (client_id,),
         ).fetchall()
     status_data = _parse(state_row["status_json"], {}) if state_row else {}
-    with _cp.db() as conn:
-        binding_row = conn.execute(
-            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
-            (client_id,),
-        ).fetchone()
+    try:
+        with _cp.db() as conn:
+            binding_row = conn.execute(
+                "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+                (client_id,),
+            ).fetchone()
+    except Exception:
+        binding_row = None
     if binding_row:
         # The binding is the authoritative tenant boundary; telemetry is only a
         # presentation fallback and must never switch the selected ShopKey.
