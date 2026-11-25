@@ -235,40 +235,50 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 var state = SelectSyncState(shop.ShopKey, seller);
-                var pending = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc limit 1",
-                    shop.ShopKey, seller).FirstOrDefault();
+                var pendingItems = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc limit 50",
+                    shop.ShopKey, seller);
                 var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
                     shop.ShopKey, seller);
                 var upserts = new JArray();
-                if (pending != null)
+                foreach (var pending in pendingItems)
                 {
-                    if (!IsManagedImagePath(pending.ImagePath, GetImageDirectory(shop)) || !File.Exists(pending.ImagePath))
-                        Log.ErrorWithMaxCount("图片知识原图缺失，保留待同步记录并继续拉取云端更新: " + pending.EntityId, 5);
-                    else
+                    try
                     {
+                        if (!IsManagedImagePath(pending.ImagePath, GetImageDirectory(shop)) || !File.Exists(pending.ImagePath))
+                        {
+                            Log.ErrorWithMaxCount("图片知识原图缺失，保留待同步记录并继续处理其他图片: " + pending.EntityId, 5);
+                            continue;
+                        }
                         var bytes = File.ReadAllBytes(pending.ImagePath);
                         if (bytes.Length <= 0 || bytes.Length > MaxImageBytes)
-                            Log.ErrorWithMaxCount("图片知识原图超过同步大小限制，保留待同步记录: " + pending.EntityId, 5);
-                        else
                         {
-                            var digest = ComputeSha256(bytes);
-                            if (!string.Equals(digest, pending.ImageSha256, StringComparison.OrdinalIgnoreCase))
-                                Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
-                            else
-                                upserts.Add(new JObject
-                                {
-                                    ["id"] = pending.EntityId,
-                                    ["base_revision"] = pending.CloudRevision,
-                                    ["image_name"] = pending.ImageName ?? Path.GetFileName(pending.ImagePath),
-                                    ["mime_type"] = VisionImageResolver.DetectMime(bytes),
-                                    ["image_sha256"] = digest,
-                                    ["image_base64"] = Convert.ToBase64String(bytes),
-                                    ["ocr_text"] = pending.OcrText ?? string.Empty,
-                                    ["description"] = pending.Description ?? string.Empty,
-                                    ["enabled"] = pending.Enabled,
-                                    ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
-                                });
+                            Log.ErrorWithMaxCount("图片知识原图超过同步大小限制，保留待同步记录: " + pending.EntityId, 5);
+                            continue;
                         }
+                        var digest = ComputeSha256(bytes);
+                        if (!string.Equals(digest, pending.ImageSha256, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
+                            continue;
+                        }
+                        upserts.Add(new JObject
+                        {
+                            ["id"] = pending.EntityId,
+                            ["base_revision"] = pending.CloudRevision,
+                            ["image_name"] = pending.ImageName ?? Path.GetFileName(pending.ImagePath),
+                            ["mime_type"] = VisionImageResolver.DetectMime(bytes),
+                            ["image_sha256"] = digest,
+                            ["image_base64"] = Convert.ToBase64String(bytes),
+                            ["ocr_text"] = pending.OcrText ?? string.Empty,
+                            ["description"] = pending.Description ?? string.Empty,
+                            ["enabled"] = pending.Enabled,
+                            ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
+                        });
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("读取待同步图片知识失败，跳过此条并继续：" + pending.EntityId + " " + ex.Message, 5);
                     }
                 }
 
