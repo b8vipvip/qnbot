@@ -233,23 +233,24 @@ namespace Bot.Knowledge
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                 using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
                 using (var http = new HttpClient(handler))
-                using (var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/image-knowledge/"
-                        + Uri.EscapeDataString(id) + "/image"))
-                using (var content = new ByteArrayContent(bytes))
                 {
                     http.Timeout = TimeSpan.FromSeconds(45);
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                    request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
-                    request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha);
-                    content.Headers.ContentType = new MediaTypeHeaderValue(MimeForPath(item.ImagePath));
-                    request.Content = content;
                     using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
                         shop, token, async requestToken =>
                         {
-                            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
-                            return await http.SendAsync(request).ConfigureAwait(false);
+                            using (var request = new HttpRequestMessage(
+                                HttpMethod.Post,
+                                serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/image-knowledge/"
+                                    + Uri.EscapeDataString(id) + "/image"))
+                            using (var content = new ByteArrayContent(bytes))
+                            {
+                                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                                request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha);
+                                content.Headers.ContentType = new MediaTypeHeaderValue(MimeForPath(item.ImagePath));
+                                request.Content = content;
+                                return await http.SendAsync(request).ConfigureAwait(false);
+                            }
                         }))
                     {
                         if (!response.IsSuccessStatusCode)
@@ -269,19 +270,20 @@ namespace Bot.Knowledge
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
             using (var http = new HttpClient(handler))
-            using (var request = new HttpRequestMessage(
-                HttpMethod.Get,
-                serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/image-knowledge/"
-                    + Uri.EscapeDataString(id) + "/image"))
             {
                 http.Timeout = TimeSpan.FromSeconds(45);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
                 using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
                     shop, token, async requestToken =>
                     {
-                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
-                        return await http.SendAsync(request).ConfigureAwait(false);
+                        using (var request = new HttpRequestMessage(
+                            HttpMethod.Get,
+                            serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/image-knowledge/"
+                                + Uri.EscapeDataString(id) + "/image"))
+                        {
+                            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                            request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                            return await http.SendAsync(request).ConfigureAwait(false);
+                        }
                     }))
                 {
                     if (!response.IsSuccessStatusCode) return string.Empty;
