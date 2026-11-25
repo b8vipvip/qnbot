@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 API = ROOT / "services" / "api-control-plane"
@@ -51,11 +53,17 @@ def loaded_modules():
         def __getattr__(self, name):
             return 200
 
+    class DummyHTTPException(Exception):
+        def __init__(self, status_code, detail=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
     fastapi = types.ModuleType("fastapi")
     fastapi.__path__ = []
     fastapi.APIRouter = DummyRouter
     fastapi.Depends = lambda *args, **kwargs: None
-    fastapi.HTTPException = type("HTTPException", (Exception,), {})
+    fastapi.HTTPException = DummyHTTPException
     fastapi.Query = lambda default=None, **kwargs: default
     fastapi.Request = type("Request", (), {})
     fastapi.status = DummyStatus()
@@ -313,3 +321,15 @@ def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_with
         assert withdrawn["withdrawn"] == 1
         assert withdrawn["attachment_bytes"] is None
         assert withdrawn["attachment_sha256"] is None
+
+        with pytest.raises(core.HTTPException) as invalid_attachment:
+            core._save_message(1, {
+                "message_key": "buyer-image-invalid",
+                "seller": "seller",
+                "buyer": "buyer",
+                "role": "user",
+                "text": "[图片]",
+                "message_type": "image",
+                "attachment": "not-an-attachment-object",
+            })
+        assert invalid_attachment.value.status_code == 400

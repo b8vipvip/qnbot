@@ -325,7 +325,7 @@ class ImageKnowledgeSyncInput(BaseModel):
     shop_key: str = Field(min_length=1, max_length=64)
     seller: str = Field(min_length=1, max_length=160)
     since_revision: int = Field(default=0, ge=0)
-    upserts: List[Dict[str, Any]] = Field(default_factory=list, max_length=1)
+    upserts: List[Dict[str, Any]] = Field(default_factory=list, max_length=5)
     deletes: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
 
 

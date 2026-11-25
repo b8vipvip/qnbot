@@ -240,6 +240,7 @@ namespace Bot.ChromeNs
                 var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
                     shop.ShopKey, seller);
                 var upserts = new JArray();
+                long pendingImageBytes = 0;
                 foreach (var pending in pendingItems)
                 {
                     try
@@ -261,6 +262,9 @@ namespace Bot.ChromeNs
                             Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
                             continue;
                         }
+                        if (upserts.Count >= 5) break;
+                        if (upserts.Count > 0 && pendingImageBytes + bytes.Length > 8L * 1024L * 1024L)
+                            continue;
                         upserts.Add(new JObject
                         {
                             ["id"] = pending.EntityId,
@@ -274,7 +278,7 @@ namespace Bot.ChromeNs
                             ["enabled"] = pending.Enabled,
                             ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
                         });
-                        break;
+                        pendingImageBytes += bytes.Length;
                     }
                     catch (Exception ex)
                     {
@@ -315,28 +319,40 @@ namespace Bot.ChromeNs
             EnsureSchema();
 
             var upserts = response["upserts"] as JArray ?? new JArray();
+            var deletes = response["deletes"] as JArray ?? new JArray();
             var conflicts = response["conflicts"] as JArray ?? new JArray();
             if (conflicts.Count > 0)
                 Log.ErrorWithMaxCount("图片知识检测到另一端并发修改，已按云端版本进行冲突收敛；请检查本轮编辑是否需要重新提交。", 10);
-            foreach (var item in upserts.Concat(conflicts).OfType<JObject>())
+
+            // Separate upsert/delete arrays are convenient for JSON consumers, but
+            // their order must be restored by revision before applying (delete then
+            // restore of the same ID must converge to the later restore, not delete).
+            var actions = new List<Tuple<long, string, JObject, JObject>>();
+            foreach (var item in upserts.OfType<JObject>())
+                actions.Add(Tuple.Create(item.Value<long?>("revision") ?? 0, "upsert", item, item));
+            foreach (var item in deletes.OfType<JObject>())
+                actions.Add(Tuple.Create(item.Value<long?>("revision") ?? 0, "delete", item, item));
+            foreach (var wrapper in conflicts.OfType<JObject>())
             {
-                var kind = (string)item["kind"] ?? "upsert";
-                var data = item["item"] as JObject ?? item;
-                var duplicateLocalId = Clean((string)item["local_id"], 80);
+                var kind = (string)wrapper["kind"] ?? "upsert";
+                var data = wrapper["item"] as JObject ?? wrapper;
+                actions.Add(Tuple.Create(data.Value<long?>("revision") ?? 0, kind, data, wrapper));
+            }
+            foreach (var action in actions.OrderBy(x => x.Item1))
+            {
+                var kind = action.Item2;
+                var data = action.Item3;
+                var wrapper = action.Item4;
+                var duplicateLocalId = Clean((string)wrapper["local_id"], 80);
                 var cloudId = Clean((string)data["id"], 80);
                 if (duplicateLocalId.Length > 0 && cloudId.Length > 0
                     && !string.Equals(duplicateLocalId, cloudId, StringComparison.Ordinal))
                     RemoveLocalDuplicate(shop, seller, duplicateLocalId);
                 if (string.Equals(kind, "delete", StringComparison.OrdinalIgnoreCase))
-                {
                     ApplyCloudDelete(shop, seller, data);
-                    continue;
-                }
-                ApplyCloudUpsert(shop, seller, data);
+                else
+                    ApplyCloudUpsert(shop, seller, data);
             }
-            var deletes = response["deletes"] as JArray ?? new JArray();
-            foreach (var item in deletes.OfType<JObject>())
-                ApplyCloudDelete(shop, seller, item);
 
             var revision = response.Value<long?>("revision") ?? 0;
             lock (Sync)

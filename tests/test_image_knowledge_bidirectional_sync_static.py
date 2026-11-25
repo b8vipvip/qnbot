@@ -21,6 +21,8 @@ def test_windows_image_knowledge_has_per_shop_delta_state_and_conflict_safe_appl
     assert "TryDeleteManagedImage" in service
     assert "since_revision" in service
     assert "base_revision" in service
+    assert "pendingImageBytes" in service
+    assert "actions.OrderBy(x => x.Item1)" in service
     assert "SyncImageKnowledgeAsync" in sync
     assert '"/api/runtime/v1/bot-web/image-knowledge/sync"' in sync
     assert '"X-Shop-Key"' in sync
@@ -46,9 +48,13 @@ def test_cloud_image_knowledge_is_bound_to_client_shop_and_uses_revisioned_tombs
     assert "base_revision" in api
     assert "conflicts" in api
     assert "revision" in api
-    assert "bot_web_image_knowledge" in binding
-    assert "bot_web_image_knowledge_tombstones" in binding
-    assert "bot_web_image_knowledge_sync_state" in binding
+    assert "upserts: List[Dict[str, Any]] = Field(default_factory=list, max_length=5)" in api
+    scoped_cleanup = binding.split("TOKEN_SCOPED_STATE_TABLES", 1)[1].split(")", 1)[0]
+    assert "bot_web_image_knowledge" not in scoped_cleanup
+    assert "bot_web_image_knowledge_tombstones" not in scoped_cleanup
+    assert "bot_web_image_knowledge_sync_state" not in scoped_cleanup
+    # The records and cursors remain partitioned by ShopKey, so token rebinds
+    # hide the old shop rather than destroying its image knowledge.
 
 
 def test_web_image_knowledge_uses_the_same_shop_scoped_cloud_records_as_windows_sync():
@@ -81,6 +87,9 @@ def test_original_buyer_images_are_captured_from_shop_cache_sent_and_rendered_in
     assert '["attachment"]' in sync
     assert "attachment_bytes BLOB" in console
     assert "_decode_message_attachment" in console
+    decoder = console.split("def _decode_message_attachment", 1)[1].split("def _save_message", 1)[0]
+    assert "raise HTTPException(status_code=409" in decoder
+    assert "raise HTTPException(status_code=422" in decoder
     assert "bot_web_conversation_message_attachment" in console
     assert "attachment_bytes" not in conversation.split("def web_conversation_messages", 1)[1].split(
         "def web_mark_conversation_read", 1

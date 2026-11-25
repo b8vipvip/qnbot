@@ -44,9 +44,9 @@ def setup_cp(tmp_path):
             CREATE TABLE bot_commands(client_id INTEGER);
             CREATE TABLE bot_client_state(client_id INTEGER);
             CREATE TABLE bot_conversation_reads(client_id INTEGER);
-            CREATE TABLE bot_web_image_knowledge(client_id INTEGER);
-            CREATE TABLE bot_web_image_knowledge_sync_state(client_id INTEGER);
-            CREATE TABLE bot_web_image_knowledge_tombstones(client_id INTEGER);
+            CREATE TABLE bot_web_image_knowledge(client_id INTEGER,shop_key TEXT,id TEXT);
+            CREATE TABLE bot_web_image_knowledge_sync_state(client_id INTEGER,shop_key TEXT,revision INTEGER);
+            CREATE TABLE bot_web_image_knowledge_tombstones(client_id INTEGER,shop_key TEXT,id TEXT);
             CREATE TABLE bot_knowledge_state(client_id INTEGER);
             CREATE TABLE bot_knowledge_v2_state(
                 client_id INTEGER PRIMARY KEY,
@@ -173,9 +173,6 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_commands",
             "bot_client_state",
             "bot_conversation_reads",
-            "bot_web_image_knowledge",
-            "bot_web_image_knowledge_sync_state",
-            "bot_web_image_knowledge_tombstones",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
             "bot_store_rule_state",
@@ -183,6 +180,9 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_client_data_backups",
         ):
             conn.execute(f"INSERT INTO {table}(client_id) VALUES(1)")
+        conn.execute("INSERT INTO bot_web_image_knowledge(client_id,shop_key,id) VALUES(1,'shop_a','image-a')")
+        conn.execute("INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision) VALUES(1,'shop_a',12)")
+        conn.execute("INSERT INTO bot_web_image_knowledge_tombstones(client_id,shop_key,id) VALUES(1,'shop_a','deleted-a')")
         conn.execute("INSERT INTO bot_knowledge_backups(client_id,revision,created_at) VALUES(1,1,'2026-08-11T00:00:00+00:00')")
         for table in ("bot_web_settings_ack", "bot_web_auto_reply_rules", "bot_web_ai_model_settings"):
             conn.execute(f"INSERT INTO {table}(client_id,updated_at) VALUES(1,'2026-08-11T00:00:00+00:00')")
@@ -209,9 +209,6 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_commands",
             "bot_client_state",
             "bot_conversation_reads",
-            "bot_web_image_knowledge",
-            "bot_web_image_knowledge_sync_state",
-            "bot_web_image_knowledge_tombstones",
             "bot_knowledge_state",
             "bot_knowledge_v2_state",
             "bot_knowledge_backups",
@@ -231,6 +228,11 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
         for table in ("wecom_handoff_tickets", "wecom_handoff_commands"):
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             assert count == 0
+        # Image knowledge is explicitly ShopKey-scoped, so rebinding this token
+        # hides the old shop's rows without deleting them; rebinding back can recover them.
+        assert conn.execute("SELECT shop_key FROM bot_web_image_knowledge WHERE client_id=1").fetchone()[0] == "shop_a"
+        assert conn.execute("SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=1 AND shop_key='shop_a'").fetchone()[0] == 12
+        assert conn.execute("SELECT id FROM bot_web_image_knowledge_tombstones WHERE client_id=1 AND shop_key='shop_a'").fetchone()[0] == "deleted-a"
         row = conn.execute(
             "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=1"
         ).fetchone()
