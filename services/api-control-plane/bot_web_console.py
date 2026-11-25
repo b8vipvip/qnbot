@@ -610,12 +610,12 @@ def bot_web_snapshot(
         state_row = conn.execute("SELECT * FROM bot_client_state WHERE client_id=?", (client_id,)).fetchone()
         if after_id > 0:
             rows = conn.execute(
-                "SELECT * FROM bot_messages WHERE client_id=? AND id>? ORDER BY id ASC LIMIT 500",
+                "SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at FROM bot_messages WHERE client_id=? AND id>? ORDER BY id ASC LIMIT 500",
                 (client_id, after_id),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT 300",
+                "SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at FROM bot_messages WHERE client_id=? ORDER BY id DESC LIMIT 300",
                 (client_id,),
             ).fetchall()
             rows = list(reversed(rows))
@@ -643,6 +643,29 @@ def bot_web_snapshot(
         "messages": [dict(row) for row in rows],
         "commands": [dict(row) for row in command_rows],
         "server_time": _now(),
+    }
+
+
+@router.get("/api/bot-web/conversation/messages/{message_id}/attachment")
+def bot_web_conversation_message_attachment(
+    message_id: int,
+    seller: str = Query(..., min_length=1, max_length=120),
+    buyer: str = Query(..., min_length=1, max_length=120),
+    client: Dict[str, Any] = Depends(_web_client),
+) -> Dict[str, Any]:
+    with _cp.db() as conn:
+        row = conn.execute(
+            """SELECT attachment_mime,attachment_name,attachment_sha256,attachment_bytes
+               FROM bot_messages WHERE client_id=? AND id=? AND seller=? AND buyer=? AND withdrawn=0""",
+            (int(client["id"]), message_id, seller.strip(), buyer.strip()),
+        ).fetchone()
+    if not row or not row["attachment_bytes"]:
+        raise HTTPException(status_code=404, detail="该消息的原始图片附件尚未同步或已撤回")
+    return {
+        "mime_type": row["attachment_mime"],
+        "file_name": row["attachment_name"],
+        "sha256": row["attachment_sha256"],
+        "image_base64": base64.b64encode(bytes(row["attachment_bytes"])).decode("ascii"),
     }
 
 
