@@ -12,7 +12,7 @@ function Write-TestSamplerCsv {
         SampleKind = 'system'
         KnowledgeV2SyncSnapshotStatus = 'fresh'
         KnowledgeV2SyncSnapshotAgeSeconds = '5'
-        KnowledgeV2ShopStates = ($ShopRef + '=' + $Revision + ':' + $LocalFingerprint + '/' + $CloudFingerprint + ':converged:True')
+        KnowledgeV2ShopStates = ($ShopRef + '=' + $Revision + ':' + $LocalFingerprint + '/' + $CloudFingerprint + ':converged:True:False')
     }
     $row | Export-Csv -LiteralPath $Path -NoTypeInformation -Encoding UTF8
 }
