@@ -154,19 +154,7 @@ namespace Bot.ChromeNs
                     + ", sha256=" + ShortHash(sha256));
             }
 
-            sharedTask.ContinueWith(
-                _ =>
-                {
-                    Lazy<Task<LocalOcrResult>> current;
-                    if (InFlight.TryGetValue(inFlightKey, out current) && ReferenceEquals(current, shared))
-                    {
-                        Lazy<Task<LocalOcrResult>> removed;
-                        InFlight.TryRemove(inFlightKey, out removed);
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            RemoveInFlightWhenComplete(inFlightKey, shared, sharedTask);
 
             try
             {
@@ -183,6 +171,26 @@ namespace Bot.ChromeNs
             {
                 return Failure("服务端OCR异常: " + ex.Message, startedAt, sha256);
             }
+        }
+
+        private static void RemoveInFlightWhenComplete(
+            string inFlightKey,
+            Lazy<Task<LocalOcrResult>> shared,
+            Task<LocalOcrResult> sharedTask)
+        {
+            sharedTask.ContinueWith(
+                _ =>
+                {
+                    Lazy<Task<LocalOcrResult>> current;
+                    if (InFlight.TryGetValue(inFlightKey, out current) && ReferenceEquals(current, shared))
+                    {
+                        Lazy<Task<LocalOcrResult>> removed;
+                        InFlight.TryRemove(inFlightKey, out removed);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         private static async Task<LocalOcrResult> RecognizeAndCacheAsync(
