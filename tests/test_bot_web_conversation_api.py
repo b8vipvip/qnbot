@@ -110,6 +110,10 @@ def create_message_schema(cp: FakeControlPlane) -> None:
                 message_type TEXT NOT NULL DEFAULT 'text',
                 is_bot INTEGER NOT NULL DEFAULT 0,
                 withdrawn INTEGER NOT NULL DEFAULT 0,
+                attachment_mime TEXT,
+                attachment_name TEXT,
+                attachment_sha256 TEXT,
+                attachment_bytes BLOB,
                 occurred_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(client_id, message_key)
