@@ -204,6 +204,10 @@ def test_windows_memory_sampler_tracks_a_b_a_only_with_fresh_active_focus_proof(
     assert "RuntimeActiveShopChangedSincePreviousSample" in collector
     assert "RuntimeActiveShopTransitions" in collector
     assert "RuntimeActiveShopSequence" in collector
-    assert "if ($runtimeActiveFocusProofFresh -eq $true" in collector
+    assert "RuntimeActiveShopMappingValid" in collector
+    assert "OwnerConnected -eq $true" in collector
+    assert "OwnerInitialized -eq $true" in collector
+    assert "OwnerClientInvalidated -ne $true" in collector
+    assert "if ($runtimeActiveFocusProofFresh -eq $true -and $runtimeActiveShopMappingValid)" in collector
     assert "$activeShopSequence.Clear()" in collector
     assert "while ($activeShopSequence.Count -gt 32)" in collector
