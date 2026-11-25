@@ -186,6 +186,9 @@ TOKEN_SCOPED_STATE_TABLES = (
     "bot_message_processing_traces",
     "bot_client_bot_enabled",
     "bot_client_data_backups",
+    "bot_message_images",
+    "bot_image_knowledge_state",
+    "bot_image_knowledge_uploads",
 )
 
 
