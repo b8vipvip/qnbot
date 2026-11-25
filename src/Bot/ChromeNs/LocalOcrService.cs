@@ -117,7 +117,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                return Failure("计算图片哈希失败: " + ex.Message);
+                return Failure("计算图片哈希失败: " + ex.Message, startedAt);
             }
 
             var cached = TryReadCache(sha256);
