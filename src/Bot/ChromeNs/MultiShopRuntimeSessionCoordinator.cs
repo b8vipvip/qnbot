@@ -568,7 +568,7 @@ namespace Bot.ChromeNs
             if (focusProof)
             {
                 var server = MyWebSocketServer.WSocketSvrInst;
-                if (server != null) server.RefreshReadOnlyAcceptanceSnapshot();
+                if (server != null) server.QueueReadOnlyAcceptanceSnapshotRefresh();
             }
             return true;
         }
