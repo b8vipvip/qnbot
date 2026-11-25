@@ -184,6 +184,7 @@ def test_plain_text_image_mentions_are_not_treated_as_media_attachments():
     assert 'value == "[图片]"' in placeholder
     assert 'value == "图片消息"' in placeholder
     assert 'value == "图片"' not in placeholder
+    assert 'value == "image"' not in placeholder
 
 
 
