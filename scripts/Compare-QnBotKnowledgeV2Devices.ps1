@@ -158,7 +158,7 @@ $report = [ordered]@{
     }
 }
 $json = $report | ConvertTo-Json -Depth 8
-[System.IO.File]::WriteAllText($jsonPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.UTF8Encoding]::new($false))
 
 $markdown = @(
     '# QnBot Knowledge V2 two-device convergence report'
@@ -190,7 +190,7 @@ $markdown += @(
     '- Raw ShopKeys, seller nicknames, buyer messages and knowledge content are not included.'
     '- Device-local ShopRef aliases are intentionally independent and are selected separately.'
 )
-[System.IO.File]::WriteAllLines($markdownPath, [string[]]$markdown, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllLines($markdownPath, [string[]]$markdown, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ('Knowledge V2 two-device convergence: ' + $result)
 Write-Host ('JSON: ' + $jsonPath)
