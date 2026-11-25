@@ -333,3 +333,96 @@ def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_with
                 "attachment": "not-an-attachment-object",
             })
         assert invalid_attachment.value.status_code == 400
+
+
+
+def test_image_knowledge_revision_cursor_is_rebuilt_from_scoped_rows(tmp_path):
+    with loaded_modules() as (core, conversations):
+        cp = FakeControlPlane(tmp_path / "image-revision-recovery.db")
+        core._cp = cp
+        with cp.db() as conn:
+            conn.execute("CREATE TABLE client_tokens(id INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+        conversations.init_db()
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with cp.db() as conn:
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,
+                    ocr_text,description,enabled,revision,updated_by,created_at,updated_at)
+                   VALUES('image-a',1,'shop-a','seller-a','a.png','image/png',? ,?,'ocr','说明',1,0,'legacy',?,?)""",
+                ("a" * 64, b"\\x89PNG\\r\\n\\x1a\\nimage-a", now, now),
+            )
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge_tombstones
+                   (client_id,shop_key,id,revision,deleted_at,updated_by)
+                   VALUES(1,'shop-a','image-b',0,?,'legacy')""",
+                (now,),
+            )
+
+        # Re-running init_db simulates startup after an older/partial backup that
+        # retained shop-scoped rows but lost their revision cursor.
+        conversations.init_db()
+        with cp.db() as conn:
+            entry = conn.execute(
+                "SELECT revision FROM bot_web_image_knowledge WHERE id='image-a'"
+            ).fetchone()
+            tombstone = conn.execute(
+                "SELECT revision FROM bot_web_image_knowledge_tombstones WHERE id='image-b'"
+            ).fetchone()
+            state = conn.execute(
+                "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=1 AND shop_key='shop-a'"
+            ).fetchone()
+            next_revision = conversations._next_image_revision(conn, 1, "shop-a")
+        assert entry["revision"] > 0
+        assert tombstone["revision"] > entry["revision"]
+        assert state["revision"] == tombstone["revision"]
+        assert next_revision == state["revision"] + 1
+
+
+def test_runtime_image_sync_requests_full_reconciliation_when_cloud_cursor_was_rolled_back(tmp_path, monkeypatch):
+    binding = types.ModuleType("bot_client_shop_binding")
+    binding._seller_identity_matches = lambda left, right: left == right
+    monkeypatch.setitem(sys.modules, "bot_client_shop_binding", binding)
+
+    with loaded_modules() as (core, conversations):
+        cp = FakeControlPlane(tmp_path / "image-revision-reset.db")
+        core._cp = cp
+        with cp.db() as conn:
+            conn.execute("CREATE TABLE client_tokens(id INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+            conn.execute(
+                "CREATE TABLE bot_client_shop_binding(client_id INTEGER PRIMARY KEY,shop_key TEXT,seller TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO bot_client_shop_binding(client_id,shop_key,seller) VALUES(1,'shop-a','seller-a')"
+            )
+            conn.execute(
+                "CREATE TABLE bot_client_state(client_id INTEGER PRIMARY KEY,seller_nicks_json TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO bot_client_state(client_id,seller_nicks_json) VALUES(1,'[\"seller-a\"]')"
+            )
+        conversations.init_db()
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with cp.db() as conn:
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,
+                    ocr_text,description,enabled,revision,updated_by,created_at,updated_at)
+                   VALUES('image-a',1,'shop-a','seller-a','a.png','image/png',? ,?,'ocr','说明',1,5,'web',?,?)""",
+                ("a" * 64, b"\\x89PNG\\r\\n\\x1a\\nimage-a", now, now),
+            )
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
+                   VALUES(1,'shop-a',5,?)""",
+                (now,),
+            )
+
+        data = types.SimpleNamespace(shop_key="shop-a", seller="seller-a", since_revision=12, upserts=[], deletes=[])
+        request = types.SimpleNamespace(headers={"x-shop-key": "shop-a"})
+        result = conversations.runtime_image_knowledge_sync(data, request, client={"id": 1})
+        assert result["reset_cursor"] is True
+        assert result["revision"] == 0
+        assert result["current_revision"] == 5
