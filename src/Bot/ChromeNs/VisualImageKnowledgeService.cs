@@ -137,12 +137,19 @@ namespace Bot.ChromeNs
             VisualImageKnowledgeEntry old;
             lock (Sync)
             {
+                var globalId = Select("where EntityId = ? limit 1", entry.EntityId).FirstOrDefault();
+                if (globalId != null
+                    && !string.Equals(globalId.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    throw new InvalidOperationException("图片知识ID已属于其他ShopKey，拒绝跨店覆盖。");
+
                 old = Select("where EntityId = ? and ShopKey = ? and Seller = ? limit 1",
                     entry.EntityId, shop.ShopKey, seller).FirstOrDefault();
-                var duplicate = Select("where ShopKey = ? and Seller = ? and ImageSha256 = ? and EntityId <> ? limit 1",
-                    shop.ShopKey, seller, sha256, entry.EntityId).FirstOrDefault();
+                // The cloud uniqueness boundary is ShopKey + image hash. Enforce the same
+                // rule locally so two seller aliases of one shop cannot create divergent copies.
+                var duplicate = Select("where ShopKey = ? and ImageSha256 = ? and EntityId <> ? limit 1",
+                    shop.ShopKey, sha256, entry.EntityId).FirstOrDefault();
                 if (duplicate != null)
-                    throw new InvalidOperationException("当前店铺已存在这张图片，请在左侧列表中编辑已有图片知识。");
+                    throw new InvalidOperationException("当前ShopKey已存在这张图片，请编辑已有图片知识。");
             }
 
             var createdImage = false;
