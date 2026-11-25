@@ -124,12 +124,27 @@ namespace Bot.ChromeNs
 
             try
             {
+                // Reject oversized BMP dimensions from the header before asking WIC to
+                // allocate decoded pixels. The byte-size limit alone does not prevent a
+                // tiny malformed BMP header from declaring an enormous raster.
+                if (normalizedMime == "image/bmp")
+                {
+                    string dimensionError;
+                    if (!HasSafeBmpDimensions(sourceBytes, out dimensionError))
+                    {
+                        error = dimensionError;
+                        return false;
+                    }
+                }
+
                 using (var input = new MemoryStream(sourceBytes, false))
                 {
+                    // OnDemand exposes frame metadata first; the pixel limit below is
+                    // checked before the PNG encoder triggers the actual decode.
                     var decoder = BitmapDecoder.Create(
                         input,
                         BitmapCreateOptions.PreservePixelFormat,
-                        BitmapCacheOption.OnLoad);
+                        BitmapCacheOption.OnDemand);
                     if (decoder == null || decoder.Frames == null || decoder.Frames.Count == 0)
                     {
                         error = "图片解码器没有返回有效图像";
@@ -175,6 +190,50 @@ namespace Bot.ChromeNs
                 error = normalizedMime == "image/heic" || normalizedMime == "image/heif"
                     ? "当前 Windows 未安装可用的 HEIC/HEIF 解码组件，请先转换为 JPG 或 PNG。"
                     : "BMP 图片转换为 PNG 失败：" + ex.GetType().Name;
+                return false;
+            }
+        }
+
+        private static bool HasSafeBmpDimensions(byte[] bytes, out string error)
+        {
+            error = string.Empty;
+            if (bytes == null || bytes.Length < 26)
+            {
+                error = "BMP 文件头不完整";
+                return false;
+            }
+
+            try
+            {
+                var dibHeaderSize = BitConverter.ToUInt32(bytes, 14);
+                long width;
+                long height;
+                if (dibHeaderSize >= 40)
+                {
+                    width = BitConverter.ToInt32(bytes, 18);
+                    height = Math.Abs((long)BitConverter.ToInt32(bytes, 22));
+                }
+                else if (dibHeaderSize == 12)
+                {
+                    width = BitConverter.ToUInt16(bytes, 18);
+                    height = BitConverter.ToUInt16(bytes, 20);
+                }
+                else
+                {
+                    error = "BMP 图像头格式不受支持";
+                    return false;
+                }
+
+                if (width <= 0 || height <= 0 || width * height > 25000000L)
+                {
+                    error = "BMP 分辨率无效或超过 2500 万像素限制";
+                    return false;
+                }
+                return true;
+            }
+            catch
+            {
+                error = "BMP 图像尺寸字段无效";
                 return false;
             }
         }
