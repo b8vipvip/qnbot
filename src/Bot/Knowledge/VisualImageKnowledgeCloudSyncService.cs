@@ -74,7 +74,8 @@ namespace Bot.Knowledge
 
         private static void Queue(ShopContext shop)
         {
-            if (shop == null || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
+            if (shop == null || !KnowledgeCloudSyncService.IsEnabledForShop(shop)
+                || !ShopTokenBindingService.ShouldAttemptSync(shop)) return;
             var state = States.GetOrAdd(shop.ShopKey, _ => LoadState(shop));
             if (Interlocked.Exchange(ref state.Syncing, 1) != 0) return;
             Task.Run(async () =>
