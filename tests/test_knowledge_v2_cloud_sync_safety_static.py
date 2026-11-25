@@ -277,6 +277,9 @@ def test_two_device_knowledge_v2_comparator_requires_fresh_converged_fingerprint
     assert "CloudFingerprintPrefix" in script
     assert "Converged" in script
     assert "MaxSampleSkewMinutes" in script
+    assert "MaxSampleAgeMinutes" in script
+    assert "Device A sample is recent" in script
+    assert "Device B sample is recent" in script
     assert "Each local fingerprint matches its cloud fingerprint" in script
     assert "RawShopKeysIncluded = $false" in script
     assert "BuyerMessagesIncluded = $false" in script
