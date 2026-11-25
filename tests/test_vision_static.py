@@ -79,6 +79,9 @@ def test_bmp_and_decodable_heif_buyer_images_are_normalized_before_vision_and_oc
     assert 'return "image/heic"' in resolver
     assert 'return "image/heif"' in resolver
     assert 'BitmapDecoder.Create(' in resolver
+    assert 'BitmapCacheOption.OnDemand' in resolver
+    assert 'HasSafeBmpDimensions(sourceBytes' in resolver
+    assert 'BitConverter.ToUInt32(bytes, 14)' in resolver
     assert 'new PngBitmapEncoder()' in resolver
     assert 'TryNormalizeForVision(' in cache
     assert cache.count('TryNormalizeForVision(') >= 2
