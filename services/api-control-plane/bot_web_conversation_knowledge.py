@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -11,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from starlette.concurrency import run_in_threadpool
 
 import bot_web_console as core
 
@@ -261,7 +261,7 @@ async def web_image_knowledge_recognize(request: Request, client: Dict[str, Any]
     try:
         await runtime_ocr._acquire_ocr_slot(int(settings.get("max_concurrency", 2)))
         try:
-            result = await run_in_threadpool(runtime_ocr._run_ocr, raw)
+            result = await asyncio.to_thread(runtime_ocr._run_ocr, raw)
         finally:
             runtime_ocr._release_ocr_slot()
     except Exception as exc:
