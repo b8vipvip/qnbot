@@ -636,88 +636,95 @@ namespace Bot.ChromeNs
                     || string.IsNullOrWhiteSpace(serverUrl)
                     || string.IsNullOrWhiteSpace(token)) return;
 
-                CaptureRecentConversations(state);
-                List<WebMessage> messageSnapshot;
-                lock (state.PendingMessagesSync)
+                // Message mirroring and image-knowledge replication share credentials and
+                // scheduling, but neither data plane may starve the other. A rejected or
+                // oversized message attachment must not stop knowledge synchronization.
+                try
                 {
-                    messageSnapshot = state.MessageSyncEnabled
-                        ? SelectPendingMessageBatch(state)
-                        : new List<WebMessage>();
-                }
-                KeyValuePair<long, JObject>[] resultSnapshot;
-                lock (state.PendingCommandResultsSync)
-                    resultSnapshot = state.PendingCommandResults.ToArray();
-                var payload = new JObject
-                {
-                    ["shop_key"] = state.Shop.ShopKey,
-                    ["status"] = BuildStatus(state),
-                    ["current_settings"] = new JObject
+                    CaptureRecentConversations(state);
+                    List<WebMessage> messageSnapshot;
+                    lock (state.PendingMessagesSync)
                     {
-                        ["auto_reply_enabled"] = !state.RemotePause,
-                        ["message_sync_enabled"] = state.MessageSyncEnabled,
-                        ["allow_web_manual_reply"] = state.AllowManualReply,
-                        ["sync_interval_seconds"] = state.SyncIntervalSeconds
-                    },
-                    ["messages"] = new JArray(messageSnapshot.Select(ToJson)),
-                    ["command_results"] = new JArray(resultSnapshot.Select(x => x.Value))
-                };
-
-                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-                using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
-                using (var http = new HttpClient(handler))
-                {
-                    // A single original image attachment may add up to 8 MB to this request.
-                    http.Timeout = TimeSpan.FromSeconds(45);
-                    using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
-                        state.Shop,
-                        token,
-                        async requestToken =>
-                        {
-                            using (var request = new HttpRequestMessage(
-                                HttpMethod.Post,
-                                serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/sync"))
-                            {
-                                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
-                                request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-sync/2.0");
-                                request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
-                                request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
-                                return await http.SendAsync(request).ConfigureAwait(false);
-                            }
-                        }))
-                    {
-                        var body = await response.Content.ReadAsStringAsync();
-                        if (!response.IsSuccessStatusCode)
-                            throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
-                        var root = JObject.Parse(body);
-                        // The successful sync response acknowledges this exact snapshot.
-                        // Remove it before applying a remote disable command, so disabling
-                        // clears only still-unsent messages and does not cause acknowledged
-                        // messages to be replayed when sync is enabled again.
-                        lock (state.PendingMessagesSync)
-                        {
-                            foreach (var item in messageSnapshot)
-                            {
-                                if (((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
-                                    new KeyValuePair<string, WebMessage>(item.MessageKey, item)))
-                                    state.PendingMessageBytes = Math.Max(
-                                        0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
-                            }
-                        }
-                        ApplyDesiredSettings(state, root["desired_settings"] as JObject);
-                        await ApplyCommandsAsync(state, root["commands"] as JArray);
+                        messageSnapshot = state.MessageSyncEnabled
+                            ? SelectPendingMessageBatch(state)
+                            : new List<WebMessage>();
                     }
+                    KeyValuePair<long, JObject>[] resultSnapshot;
+                    lock (state.PendingCommandResultsSync)
+                        resultSnapshot = state.PendingCommandResults.ToArray();
+                    var payload = new JObject
+                    {
+                        ["shop_key"] = state.Shop.ShopKey,
+                        ["status"] = BuildStatus(state),
+                        ["current_settings"] = new JObject
+                        {
+                            ["auto_reply_enabled"] = !state.RemotePause,
+                            ["message_sync_enabled"] = state.MessageSyncEnabled,
+                            ["allow_web_manual_reply"] = state.AllowManualReply,
+                            ["sync_interval_seconds"] = state.SyncIntervalSeconds
+                        },
+                        ["messages"] = new JArray(messageSnapshot.Select(ToJson)),
+                        ["command_results"] = new JArray(resultSnapshot.Select(x => x.Value))
+                    };
+
+                    ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                    using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+                    using (var http = new HttpClient(handler))
+                    {
+                        // A single original image attachment may add up to 8 MB to this request.
+                        http.Timeout = TimeSpan.FromSeconds(45);
+                        using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                            state.Shop,
+                            token,
+                            async requestToken =>
+                            {
+                                using (var request = new HttpRequestMessage(
+                                    HttpMethod.Post,
+                                    serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/sync"))
+                                {
+                                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                    request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-sync/2.0");
+                                    request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
+                                    request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                                    return await http.SendAsync(request).ConfigureAwait(false);
+                                }
+                            }))
+                        {
+                            var body = await response.Content.ReadAsStringAsync();
+                            if (!response.IsSuccessStatusCode)
+                                throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                            var root = JObject.Parse(body);
+                            // A successful response acknowledges only this exact snapshot.
+                            lock (state.PendingMessagesSync)
+                            {
+                                foreach (var item in messageSnapshot)
+                                {
+                                    if (((ICollection<KeyValuePair<string, WebMessage>>)state.PendingMessages).Remove(
+                                        new KeyValuePair<string, WebMessage>(item.MessageKey, item)))
+                                        state.PendingMessageBytes = Math.Max(
+                                            0, state.PendingMessageBytes - PendingMessageSizeBytes(item));
+                                }
+                            }
+                            ApplyDesiredSettings(state, root["desired_settings"] as JObject);
+                            await ApplyCommandsAsync(state, root["commands"] as JArray);
+                        }
+                    }
+
+                    AcknowledgeCommandResults(state, resultSnapshot);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("本店 Bot Web消息镜像同步失败；图片知识同步仍将独立执行：" + Safe(ex.Message, 300), 20);
                 }
 
-                AcknowledgeCommandResults(state, resultSnapshot);
                 try
                 {
                     await SyncImageKnowledgeAsync(state, serverUrl, token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    using (ShopSettingsScope.Enter(state.Shop))
-                        Log.ErrorWithMaxCount("本店图片知识云同步失败，下一周期会重试：" + Safe(ex.Message, 260), 10);
+                    Log.ErrorWithMaxCount("本店图片知识云同步失败，下一周期会重试：" + Safe(ex.Message, 260), 10);
                 }
             }
         }
