@@ -306,14 +306,24 @@ def ensure_binding(
                 (client_id, shop_key, seller, now, now),
             )
         else:
-            conn.execute(
-                """
-                UPDATE bot_client_shop_binding
-                SET shop_key=?,seller=?,updated_at=?
-                WHERE client_id=?
-                """,
-                (shop_key, seller, now, client_id),
-            )
+            if rebound:
+                conn.execute(
+                    """
+                    UPDATE bot_client_shop_binding
+                    SET shop_key=?,seller=?,bound_at=?,updated_at=?
+                    WHERE client_id=?
+                    """,
+                    (shop_key, seller, now, now, client_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE bot_client_shop_binding
+                    SET shop_key=?,seller=?,updated_at=?
+                    WHERE client_id=?
+                    """,
+                    (shop_key, seller, now, client_id),
+                )
 
     return {
         "ok": True,
