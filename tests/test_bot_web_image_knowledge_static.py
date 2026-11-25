@@ -57,4 +57,4 @@ def test_web_image_import_action_uses_attachment_flag_or_exact_placeholder_only(
     assert 'm.message_type==="image"' in action
     assert '!!m.attachment_sha256' in action
     assert '["[图片]","图片消息","[image]"].includes(String(m.text||"").trim())' in action
-    assert r'/\\[图片\\]|图片消息/.test' not in action
+    assert r'/\[图片\]|图片消息/.test' not in action
