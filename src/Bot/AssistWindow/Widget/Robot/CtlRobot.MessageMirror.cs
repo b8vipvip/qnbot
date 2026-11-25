@@ -853,7 +853,8 @@ namespace Bot.AssistWindow.Widget.Robot
             var sourceMessageId = turn == null ? string.Empty : (turn.MessageKey ?? string.Empty);
             var menu = BuildCopyOnlyContextMenu(question, placementTarget);
             var isImageMessage = !string.IsNullOrWhiteSpace(sourceMessageId)
-                && (question.Trim() == "[图片]" || question.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                && ((turn != null && turn.HasImage)
+                    || question.Trim() == "[图片]" || question.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
                     || question.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0);
             if (isImageMessage)
             {
