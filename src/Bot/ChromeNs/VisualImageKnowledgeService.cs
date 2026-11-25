@@ -419,6 +419,9 @@ namespace Bot.ChromeNs
 
             var revision = data.Value<long?>("revision") ?? 0;
             var cloudUpdatedAt = ParseUtcTicks((string)data["updated_at"]);
+            var root = GetImageDirectory(shop);
+            Directory.CreateDirectory(root);
+            var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));
             lock (Sync)
             {
                 var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
@@ -442,30 +445,27 @@ namespace Bot.ChromeNs
                         revision, id, shop.ShopKey, seller);
                     return;
                 }
-            }
 
-            var root = GetImageDirectory(shop);
-            Directory.CreateDirectory(root);
-            var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));
-            try
-            {
-                File.WriteAllBytes(temp, bytes);
-                var imageName = Clean((string)data["image_name"], 180);
-                if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
-                var entry = new VisualImageKnowledgeEntry
+                try
                 {
-                    EntityId = id,
-                    ShopKey = shop.ShopKey,
-                    Seller = seller,
-                    ImageName = imageName,
-                    ImageSha256 = sha,
-                    OcrText = Clean((string)data["ocr_text"], MaxOcrChars),
-                    Description = Clean((string)data["description"], MaxDescriptionChars),
-                    Enabled = data.Value<bool?>("enabled") ?? true
-                };
-                Save(shop.ShopKey, seller, entry, temp);
-                lock (Sync)
-                {
+                    File.WriteAllBytes(temp, bytes);
+                    var imageName = Clean((string)data["image_name"], 180);
+                    if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
+                    var entry = new VisualImageKnowledgeEntry
+                    {
+                        EntityId = id,
+                        ShopKey = shop.ShopKey,
+                        Seller = seller,
+                        ImageName = imageName,
+                        ImageSha256 = sha,
+                        OcrText = Clean((string)data["ocr_text"], MaxOcrChars),
+                        Description = Clean((string)data["description"], MaxDescriptionChars),
+                        Enabled = data.Value<bool?>("enabled") ?? true
+                    };
+                    // Save() uses the same re-entrant Sync monitor. Holding it across the
+                    // guard, file replacement and acknowledgement makes the whole apply
+                    // atomic relative to local Save/Delete operations.
+                    Save(shop.ShopKey, seller, entry, temp);
                     DbHelper.Db.Execute(
                         "update VisualImageKnowledgeEntry set SyncDirty=0,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         revision, id, shop.ShopKey, seller);
@@ -473,10 +473,10 @@ namespace Bot.ChromeNs
                         "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
                         id, shop.ShopKey, seller);
                 }
-            }
-            finally
-            {
-                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+                finally
+                {
+                    try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+                }
             }
         }
 
