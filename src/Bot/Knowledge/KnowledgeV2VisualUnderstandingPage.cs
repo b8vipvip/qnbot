@@ -400,7 +400,7 @@ namespace Bot.Knowledge
             LoadPreview(_currentImagePath);
             _deleteButton.IsEnabled = item != null;
             _status.Text = item == null
-                ? "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+                ? "上传图片后自动执行服务端 OCR，编辑识别结果并填写图片说明。"
                 : "已载入图片知识。可修改 OCR 文字或图片说明后保存。";
         }
 
