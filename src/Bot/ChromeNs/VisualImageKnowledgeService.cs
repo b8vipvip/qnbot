@@ -419,6 +419,11 @@ namespace Bot.ChromeNs
 
             var revision = data.Value<long?>("revision") ?? 0;
             var cloudUpdatedAt = ParseUtcTicks((string)data["updated_at"]);
+            var imageName = Clean((string)data["image_name"], 180);
+            if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
+            var cloudOcrText = Clean((string)data["ocr_text"], MaxOcrChars);
+            var cloudDescription = Clean((string)data["description"], MaxDescriptionChars);
+            var cloudEnabled = data.Value<bool?>("enabled") ?? true;
             var root = GetImageDirectory(shop);
             Directory.CreateDirectory(root);
             var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));
@@ -426,10 +431,18 @@ namespace Bot.ChromeNs
             {
                 var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
-                if (local != null && local.SyncDirty && local.UpdatedAtTicks > cloudUpdatedAt)
+                var localContentChanged = local != null
+                    && (!string.Equals(local.ImageSha256, sha, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(local.ImageName ?? string.Empty, imageName, StringComparison.Ordinal)
+                        || !string.Equals(local.OcrText ?? string.Empty, cloudOcrText, StringComparison.Ordinal)
+                        || !string.Equals(local.Description ?? string.Empty, cloudDescription, StringComparison.Ordinal)
+                        || local.Enabled != cloudEnabled);
+                if (local != null && local.SyncDirty
+                    && (local.UpdatedAtTicks > cloudUpdatedAt || localContentChanged))
                 {
                     // A user edit made while the HTTP request was in flight must not be
-                    // overwritten by the acknowledgement of the older payload.
+                    // overwritten by the acknowledgement of the older payload. Content
+                    // comparison also protects against a Windows clock that lags the server.
                     DbHelper.Db.Execute(
                         "update VisualImageKnowledgeEntry set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         revision, id, shop.ShopKey, seller);
@@ -437,7 +450,7 @@ namespace Bot.ChromeNs
                 }
                 var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
-                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt)
+                if (localDelete != null && localDelete.SyncDirty)
                 {
                     // A delete performed during the upload wins over the older in-flight upsert.
                     DbHelper.Db.Execute(
@@ -449,8 +462,6 @@ namespace Bot.ChromeNs
                 try
                 {
                     File.WriteAllBytes(temp, bytes);
-                    var imageName = Clean((string)data["image_name"], 180);
-                    if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
                     var entry = new VisualImageKnowledgeEntry
                     {
                         EntityId = id,
@@ -458,9 +469,9 @@ namespace Bot.ChromeNs
                         Seller = seller,
                         ImageName = imageName,
                         ImageSha256 = sha,
-                        OcrText = Clean((string)data["ocr_text"], MaxOcrChars),
-                        Description = Clean((string)data["description"], MaxDescriptionChars),
-                        Enabled = data.Value<bool?>("enabled") ?? true
+                        OcrText = cloudOcrText,
+                        Description = cloudDescription,
+                        Enabled = cloudEnabled
                     };
                     // Save() uses the same re-entrant Sync monitor. Holding it across the
                     // guard, file replacement and acknowledgement makes the whole apply
