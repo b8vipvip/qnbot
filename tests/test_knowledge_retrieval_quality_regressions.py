@@ -198,7 +198,7 @@ def test_ocr_non_direct_v2_context_reaches_multimodal_and_ocr_text_fallback():
     assert "localDecision != null && localDecision.Success" in vision
     assert "localDecision.KnowledgeV2ContextPromptAddon" in vision
     assert "knowledgeV2ContextAddon ?? string.Empty" in vision
-    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon)" in vision
+    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon, localDecision)" in vision
 
 
 
