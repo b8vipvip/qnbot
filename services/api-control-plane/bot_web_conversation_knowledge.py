@@ -269,10 +269,30 @@ def web_conversation_messages(
     client_id = int(client["id"])
     cp = core._cp
     if before_id > 0:
-        sql = "SELECT * FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? AND id<? ORDER BY id DESC LIMIT ?"
+        sql = """
+            SELECT m.*,
+                   CASE WHEN i.message_key IS NULL THEN 0 ELSE 1 END AS image_available,
+                   COALESCE(i.image_name,'') AS image_name
+            FROM bot_messages m
+            LEFT JOIN bot_message_images i
+              ON i.client_id=m.client_id AND i.message_key=m.message_key
+             AND i.seller=m.seller AND i.buyer=m.buyer
+            WHERE m.client_id=? AND m.seller=? AND m.buyer=? AND m.id<?
+            ORDER BY m.id DESC LIMIT ?
+        """
         args = (client_id, seller.strip(), buyer.strip(), before_id, limit)
     else:
-        sql = "SELECT * FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? ORDER BY id DESC LIMIT ?"
+        sql = """
+            SELECT m.*,
+                   CASE WHEN i.message_key IS NULL THEN 0 ELSE 1 END AS image_available,
+                   COALESCE(i.image_name,'') AS image_name
+            FROM bot_messages m
+            LEFT JOIN bot_message_images i
+              ON i.client_id=m.client_id AND i.message_key=m.message_key
+             AND i.seller=m.seller AND i.buyer=m.buyer
+            WHERE m.client_id=? AND m.seller=? AND m.buyer=?
+            ORDER BY m.id DESC LIMIT ?
+        """
         args = (client_id, seller.strip(), buyer.strip(), limit)
     with cp.db() as conn:
         rows = conn.execute(sql, args).fetchall()
