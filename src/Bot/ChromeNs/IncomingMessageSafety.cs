@@ -401,15 +401,39 @@ namespace Bot.ChromeNs
             return new IncomingMessageDecision { ShouldCallAi = false, MessageLabel = label, Note = note };
         }
 
+        internal static bool IsImageMessage(QNChatMessage message, string messageText)
+        {
+            if (message == null) return false;
+            try
+            {
+                if (message.HasImage) return true;
+            }
+            catch { }
+            return string.Equals(
+                DetectUnsupportedType(message, messageText),
+                "图片",
+                StringComparison.Ordinal);
+        }
+
         private static string DetectUnsupportedType(QNChatMessage message, string messageText)
         {
             if (message == null) return "未知类型";
             var original = message.originalData;
             var fileId = original == null ? string.Empty : (original.fileId ?? string.Empty);
             var url = original == null ? string.Empty : (original.url ?? string.Empty);
-            var combined = ((messageText ?? string.Empty) + " " + (message.summary ?? string.Empty)).Trim().ToLowerInvariant();
+            var headerSummary = original == null || original.header == null ? string.Empty : (original.header.summary ?? string.Empty);
+            var headerTitle = original == null || original.header == null ? string.Empty : (original.header.title ?? string.Empty);
+            var combined = ((messageText ?? string.Empty) + " " + (message.summary ?? string.Empty)
+                + " " + headerSummary + " " + headerTitle).Trim().ToLowerInvariant();
+            var imageMetadata = (headerSummary + " " + headerTitle).Trim().ToLowerInvariant();
 
-            if (HasExtension(fileId, ImageExtensions) || HasExtension(url, ImageExtensions) || ContainsMarker(combined, "图片", "image", "photo")) return "图片";
+            // Do not classify ordinary buyer text such as "这个图片可以吗" as an
+            // attachment. Image detection requires an image file/url, image metadata,
+            // or an explicit platform media placeholder.
+            if (HasExtension(fileId, ImageExtensions) || HasExtension(url, ImageExtensions)
+                || ContainsMarker(imageMetadata, "图片", "image", "photo")
+                || IsExplicitImagePlaceholder(messageText)
+                || IsExplicitImagePlaceholder(message.summary)) return "图片";
             if (HasExtension(fileId, VideoExtensions) || HasExtension(url, VideoExtensions) || ContainsMarker(combined, "视频", "video")) return "视频";
             if (HasExtension(fileId, AudioExtensions) || HasExtension(url, AudioExtensions) || ContainsMarker(combined, "语音", "音频", "voice", "audio")) return "语音";
             if (ContainsMarker(combined, "表情", "emoji", "emotion", "face")
@@ -419,6 +443,13 @@ namespace Bot.ChromeNs
             if (ContainsMarker(combined, "文件", "附件", "file")) return "文件";
             if (!string.IsNullOrWhiteSpace(fileId)) return "文件";
             return string.Empty;
+        }
+
+        private static bool IsExplicitImagePlaceholder(string value)
+        {
+            value = (value ?? string.Empty).Trim().ToLowerInvariant();
+            return value == "[图片]" || value == "图片消息"
+                || value == "[image]";
         }
 
         private static bool ContainsMarker(string text, params string[] markers)
