@@ -125,7 +125,7 @@ def test_web_v2_edits_use_compare_and_swap_to_prevent_stale_device_overwrites():
     assert "expected_revision:state.knowledgeV2Revision" in js
     assert "err.status===409" in js
     assert "await loadKnowledgeV2(false)" in js
-    assert 'bot-web-v2.js?v=11' in html
+    assert 'bot-web-v2.js?v=12' in html
 
 
 class _V2CasFakeControlPlane:
