@@ -76,6 +76,54 @@ namespace Bot.Knowledge
             window.Show();
         }
 
+        public static void ImportBuyerImage(
+            Window owner, string seller, string buyer, string shopKey, string messageKey)
+        {
+            Initialize();
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    throw new InvalidOperationException("图片消息所属店铺身份不匹配。");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认图片消息所属店铺：" + ex.Message,
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = seller,
+                RequestedShopKey = shopKey
+            };
+            ShopScopedUiBridge.Attach(window, shop);
+            if (owner != null) window.Owner = owner;
+            window.Loaded += async delegate
+            {
+                await window.Dispatcher.BeginInvoke(new Action(async () =>
+                {
+                    var shell = window.Content as KnowledgeCenterV2Shell;
+                    if (shell == null) return;
+                    var imagePath = await VisionImageCacheService.TryGetCachedImagePathAsync(
+                        shopKey, seller, buyer, messageKey);
+                    if (string.IsNullOrWhiteSpace(imagePath) || !System.IO.File.Exists(imagePath))
+                    {
+                        MessageBox.Show(window,
+                            "这条买家图片尚未完成本地缓存，或缓存已过期。请稍后重试，或在图片知识页面手动上传原图。",
+                            "原始图片暂不可用", MessageBoxButton.OK, MessageBoxImage.Information);
+                        shell.OpenImageKnowledge(null);
+                        return;
+                    }
+                    shell.OpenImageKnowledge(imagePath);
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            };
+            window.Show();
+        }
+
         /// <summary>
         /// Open the actual producer/configuration page of one confirmed Bot message.
         /// Never infer a knowledge or preset ID from a similar answer.
@@ -170,13 +218,13 @@ namespace Bot.Knowledge
 
             try
             {
-                window.Title = "AI客服 - 知识中心 V2";
+                window.Title = "AI客服 - 知识库";
                 window.MinWidth = 1100;
                 window.MinHeight = 720;
                 window.Width = Math.Max(window.Width, 1320);
                 window.Height = Math.Max(window.Height, 820);
                 window.Content = new KnowledgeCenterV2Shell(window);
-                Log.Info("Knowledge Center V2界面已替换旧知识库页。");
+                Log.Info("知识库界面已替换旧知识库页。");
             }
             catch (Exception ex)
             {
@@ -240,7 +288,7 @@ namespace Bot.Knowledge
             var items = new[]
             {
                 Nav("知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.All)),
-                Nav("视觉理解", () => new KnowledgeV2VisualUnderstandingPage(_seller, _shopKey)),
+                Nav("图片知识", () => new KnowledgeV2VisualUnderstandingPage(_seller, _shopKey)),
                 Nav("商品知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Product)),
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
@@ -293,7 +341,7 @@ namespace Bot.Knowledge
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var titlePanel = new StackPanel { Margin = new Thickness(12, 8, 20, 8) };
-            titlePanel.Children.Add(new TextBlock { Text = "Knowledge Center V2", FontSize = 22, FontWeight = FontWeights.SemiBold });
+            titlePanel.Children.Add(new TextBlock { Text = "知识库", FontSize = 22, FontWeight = FontWeights.SemiBold });
             _status = new TextBlock
             {
                 Text = "结构化知识 + 本地倒排索引 + Working Memory补全",
@@ -364,6 +412,14 @@ namespace Bot.Knowledge
         private static Button Button(string text, double width)
         {
             return new Button { Content = text, Width = width, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
+        }
+
+        internal void OpenImageKnowledge(string imagePath)
+        {
+            SelectNav("图片知识");
+            var page = _content.Content as KnowledgeV2VisualUnderstandingPage;
+            if (page != null && !string.IsNullOrWhiteSpace(imagePath))
+                page.ImportImageFile(imagePath);
         }
 
         internal void OpenReplySourceById(string sourceRecordId, string answer)
@@ -473,7 +529,7 @@ namespace Bot.Knowledge
             {
                 Kind = RouteKind.SourceRecord,
                 TargetId = string.Empty,
-                Path = "知识中心 V2 → Bot回复管理 → Bot消息来源",
+                Path = "知识库 → Bot回复管理 → Bot消息来源",
                 Evidence = manuallyCorrected
                     ? "此消息的来源已被人工更正。仅能确认更正记录，不能据此证明原始生成配置。"
                     : "没有保存可验证的配置条目ID。可查看这条消息的溯源记录，不能凭回复相似度定位配置。"

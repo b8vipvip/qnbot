@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
+import mimetypes
 import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
@@ -26,6 +29,22 @@ def init_db() -> None:
     with cp.db() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS bot_web_image_knowledge (
+                id TEXT PRIMARY KEY NOT NULL,
+                client_id INTEGER NOT NULL,
+                image_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                image_sha256 TEXT NOT NULL,
+                image_bytes BLOB NOT NULL,
+                ocr_text TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(client_id, image_sha256),
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS bot_conversation_reads (
                 client_id INTEGER NOT NULL,
                 seller TEXT NOT NULL,
@@ -188,6 +207,17 @@ def _cloud_sync_enabled(client_id: int) -> bool:
     return bool(settings.get("knowledge_cloud_sync_enabled", False))
 
 
+class ImageKnowledgeSaveInput(BaseModel):
+    id: str = Field(default="", max_length=80)
+    image_name: str = Field(default="", max_length=180)
+    mime_type: str = Field(min_length=1, max_length=40)
+    image_sha256: str = Field(min_length=64, max_length=64)
+    image_base64: str = Field(min_length=16, max_length=12 * 1024 * 1024)
+    ocr_text: str = Field(default="", max_length=12000)
+    description: str = Field(min_length=1, max_length=1200)
+    enabled: bool = True
+
+
 class ConversationReadInput(BaseModel):
     seller: str = Field(min_length=1, max_length=120)
     buyer: str = Field(min_length=1, max_length=120)
@@ -217,6 +247,125 @@ class KnowledgeSyncInput(BaseModel):
     revision: int = Field(default=0, ge=0)
     content_hash: str = Field(default="", max_length=128)
     items: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/api/bot-web/image-knowledge/recognize")
+async def web_image_knowledge_recognize(request: Request, client: Dict[str, Any] = Depends(core._web_client)):
+    raw = await request.body()
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片必须为 1 字节至 8 MB")
+    import runtime_ocr
+    settings = runtime_ocr._current_settings()
+    if not settings.get("enabled", True):
+        raise HTTPException(status_code=503, detail="服务端 OCR 当前已关闭")
+    try:
+        await runtime_ocr._acquire_ocr_slot(int(settings.get("max_concurrency", 2)))
+        try:
+            result = await asyncio.to_thread(runtime_ocr._run_ocr, raw)
+        finally:
+            runtime_ocr._release_ocr_slot()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="服务端 OCR 识别失败：" + str(exc)[:240])
+    return {
+        "ok": True,
+        "text": str(result.get("text") or ""),
+        "confidence": float(result.get("confidence") or 0),
+        "elapsed_ms": int(result.get("elapsedMs") or 0),
+        "engine": str(result.get("engine") or "RapidOCR/ONNXRuntime"),
+        "image_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+@router.get("/api/bot-web/image-knowledge")
+def web_image_knowledge_list(client: Dict[str, Any] = Depends(core._web_client)):
+    client_id = int(client["id"])
+    with core._cp.db() as conn:
+        rows = conn.execute(
+            """SELECT id,image_name,mime_type,image_sha256,ocr_text,description,enabled,created_at,updated_at
+               FROM bot_web_image_knowledge WHERE client_id=? ORDER BY updated_at DESC LIMIT 500""",
+            (client_id,),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@router.get("/api/bot-web/image-knowledge/{image_id}/image")
+def web_image_knowledge_image(image_id: str, client: Dict[str, Any] = Depends(core._web_client)):
+    with core._cp.db() as conn:
+        row = conn.execute(
+            "SELECT mime_type,image_bytes FROM bot_web_image_knowledge WHERE client_id=? AND id=?",
+            (int(client["id"]), image_id),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="图片知识不存在")
+    return {
+        "mime_type": row["mime_type"],
+        "image_base64": base64.b64encode(bytes(row["image_bytes"])).decode("ascii"),
+    }
+
+
+@router.post("/api/bot-web/image-knowledge")
+def web_image_knowledge_save(data: ImageKnowledgeSaveInput, client: Dict[str, Any] = Depends(core._web_client)):
+    client_id = int(client["id"])
+    try:
+        raw = base64.b64decode(data.image_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="图片数据编码无效")
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片必须为 1 字节至 8 MB")
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest.lower() != data.image_sha256.lower():
+        raise HTTPException(status_code=409, detail="图片文件与 OCR 识别结果不一致，请重新上传识别")
+    from PIL import Image
+    import io
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            image.verify()
+            detected = Image.MIME.get(image.format)
+    except Exception:
+        raise HTTPException(status_code=422, detail="图片格式无效或文件损坏")
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    mime = (data.mime_type or "").lower()
+    if mime not in allowed or (detected and detected not in allowed):
+        raise HTTPException(status_code=415, detail="仅支持 JPG、PNG、WEBP、GIF 图片")
+    if detected and mime != detected:
+        raise HTTPException(status_code=415, detail="图片 MIME 类型与文件内容不一致")
+    name = (data.image_name or "").strip()[:180] or "图片-" + digest[:12] + (mimetypes.guess_extension(mime) or ".img")
+    description = (data.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="图片说明不能为空")
+    image_id = (data.id or "").strip() or uuid.uuid4().hex
+    now = _now()
+    with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        duplicate = conn.execute(
+            "SELECT id FROM bot_web_image_knowledge WHERE client_id=? AND image_sha256=? AND id<>?",
+            (client_id, digest, image_id),
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="当前客户端已存在相同图片，请编辑已有图片知识")
+        conn.execute(
+            """INSERT INTO bot_web_image_knowledge
+               (id,client_id,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,enabled,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(client_id,id) DO UPDATE SET
+                 image_name=excluded.image_name,mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,
+                 image_bytes=excluded.image_bytes,ocr_text=excluded.ocr_text,description=excluded.description,
+                 enabled=excluded.enabled,updated_at=excluded.updated_at""",
+            (image_id, client_id, name, mime, digest, raw, data.ocr_text.strip(), description,
+             1 if data.enabled else 0, now, now),
+        )
+    return {"ok": True, "id": image_id, "image_name": name, "image_sha256": digest, "updated_at": now}
+
+
+@router.delete("/api/bot-web/image-knowledge/{image_id}")
+def web_image_knowledge_delete(image_id: str, client: Dict[str, Any] = Depends(core._web_client)):
+    with core._cp.db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM bot_web_image_knowledge WHERE client_id=? AND id=?",
+            (int(client["id"]), image_id),
+        )
+    if cursor.rowcount < 1:
+        raise HTTPException(status_code=404, detail="图片知识不存在")
+    return {"ok": True}
 
 
 @router.get("/api/bot-web/conversations")

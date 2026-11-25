@@ -27,8 +27,9 @@ namespace Bot.Knowledge
         private Image _preview;
         private TextBox _ocrText;
         private TextBox _description;
+        private TextBox _imageName;
         private TextBlock _status;
-        private Button _recognizeButton;
+        private Button _uploadButton;
         private Button _saveButton;
         private Button _deleteButton;
         private VisualImageKnowledgeEntry _selected;
@@ -80,24 +81,9 @@ namespace Bot.Knowledge
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            var upload = Button("上传图片");
-            upload.Click += delegate { UploadImage(); };
-            _recognizeButton = Button("识别图片");
-            _recognizeButton.Click += async delegate { await RecognizeImageAsync(); };
-            _saveButton = Button("保存图片知识");
-            _saveButton.Click += async delegate { await SaveAsync(); };
-            _deleteButton = Button("删除图片知识");
-            _deleteButton.Click += async delegate { await DeleteAsync(); };
-            var refresh = Button("刷新");
-            refresh.Click += delegate { RefreshView(); };
-            toolbar.Children.Add(upload);
-            toolbar.Children.Add(_recognizeButton);
-            toolbar.Children.Add(_saveButton);
-            toolbar.Children.Add(_deleteButton);
-            toolbar.Children.Add(refresh);
-            Grid.SetRow(toolbar, 0);
-            root.Children.Add(toolbar);
+            // Image knowledge uses one focused editor: upload above the preview,
+            // automatic OCR after upload, and save directly below the description.
+            // No separate recognize toolbar or five-button command strip is shown.
 
             var body = new Grid();
             body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40, GridUnitType.Star) });
@@ -118,6 +104,12 @@ namespace Bot.Knowledge
             };
             _grid.Columns.Add(new DataGridTextColumn
             {
+                Header = "图片名称 / 说明",
+                Binding = new System.Windows.Data.Binding("ImageName"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _grid.Columns.Add(new DataGridTextColumn
+            {
                 Header = "图片说明",
                 Binding = new System.Windows.Data.Binding("Description"),
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
@@ -136,6 +128,20 @@ namespace Bot.Knowledge
             body.Children.Add(_grid);
 
             var editor = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            var uploadRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 6) };
+            _uploadButton = Button("上传图片");
+            _uploadButton.Click += delegate { UploadImage(); };
+            DockPanel.SetDock(_uploadButton, Dock.Left);
+            uploadRow.Children.Add(_uploadButton);
+            _imageName = new TextBox
+            {
+                Height = 28,
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "图片名称；留空时自动使用上传文件名"
+            };
+            uploadRow.Children.Add(_imageName);
+            editor.Children.Add(uploadRow);
             editor.Children.Add(Label("图片预览"));
             var previewBorder = new Border
             {
@@ -157,6 +163,16 @@ namespace Bot.Knowledge
             _description = Multi(88);
             editor.Children.Add(_description);
 
+            var saveRow = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            _saveButton = Button("保存");
+            _saveButton.Click += async delegate { await SaveAsync(); };
+            _deleteButton = Button("删除图片知识");
+            _deleteButton.Click += async delegate { await DeleteAsync(); };
+            _deleteButton.IsEnabled = false;
+            saveRow.Children.Add(_saveButton);
+            saveRow.Children.Add(_deleteButton);
+            editor.Children.Add(saveRow);
+
             var editorScroll = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -170,14 +186,14 @@ namespace Bot.Knowledge
             {
                 Margin = new Thickness(0, 8, 0, 0),
                 Foreground = Brushes.DimGray,
-                Text = "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+                Text = "上传图片后自动调用服务端 OCR；核对识别结果、填写图片说明，然后保存。"
             };
             Grid.SetRow(_status, 2);
             root.Children.Add(_status);
             Content = root;
         }
 
-        private void UploadImage()
+        private async void UploadImage()
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
@@ -202,12 +218,14 @@ namespace Bot.Knowledge
                 _suppressSelection = false;
                 _selected = null;
                 _currentImagePath = dialog.FileName;
+                _imageName.Text = Path.GetFileName(dialog.FileName);
                 _currentImageSha256 = string.Empty;
                 _ocrRecognized = false;
                 _ocrText.Clear();
                 _description.Clear();
                 LoadPreview(_currentImagePath);
-                _status.Text = "图片已选择，请点击“识别图片”调用服务端 OCR。";
+                _status.Text = "图片已上传，正在自动调用服务端 OCR…";
+                await RecognizeImageAsync();
             }
             catch (Exception ex)
             {
@@ -223,7 +241,7 @@ namespace Bot.Knowledge
                 return;
             }
 
-            _recognizeButton.IsEnabled = false;
+            if (_uploadButton != null) _uploadButton.IsEnabled = false;
             _status.Text = "正在上传图片并调用服务端 OCR，请稍候…";
             try
             {
@@ -252,7 +270,7 @@ namespace Bot.Knowledge
             }
             finally
             {
-                _recognizeButton.IsEnabled = true;
+                if (_uploadButton != null) _uploadButton.IsEnabled = true;
             }
         }
 
@@ -265,7 +283,7 @@ namespace Bot.Knowledge
             }
             if (!_ocrRecognized)
             {
-                _status.Text = "请先点击“识别图片”并等待服务端 OCR 成功后再保存。";
+                _status.Text = "图片尚未完成服务端 OCR，识别成功后才能保存。";
                 return;
             }
             if (string.IsNullOrWhiteSpace(_description.Text))
@@ -279,6 +297,7 @@ namespace Bot.Knowledge
             {
                 EntityId = _selected == null ? string.Empty : _selected.EntityId,
                 ImageSha256 = _currentImageSha256,
+                ImageName = _imageName == null ? string.Empty : _imageName.Text,
                 OcrText = _ocrText.Text,
                 Description = _description.Text
             };
@@ -336,6 +355,38 @@ namespace Bot.Knowledge
             }
         }
 
+        internal void ImportImageFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Length <= 0 || info.Length > VisualImageKnowledgeService.MaxImageBytes)
+                    throw new InvalidOperationException("图片大小必须在 1 字节至 8 MB 之间。");
+                var extension = (Path.GetExtension(path) ?? string.Empty).ToLowerInvariant();
+                if (extension != ".jpg" && extension != ".jpeg" && extension != ".png"
+                    && extension != ".webp" && extension != ".gif")
+                    throw new InvalidOperationException("仅支持 JPG、PNG、WEBP、GIF 图片。");
+                _suppressSelection = true;
+                _grid.SelectedItem = null;
+                _suppressSelection = false;
+                _selected = null;
+                _currentImagePath = path;
+                _currentImageSha256 = string.Empty;
+                _ocrRecognized = false;
+                _imageName.Text = Path.GetFileName(path);
+                _ocrText.Clear();
+                _description.Clear();
+                LoadPreview(path);
+                _status.Text = "已从买家消息导入图片，正在自动执行服务端 OCR…";
+                _ = RecognizeImageAsync();
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "导入买家图片失败：" + ex.Message;
+            }
+        }
+
         private void Select(VisualImageKnowledgeEntry item)
         {
             _selected = item;
@@ -344,10 +395,12 @@ namespace Bot.Knowledge
             _ocrRecognized = item != null;
             _ocrText.Text = item == null ? string.Empty : item.OcrText ?? string.Empty;
             _description.Text = item == null ? string.Empty : item.Description ?? string.Empty;
+            _imageName.Text = item == null ? string.Empty
+                : (!string.IsNullOrWhiteSpace(item.ImageName) ? item.ImageName : Path.GetFileName(item.ImagePath ?? string.Empty));
             LoadPreview(_currentImagePath);
             _deleteButton.IsEnabled = item != null;
             _status.Text = item == null
-                ? "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+                ? "上传图片后自动执行服务端 OCR，编辑识别结果并填写图片说明。"
                 : "已载入图片知识。可修改 OCR 文字或图片说明后保存。";
         }
 

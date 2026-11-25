@@ -485,6 +485,41 @@ namespace Bot.ChromeNs
             return record != null && record.Withdrawn;
         }
 
+        public static async Task<string> TryGetCachedImagePathAsync(
+            string shopKey, string seller, string buyer, string messageKey)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            messageKey = (messageKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0 || messageKey.Length == 0)
+                return string.Empty;
+
+            var shop = ResolveShop(seller, shopKey);
+            if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                return string.Empty;
+
+            var record = Records.Values.FirstOrDefault(x => x != null
+                && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                && string.Equals(x.MessageKey, messageKey, StringComparison.Ordinal)
+                && SameConversation(seller, buyer, x.SellerNick, x.BuyerNick));
+            if (record == null || record.Withdrawn || record.DownloadTask == null)
+                return string.Empty;
+
+            try
+            {
+                var cached = await AwaitWithoutCancellingSharedTask(record.DownloadTask, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return cached != null && cached.Success && !string.IsNullOrWhiteSpace(cached.FilePath)
+                    && File.Exists(cached.FilePath) ? cached.FilePath : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("从买家消息缓存导入图片知识失败: " + ex.Message);
+                return string.Empty;
+            }
+        }
+
         public static bool HasCompleteCache(string messageKey, QNChatMessage message, string shopKey = null)
         {
             var seller = GetSellerNick(message, shopKey);

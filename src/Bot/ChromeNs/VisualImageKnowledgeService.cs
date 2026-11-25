@@ -18,6 +18,7 @@ namespace Bot.ChromeNs
         public string Seller { get; set; }
         public string ImageSha256 { get; set; }
         public string ImagePath { get; set; }
+        public string ImageName { get; set; }
         public string OcrText { get; set; }
         public string Description { get; set; }
         public bool Enabled { get; set; }
@@ -100,6 +101,8 @@ namespace Bot.ChromeNs
             entry.ShopKey = shop.ShopKey;
             entry.Seller = seller;
             entry.ImageSha256 = sha256;
+            entry.ImageName = Clean(entry.ImageName, 180);
+            if (entry.ImageName.Length == 0) entry.ImageName = Path.GetFileName(sourceImagePath);
             entry.OcrText = Clean(entry.OcrText, MaxOcrChars);
             entry.Description = Clean(entry.Description, MaxDescriptionChars);
             entry.Enabled = true;
@@ -392,7 +395,8 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column ImageName text not null default ''"); } catch { }
                 DbHelper.Db.Execute("create index if not exists IX_VisualImageKnowledge_ShopSeller on VisualImageKnowledgeEntry(ShopKey,Seller,Enabled,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create unique index if not exists UX_VisualImageKnowledge_ShopSellerImage on VisualImageKnowledgeEntry(ShopKey,Seller,ImageSha256)");
                 System.Threading.Volatile.Write(ref _schemaReady, 1);
