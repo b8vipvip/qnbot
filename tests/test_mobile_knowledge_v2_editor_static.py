@@ -8,7 +8,8 @@ def read(p): return p.read_text(encoding="utf-8-sig")
 
 def test_mobile_exposes_native_knowledge_v2_editor():
     h=read(HTML); s=read(JS)
-    assert "Knowledge Center V2" in h
+    assert "知识库" in h
+    assert "Knowledge Center V2" not in h
     assert 'id="addKnowledgeV2Btn"' in h
     assert 'id="knowledgeV2List"' in h
     assert 'id="knowledgeV2Dialog"' in h
