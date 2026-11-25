@@ -10,6 +10,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import unquote
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
@@ -126,7 +127,7 @@ def _shop_root(client_id: int, shop_key: str) -> Path:
 
 
 def _safe_image_name(value: Any, fallback: str = "") -> str:
-    name = os.path.basename(str(value or "").replace("\\", "/")).strip()
+    name = os.path.basename(unquote(str(value or "")).replace("\\", "/")).strip()
     name = re.sub(r"[\x00-\x1f<>:\"|?*]", "_", name)
     name = name[:180].strip(" .")
     return name or fallback
@@ -582,8 +583,8 @@ async def runtime_upload_message_image(
     client_id = int(client["id"])
     scope = _require_runtime_shop(client_id, x_shop_key.strip())
     message_key = str(x_message_key or "").strip()
-    seller = str(x_seller or "").strip()
-    buyer = str(x_buyer or "").strip()
+    seller = unquote(str(x_seller or "")).strip()
+    buyer = unquote(str(x_buyer or "")).strip()
     if not message_key or not seller or not buyer:
         raise HTTPException(status_code=400, detail="图片消息缺少消息身份")
     with _cp.db() as conn:
