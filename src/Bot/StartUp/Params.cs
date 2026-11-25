@@ -143,7 +143,11 @@ namespace Bot
             {
                 if (tabName == "话术") return GetShortcutIsVisible(seller);
                 if (tabName == "订单") return GetOrderIsVisible(seller);
-                if (tabName == "机器人") return GetRobotIsVisible(seller);
+                // "工作台" is the persisted/default name for the Bot tab. Older
+                // settings also used "机器人"; both must share the same visibility flag.
+                if (tabName == "工作台" || tabName == "机器人"
+                    || tabName == "Bot" || tabName == "Robot" || tabName == "状态")
+                    return GetRobotIsVisible(seller);
                 if (tabName == "商品") return GetGoodsKnowledgeIsVisible(seller);
                 if (tabName == "优惠券") return GetCouponIsVisible(seller);
                 return false;
