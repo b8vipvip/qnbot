@@ -655,7 +655,7 @@ def runtime_image_knowledge_sync(
                    WHERE bot_web_image_knowledge.client_id=excluded.client_id
                      AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
                 (image_id, client_id, data.shop_key, canonical, image_name, mime, digest, raw,
-                 _safe_text(item.get("ocr_text"), 6000), description, 1 if bool(item.get("enabled", True)) else 0,
+                 _safe_text(item.get("ocr_text"), 12000), description, 1 if bool(item.get("enabled", True)) else 0,
                  revision, "windows", now, updated_at),
             )
             conn.execute(
