@@ -448,7 +448,7 @@ namespace Bot.ChromeNs
         private static bool IsExplicitImagePlaceholder(string value)
         {
             value = (value ?? string.Empty).Trim().ToLowerInvariant();
-            return value == "[图片]" || value == "图片" || value == "图片消息"
+            return value == "[图片]" || value == "图片消息"
                 || value == "[image]" || value == "image";
         }
 
