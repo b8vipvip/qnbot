@@ -276,6 +276,9 @@ def test_two_device_knowledge_v2_comparator_requires_fresh_converged_fingerprint
     assert "LocalFingerprintPrefix" in script
     assert "CloudFingerprintPrefix" in script
     assert "Converged" in script
+    assert "Syncing" in script
+    assert "Device A shop is not syncing" in script
+    assert "Device B shop is not syncing" in script
     assert "MaxSampleSkewMinutes" in script
     assert "MaxSampleAgeMinutes" in script
     assert "Device A sample is recent" in script
