@@ -67,6 +67,8 @@ namespace Bot.ChromeNs
                     {
                         if (!IsManagedImagePath(item.ImagePath, imageRoot))
                             item.ImagePath = string.Empty;
+                        if (string.IsNullOrWhiteSpace(item.ImageName))
+                            item.ImageName = Path.GetFileName(item.ImagePath ?? string.Empty);
                         return item;
                     })
                     .ToList();
