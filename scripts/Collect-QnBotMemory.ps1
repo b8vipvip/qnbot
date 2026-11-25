@@ -87,6 +87,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
     $runtimeActiveFocusProofFresh = $null
     $runtimeActiveFocusProofAgeSeconds = $null
     $runtimeActiveShopChanged = $false
+    $runtimeActiveShopMappingValid = $false
     $runtimeActiveShopTransitions = 0
     $runtimeActiveShopSequence = ''
     $runtimeOwnerChanges = 0
@@ -148,6 +149,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                     $shopRows = @()
                     if ($null -ne $runtime.Shops) { $shopRows = @($runtime.Shops) }
                     $currentOwners = @{}
+                    $currentShopRowsByRef = @{}
                     $shopRefList = @()
                     $ownerPairs = @()
                     foreach ($shop in $shopRows) {
@@ -156,6 +158,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                         if ([string]::IsNullOrWhiteSpace($shopRef)) { continue }
                         $ownerRef = [string]$shop.OwnerSessionRef
                         $currentOwners[$shopRef] = $ownerRef
+                        $currentShopRowsByRef[$shopRef] = $shop
                         $shopRefList += $shopRef
                         $ownerDisplay = 'none'
                         if (-not [string]::IsNullOrWhiteSpace($ownerRef)) { $ownerDisplay = $ownerRef }
@@ -191,9 +194,23 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                         }
                     }
                     $previousOwners = $currentOwners
-                    # Count a foreground switch only when the 5-second focus proof is fresh.
+                    $activeShopRow = $null
+                    if ($runtimeActiveShopRef -match '^shop#[0-9a-f]{16}$' -and $currentShopRowsByRef.ContainsKey($runtimeActiveShopRef)) {
+                        $activeShopRow = $currentShopRowsByRef[$runtimeActiveShopRef]
+                        $runtimeActiveShopMappingValid = [string]::Equals(
+                            [string]$currentOwners[$runtimeActiveShopRef],
+                            $runtimeActiveSessionRef,
+                            [StringComparison]::Ordinal
+                        ) -and $activeShopRow.OwnerConnected -eq $true -and
+                            $activeShopRow.OwnerInitialized -eq $true -and
+                            $activeShopRow.OwnerClientPresent -eq $true -and
+                            $activeShopRow.OwnerClientInvalidated -ne $true -and
+                            $activeShopRow.OwnerClientIdentityRetired -ne $true
+                    }
+                    # Count a foreground switch only when the 5-second focus proof is fresh
+                    # and the active session is the connected, initialized authoritative owner.
                     # A stale remembered active shop is diagnostic context, not A/B/A evidence.
-                    if ($runtimeActiveFocusProofFresh -eq $true -and $runtimeActiveShopRef -match '^shop#[0-9a-f]{16}$') {
+                    if ($runtimeActiveFocusProofFresh -eq $true -and $runtimeActiveShopMappingValid) {
                         if ($previousActiveShopRef.Length -gt 0 -and
                             -not [string]::Equals($previousActiveShopRef, $runtimeActiveShopRef, [StringComparison]::Ordinal)) {
                             $runtimeActiveShopChanged = $true
@@ -390,6 +407,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         RuntimeActiveFocusProofFresh = $runtimeActiveFocusProofFresh
         RuntimeActiveFocusProofAgeSeconds = $runtimeActiveFocusProofAgeSeconds
         RuntimeActiveShopChangedSincePreviousSample = $runtimeActiveShopChanged
+        RuntimeActiveShopMappingValid = $runtimeActiveShopMappingValid
         RuntimeActiveShopTransitions = $runtimeActiveShopTransitions
         RuntimeActiveShopSequence = $runtimeActiveShopSequence
         RuntimeOwnerChangesSincePreviousSample = $runtimeOwnerChanges
@@ -488,7 +506,8 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         $top.Count + ' system processes, used=' + $usedPercent + '%, runtime=' +
         $runtimeStatus + ', shops=' + $runtimeAuthoritativeShopCount +
         ', ownerChanges=' + $runtimeOwnerChanges + ', activeShop=' + $runtimeActiveShopRef +
-        ', activeChanged=' + $runtimeActiveShopChanged + ', activeTransitions=' + $runtimeActiveShopTransitions +
+        ', activeChanged=' + $runtimeActiveShopChanged + ', activeMappingValid=' + $runtimeActiveShopMappingValid +
+        ', activeTransitions=' + $runtimeActiveShopTransitions +
         ', knowledgeSync=' + $knowledgeSyncStatus +
         ', converged=' + $knowledgeSyncConvergedShopCount + '/' + $knowledgeSyncShopCount +
         ', learning=' + $learningSnapshotStatus + ', history=' + $learningLatestHistoryMessagesInWindow +
