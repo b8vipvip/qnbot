@@ -326,6 +326,32 @@ namespace Bot.ChromeNs
             lock (Sync) return _activeSessionId;
         }
 
+        internal static void GetReadOnlyAcceptanceState(
+            out string shopKey,
+            out string sessionId,
+            out bool focusProofFresh,
+            out int? focusProofAgeSeconds)
+        {
+            lock (Sync)
+            {
+                shopKey = _activeShopKey;
+                sessionId = _activeSessionId;
+                focusProofFresh = HasFreshFocusProofLocked();
+                if (_lastFocusProofUtc == DateTime.MinValue)
+                {
+                    focusProofAgeSeconds = null;
+                }
+                else
+                {
+                    var age = DateTime.UtcNow - _lastFocusProofUtc;
+                    if (age < TimeSpan.Zero)
+                        focusProofAgeSeconds = null;
+                    else
+                        focusProofAgeSeconds = Math.Max(0, (int)Math.Floor(age.TotalSeconds));
+                }
+            }
+        }
+
         internal static bool IsActive(QN qn)
         {
             if (qn == null || qn.Seller == null) return false;
@@ -536,6 +562,14 @@ namespace Bot.ChromeNs
                 Log.Info("活动店铺会话已切换: previousSeller=" + previousSeller + ", previousShopKey=" + previousShopKey
                     + ", seller=" + seller + ", shopKey=" + shopKey + ", targetId=" + _activeTargetId
                     + ", session=" + sessionId + ", focusProof=" + focusProof + ", evidence=" + (evidence ?? string.Empty));
+            }
+            // Persist the read-only acceptance snapshot immediately after verified foreground
+            // evidence. The periodic WebSocket sweep is 30 seconds and would otherwise miss
+            // the 5-second focus-proof window required for A/B/A acceptance sampling.
+            if (focusProof)
+            {
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (server != null) server.QueueReadOnlyAcceptanceSnapshotRefresh();
             }
             return true;
         }

@@ -148,6 +148,14 @@ namespace Bot.ChromeNs
             return Math.Max(0, (int)Math.Floor((nowUtc - lastActivity).TotalSeconds));
         }
 
+        internal void QueueReadOnlyAcceptanceSnapshotRefresh()
+        {
+            // Do not run diagnostics inline on a CDP/UI event callback. The snapshot
+            // writer takes the seller-session lock and must never stall or re-enter
+            // the foreground activation path.
+            Task.Run(() => WriteReadOnlyAcceptanceSnapshot());
+        }
+
         private void WriteReadOnlyAcceptanceSnapshot()
         {
             try
@@ -158,6 +166,15 @@ namespace Bot.ChromeNs
                 {
                     var processId = process.Id;
                     var processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+                    string activeShopKey;
+                    string activeSessionId;
+                    bool activeFocusProofFresh;
+                    int? activeFocusProofAgeSeconds;
+                    ActiveShopSessionRegistry.GetReadOnlyAcceptanceState(
+                        out activeShopKey,
+                        out activeSessionId,
+                        out activeFocusProofFresh,
+                        out activeFocusProofAgeSeconds);
                     lock (_sellerSessionSync)
                     {
                         var mappedSessionIds = new HashSet<string>(_sessionShopKeys.Keys, StringComparer.Ordinal);
@@ -230,6 +247,10 @@ namespace Bot.ChromeNs
                             CollectedAtUtc = nowUtc.ToString("o"),
                             ProcessId = processId,
                             ProcessStartTimeUtcTicks = processStartTimeUtcTicks,
+                            ActiveShopRef = RuntimeAcceptanceDiagnosticRef("shop", activeShopKey),
+                            ActiveSessionRef = RuntimeAcceptanceDiagnosticRef("session", activeSessionId),
+                            ActiveFocusProofFresh = activeFocusProofFresh,
+                            ActiveFocusProofAgeSeconds = activeFocusProofAgeSeconds,
                             Counts = new
                             {
                                 ConnectedSessions = _connectedSessions.Count,

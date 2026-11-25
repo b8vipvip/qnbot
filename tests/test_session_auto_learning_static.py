@@ -1109,3 +1109,44 @@ def test_incomplete_bot_echo_history_never_promotes_unknown_seller_turns_to_huma
     ]
     assert 'turn.Role == "assistant" && cards == null' in collector
     assert "cards == null" in agent_classifier and "return true;" in agent_classifier
+
+
+def test_active_shop_acceptance_snapshot_is_atomic_hmac_aliased_and_focus_proven():
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    registry = coordinator.split("internal static class ActiveShopSessionRegistry", 1)[1]
+    acceptance_state = registry.split("internal static bool IsActive", 1)[0]
+    assert "GetReadOnlyAcceptanceState(" in acceptance_state
+    assert "lock (Sync)" in acceptance_state
+    assert "HasFreshFocusProofLocked()" in acceptance_state
+    assert "focusProofAgeSeconds" in acceptance_state
+
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    snapshot = server[
+        server.index("private void WriteReadOnlyAcceptanceSnapshot"):
+        server.index("private void TouchSession(WebSocketSession session)")
+    ]
+    assert "ActiveShopSessionRegistry.GetReadOnlyAcceptanceState(" in snapshot
+    assert snapshot.index("ActiveShopSessionRegistry.GetReadOnlyAcceptanceState(") < snapshot.index("lock (_sellerSessionSync)")
+    assert 'ActiveShopRef = RuntimeAcceptanceDiagnosticRef("shop", activeShopKey)' in snapshot
+    assert 'ActiveSessionRef = RuntimeAcceptanceDiagnosticRef("session", activeSessionId)' in snapshot
+    assert "ActiveFocusProofFresh = activeFocusProofFresh" in snapshot
+    assert "ActiveFocusProofAgeSeconds = activeFocusProofAgeSeconds" in snapshot
+    assert "ActiveShopKey =" not in snapshot.split("snapshot = new", 1)[1]
+    assert "ShopKey = activeShopKey" not in snapshot.split("snapshot = new", 1)[1]
+
+    activation = coordinator.split("private static bool Activate(", 1)[1].split(
+        "private static bool OwnsAuthoritativeSession", 1
+    )[0]
+    assert "if (focusProof)" in activation
+    assert "QueueReadOnlyAcceptanceSnapshotRefresh()" in activation
+    server_refresh = server.split("internal void QueueReadOnlyAcceptanceSnapshotRefresh()", 1)[1].split(
+        "private void WriteReadOnlyAcceptanceSnapshot", 1
+    )[0]
+    assert "Task.Run(() => WriteReadOnlyAcceptanceSnapshot())" in server_refresh
+
+    diagnostic = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+    assert "ActiveShopEvidenceStatus" in diagnostic
+    assert "owner_mapping_mismatch" in diagnostic
+    assert "owner_mapping_missing_or_ambiguous" in diagnostic
+    assert "Active shop focus proof" in diagnostic
+    assert "ActiveShopRef = $activeShopRef" in diagnostic

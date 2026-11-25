@@ -40,6 +40,8 @@ $csv = Join-Path $OutputDirectory ('qnbot-memory-' + $stamp + '.csv')
 $processNames = @('Bot', 'AliWorkbench', 'AliRender', 'wwcmd')
 $last = @{}
 $previousOwners = @{}
+$previousActiveShopRef = ''
+$activeShopSequence = New-Object System.Collections.Generic.List[string]
 $previousRuntimeProcessStartTicks = [long]0
 $loops = [int][Math]::Ceiling(($Minutes * 60.0) / $IntervalSeconds)
 
@@ -80,6 +82,14 @@ for ($sample = 1; $sample -le $loops; $sample++) {
     $runtimeRecoverableStandbyCount = $null
     $runtimeShopRefs = ''
     $runtimeShopOwners = ''
+    $runtimeActiveShopRef = ''
+    $runtimeActiveSessionRef = ''
+    $runtimeActiveFocusProofFresh = $null
+    $runtimeActiveFocusProofAgeSeconds = $null
+    $runtimeActiveShopChanged = $false
+    $runtimeActiveShopMappingValid = $false
+    $runtimeActiveShopTransitions = 0
+    $runtimeActiveShopSequence = ''
     $runtimeOwnerChanges = 0
     $runtimeProcessGenerationChanged = $false
     $runtimeSchemaVersion = $null
@@ -107,8 +117,28 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 else {
                     $runtimeStatus = 'fresh'
                     $counts = $runtime.Counts
-                    $hasCompleteRuntimeSchema = ($null -ne $runtime.PSObject.Properties['Shops']) -and ($null -ne $runtime.PSObject.Properties['Counts']) -and ($null -ne $counts.PSObject.Properties['StandbyCapabilitySessions'])
+                    $hasActiveShopEvidence = ($null -ne $runtime.PSObject.Properties['ActiveShopRef']) -and
+                        ($null -ne $runtime.PSObject.Properties['ActiveSessionRef']) -and
+                        ($null -ne $runtime.PSObject.Properties['ActiveFocusProofFresh'])
+                    $hasCompleteRuntimeSchema = ($null -ne $runtime.PSObject.Properties['Shops']) -and
+                        ($null -ne $runtime.PSObject.Properties['Counts']) -and
+                        ($null -ne $counts.PSObject.Properties['StandbyCapabilitySessions']) -and
+                        $hasActiveShopEvidence
                     if (-not $hasCompleteRuntimeSchema) { $runtimeStatus = 'partial' }
+                    if ($hasActiveShopEvidence) {
+                        $candidateActiveShopRef = [string]$runtime.ActiveShopRef
+                        if ($candidateActiveShopRef -match '^shop#(?:[0-9a-f]{16}|none)$') {
+                            $runtimeActiveShopRef = $candidateActiveShopRef
+                        }
+                        $candidateActiveSessionRef = [string]$runtime.ActiveSessionRef
+                        if ($candidateActiveSessionRef -match '^session#(?:[0-9a-f]{16}|none)$') {
+                            $runtimeActiveSessionRef = $candidateActiveSessionRef
+                        }
+                        $runtimeActiveFocusProofFresh = [bool]$runtime.ActiveFocusProofFresh
+                        if ($null -ne $runtime.ActiveFocusProofAgeSeconds) {
+                            $runtimeActiveFocusProofAgeSeconds = [int]$runtime.ActiveFocusProofAgeSeconds
+                        }
+                    }
                     $runtimeConnectedSessions = [int]$counts.ConnectedSessions
                     $runtimeAuthoritativeShopCount = [int]$counts.AuthoritativeShopCount
                     $runtimeDuplicateSessions = [int]$counts.DuplicateSessions
@@ -119,6 +149,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                     $shopRows = @()
                     if ($null -ne $runtime.Shops) { $shopRows = @($runtime.Shops) }
                     $currentOwners = @{}
+                    $currentShopRowsByRef = @{}
                     $shopRefList = @()
                     $ownerPairs = @()
                     foreach ($shop in $shopRows) {
@@ -127,6 +158,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                         if ([string]::IsNullOrWhiteSpace($shopRef)) { continue }
                         $ownerRef = [string]$shop.OwnerSessionRef
                         $currentOwners[$shopRef] = $ownerRef
+                        $currentShopRowsByRef[$shopRef] = $shop
                         $shopRefList += $shopRef
                         $ownerDisplay = 'none'
                         if (-not [string]::IsNullOrWhiteSpace($ownerRef)) { $ownerDisplay = $ownerRef }
@@ -150,6 +182,8 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                     if ($previousRuntimeProcessStartTicks -ne [long]0 -and $previousRuntimeProcessStartTicks -ne $runtimeProcessStartTicks) {
                         $runtimeProcessGenerationChanged = $true
                         $previousOwners = @{}
+                        $previousActiveShopRef = ''
+                        $activeShopSequence.Clear()
                     }
                     if (-not $runtimeProcessGenerationChanged) {
                         foreach ($shopRef in $currentOwners.Keys) {
@@ -160,6 +194,36 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                         }
                     }
                     $previousOwners = $currentOwners
+                    $activeShopRow = $null
+                    if ($runtimeActiveShopRef -match '^shop#[0-9a-f]{16}$' -and $currentShopRowsByRef.ContainsKey($runtimeActiveShopRef)) {
+                        $activeShopRow = $currentShopRowsByRef[$runtimeActiveShopRef]
+                        $runtimeActiveShopMappingValid = [string]::Equals(
+                            [string]$currentOwners[$runtimeActiveShopRef],
+                            $runtimeActiveSessionRef,
+                            [StringComparison]::Ordinal
+                        ) -and $activeShopRow.OwnerConnected -eq $true -and
+                            $activeShopRow.OwnerInitialized -eq $true -and
+                            $activeShopRow.OwnerClientPresent -eq $true -and
+                            $activeShopRow.OwnerClientInvalidated -ne $true -and
+                            $activeShopRow.OwnerClientIdentityRetired -ne $true
+                    }
+                    # Count a foreground switch only when the 5-second focus proof is fresh
+                    # and the active session is the connected, initialized authoritative owner.
+                    # A stale remembered active shop is diagnostic context, not A/B/A evidence.
+                    if ($runtimeActiveFocusProofFresh -eq $true -and $runtimeActiveShopMappingValid) {
+                        if ($previousActiveShopRef.Length -gt 0 -and
+                            -not [string]::Equals($previousActiveShopRef, $runtimeActiveShopRef, [StringComparison]::Ordinal)) {
+                            $runtimeActiveShopChanged = $true
+                            $activeShopSequence.Add($runtimeActiveShopRef)
+                        }
+                        elseif ($previousActiveShopRef.Length -eq 0) {
+                            $activeShopSequence.Add($runtimeActiveShopRef)
+                        }
+                        $previousActiveShopRef = $runtimeActiveShopRef
+                    }
+                    while ($activeShopSequence.Count -gt 32) { $activeShopSequence.RemoveAt(0) }
+                    $runtimeActiveShopTransitions = [math]::Max(0, $activeShopSequence.Count - 1)
+                    $runtimeActiveShopSequence = $activeShopSequence -join '>'
                     $previousRuntimeProcessStartTicks = $runtimeProcessStartTicks
                 }
             }
@@ -338,6 +402,14 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         RuntimeRecoverableStandbyCount = $runtimeRecoverableStandbyCount
         RuntimeShopRefs = $runtimeShopRefs
         RuntimeShopOwners = $runtimeShopOwners
+        RuntimeActiveShopRef = $runtimeActiveShopRef
+        RuntimeActiveSessionRef = $runtimeActiveSessionRef
+        RuntimeActiveFocusProofFresh = $runtimeActiveFocusProofFresh
+        RuntimeActiveFocusProofAgeSeconds = $runtimeActiveFocusProofAgeSeconds
+        RuntimeActiveShopChangedSincePreviousSample = $runtimeActiveShopChanged
+        RuntimeActiveShopMappingValid = $runtimeActiveShopMappingValid
+        RuntimeActiveShopTransitions = $runtimeActiveShopTransitions
+        RuntimeActiveShopSequence = $runtimeActiveShopSequence
         RuntimeOwnerChangesSincePreviousSample = $runtimeOwnerChanges
         KnowledgeV2SyncSnapshotStatus = $knowledgeSyncStatus
         KnowledgeV2SyncSnapshotAgeSeconds = $knowledgeSyncAgeSeconds
@@ -433,7 +505,10 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         $targets.Count + ' QnBot/Qianniu target processes, top ' +
         $top.Count + ' system processes, used=' + $usedPercent + '%, runtime=' +
         $runtimeStatus + ', shops=' + $runtimeAuthoritativeShopCount +
-        ', ownerChanges=' + $runtimeOwnerChanges + ', knowledgeSync=' + $knowledgeSyncStatus +
+        ', ownerChanges=' + $runtimeOwnerChanges + ', activeShop=' + $runtimeActiveShopRef +
+        ', activeChanged=' + $runtimeActiveShopChanged + ', activeMappingValid=' + $runtimeActiveShopMappingValid +
+        ', activeTransitions=' + $runtimeActiveShopTransitions +
+        ', knowledgeSync=' + $knowledgeSyncStatus +
         ', converged=' + $knowledgeSyncConvergedShopCount + '/' + $knowledgeSyncShopCount +
         ', learning=' + $learningSnapshotStatus + ', history=' + $learningLatestHistoryMessagesInWindow +
         ', corpus=' + $learningLatestRecordsReviewed + '/' + $learningLatestCorpusRecords +

@@ -231,6 +231,11 @@ function Read-RuntimeAcceptanceSnapshot {
         CollectedAtUtc = $null
         Counts = $null
         Shops = @()
+        ActiveShopRef = 'shop#none'
+        ActiveSessionRef = 'session#none'
+        ActiveFocusProofFresh = $false
+        ActiveFocusProofAgeSeconds = $null
+        ActiveShopEvidenceStatus = 'unavailable'
     }
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return $empty
@@ -263,6 +268,31 @@ function Read-RuntimeAcceptanceSnapshot {
             $empty.Status = 'stale'
             $empty.AgeSeconds = $ageSeconds
             return $empty
+        }
+
+        $activeShopRef = 'shop#none'
+        $activeSessionRef = 'session#none'
+        $activeFocusProofFresh = $false
+        $activeFocusProofAgeSeconds = $null
+        $activeShopEvidenceStatus = 'unavailable'
+        if ($null -ne $snapshot.PSObject.Properties['ActiveShopRef'] -and
+            $null -ne $snapshot.PSObject.Properties['ActiveSessionRef'] -and
+            $null -ne $snapshot.PSObject.Properties['ActiveFocusProofFresh']) {
+            $candidateShopRef = [string]$snapshot.ActiveShopRef
+            $candidateSessionRef = [string]$snapshot.ActiveSessionRef
+            if ($candidateShopRef -match '^shop#(?:[0-9a-f]{16}|none)$' -and
+                $candidateSessionRef -match '^session#(?:[0-9a-f]{16}|none)$') {
+                $activeShopRef = $candidateShopRef
+                $activeSessionRef = $candidateSessionRef
+                $activeFocusProofFresh = [bool]$snapshot.ActiveFocusProofFresh
+                if ($null -ne $snapshot.ActiveFocusProofAgeSeconds) {
+                    $activeFocusProofAgeSeconds = [int]$snapshot.ActiveFocusProofAgeSeconds
+                }
+                $activeShopEvidenceStatus = if ($activeFocusProofFresh) { 'owner_mapping_unverified' } else { 'stale_or_unfocused' }
+            }
+            else {
+                $activeShopEvidenceStatus = 'invalid_alias'
+            }
         }
 
         $shopRows = @()
@@ -307,6 +337,24 @@ function Read-RuntimeAcceptanceSnapshot {
             }
         }
 
+        if ($activeFocusProofFresh) {
+            $activeOwnerRows = @($shopRows | Where-Object { $_.ShopRef -eq $activeShopRef })
+            if ($activeOwnerRows.Count -eq 1) {
+                $activeOwner = $activeOwnerRows[0]
+                $activeShopEvidenceStatus = if (
+                    [string]::Equals([string]$activeOwner.OwnerSessionRef, $activeSessionRef, [StringComparison]::Ordinal) -and
+                    $activeOwner.OwnerConnected -eq $true -and
+                    $activeOwner.OwnerInitialized -eq $true -and
+                    $activeOwner.OwnerClientPresent -eq $true -and
+                    $activeOwner.OwnerClientInvalidated -ne $true -and
+                    $activeOwner.OwnerClientIdentityRetired -ne $true
+                ) { 'fresh' } else { 'owner_mapping_mismatch' }
+            }
+            else {
+                $activeShopEvidenceStatus = 'owner_mapping_missing_or_ambiguous'
+            }
+        }
+
         $rawCounts = $snapshot.Counts
         $counts = [pscustomobject]@{
             ConnectedSessions = [int]$rawCounts.ConnectedSessions
@@ -325,6 +373,11 @@ function Read-RuntimeAcceptanceSnapshot {
             CollectedAtUtc = $collectedAt.ToString('o')
             Counts = $counts
             Shops = $shopRows
+            ActiveShopRef = $activeShopRef
+            ActiveSessionRef = $activeSessionRef
+            ActiveFocusProofFresh = $activeFocusProofFresh
+            ActiveFocusProofAgeSeconds = $activeFocusProofAgeSeconds
+            ActiveShopEvidenceStatus = $activeShopEvidenceStatus
         }
     }
     catch {
@@ -592,6 +645,11 @@ if ($successfulCdpProbes -gt 0) {
     $cdpCheckStatus = 'endpoint_found_probe_incomplete'
 }
 
+$activeFocusCheckStatus = 'unavailable'
+if ($runtimeSnapshot.Status -eq 'fresh') {
+    $activeFocusCheckStatus = [string]$runtimeSnapshot.ActiveShopEvidenceStatus
+}
+
 $report = [ordered]@{
     SchemaVersion = 1
     CollectedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
@@ -636,6 +694,7 @@ $report = [ordered]@{
         [pscustomobject]@{ Name = 'WebSocket 41010'; Status = $webSocketCheckStatus }
         [pscustomobject]@{ Name = 'CDP/IMSDK probe'; Status = $cdpCheckStatus }
         [pscustomobject]@{ Name = 'ShopKey runtime mapping'; Status = [string]$runtimeSnapshot.Status }
+        [pscustomobject]@{ Name = 'Active shop focus proof'; Status = $activeFocusCheckStatus }
     )
     RuntimeShopSessions = $runtimeSnapshot
     Privacy = [ordered]@{
@@ -707,6 +766,7 @@ $markdown += @(
 )
 if ($runtimeSnapshot.Status -eq 'fresh') {
     $counts = $runtimeSnapshot.Counts
+    $markdown += ('- Active shop=' + $runtimeSnapshot.ActiveShopRef + '; active session=' + $runtimeSnapshot.ActiveSessionRef + '; focus proof=' + $runtimeSnapshot.ActiveShopEvidenceStatus + '; focus age seconds=' + $runtimeSnapshot.ActiveFocusProofAgeSeconds)
     $markdown += ('- Connected sessions=' + $counts.ConnectedSessions + '; authoritative shops=' + $counts.AuthoritativeShopCount + '; duplicate sessions=' + $counts.DuplicateSessions + '; recoverable standbys=' + $counts.RecoverableStandbySessions + '; standby-capable sessions=' + $counts.StandbyCapabilitySessions + '; unmapped connected=' + $counts.UnmappedConnectedSessions)
     foreach ($shop in $runtimeSnapshot.Shops) {
         $markdown += ('- ' + $shop.ShopRef + ': owner=' + $shop.OwnerSessionRef + '; connected=' + $shop.OwnerConnected + '; initialized=' + $shop.OwnerInitialized + '; client=' + $shop.OwnerClientPresent + '; invalidated=' + $shop.OwnerClientInvalidated + '; retired=' + $shop.OwnerClientIdentityRetired + '; standbys=' + $shop.StandbyCount + '; recoverable=' + $shop.RecoverableStandbyCount)
