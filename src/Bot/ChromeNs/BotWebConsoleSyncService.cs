@@ -742,8 +742,8 @@ namespace Bot.ChromeNs
                         request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-image-sync/1.0");
                         request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
                         request.Headers.TryAddWithoutValidation("X-Message-Key", item.MessageKey);
-                        request.Headers.TryAddWithoutValidation("X-Seller", item.Seller);
-                        request.Headers.TryAddWithoutValidation("X-Buyer", item.Buyer);
+                        request.Headers.TryAddWithoutValidation("X-Seller", Uri.EscapeDataString(item.Seller ?? string.Empty));
+                        request.Headers.TryAddWithoutValidation("X-Buyer", Uri.EscapeDataString(item.Buyer ?? string.Empty));
                         request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
                         request.Headers.TryAddWithoutValidation("X-Image-Name", Uri.EscapeDataString(imageName));
                         content.Headers.ContentType = new MediaTypeHeaderValue(
