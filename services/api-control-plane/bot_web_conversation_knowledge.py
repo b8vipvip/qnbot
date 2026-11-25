@@ -786,10 +786,14 @@ def web_conversation_messages(
     client_id = int(client["id"])
     cp = core._cp
     if before_id > 0:
-        sql = "SELECT * FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? AND id<? ORDER BY id DESC LIMIT ?"
+        sql = """SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,
+                     attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at
+              FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? AND id<? ORDER BY id DESC LIMIT ?"""
         args = (client_id, seller.strip(), buyer.strip(), before_id, limit)
     else:
-        sql = "SELECT * FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? ORDER BY id DESC LIMIT ?"
+        sql = """SELECT id,client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,
+                     attachment_mime,attachment_name,attachment_sha256,occurred_at,created_at
+              FROM bot_messages WHERE client_id=? AND seller=? AND buyer=? ORDER BY id DESC LIMIT ?"""
         args = (client_id, seller.strip(), buyer.strip(), limit)
     with cp.db() as conn:
         rows = conn.execute(sql, args).fetchall()
