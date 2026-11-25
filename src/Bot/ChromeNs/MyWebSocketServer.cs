@@ -148,9 +148,12 @@ namespace Bot.ChromeNs
             return Math.Max(0, (int)Math.Floor((nowUtc - lastActivity).TotalSeconds));
         }
 
-        internal void RefreshReadOnlyAcceptanceSnapshot()
+        internal void QueueReadOnlyAcceptanceSnapshotRefresh()
         {
-            WriteReadOnlyAcceptanceSnapshot();
+            // Do not run diagnostics inline on a CDP/UI event callback. The snapshot
+            // writer takes the seller-session lock and must never stall or re-enter
+            // the foreground activation path.
+            Task.Run(() => WriteReadOnlyAcceptanceSnapshot());
         }
 
         private void WriteReadOnlyAcceptanceSnapshot()
