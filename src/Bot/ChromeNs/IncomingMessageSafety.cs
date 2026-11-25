@@ -449,7 +449,7 @@ namespace Bot.ChromeNs
         {
             value = (value ?? string.Empty).Trim().ToLowerInvariant();
             return value == "[图片]" || value == "图片消息"
-                || value == "[image]" || value == "image";
+                || value == "[image]";
         }
 
         private static bool ContainsMarker(string text, params string[] markers)
