@@ -39,14 +39,31 @@ namespace Bot.ChromeNs
                 var visionEndpoints = AiEndpointStore.GetVisionEnabledEndpoints();
                 if (visionEndpoints != null && visionEndpoints.Count > 0)
                 {
-                    Log.Info("视觉理解优先级=AI接口优先，跳过OCR+知识库提前直答: seller=" + task.SellerNick
-                        + ", buyer=" + task.BuyerNick
-                        + ", visionEndpoints=" + visionEndpoints.Count);
-                    return null;
-                }
+                    var hasImageKnowledge = false;
+                    try { hasImageKnowledge = VisualImageKnowledgeService.HasEntries(task.ShopKey); }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("检查本店图片知识失败，保留原AI优先路由: " + ex.Message, 5);
+                    }
+                    if (!hasImageKnowledge)
+                    {
+                        Log.Info("视觉理解优先级=AI接口优先，且本店没有图片知识，跳过OCR+知识库提前直答: seller=" + task.SellerNick
+                            + ", buyer=" + task.BuyerNick
+                            + ", visionEndpoints=" + visionEndpoints.Count);
+                        return null;
+                    }
 
-                Log.Info("视觉理解优先级=AI接口优先，但未配置可用视觉模型，允许OCR+知识库兜底: seller="
-                    + task.SellerNick + ", buyer=" + task.BuyerNick);
+                    // Image knowledge must be matched even when the configured answer route is AI-first.
+                    // OCR supplies the stable fingerprint and its description is then injected into AI context.
+                    Log.Info("视觉理解优先级=AI接口优先，但本店存在图片知识，先执行服务端OCR匹配再交给视觉AI: seller="
+                        + task.SellerNick + ", buyer=" + task.BuyerNick
+                        + ", imageKnowledgeEnabled=true");
+                }
+                else
+                {
+                    Log.Info("视觉理解优先级=AI接口优先，但未配置可用视觉模型，允许OCR+知识库兜底: seller="
+                        + task.SellerNick + ", buyer=" + task.BuyerNick);
+                }
             }
 
             var sw = Stopwatch.StartNew();
