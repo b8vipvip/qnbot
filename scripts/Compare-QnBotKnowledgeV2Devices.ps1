@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 function Get-LatestDeviceShopState {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$RequestedShopRef,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$RequestedShopRef,
         [Parameter(Mandatory = $true)][string]$DeviceLabel
     )
 
