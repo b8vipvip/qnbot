@@ -53,6 +53,10 @@ namespace Bot.ChromeNs
             public bool IsBot;
             public bool Withdrawn;
             public DateTime OccurredAt;
+            public byte[] AttachmentBytes;
+            public string AttachmentMime;
+            public string AttachmentName;
+            public string AttachmentSha256;
         }
 
         private sealed class ShopWebState
@@ -375,13 +379,51 @@ namespace Bot.ChromeNs
             else if (messageKey.Length > 200)
                 messageKey = Hash(messageKey);
 
+            var isImage = turn.HasImage
+                || text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0;
+            byte[] attachmentBytes = null;
+            var attachmentMime = string.Empty;
+            var attachmentName = string.Empty;
+            var attachmentSha = string.Empty;
+            if (isImage && !turn.Withdrawn)
+            {
+                try
+                {
+                    var imagePath = VisionImageCacheService.TryGetCompletedCachedImagePath(
+                        state.Shop.ShopKey, seller, buyer, turn.MessageKey ?? messageKey);
+                    if (!string.IsNullOrWhiteSpace(imagePath) && System.IO.File.Exists(imagePath))
+                    {
+                        var candidate = System.IO.File.ReadAllBytes(imagePath);
+                        if (candidate.Length > 0 && candidate.Length <= VisualImageKnowledgeService.MaxImageBytes)
+                        {
+                            var mime = VisionImageResolver.DetectMime(candidate);
+                            if (mime == "image/jpeg" || mime == "image/png"
+                                || mime == "image/webp" || mime == "image/gif")
+                            {
+                                using (var sha = SHA256.Create())
+                                    attachmentSha = BitConverter.ToString(sha.ComputeHash(candidate)).Replace("-", "").ToLowerInvariant();
+                                attachmentBytes = candidate;
+                                attachmentMime = mime;
+                                attachmentName = System.IO.Path.GetFileName(imagePath);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("Bot Web镜像图片附件暂不可用，后续同步周期会重试: " + Safe(ex.Message, 180));
+                }
+            }
+
             var signature = Hash(role + "|" + text + "|" + occurredAt.ToUniversalTime().Ticks
-                + "|" + turn.Withdrawn + "|" + isBot);
+                + "|" + turn.Withdrawn + "|" + isBot + "|" + isImage + "|" + attachmentSha);
             lock (state.PendingMessagesSync)
             {
                 // Serialize capture/signature updates with the remote disable transition.
-                // Otherwise a signature can be written after the disable path clears the queue,
-                // permanently suppressing retry when message sync is enabled again.
+                // An image first arrives as a text-only placeholder while the browser cache
+                // finishes; once its bytes are ready the attachment hash changes the signature
+                // and the same message key is upserted with the original image.
                 if (!state.MessageSyncEnabled) return string.Empty;
 
                 string previous;
@@ -389,8 +431,9 @@ namespace Bot.ChromeNs
                     && string.Equals(previous, signature, StringComparison.Ordinal))
                     return messageKey;
 
-                if (EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
-                    messageKey, turn.Withdrawn, isBot))
+                if (EnqueueMessage(state, seller, buyer, role, text, isImage ? "image" : "text",
+                    occurredAt, messageKey, turn.Withdrawn, isBot,
+                    attachmentBytes, attachmentMime, attachmentName, attachmentSha))
                     state.CapturedMessageSignatures[messageKey] = signature;
             }
             return messageKey;
@@ -405,7 +448,8 @@ namespace Bot.ChromeNs
                 + Encoding.UTF8.GetByteCount(item.Buyer ?? string.Empty)
                 + Encoding.UTF8.GetByteCount(item.Role ?? string.Empty)
                 + Encoding.UTF8.GetByteCount(item.Text ?? string.Empty)
-                + Encoding.UTF8.GetByteCount(item.MessageType ?? string.Empty);
+                + Encoding.UTF8.GetByteCount(item.MessageType ?? string.Empty)
+                + (item.AttachmentBytes == null ? 0 : item.AttachmentBytes.Length);
         }
 
         private static long GetPendingMessageBytes(ShopWebState state)
@@ -424,7 +468,11 @@ namespace Bot.ChromeNs
             DateTime occurredAt,
             string messageKey,
             bool withdrawn = false,
-            bool isBot = false)
+            bool isBot = false,
+            byte[] attachmentBytes = null,
+            string attachmentMime = null,
+            string attachmentName = null,
+            string attachmentSha256 = null)
         {
             if (state == null || !state.MessageSyncEnabled) return false;
             seller = Safe(seller, 120);
@@ -449,7 +497,11 @@ namespace Bot.ChromeNs
                 MessageType = Safe(messageType, 50),
                 IsBot = isBot,
                 Withdrawn = withdrawn,
-                OccurredAt = occurredAt
+                OccurredAt = occurredAt,
+                AttachmentBytes = withdrawn ? null : attachmentBytes,
+                AttachmentMime = withdrawn ? string.Empty : Safe(attachmentMime, 40),
+                AttachmentName = withdrawn ? string.Empty : Safe(attachmentName, 180),
+                AttachmentSha256 = withdrawn ? string.Empty : Safe(attachmentSha256, 64)
             };
             // Apply count and byte backpressure instead of evicting unsent messages.
             // A rejected item is deliberately not marked in CapturedMessageSignatures,
@@ -587,7 +639,7 @@ namespace Bot.ChromeNs
                 lock (state.PendingMessagesSync)
                 {
                     messageSnapshot = state.MessageSyncEnabled
-                        ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
+                        ? SelectPendingMessageBatch(state)
                         : new List<WebMessage>();
                 }
                 KeyValuePair<long, JObject>[] resultSnapshot;
@@ -655,6 +707,54 @@ namespace Bot.ChromeNs
                 }
 
                 AcknowledgeCommandResults(state, resultSnapshot);
+                try
+                {
+                    await SyncImageKnowledgeAsync(state, serverUrl, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    using (ShopSettingsScope.Enter(state.Shop))
+                        Log.ErrorWithMaxCount("本店图片知识云同步失败，下一周期会重试：" + Safe(ex.Message, 260), 10);
+                }
+            }
+        }
+
+        private static async Task SyncImageKnowledgeAsync(
+            ShopWebState state, string serverUrl, string token)
+        {
+            if (state == null || state.Shop == null) return;
+            var payload = VisualImageKnowledgeService.BuildCloudSyncRequest(
+                state.Shop.ShopKey, state.Shop.SellerNick);
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+            using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+            using (var http = new HttpClient(handler))
+            {
+                http.Timeout = TimeSpan.FromSeconds(35);
+                using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                    state.Shop,
+                    token,
+                    async requestToken =>
+                    {
+                        using (var request = new HttpRequestMessage(
+                            HttpMethod.Post,
+                            serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/image-knowledge/sync"))
+                        {
+                            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                            request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-image-knowledge-sync/1.0");
+                            request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
+                            request.Headers.TryAddWithoutValidation("X-Shop-Seller", state.Shop.SellerNick);
+                            request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                            return await http.SendAsync(request).ConfigureAwait(false);
+                        }
+                    }))
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                        throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                    VisualImageKnowledgeService.ApplyCloudSyncResponse(
+                        state.Shop.ShopKey, state.Shop.SellerNick, JObject.Parse(body));
+                }
             }
         }
 
@@ -750,6 +850,27 @@ namespace Bot.ChromeNs
             return result;
         }
 
+        private static List<WebMessage> SelectPendingMessageBatch(ShopWebState state)
+        {
+            const long maxPayloadBytes = 9L * 1024 * 1024;
+            var result = new List<WebMessage>();
+            long bytes = 0;
+            var imageIncluded = false;
+            foreach (var item in state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500))
+            {
+                var isImage = item.AttachmentBytes != null && item.AttachmentBytes.Length > 0;
+                if (isImage && imageIncluded) continue;
+                var size = PendingMessageSizeBytes(item);
+                if (result.Count > 0 && bytes + size > maxPayloadBytes) continue;
+                if (size > maxPayloadBytes && result.Count > 0) continue;
+                result.Add(item);
+                bytes += size;
+                if (isImage) imageIncluded = true;
+                if (bytes >= maxPayloadBytes) break;
+            }
+            return result;
+        }
+
         private static JObject ToJson(WebMessage item)
         {
             return new JObject
@@ -762,7 +883,16 @@ namespace Bot.ChromeNs
                 ["message_type"] = item.MessageType,
                 ["is_bot"] = item.IsBot,
                 ["withdrawn"] = item.Withdrawn,
-                ["occurred_at"] = item.OccurredAt.ToUniversalTime().ToString("o")
+                ["occurred_at"] = item.OccurredAt.ToUniversalTime().ToString("o"),
+                ["attachment"] = item.AttachmentBytes == null || item.AttachmentBytes.Length == 0
+                    ? null
+                    : new JObject
+                    {
+                        ["mime_type"] = item.AttachmentMime,
+                        ["file_name"] = item.AttachmentName,
+                        ["sha256"] = item.AttachmentSha256,
+                        ["data_base64"] = Convert.ToBase64String(item.AttachmentBytes)
+                    }
             };
         }
 
