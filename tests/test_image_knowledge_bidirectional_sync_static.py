@@ -53,7 +53,8 @@ def test_web_image_knowledge_uses_the_same_shop_scoped_cloud_records_as_windows_
     assert "shop_key" in script
     assert "base_revision" in script
     assert "imageKnowledgeScopeQuery()" in script
-    assert "shop_key: str = Query" not in api  # scope is validated by the explicit input/query arguments
+    assert "shop_key: str = Query" in api
+    assert "seller: str = Query" in api
     assert "def web_image_knowledge_list(" in api
     assert "def web_image_knowledge_save(" in api
     assert "def web_image_knowledge_delete(" in api
