@@ -142,12 +142,23 @@ namespace Bot.AssistWindow.Widget
                 }
             }
 
-            if (GetTabItem(TabTypeEnum.Robot) == null)
+            var robotTab = GetTabItem(TabTypeEnum.Robot);
+            if (robotTab == null)
             {
                 Log.ErrorWithMaxCount(
                     "右侧面板配置未生成Bot工作台，自动补回默认工作台。configured="
                     + (tabCsv.Length > 80 ? tabCsv.Substring(0, 80) : tabCsv), 10);
                 EnsureRobotTab("InvalidOrEmptyConfiguration");
+                robotTab = GetTabItem(TabTypeEnum.Robot);
+            }
+            // A previous build treated the persisted name "工作台" as an unknown
+            // visibility option and collapsed the only Bot tab. Restore it whenever
+            // the actual Robot visibility setting says the tab should be shown.
+            if (robotTab != null && robotTab.Visibility != Visibility.Visible
+                && Params.Panel.GetRobotIsVisible(Wnd.Desk.WndTitle))
+            {
+                robotTab.Visibility = Visibility.Visible;
+                Log.ErrorWithMaxCount("检测到Bot工作台被旧版标签别名逻辑隐藏，已按RobotIsVisible配置恢复显示。", 10);
             }
 
             if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
@@ -164,6 +175,7 @@ namespace Bot.AssistWindow.Widget
             if (GetTabItem(TabTypeEnum.Robot) != null) return;
             try
             {
+                Log.Info("正在恢复右侧Bot工作台，reason=" + (reason ?? string.Empty));
                 var tabItem = TabRobot();
                 AddTabItem(tabItem, TabTypeEnum.Robot);
             }
