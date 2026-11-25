@@ -852,10 +852,12 @@ namespace Bot.AssistWindow.Widget.Robot
             var question = turn == null ? string.Empty : (turn.Text ?? string.Empty);
             var sourceMessageId = turn == null ? string.Empty : (turn.MessageKey ?? string.Empty);
             var menu = BuildCopyOnlyContextMenu(question, placementTarget);
+            var normalizedQuestion = (question ?? string.Empty).Trim();
             var isImageMessage = !string.IsNullOrWhiteSpace(sourceMessageId)
                 && ((turn != null && turn.HasImage)
-                    || question.Trim() == "[图片]" || question.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
-                    || question.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0);
+                    || string.Equals(normalizedQuestion, "[图片]", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(normalizedQuestion, "图片消息", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(normalizedQuestion, "[image]", StringComparison.OrdinalIgnoreCase));
             if (isImageMessage)
             {
                 var importImage = new MenuItem { Header = "导入图片知识" };
