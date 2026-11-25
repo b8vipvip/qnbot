@@ -1643,8 +1643,8 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.Info("权威CDP重连后UIA刷新失败，等待下一次发送前扫描: "
-                    + SafeDiagnosticText(ex.Message, 180));
+                Log.Info("权威CDP重连后UIA刷新失败，等待下一次发送前扫描: type="
+                    + ex.GetType().Name);
             }
         }
 
