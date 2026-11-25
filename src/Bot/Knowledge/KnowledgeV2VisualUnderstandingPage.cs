@@ -110,6 +110,12 @@ namespace Bot.Knowledge
             });
             _grid.Columns.Add(new DataGridTextColumn
             {
+                Header = "图片说明",
+                Binding = new System.Windows.Data.Binding("Description"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _grid.Columns.Add(new DataGridTextColumn
+            {
                 Header = "OCR 内容预览",
                 Binding = new System.Windows.Data.Binding("OcrText"),
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
