@@ -627,6 +627,17 @@ def bot_web_snapshot(
             (client_id,),
         ).fetchall()
     status_data = _parse(state_row["status_json"], {}) if state_row else {}
+    with _cp.db() as conn:
+        binding_row = conn.execute(
+            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+            (client_id,),
+        ).fetchone()
+    if binding_row:
+        # The binding is the authoritative tenant boundary; telemetry is only a
+        # presentation fallback and must never switch the selected ShopKey.
+        status_data["shop_key"] = str(binding_row["shop_key"] or "")
+        if not str(status_data.get("current_seller") or "").strip():
+            status_data["current_seller"] = str(binding_row["seller"] or "")
     last_seen = state_row["last_seen_at"] if state_row else None
     settings = _settings_for(client_id)
     return {
