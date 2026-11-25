@@ -741,20 +741,35 @@ namespace Bot.ChromeNs
                     return result;
                 }
 
-                var detectedMime = VisionImageResolver.DetectMime(bytes);
-                if (string.IsNullOrWhiteSpace(detectedMime)
-                    || !AllowedMimeTypes.Contains(detectedMime, StringComparer.OrdinalIgnoreCase))
+                var sourceMime = VisionImageResolver.DetectMime(bytes);
+                if (string.IsNullOrWhiteSpace(sourceMime))
                 {
-                    result.Error = "千牛浏览器返回的数据不是受支持的图片";
+                    result.Error = "千牛浏览器返回的数据不是有效图片";
                     return result;
                 }
                 if (!string.IsNullOrWhiteSpace(payload.mime)
                     && payload.mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(payload.mime, detectedMime, StringComparison.OrdinalIgnoreCase))
+                    && !string.Equals(payload.mime, sourceMime, StringComparison.OrdinalIgnoreCase))
                 {
                     result.Error = "千牛浏览器图片MIME与实际内容不一致";
                     return result;
                 }
+
+                byte[] normalizedBytes;
+                string detectedMime;
+                string normalizeError;
+                if (!VisionImageResolver.TryNormalizeForVision(
+                    bytes, out normalizedBytes, out detectedMime, out normalizeError))
+                {
+                    result.Error = "千牛浏览器图片格式无法用于OCR/视觉识别：" + normalizeError;
+                    return result;
+                }
+                if (normalizedBytes.LongLength > maxBytes)
+                {
+                    result.Error = "图片转换为通用格式后超过大小限制";
+                    return result;
+                }
+                bytes = normalizedBytes;
 
                 Directory.CreateDirectory(CacheDirectory);
                 var path = Path.Combine(
@@ -895,9 +910,8 @@ namespace Bot.ChromeNs
                                 result.Error = "图片超过大小限制或下载不完整";
                                 return result;
                             }
-                            var mime = VisionImageResolver.DetectMime(bytes);
-                            if (string.IsNullOrWhiteSpace(mime)
-                                || !AllowedMimeTypes.Contains(mime, StringComparer.OrdinalIgnoreCase))
+                            var sourceMime = VisionImageResolver.DetectMime(bytes);
+                            if (string.IsNullOrWhiteSpace(sourceMime))
                             {
                                 result.Error = "图片数据损坏或格式不支持";
                                 return result;
@@ -907,17 +921,28 @@ namespace Bot.ChromeNs
                                 ? string.Empty
                                 : (response.Content.Headers.ContentType.MediaType ?? string.Empty).ToLowerInvariant();
                             if (!string.IsNullOrWhiteSpace(headerMime)
-                                && !AllowedMimeTypes.Contains(headerMime, StringComparer.OrdinalIgnoreCase))
-                            {
-                                result.Error = "图片 MIME 类型不支持";
-                                return result;
-                            }
-                            if (!string.IsNullOrWhiteSpace(headerMime)
-                                && !string.Equals(headerMime, mime, StringComparison.OrdinalIgnoreCase))
+                                && !string.Equals(headerMime, "application/octet-stream", StringComparison.OrdinalIgnoreCase)
+                                && !string.Equals(headerMime, sourceMime, StringComparison.OrdinalIgnoreCase))
                             {
                                 result.Error = "图片 MIME 与实际内容不一致";
                                 return result;
                             }
+
+                            byte[] normalizedBytes;
+                            string mime;
+                            string normalizeError;
+                            if (!VisionImageResolver.TryNormalizeForVision(
+                                bytes, out normalizedBytes, out mime, out normalizeError))
+                            {
+                                result.Error = "图片格式无法用于OCR/视觉识别：" + normalizeError;
+                                return result;
+                            }
+                            if (normalizedBytes.LongLength > maxBytes)
+                            {
+                                result.Error = "图片转换为通用格式后超过大小限制";
+                                return result;
+                            }
+                            bytes = normalizedBytes;
 
                             Directory.CreateDirectory(CacheDirectory);
                             var path = Path.Combine(
