@@ -148,6 +148,11 @@ namespace Bot.ChromeNs
             return Math.Max(0, (int)Math.Floor((nowUtc - lastActivity).TotalSeconds));
         }
 
+        internal void RefreshReadOnlyAcceptanceSnapshot()
+        {
+            WriteReadOnlyAcceptanceSnapshot();
+        }
+
         private void WriteReadOnlyAcceptanceSnapshot()
         {
             try
