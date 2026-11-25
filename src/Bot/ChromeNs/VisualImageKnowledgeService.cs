@@ -23,6 +23,7 @@ namespace Bot.ChromeNs
         public string Description { get; set; }
         public bool Enabled { get; set; }
         public bool Deleted { get; set; }
+        public string CloudContentFingerprint { get; set; }
         public long CreatedAtTicks { get; set; }
         public long UpdatedAtTicks { get; set; }
     }
@@ -158,6 +159,8 @@ namespace Bot.ChromeNs
                     throw new InvalidOperationException("当前店铺已存在这张图片，请在左侧列表中编辑已有图片知识。");
             }
             entry.Enabled = old == null ? true : entry.Enabled;
+            if (old != null && string.IsNullOrWhiteSpace(entry.CloudContentFingerprint))
+                entry.CloudContentFingerprint = old.CloudContentFingerprint ?? string.Empty;
             entry.Deleted = false;
 
             var createdImage = false;
@@ -205,6 +208,24 @@ namespace Bot.ChromeNs
                 + ", knowledgeId=" + entry.EntityId
                 + ", ocrChars=" + entry.OcrText.Length);
             return entry;
+        }
+
+        public static void SetCloudContentFingerprint(
+            string shopKey, string seller, string id, string fingerprint)
+        {
+            var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
+            id = Clean(id, 80);
+            if (id.Length == 0) return;
+            EnsureSchema();
+            lock (Sync)
+            {
+                var item = Select("where EntityId = ? and ShopKey = ? and Seller = ? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (item == null) return;
+                item.CloudContentFingerprint = Clean(fingerprint, 64);
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { item });
+            }
         }
 
         public static bool Delete(string shopKey, string seller, string id)
@@ -432,7 +453,7 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,Deleted integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,Deleted integer not null default 0,CloudContentFingerprint text not null default '',CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try
                 {
                     // Existing installations have the pre-ImageName schema. Keep all
@@ -447,6 +468,15 @@ namespace Bot.ChromeNs
                 try
                 {
                     DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column Deleted integer not null default 0");
+                }
+                catch (Exception ex)
+                {
+                    if ((ex.Message ?? string.Empty).IndexOf("duplicate column name", StringComparison.OrdinalIgnoreCase) < 0)
+                        throw;
+                }
+                try
+                {
+                    DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column CloudContentFingerprint text not null default ''");
                 }
                 catch (Exception ex)
                 {
