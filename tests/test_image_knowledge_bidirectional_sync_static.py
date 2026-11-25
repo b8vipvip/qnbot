@@ -184,3 +184,16 @@ def test_plain_text_image_mentions_are_not_treated_as_media_attachments():
     assert 'value == "[图片]"' in placeholder
     assert 'value == "图片消息"' in placeholder
     assert 'value == "图片"' not in placeholder
+
+
+
+def test_windows_sqlite_enforces_shopkey_image_knowledge_id_and_hash_boundaries():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    save = service.split("public static VisualImageKnowledgeEntry Save", 1)[1].split(
+        "public static bool Delete", 1
+    )[0]
+    assert 'Select("where EntityId = ? limit 1", entry.EntityId)' in save
+    assert "globalId.ShopKey" in save
+    assert "图片知识ID已属于其他ShopKey" in save
+    assert 'where ShopKey = ? and ImageSha256 = ? and EntityId <> ? limit 1' in save
+    assert "当前ShopKey已存在这张图片" in save
