@@ -478,8 +478,8 @@ namespace Bot.ChromeNs
                     // atomic relative to local Save/Delete operations.
                     Save(shop.ShopKey, seller, entry, temp);
                     DbHelper.Db.Execute(
-                        "update VisualImageKnowledgeEntry set SyncDirty=0,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
-                        revision, id, shop.ShopKey, seller);
+                        "update VisualImageKnowledgeEntry set Enabled=?,SyncDirty=0,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        cloudEnabled ? 1 : 0, revision, id, shop.ShopKey, seller);
                     DbHelper.Db.Execute(
                         "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
                         id, shop.ShopKey, seller);
