@@ -124,6 +124,8 @@ def test_sync_preserves_local_edits_and_deletes_that_race_with_cloud_responses()
     assert "localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt" in upsert
     assert "Save(shop.ShopKey, seller, entry, temp)" in upsert
     assert upsert.index("lock (Sync)") < upsert.index("Save(shop.ShopKey, seller, entry, temp)")
+    assert "set Enabled=?,SyncDirty=0,CloudRevision=?" in upsert
+    assert "cloudEnabled ? 1 : 0" in upsert
     assert "old.SyncDirty && old.UpdatedAtTicks > deletedAt" in delete
     assert "localDelete.SyncDirty && localDelete.DeletedAtTicks > deletedAt" in delete
     assert "CloudRevision=?" in delete
