@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import base64
 import importlib.util
-import io
 import sqlite3
 import sys
 import types
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -240,15 +237,36 @@ def test_buyer_inbox_and_message_history_api_page_without_dropping_messages(tmp_
 
 
 
-def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_withdrawal(tmp_path):
+def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_withdrawal(tmp_path, monkeypatch):
+    class FakeImage:
+        format = "PNG"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def verify(self):
+            return None
+
+    class FakeImageModule:
+        MIME = {"PNG": "image/png"}
+
+        @staticmethod
+        def open(_):
+            return FakeImage()
+
+    pil = types.ModuleType("PIL")
+    pil.Image = FakeImageModule
+    monkeypatch.setitem(sys.modules, "PIL", pil)
+
     with loaded_modules() as (core, _):
         cp = FakeControlPlane(tmp_path / "message-attachments.db")
         core._cp = cp
         create_message_schema(cp)
 
-        buffer = io.BytesIO()
-        Image.new("RGB", (2, 2), (240, 30, 20)).save(buffer, format="PNG")
-        raw = buffer.getvalue()
+        raw = b"\\x89PNG\\r\\n\\x1a\\noriginal-buyer-image-bytes"
         digest = __import__("hashlib").sha256(raw).hexdigest()
         core._save_message(1, {
             "message_key": "buyer-image-1",
