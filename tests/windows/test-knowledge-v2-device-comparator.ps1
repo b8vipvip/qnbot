@@ -19,7 +19,7 @@ function Write-TestSamplerCsv {
 
 function Invoke-ComparatorChild {
     param([string]$CsvA, [string]$CsvB, [string]$OutputPath)
-    $args = @(
+    $childArguments = @(
         '-NoProfile',
         '-ExecutionPolicy Bypass',
         ('-File "' + $scriptPath + '"'),
@@ -27,7 +27,7 @@ function Invoke-ComparatorChild {
         ('-DeviceBCsv "' + $CsvB + '"'),
         ('-OutputDirectory "' + $OutputPath + '"')
     ) -join ' '
-    return Start-Process -FilePath 'powershell.exe' -ArgumentList $args -Wait -PassThru -NoNewWindow
+    return Start-Process -FilePath 'powershell.exe' -ArgumentList $childArguments -Wait -PassThru -NoNewWindow
 }
 
 try {
