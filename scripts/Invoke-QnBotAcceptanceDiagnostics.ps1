@@ -288,7 +288,7 @@ function Read-RuntimeAcceptanceSnapshot {
                 if ($null -ne $snapshot.ActiveFocusProofAgeSeconds) {
                     $activeFocusProofAgeSeconds = [int]$snapshot.ActiveFocusProofAgeSeconds
                 }
-                $activeShopEvidenceStatus = if ($activeFocusProofFresh) { 'fresh' } else { 'stale_or_unfocused' }
+                $activeShopEvidenceStatus = if ($activeFocusProofFresh) { 'owner_mapping_unverified' } else { 'stale_or_unfocused' }
             }
             else {
                 $activeShopEvidenceStatus = 'invalid_alias'
@@ -334,6 +334,24 @@ function Read-RuntimeAcceptanceSnapshot {
                 StandbyCount = [int]$shop.StandbyCount
                 RecoverableStandbyCount = [int]$shop.RecoverableStandbyCount
                 Standbys = $standbyRows
+            }
+        }
+
+        if ($activeFocusProofFresh) {
+            $activeOwnerRows = @($shopRows | Where-Object { $_.ShopRef -eq $activeShopRef })
+            if ($activeOwnerRows.Count -eq 1) {
+                $activeOwner = $activeOwnerRows[0]
+                $activeShopEvidenceStatus = if (
+                    [string]::Equals([string]$activeOwner.OwnerSessionRef, $activeSessionRef, [StringComparison]::Ordinal) -and
+                    $activeOwner.OwnerConnected -eq $true -and
+                    $activeOwner.OwnerInitialized -eq $true -and
+                    $activeOwner.OwnerClientPresent -eq $true -and
+                    $activeOwner.OwnerClientInvalidated -ne $true -and
+                    $activeOwner.OwnerClientIdentityRetired -ne $true
+                ) { 'fresh' } else { 'owner_mapping_mismatch' }
+            }
+            else {
+                $activeShopEvidenceStatus = 'owner_mapping_missing_or_ambiguous'
             }
         }
 
