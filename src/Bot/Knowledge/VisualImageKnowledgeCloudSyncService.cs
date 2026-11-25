@@ -173,33 +173,68 @@ namespace Bot.Knowledge
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 VisualImageKnowledgeEntry localEntry;
                 byId.TryGetValue(id, out localEntry);
+                var cloud = FromCloudRecord(record);
+                if (cloud == null) continue;
+                cloud.EntityId = id;
+                var cloudFingerprint = FingerprintRecord(cloud);
+                if (localEntry != null)
+                {
+                    var localFingerprint = FingerprintRecord(localEntry);
+                    var baseline = localEntry.CloudContentFingerprint ?? string.Empty;
+                    var localDirty = baseline.Length == 0
+                        || !string.Equals(localFingerprint, baseline, StringComparison.Ordinal);
+                    var cloudDirty = baseline.Length == 0
+                        || !string.Equals(cloudFingerprint, baseline, StringComparison.Ordinal);
+
+                    if (string.Equals(localFingerprint, cloudFingerprint, StringComparison.Ordinal))
+                    {
+                        VisualImageKnowledgeService.SetCloudContentFingerprint(
+                            shop.ShopKey, shop.DisplayName, id, cloudFingerprint);
+                        continue;
+                    }
+
+                    if (localDirty)
+                    {
+                        // Preserve unsynced Windows edits on conflicts. The new cloud
+                        // baseline is stored so the next poll can safely push the local winner.
+                        if (cloudDirty)
+                            Log.ErrorWithMaxCount("图片知识发生 Windows/Web 并发修改，保留本地版本并在下一轮同步：" + id, 10);
+                        VisualImageKnowledgeService.SetCloudContentFingerprint(
+                            shop.ShopKey, shop.DisplayName, id, cloudFingerprint);
+                        continue;
+                    }
+
+                    if (!cloudDirty) continue;
+                }
+
                 var deleted = record.Value<bool?>("Deleted").GetValueOrDefault();
                 if (deleted)
                 {
                     if (localEntry != null && !localEntry.Deleted)
                         VisualImageKnowledgeService.Delete(shop.ShopKey, shop.DisplayName, id);
+                    VisualImageKnowledgeService.SetCloudContentFingerprint(
+                        shop.ShopKey, shop.DisplayName, id, cloudFingerprint);
                     continue;
                 }
 
-                if (!record.Value<bool?>("ImageAvailable").GetValueOrDefault()) continue;
-                var cloud = FromCloudRecord(record);
-                if (cloud == null) continue;
-                if (localEntry != null && SameContent(localEntry, cloud)) continue;
-
+                var imageAvailable = record.Value<bool?>("ImageAvailable").GetValueOrDefault();
                 string sourcePath = localEntry != null
                     && string.Equals(localEntry.ImageSha256, cloud.ImageSha256, StringComparison.OrdinalIgnoreCase)
                     && !string.IsNullOrWhiteSpace(localEntry.ImagePath)
                     && File.Exists(localEntry.ImagePath)
                     ? localEntry.ImagePath
-                    : await DownloadImageAsync(shop, serverUrl, token, id, cloud.ImageSha256, cloud.ImageName);
+                    : (imageAvailable
+                        ? await DownloadImageAsync(shop, serverUrl, token, id, cloud.ImageSha256, cloud.ImageName)
+                        : string.Empty);
 
                 var temporary = !string.Equals(sourcePath, localEntry == null ? string.Empty : localEntry.ImagePath,
                     StringComparison.OrdinalIgnoreCase);
                 try
                 {
                     if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath)) continue;
-                    cloud.EntityId = id;
                     VisualImageKnowledgeService.Save(shop.ShopKey, shop.DisplayName, cloud, sourcePath);
+                    VisualImageKnowledgeService.SetCloudContentFingerprint(
+                        shop.ShopKey, shop.DisplayName, id, cloudFingerprint);
                 }
                 finally
                 {
@@ -417,6 +452,22 @@ namespace Bot.Knowledge
                     x.Deleted ? "1" : "0"
                 }));
             return HashBytes(Encoding.UTF8.GetBytes(string.Join("\n", canonical)));
+        }
+
+        private static string FingerprintRecord(VisualImageKnowledgeEntry item)
+        {
+            if (item == null) return string.Empty;
+            var canonical = string.Join("|", new[]
+            {
+                item.EntityId ?? string.Empty,
+                item.ImageName ?? string.Empty,
+                item.ImageSha256 ?? string.Empty,
+                item.OcrText ?? string.Empty,
+                item.Description ?? string.Empty,
+                item.Enabled ? "1" : "0",
+                item.Deleted ? "1" : "0"
+            });
+            return HashBytes(Encoding.UTF8.GetBytes(canonical));
         }
 
         private static bool SameContent(VisualImageKnowledgeEntry local, VisualImageKnowledgeEntry cloud)
