@@ -344,9 +344,10 @@ namespace Bot.ChromeNs
                 else
                 {
                     var age = DateTime.UtcNow - _lastFocusProofUtc;
-                    focusProofAgeSeconds = age < TimeSpan.Zero
-                        ? null
-                        : Math.Max(0, (int)Math.Floor(age.TotalSeconds));
+                    if (age < TimeSpan.Zero)
+                        focusProofAgeSeconds = null;
+                    else
+                        focusProofAgeSeconds = Math.Max(0, (int)Math.Floor(age.TotalSeconds));
                 }
             }
         }
