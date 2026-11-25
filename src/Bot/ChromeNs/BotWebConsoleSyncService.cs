@@ -367,8 +367,12 @@ namespace Bot.ChromeNs
                 text = text.Substring(0, text.Length - botEchoMarker.Length).TrimEnd();
                 isBot = text.Length > 0;
             }
+            var isImage = turn.HasImage
+                || text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0;
             if (turn.Withdrawn && string.IsNullOrWhiteSpace(text))
                 text = "已撤回一条消息";
+            if (text.Length == 0 && isImage) text = "[图片]";
             if (text.Length == 0) return string.Empty;
 
             var occurredAt = turn.Timestamp == DateTime.MinValue ? DateTime.Now : turn.Timestamp;
@@ -379,9 +383,6 @@ namespace Bot.ChromeNs
             else if (messageKey.Length > 200)
                 messageKey = Hash(messageKey);
 
-            var isImage = turn.HasImage
-                || text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
-                || text.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0;
             byte[] attachmentBytes = null;
             var attachmentMime = string.Empty;
             var attachmentName = string.Empty;
