@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 function Write-TestSamplerCsv {
     param([string]$Path, [string]$ShopRef, [int]$Revision, [string]$LocalFingerprint, [string]$CloudFingerprint)
     $row = [pscustomobject]@{
-        Time = '2026-11-25T12:00:00+00:00'
+        Time = [DateTimeOffset]::UtcNow.AddSeconds(-5).ToString('o')
         SampleKind = 'system'
         KnowledgeV2SyncSnapshotStatus = 'fresh'
         KnowledgeV2SyncSnapshotAgeSeconds = '5'
