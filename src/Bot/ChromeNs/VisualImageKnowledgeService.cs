@@ -55,6 +55,7 @@ namespace Bot.ChromeNs
         public static List<VisualImageKnowledgeEntry> Load(string shopKey, string seller)
         {
             var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
             EnsureSchema();
             var imageRoot = GetImageDirectory(shop);
             lock (Sync)
@@ -78,6 +79,7 @@ namespace Bot.ChromeNs
             string sourceImagePath)
         {
             var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
             if (entry == null) throw new ArgumentNullException("entry");
             sourceImagePath = (sourceImagePath ?? string.Empty).Trim();
             if (sourceImagePath.Length == 0 || !File.Exists(sourceImagePath))
@@ -169,6 +171,7 @@ namespace Bot.ChromeNs
         public static bool Delete(string shopKey, string seller, string id)
         {
             var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
             id = Clean(id, 80);
             if (id.Length == 0) return false;
             EnsureSchema();
@@ -205,6 +208,7 @@ namespace Bot.ChromeNs
         {
             match = null;
             var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
             ocrText = Clean(ocrText, MaxOcrChars);
             imageSha256 = Clean(imageSha256, 64);
             if (ocrText.Length < 4 && imageSha256.Length == 0) return false;
@@ -298,13 +302,20 @@ namespace Bot.ChromeNs
         {
             shopKey = Clean(shopKey, 64);
             seller = Clean(seller, 160);
-            if (shopKey.Length == 0 || seller.Length == 0)
-                throw new InvalidOperationException("图片知识必须绑定明确的ShopKey和客服账号。");
+            if (shopKey.Length == 0)
+                throw new InvalidOperationException("图片知识必须绑定明确的ShopKey。");
+
+            // ShopKey is the authoritative identity. Seller may be a UI/display alias;
+            // every database row is written with the canonical seller from this profile.
             var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
             if (shop == null
                 || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal)
-                || !string.Equals((shop.SellerNick ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
-                throw new InvalidOperationException("图片知识店铺身份与当前客服账号不一致，已阻止跨店访问。");
+                || string.IsNullOrWhiteSpace(shop.SellerNick))
+                throw new InvalidOperationException("图片知识无法解析权威ShopKey店铺身份，已阻止跨店访问。");
+            if (seller.Length > 0
+                && !string.Equals(seller, (shop.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal)
+                && !string.Equals(seller, (shop.DisplayName ?? string.Empty).Trim(), StringComparison.Ordinal))
+                Log.Info("图片知识请求使用了店铺显示昵称别名，数据仍按权威ShopKey和canonical Seller隔离。");
             return shop;
         }
 
