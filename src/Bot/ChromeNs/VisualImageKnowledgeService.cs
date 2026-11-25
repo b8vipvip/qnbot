@@ -303,6 +303,11 @@ namespace Bot.ChromeNs
             {
                 var kind = (string)item["kind"] ?? "upsert";
                 var data = item["item"] as JObject ?? item;
+                var duplicateLocalId = Clean((string)item["local_id"], 80);
+                var cloudId = Clean((string)data["id"], 80);
+                if (duplicateLocalId.Length > 0 && cloudId.Length > 0
+                    && !string.Equals(duplicateLocalId, cloudId, StringComparison.Ordinal))
+                    RemoveLocalDuplicate(shop, seller, duplicateLocalId);
                 if (string.Equals(kind, "delete", StringComparison.OrdinalIgnoreCase))
                 {
                     ApplyCloudDelete(shop, seller, data);
@@ -320,6 +325,20 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute(
                     "insert or replace into VisualImageKnowledgeSyncState(ShopKey,Seller,LastCloudRevision,UpdatedAtTicks) values(?,?,?,?)",
                     shop.ShopKey, seller, revision, DateTime.Now.Ticks);
+            }
+        }
+
+        private static void RemoveLocalDuplicate(ShopContext shop, string seller, string id)
+        {
+            lock (Sync)
+            {
+                var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (local == null) return;
+                DbHelper.Db.Execute(
+                    "delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
+                    id, shop.ShopKey, seller);
+                TryDeleteManagedImage(local.ImagePath, GetImageDirectory(shop));
             }
         }
 
