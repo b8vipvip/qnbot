@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -294,8 +293,10 @@ def web_image_knowledge_image(image_id: str, client: Dict[str, Any] = Depends(co
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="图片知识不存在")
-    return Response(content=bytes(row["image_bytes"]), media_type=row["mime_type"],
-                    headers={"Cache-Control": "private, max-age=300"})
+    return {
+        "mime_type": row["mime_type"],
+        "image_base64": base64.b64encode(bytes(row["image_bytes"])).decode("ascii"),
+    }
 
 
 @router.post("/api/bot-web/image-knowledge")
