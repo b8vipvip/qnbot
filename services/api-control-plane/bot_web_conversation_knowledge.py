@@ -127,16 +127,20 @@ def init_db() -> None:
         # without a verified binding remain invisible and are not guessed into a shop.
         try:
             legacy = conn.execute(
-                "SELECT id,client_id FROM bot_web_image_knowledge WHERE shop_key=''"
+                "SELECT id,client_id,created_at FROM bot_web_image_knowledge WHERE shop_key=''"
             ).fetchall()
             for item in legacy:
                 binding = conn.execute(
-                    "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+                    "SELECT shop_key,seller,bound_at FROM bot_client_shop_binding WHERE client_id=?",
                     (int(item["client_id"]),),
                 ).fetchone()
-                if binding and str(binding["shop_key"] or "").strip():
+                # The previous schema did not persist ShopKey. Only migrate records
+                # created after the current binding epoch; older rows may belong to a
+                # shop that was rebound before this version and must remain quarantined.
+                if (binding and str(binding["shop_key"] or "").strip()
+                    and str(item["created_at"] or "") >= str(binding["bound_at"] or "")):
                     conn.execute(
-                        "UPDATE bot_web_image_knowledge SET shop_key=?,seller=?,revision=CASE WHEN revision=0 THEN 1 ELSE revision END,updated_by='legacy' WHERE client_id=? AND id=?",
+                        "UPDATE bot_web_image_knowledge SET shop_key=?,seller=?,revision=CASE WHEN revision=0 THEN 1 ELSE revision END,updated_by='legacy-bound' WHERE client_id=? AND id=?",
                         (binding["shop_key"], binding["seller"] or "", int(item["client_id"]), item["id"]),
                     )
                     conn.execute(
