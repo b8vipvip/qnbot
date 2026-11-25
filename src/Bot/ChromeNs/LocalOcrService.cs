@@ -154,7 +154,7 @@ namespace Bot.ChromeNs
                     + ", sha256=" + ShortHash(sha256));
             }
 
-            Task ignored = sharedTask.ContinueWith(
+            sharedTask.ContinueWith(
                 _ =>
                 {
                     Lazy<Task<LocalOcrResult>> current;
