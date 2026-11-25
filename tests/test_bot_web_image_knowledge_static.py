@@ -35,6 +35,9 @@ def test_web_image_knowledge_ui_supports_long_press_import_auto_ocr_and_editing(
     assert 'prepareImageKnowledgeFile' in script
     assert 'loadImageKnowledge' in script
     assert 'importImageKnowledgeAction' in script
+    assert 'async function sniffImageKnowledgeMime(file)' in script
+    assert 'await sniffImageKnowledgeMime(file)' in script
+    assert 'bytes[0]===0x42&&bytes[1]===0x4d' in script
     assert 'async function normalizeImageKnowledgeFile(file)' in script
     assert 'createImageBitmap(file)' in script
     assert 'canvas.toBlob(resolve,"image/png")' in script
