@@ -732,24 +732,30 @@ namespace Bot.ChromeNs
                     ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                     using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
                     using (var http = new HttpClient(handler))
-                    using (var request = new HttpRequestMessage(
-                        HttpMethod.Post, serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/message-image"))
-                    using (var content = new ByteArrayContent(bytes))
                     {
                         http.Timeout = TimeSpan.FromSeconds(25);
-                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                        request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                        request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-image-sync/1.0");
-                        request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
-                        request.Headers.TryAddWithoutValidation("X-Message-Key", item.MessageKey);
-                        request.Headers.TryAddWithoutValidation("X-Seller", Uri.EscapeDataString(item.Seller ?? string.Empty));
-                        request.Headers.TryAddWithoutValidation("X-Buyer", Uri.EscapeDataString(item.Buyer ?? string.Empty));
-                        request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
-                        request.Headers.TryAddWithoutValidation("X-Image-Name", Uri.EscapeDataString(imageName));
-                        content.Headers.ContentType = new MediaTypeHeaderValue(
-                            string.IsNullOrWhiteSpace(image.MimeType) ? "application/octet-stream" : image.MimeType);
-                        request.Content = content;
-                        using (var response = await http.SendAsync(request).ConfigureAwait(false))
+                        using (var response = await ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                            state.Shop, token, async requestToken =>
+                            {
+                                using (var request = new HttpRequestMessage(
+                                    HttpMethod.Post, serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/message-image"))
+                                using (var content = new ByteArrayContent(bytes))
+                                {
+                                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                    request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-image-sync/1.0");
+                                    request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
+                                    request.Headers.TryAddWithoutValidation("X-Message-Key", item.MessageKey);
+                                    request.Headers.TryAddWithoutValidation("X-Seller", Uri.EscapeDataString(item.Seller ?? string.Empty));
+                                    request.Headers.TryAddWithoutValidation("X-Buyer", Uri.EscapeDataString(item.Buyer ?? string.Empty));
+                                    request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
+                                    request.Headers.TryAddWithoutValidation("X-Image-Name", Uri.EscapeDataString(imageName));
+                                    content.Headers.ContentType = new MediaTypeHeaderValue(
+                                        string.IsNullOrWhiteSpace(image.MimeType) ? "application/octet-stream" : image.MimeType);
+                                    request.Content = content;
+                                    return await http.SendAsync(request).ConfigureAwait(false);
+                                }
+                            }))
                         {
                             if (!response.IsSuccessStatusCode)
                             {
