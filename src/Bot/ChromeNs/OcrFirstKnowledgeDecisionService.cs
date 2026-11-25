@@ -160,21 +160,24 @@ namespace Bot.ChromeNs
             }
 
             VisualUnderstandingMatch visualMatch = null;
-            try
+            if (imageKnowledgeMatch == null)
             {
-                if (!VisualUnderstandingRuleService.TryMatch(task.ShopKey, knowledgeSeller, ocr.Text, out visualMatch))
+                // Keep existing operator rules as a compatibility fallback only. A curated
+                // image-knowledge match is authoritative and must not be overridden by legacy fields.
+                try
+                {
+                    if (!VisualUnderstandingRuleService.TryMatch(task.ShopKey, knowledgeSeller, ocr.Text, out visualMatch))
+                    {
+                        visualMatch = null;
+                        Log.Info("OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索；不允许基于未确认应用身份提前直答: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
+                    }
+                }
+                catch (Exception ex)
                 {
                     visualMatch = null;
-                    Log.Info("OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索；不允许基于未确认应用身份提前直答: shopRef="
-                        + MyWebSocketServer.DiagnosticRef("shop", task.ShopKey));
+                    Log.ErrorWithMaxCount("旧版视觉理解规则匹配失败，仍继续OCR证据检索；不允许基于未确认应用身份提前直答: " + ex.Message, 10);
                 }
-            }
-            catch (Exception ex)
-            {
-                // A visual preset is an optional application-identity hint, not a prerequisite
-                // for OCR evidence retrieval. Knowledge V2 still sees the OCR evidence below.
-                visualMatch = null;
-                Log.ErrorWithMaxCount("视觉理解规则匹配失败，仍继续OCR证据检索；不允许基于未确认应用身份提前直答: " + ex.Message, 10);
             }
 
             KnowledgeV2Decision decision;
