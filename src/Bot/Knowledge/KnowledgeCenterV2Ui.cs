@@ -36,6 +36,61 @@ namespace Bot.Knowledge
                 new RoutedEventHandler(OnLoaded), true);
         }
 
+        public static void ShowImageKnowledgeImport(
+            Window owner, string seller, string shopKey, string imagePath, string imageName)
+        {
+            Initialize();
+            seller = (seller ?? string.Empty).Trim();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            imagePath = (imagePath ?? string.Empty).Trim();
+            if (seller.Length == 0 || shopKey.Length == 0 || imagePath.Length == 0 || !System.IO.File.Exists(imagePath))
+            {
+                MessageBox.Show(owner, "缺少有效的店铺身份或图片文件，无法导入图片知识。",
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            ShopContext shop;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
+                    throw new InvalidOperationException("无法解析原始消息所属ShopKey。");
+                var canonicalSeller = (shop.SellerNick ?? string.Empty).Trim();
+                if (canonicalSeller.Length > 0
+                    && !string.Equals(canonicalSeller, seller, StringComparison.Ordinal)
+                    && !string.Equals((shop.DisplayName ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+                    throw new InvalidOperationException("消息客服账号与ShopKey不匹配，已阻止跨店导入。");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "无法确认图片所属店铺：" + ex.Message,
+                    "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var window = new KnowledgeCenterWindow
+            {
+                RequestedSeller = shop.SellerNick,
+                RequestedShopKey = shop.ShopKey
+            };
+            ShopScopedUiBridge.Attach(window, shop);
+            if (owner != null) window.Owner = owner;
+            window.Loaded += delegate
+            {
+                window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var shell = window.Content as KnowledgeCenterV2Shell;
+                    if (shell != null)
+                        shell.OpenImageKnowledgeImport(imagePath, imageName);
+                    else
+                        MessageBox.Show(window, "知识库界面未加载，图片尚未导入。",
+                            "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            };
+            window.Show();
+        }
+
         public static void ShowBotReplySearch(
             Window owner, string seller, string buyer, string question, string answer,
             string shopKey = "")
@@ -170,17 +225,17 @@ namespace Bot.Knowledge
 
             try
             {
-                window.Title = "AI客服 - 知识中心 V2";
+                window.Title = "AI客服 - 知识库";
                 window.MinWidth = 1100;
                 window.MinHeight = 720;
                 window.Width = Math.Max(window.Width, 1320);
                 window.Height = Math.Max(window.Height, 820);
                 window.Content = new KnowledgeCenterV2Shell(window);
-                Log.Info("Knowledge Center V2界面已替换旧知识库页。");
+                Log.Info("统一知识库界面已替换旧知识库页。");
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("加载Knowledge Center V2界面失败，保留旧知识库界面: " + ex.Message, 10);
+                Log.ErrorWithMaxCount("加载知识库界面失败，保留旧知识库界面: " + ex.Message, 10);
             }
         }
     }
@@ -240,7 +295,7 @@ namespace Bot.Knowledge
             var items = new[]
             {
                 Nav("知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.All)),
-                Nav("视觉理解", () => new KnowledgeV2VisualUnderstandingPage(_seller, _shopKey)),
+                Nav("图片知识", () => new KnowledgeV2VisualUnderstandingPage(_seller, _shopKey)),
                 Nav("商品知识", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Product)),
                 Nav("流程", () => new KnowledgeV2RecordsPage(_owner, _seller, KnowledgeV2RecordsPageMode.Process)),
                 Nav("接待决策", () => new KnowledgeV2ReceptionAuditPage(_seller)),
@@ -293,7 +348,7 @@ namespace Bot.Knowledge
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var titlePanel = new StackPanel { Margin = new Thickness(12, 8, 20, 8) };
-            titlePanel.Children.Add(new TextBlock { Text = "Knowledge Center V2", FontSize = 22, FontWeight = FontWeights.SemiBold });
+            titlePanel.Children.Add(new TextBlock { Text = "知识库", FontSize = 22, FontWeight = FontWeights.SemiBold });
             _status = new TextBlock
             {
                 Text = "结构化知识 + 本地倒排索引 + Working Memory补全",
@@ -426,9 +481,24 @@ namespace Bot.Knowledge
             foreach (var item in _nav.Items.OfType<NavItem>())
             {
                 if (item.Name != name) continue;
-                _nav.SelectedItem = item;
+                if (ReferenceEquals(_nav.SelectedItem, item))
+                    Navigate();
+                else
+                    _nav.SelectedItem = item;
                 return;
             }
+        }
+
+        internal void OpenImageKnowledgeImport(string imagePath, string imageName)
+        {
+            SelectNav("图片知识");
+            var page = _content.Content as KnowledgeV2VisualUnderstandingPage;
+            if (page == null)
+            {
+                Log.ErrorWithMaxCount("打开图片知识导入页失败：目标页面未创建。", 5);
+                return;
+            }
+            page.ImportImageAndRecognizeAsync(imagePath, imageName);
         }
 
         public void OpenBotReplySearch(string question, string answer)
@@ -447,7 +517,7 @@ namespace Bot.Knowledge
                 return;
             }
             _status.Text = "店铺：" + _seller + "　ShopKey：" + _shopKey
-                + "　V2本地知识引擎（查询不触发定时全量重建）";
+                + "　本地知识引擎（查询不触发定时全量重建）";
         }
     }
 
