@@ -397,7 +397,7 @@ def test_active_reply_and_manual_delivery_paths_use_explicit_shop_scoped_dedup()
 
     assert "burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey" in streaming
     assert "burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey" in vision
-    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in qn
+    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in " ".join(qn.split())
     assert "RememberDelivered(plan.Seller, plan.Buyer, answer, plan.ShopKey)" in order
     assert "RememberDelivered(seller, buyer, reply, shop.ShopKey)" in wecom
 

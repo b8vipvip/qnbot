@@ -76,7 +76,7 @@ def test_server_trace_storage_and_admin_query_are_shop_aware():
     assert '/api/admin/message-processing-conversations/detail' in text
     assert '/api/admin/message-processing-conversations/export' in text
     assert 'conversation_date: str = Query("", max_length=10)' in text
-    assert '_beijing_day_expr("t") + "="' in text
+    assert 'where.append(_beijing_day_expr("t") + "=?")' in text
     assert 'bot_client_shop_binding.ensure_binding' in text
     assert '20_000' in text
 
