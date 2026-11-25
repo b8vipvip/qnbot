@@ -326,9 +326,13 @@ def test_vision_reply_rechecks_human_takeover_and_records_send_terminal_state():
     end = qn.index("private void AddSkippedConversation", start)
     method = qn[start:end]
     assert "ParallelReplyRelevanceGate.ShouldSend(" in method
+    send_call = method.index("SendTextWithRetryAsync(")
     assert method.index("ParallelReplyRelevanceGate.ShouldSend(") < method.index(
         'lease.MarkSending("vision_send_started")'
-    ) < method.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)")
+    ) < send_call
+    assert "burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard" in method[
+        send_call:method.index(");", send_call) + 2
+    ]
     assert "vision_final_relevance_suppressed" in method
     assert 'lease.MarkCompleted("vision_send_completed")' in method
     assert 'lease.MarkFailed("vision_send_failed")' in method
@@ -437,14 +441,14 @@ def test_failed_or_throwing_pre_send_guard_is_terminal_and_never_retried_as_tran
 def test_fixed_reply_guard_cancellation_is_not_reported_as_transport_failure():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     method = coordinator[
-        coordinator.index("private static async Task<bool> SendFixedAsync"):
+        coordinator.index("private static async Task<CanonicalPreMergeOutcome> SendFixedAsync"):
         coordinator.index("private static bool TryResolveOffHours")
     ]
     assert "sendCancelled = !ok && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;" in method
     assert "item.SellerNick, item.BuyerNick, answer, item.ShopKey" in method
     assert "固定回复发送前会话门禁取消" in method
     assert "CanonicalPreMergeOutcome.Cancelled" in coordinator
-    assert "return ok" not in method
+    assert "return ok;" not in method
     assert "return ok\n                    ? CanonicalPreMergeOutcome.Consumed" in method
 
 def test_canonical_premerge_cancelled_outcome_terminates_the_current_buyer_generation():
@@ -476,5 +480,5 @@ def test_legacy_qn_text_and_vision_fallback_paths_keep_last_mile_shop_scoped_gua
         assert "rpa.LastSendWasCancelled" in region
         assert "ResponseProgressTracker.Cancel(" in region
     assert "lease.MarkSending(\"legacy_text_send_started\")" in text_path
-    assert "RememberDelivered(burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey)" in qn
+    assert "RememberDelivered(burst.SellerNick,burst.BuyerNick,answer,burst.ShopKey)" in "".join(qn.split())
 

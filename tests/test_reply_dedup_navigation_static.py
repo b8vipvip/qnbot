@@ -43,9 +43,11 @@ def test_every_text_burst_is_checked_before_display_and_send():
     checked = text.index("ReplyDeduplicationService.EnsureDistinct", conditional_check)
     stable = text.index("ConfirmStableAsync(220)", checked)
     displayed = text.index("ResponseProgressTracker.SetAnswerReady", stable)
-    sent = text.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", displayed)
+    sent = text.index("SendTextWithRetryAsync(", displayed)
+    send_call = text[sent:text.index(");", sent) + 2]
     remembered = text.index("ReplyDeduplicationService.RememberDelivered", sent)
     assert fixed < ai < stale_check < conditional_check < checked < stable < displayed < sent < remembered
+    assert "burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard" in send_call
 
 
 def test_duplicate_service_regenerates_and_rejects_same_result():

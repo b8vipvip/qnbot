@@ -26,6 +26,7 @@ function traceStageName(value){
     delivery_confirmed:"发送确认",
     delivery_failed:"发送失败",
     manual_intervention:"人工介入",
+    manual_reply_observed:"观察到人工客服回复",
     processing_failed:"处理失败"
   };
   return map[value]||value||"-";
@@ -80,7 +81,7 @@ async function loadMessageTraces(){
     <td>${esc(String(r.success_count||0))} / ${esc(String(r.failed_count||0))}</td>
     <td>${badge(r.latest_status||"-",traceStatusKind(r.latest_status))}<div class="hint">${esc(traceStageName(r.latest_stage))}</div></td>
     <td><strong>${esc(r.latest_summary||"-")}</strong>${r.latest_detail?`<div class="hint">${esc(r.latest_detail)}</div>`:""}</td>
-    <td><button class="primary" type="button" onclick="viewMessageConversation(${index})">查看</button></td>
+    <td><div style="display:inline-flex;gap:6px;white-space:nowrap"><button class="primary" type="button" onclick="viewMessageConversation(${index})">查看</button><button class="secondary" type="button" onclick="exportMessageConversation(${index})">导出</button></div></td>
   </tr>`).join("")}</tbody></table>`;
   }catch(err){
     const message=err&&err.message?err.message:String(err||"未知错误");
@@ -95,7 +96,11 @@ function ensureTraceDetailDialog(){
   dialog=document.createElement("dialog");
   dialog.id="messageTraceDetailDialog";
   dialog.className="modal";
-  dialog.innerHTML=`<div style="min-width:min(1100px,90vw);max-width:90vw"><div class="modal-head"><div><h2 id="messageTraceDetailTitle">买家消息处理详情</h2><p id="messageTraceDetailSubtitle"></p></div><button class="icon-btn" type="button" onclick="document.getElementById('messageTraceDetailDialog').close()">×</button></div><div id="messageTraceDetailBody"><div class="empty">正在加载...</div></div><div class="modal-actions"><button class="secondary" type="button" onclick="document.getElementById('messageTraceDetailDialog').close()">关闭</button></div></div>`;
+  dialog.style.width="min(1320px,96vw)";
+  dialog.style.maxWidth="96vw";
+  dialog.style.maxHeight="90vh";
+  dialog.style.overflow="auto";
+  dialog.innerHTML=`<div style="width:100%;max-width:100%;min-width:0;box-sizing:border-box"><div class="modal-head"><div><h2 id="messageTraceDetailTitle">买家消息处理详情</h2><p id="messageTraceDetailSubtitle"></p></div><button class="icon-btn" type="button" onclick="document.getElementById('messageTraceDetailDialog').close()">×</button></div><div id="messageTraceDetailBody" style="min-width:0"><div class="empty">正在加载...</div></div><div class="modal-actions"><button class="secondary" type="button" onclick="document.getElementById('messageTraceDetailDialog').close()">关闭</button></div></div>`;
   document.body.appendChild(dialog);
   return dialog;
 }
@@ -127,6 +132,24 @@ async function viewMessageConversation(index){
   }catch(err){
     if(body)body.innerHTML=`<div class="empty">加载详情失败：${esc(err&&err.message?err.message:String(err||"未知错误"))}</div>`;
   }
+}
+
+function exportMessageConversation(index){
+  const row=(state.messageTraces||[])[Number(index)];
+  if(!row)return;
+  const query=new URLSearchParams({
+    client_id:String(row.client_id||""),
+    shop_key:String(row.shop_key||""),
+    seller:String(row.seller||""),
+    buyer:String(row.buyer||""),
+    conversation_date:String(row.conversation_date||"")
+  });
+  const anchor=document.createElement("a");
+  anchor.href="/api/admin/message-processing-conversations/export?"+query.toString();
+  anchor.download="";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function exportMessageConversations(){

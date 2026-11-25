@@ -248,6 +248,13 @@ namespace Bot.ChromeNs
                 cancellationToken.ThrowIfCancellationRequested();
                 rpa.ResetSendFailure();
                 string shopScopeReason;
+                shopScopeReason = await WaitForCurrentShopAuthorityAsync(
+                    cancellationToken, 5000, "发送").ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(shopScopeReason))
+                {
+                    rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
+                    return false;
+                }
                 if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
                 {
                     rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
@@ -303,6 +310,13 @@ namespace Bot.ChromeNs
                         break;
                     }
 
+                    shopScopeReason = await WaitForCurrentShopAuthorityAsync(
+                        cancellationToken, 3000, "重试发送").ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(shopScopeReason))
+                    {
+                        rpa.SetSendFailure("重试ShopKey作用域复核", shopScopeReason);
+                        return false;
+                    }
                     if (!await EnsureActiveBuyerForSendAsync(buyer, cancellationToken))
                     {
                         rpa.SetSendFailure("重试会话确认", "无法确认目标买家会话");
@@ -415,7 +429,10 @@ namespace Bot.ChromeNs
                 || !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal)
                 || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
             {
-                reason = "当前CDP会话不属于显式ShopSettingsScope，已阻止跨店发送";
+                reason = "当前CDP会话不属于显式ShopSettingsScope，已阻止跨店发送: expectedShopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client == null ? string.Empty : client.ShopKey)
+                    + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client == null ? string.Empty : client.SessionId);
                 return false;
             }
 
@@ -442,6 +459,81 @@ namespace Bot.ChromeNs
                 return false;
             }
             return true;
+        }
+
+        // A message may wait behind the single native send gate while the authoritative WebView
+        // session is being replaced. Wait only for the same ShopKey to reclaim authority; never
+        // borrow QN.CurQN or relax the last-mile cross-shop guard.
+        private async Task<string> WaitForCurrentShopAuthorityAsync(
+            CancellationToken cancellationToken,
+            int timeoutMs,
+            string stage)
+        {
+            var scopedShop = ShopSettingsScope.Current;
+            if (scopedShop == null) return string.Empty;
+
+            var expectedShopKey = (scopedShop.ShopKey ?? string.Empty).Trim();
+            if (expectedShopKey.Length == 0) return "显式店铺作用域缺少ShopKey，已阻止发送";
+
+            var deadlineUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(0, timeoutMs));
+            var loggedWaiting = false;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var currentScope = ShopSettingsScope.Current;
+                if (currentScope == null
+                    || !string.Equals((currentScope.ShopKey ?? string.Empty).Trim(),
+                        expectedShopKey, StringComparison.Ordinal))
+                    return "等待期间显式ShopKey作用域发生变化，已阻止发送";
+
+                var client = CDP;
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (client != null
+                    && !string.IsNullOrWhiteSpace(client.ShopKey)
+                    && !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal))
+                {
+                    var mismatchReason = "当前QN实例绑定了其他ShopKey，已阻止跨店发送";
+                    Log.Info((stage ?? "发送") + "作用域复核发现CDP ShopKey不匹配: expectedShopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client.ShopKey)
+                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client.SessionId));
+                    return mismatchReason;
+                }
+
+                var authoritative = client != null
+                    && !client.IsInvalidated
+                    && !client.IsShopIdentityRetired
+                    && string.Equals((client.ShopKey ?? string.Empty).Trim(),
+                        expectedShopKey, StringComparison.Ordinal)
+                    && server != null
+                    && server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId);
+                if (authoritative)
+                {
+                    string reason;
+                    return IsCurrentShopScopeValidForSend(out reason) ? string.Empty : reason;
+                }
+
+                if (!loggedWaiting)
+                {
+                    Log.Info((stage ?? "发送") + "等待本店权威CDP会话恢复: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", timeoutMs=" + Math.Max(0, timeoutMs));
+                    loggedWaiting = true;
+                }
+
+                var remainingMs = (int)Math.Max(0, (deadlineUtc - DateTime.UtcNow).TotalMilliseconds);
+                if (remainingMs <= 0) break;
+                await Task.Delay(Math.Min(150, remainingMs), cancellationToken).ConfigureAwait(false);
+            }
+
+            string finalReason;
+            if (IsCurrentShopScopeValidForSend(out finalReason)) return string.Empty;
+            Log.Info((stage ?? "发送") + "等待本店权威CDP会话恢复超时: shopRef="
+                + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                + ", reason=" + (finalReason ?? string.Empty));
+            return string.IsNullOrWhiteSpace(finalReason)
+                ? "等待本店权威CDP会话恢复超时"
+                : finalReason;
         }
 
         private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer, CancellationToken cancellationToken)

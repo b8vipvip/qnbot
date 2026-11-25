@@ -133,6 +133,7 @@ namespace Bot.ChromeNs
             if (uia3Automation == null || sellerDesk.Hwnd == null || sellerDesk.Hwnd.Handle < 1)
             {
                 InvalidateChatControls();
+                BotConnectionDiagnostics.RecordRpaScan(false, false, "seller HWND 无效");
                 SetSendFailure("UIA扫描", "当前客服千牛窗口句柄无效");
                 return false;
             }
@@ -169,7 +170,7 @@ namespace Bot.ChromeNs
                         SetSendFailure("UIA扫描", "当前客服千牛窗口内未找到聊天输入框；hwnd="
                             + expectedHwnd + ", descendants=" + descendants.Length);
                     }
-                    else
+                    else if (sendFound)
                     {
                         Log.Info("UIA控件刷新成功: seller=" + SellerNick
                             + ", hwnd=" + expectedHwnd
@@ -178,6 +179,17 @@ namespace Bot.ChromeNs
                             + ", sendAutomationId=" + SafeAutomationId(sendElement)
                             + ", sendName=" + SafeName(sendElement)
                             + ", sendRect=" + FormatRect(_sendMessageButtonRect));
+                    }
+                    else
+                    {
+                        Log.Info("UIA输入框已识别但发送按钮未识别: seller=" + SellerNick
+                            + ", hwnd=" + expectedHwnd
+                            + ", inputAutomationId=" + SafeAutomationId(inputElement)
+                            + ", inputClass=" + SafeClassName(inputElement)
+                            + ", sendAutomationId=" + SafeAutomationId(sendElement)
+                            + ", sendName=" + SafeName(sendElement)
+                            + ", sendRect=" + FormatRect(_sendMessageButtonRect)
+                            + "；诊断保持部分可用，发送仍需走安全回退链路");
                     }
                     return inputFound;
                 }

@@ -154,6 +154,19 @@ def test_runtime_batch_can_be_queried_grouped_and_exported_by_authenticated_admi
         detail_events = detail.json()["events"]
         assert [event["event_id"] for event in detail_events] == ["event-1", "event-2", "event-3"]
 
+        previous_day = (base - timedelta(days=1)).isoformat()
+        with cp.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO bot_message_processing_traces
+                (client_id, shop_key, event_id, trace_id, seller, buyer, stage, status,
+                 summary, detail, duration_ms, occurred_at, created_at)
+                VALUES (1, 'shop_test', 'event-old', 'trace-old', 'seller-a', 'buyer-b',
+                        'message_received', 'processing', '旧买家消息', '不应进入单条导出', 0, ?, ?)
+                """,
+                (previous_day, previous_day),
+            )
+
         exported = client.get(
             "/api/admin/message-processing-conversations/export?window=2h",
             headers={"X-Test-Admin": "yes"},
@@ -163,3 +176,27 @@ def test_runtime_batch_can_be_queried_grouped_and_exported_by_authenticated_admi
         assert "buyer-a" in exported.text
         assert "本地知识答案已就绪" in exported.text
         assert "真实回显已确认" in exported.text
+
+        single_export = client.get(
+            "/api/admin/message-processing-conversations/export",
+            headers={"X-Test-Admin": "yes"},
+            params={
+                "client_id": 1,
+                "shop_key": "shop_test",
+                "seller": "seller-a",
+                "buyer": "buyer-a",
+                "conversation_date": beijing_day,
+            },
+        )
+        assert single_export.status_code == 200
+        assert "buyer-a" in single_export.text
+        assert "buyer-b" not in single_export.text
+        assert "trace-1" in single_export.text
+        assert "trace-old" not in single_export.text
+
+        invalid_date = client.get(
+            "/api/admin/message-processing-conversations/export",
+            headers={"X-Test-Admin": "yes"},
+            params={"conversation_date": "2026-13-99"},
+        )
+        assert invalid_date.status_code == 400

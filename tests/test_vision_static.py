@@ -50,7 +50,10 @@ def test_message_safety_and_cross_buyer_guard_remain_in_path():
     assert 'BuyerNick = burst.BuyerNick' in qn
     assert 'MessageKey = visionItem.MessageKey' in qn
     assert 'CombinedQuestion = burst.CombinedQuestion' in qn
-    assert 'SendTextWithRetryAsync(burst.BuyerNick, answer, 1)' in qn
+    assert (
+        "burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard"
+        in " ".join(qn.split())
+    )
     assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
     assert '识别完成，但目标买家会话未确认，未发送。' in qn
 

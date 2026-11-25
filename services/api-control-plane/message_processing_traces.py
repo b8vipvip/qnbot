@@ -375,12 +375,24 @@ def admin_message_processing_conversation_export(
     seller: str = Query("", max_length=160),
     buyer: str = Query("", max_length=160),
     status: str = Query("", max_length=40),
+    conversation_date: str = Query("", max_length=10),
     _: str = Depends(_require_admin),
 ) -> Response:
-    since = _window_threshold(window)
-    where, values = _trace_filters(
-        client_id, shop_key, seller, buyer, status, "", recent_since=since
-    )
+    if conversation_date:
+        try:
+            datetime.strptime(conversation_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="conversation_date 必须为 YYYY-MM-DD")
+        where, values = _trace_filters(
+            client_id, shop_key, seller, buyer, status, "", recent_since=None
+        )
+        where.append(_beijing_day_expr("t") + "=?")
+        values.append(conversation_date)
+    else:
+        since = _window_threshold(window)
+        where, values = _trace_filters(
+            client_id, shop_key, seller, buyer, status, "", recent_since=since
+        )
     sql = """
         SELECT t.*, c.name client_name
         FROM bot_message_processing_traces t
@@ -428,7 +440,11 @@ def admin_message_processing_conversation_export(
             ]
         )
 
-    filename = "message-processing-conversations-" + window.lower() + ".csv"
+    filename = (
+        "message-processing-conversation-" + conversation_date + ".csv"
+        if conversation_date
+        else "message-processing-conversations-" + window.lower() + ".csv"
+    )
     return Response(
         content="\ufeff" + output.getvalue(),
         media_type="text/csv; charset=utf-8",

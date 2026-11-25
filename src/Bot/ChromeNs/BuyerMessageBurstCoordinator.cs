@@ -391,6 +391,7 @@ namespace Bot.ChromeNs
                 return productOutcome;
             }
 
+            var firstDelivered = false;
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick, item.BuyerNick, question, out firstReply, item.ShopKey);
@@ -406,14 +407,35 @@ namespace Bot.ChromeNs
                 if (firstOutcome == CanonicalPreMergeOutcome.Consumed)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick, item.ShopKey);
+                    firstDelivered = true;
                 }
                 else
                 {
+                    var firstFailureReason = qn.Rpa == null
+                        ? "首条咨询固定回复发送失败"
+                        : qn.Rpa.GetSendFailureReason();
                     FirstInquiryFixedReplyService.ReleaseReservation(
                         item.SellerNick,
                         item.BuyerNick,
-                        qn.Rpa == null ? "首条咨询固定回复发送失败" : qn.Rpa.GetSendFailureReason(), item.ShopKey);
-                    return firstOutcome;
+                        firstFailureReason, item.ShopKey);
+
+                    // A pre-send ShopKey/session rejection or an explicit human-takeover cancellation
+                    // proves that the greeting was not sent. Do not let that prelude failure swallow
+                    // the actual buyer question: try its exact short rule, or continue image OCR/AI.
+                    var failedBeforeSend = firstFailureReason.IndexOf(
+                            "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
+                        || firstFailureReason.IndexOf(
+                            "会话确认", StringComparison.OrdinalIgnoreCase) >= 0
+                        || (firstOutcome == CanonicalPreMergeOutcome.Cancelled
+                            && qn.Rpa != null
+                            && qn.Rpa.LastSendWasCancelled
+                            && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0);
+                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
+                    if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
+
+                    Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续规则/视觉理解: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
                 }
             }
 
@@ -427,7 +449,7 @@ namespace Bot.ChromeNs
                     if (LocalShortReplyService.TryResolve(
                         item.SellerNick, question, out localAnswer, out matchedPhrase))
                     {
-                        if (firstReserved)
+                        if (firstDelivered)
                         {
                             Log.Info("本地短消息已由首条咨询固定回复覆盖，继续同一实际问题普通回复链路: seller="
                                 + item.SellerNick + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase);
