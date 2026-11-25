@@ -88,8 +88,8 @@ function Get-LatestDeviceShopState {
     $snapshotAge = 0.0
     if (-not [double]::TryParse(
         [string]$latest.KnowledgeV2SyncSnapshotAgeSeconds,
-        [Globalization.NumberStyles]::Float,
-        [Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.NumberStyles]::Float,
+        [System.Globalization.CultureInfo]::InvariantCulture,
         [ref]$snapshotAge
     ) -or $snapshotAge -lt -30 -or $snapshotAge -gt 180) {
         throw ($DeviceLabel + ' Knowledge V2 sync snapshot age is invalid or stale.')
