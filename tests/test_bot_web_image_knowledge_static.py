@@ -35,3 +35,9 @@ def test_web_image_knowledge_ui_supports_long_press_import_auto_ocr_and_editing(
     assert 'prepareImageKnowledgeFile' in script
     assert 'loadImageKnowledge' in script
     assert 'importImageKnowledgeAction' in script
+    assert 'async function normalizeImageKnowledgeFile(file)' in script
+    assert 'createImageBitmap(file)' in script
+    assert 'canvas.toBlob(resolve,"image/png")' in script
+    assert 'await normalizeImageKnowledgeFile(file)' in script
+    assert '25000000' in script
+    assert 'image/bmp,image/heic,image/heif,.bmp,.heic,.heif' in html
