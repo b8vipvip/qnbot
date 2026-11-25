@@ -326,6 +326,31 @@ namespace Bot.ChromeNs
             lock (Sync) return _activeSessionId;
         }
 
+        internal static void GetReadOnlyAcceptanceState(
+            out string shopKey,
+            out string sessionId,
+            out bool focusProofFresh,
+            out int? focusProofAgeSeconds)
+        {
+            lock (Sync)
+            {
+                shopKey = _activeShopKey;
+                sessionId = _activeSessionId;
+                focusProofFresh = HasFreshFocusProofLocked();
+                if (_lastFocusProofUtc == DateTime.MinValue)
+                {
+                    focusProofAgeSeconds = null;
+                }
+                else
+                {
+                    var age = DateTime.UtcNow - _lastFocusProofUtc;
+                    focusProofAgeSeconds = age < TimeSpan.Zero
+                        ? null
+                        : Math.Max(0, (int)Math.Floor(age.TotalSeconds));
+                }
+            }
+        }
+
         internal static bool IsActive(QN qn)
         {
             if (qn == null || qn.Seller == null) return false;
