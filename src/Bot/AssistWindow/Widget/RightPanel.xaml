@@ -38,6 +38,15 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- The robot tab is the only visible panel content; its "状态" tab header is redundant. -->
+        <ControlTemplate x:Key="RightPanelContentOnlyTabControl" TargetType="{x:Type TabControl}">
+            <Grid ClipToBounds="True" SnapsToDevicePixels="True">
+                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                  ContentSource="SelectedContent"
+                                  Margin="{TemplateBinding Padding}"
+                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+            </Grid>
+        </ControlTemplate>
     </UserControl.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -79,7 +88,8 @@
             <Button Name="btnSyn" Grid.Column="5" Style="{StaticResource TopBarButton}" Click="btnHide_Click">隐藏</Button>
         </Grid>
 
-        <TabControl Name="tabControl" Grid.Row="1" Background="{StaticResource rpPageBgBrush}" BorderThickness="0" />
+        <TabControl Name="tabControl" Grid.Row="1" Background="{StaticResource rpPageBgBrush}" BorderThickness="0"
+                    Template="{StaticResource RightPanelContentOnlyTabControl}" />
 
         <Rectangle Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="5" Cursor="SizeWE" Fill="#00FFFFFF" MouseLeftButtonDown="rectWiden_MouseLeftButtonDown" MouseLeftButtonUp="rectWiden_MouseLeftButtonUp" MouseMove="rectWiden_MouseMove" />
         <Rectangle Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Height="5" Cursor="SizeNS" Fill="#00FFFFFF" MouseLeftButtonDown="rectHighden_MouseLeftButtonDown" MouseLeftButtonUp="rectHighden_MouseLeftButtonUp" MouseMove="rectHighden_MouseMove" />

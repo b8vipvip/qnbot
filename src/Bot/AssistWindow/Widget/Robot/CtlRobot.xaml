@@ -36,7 +36,7 @@
         <Style x:Key="StatusText" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
             <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Margin" Value="0 2 14 2"/>
+            <Setter Property="Margin" Value="0 0 14 0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </UserControl.Resources>
@@ -48,22 +48,22 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 5">
+        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 2">
             <WrapPanel VerticalAlignment="Center">
-                <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 2 12 2" VerticalAlignment="Center" />
+                <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 0 12 0" VerticalAlignment="Center" />
                 <TextBlock x:Name="txtStatusSummary" Text="正在检测..." Visibility="Collapsed" />
                 <TextBlock x:Name="txtConnectionStatus" Text="连接状态：正在检测" Style="{StaticResource StatusText}" />
                 <TextBlock x:Name="txtLanguageStatus" Text="语言：正在检测" Style="{StaticResource StatusText}" />
                 <TextBlock x:Name="txtStatusApi" Text="API连接：未配置" Style="{StaticResource StatusText}" />
-                <TextBlock Text="客服：" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0 2 2 2" VerticalAlignment="Center" />
-                <TextBlock x:Name="txtSeller" Text="..." Foreground="{StaticResource TextMain}" FontSize="11" FontWeight="SemiBold" Margin="0 2 14 2" VerticalAlignment="Center" />
-                <Border Background="#2EE59D" CornerRadius="10" Padding="8 2" Margin="0 1 0 1" VerticalAlignment="Center">
+                <TextBlock Text="客服：" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0 0 2 0" VerticalAlignment="Center" />
+                <TextBlock x:Name="txtSeller" Text="..." Foreground="{StaticResource TextMain}" FontSize="11" FontWeight="SemiBold" Margin="0 0 14 0" VerticalAlignment="Center" />
+                <Border Background="#2EE59D" CornerRadius="10" Padding="8 2" Margin="0" VerticalAlignment="Center">
                     <TextBlock x:Name="txtRunStatus" Text="自动回复中" Foreground="#FFFFFFFF" FontSize="11" FontWeight="Bold"/>
                 </Border>
             </WrapPanel>
         </Border>
 
-        <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="8 6" Visibility="Visible">
+        <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="8 0" Visibility="Visible">
             <StackPanel x:Name="panelGoods">
                 <ProgressBar x:Name="pgDownGoods" Height="4" Margin="0 0 0 6" Visibility="Collapsed" IsIndeterminate="True" />
             </StackPanel>
