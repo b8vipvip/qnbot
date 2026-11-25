@@ -96,7 +96,13 @@ async function normalizeImageKnowledgeFile(file){
 }
 async function prepareImageKnowledgeFile(file){
   if(!file)return;
-  if(file.size<1||file.size>8*1024*1024){toast("仅支持 1 字节至 8 MB 的图片");return}
+  // Clear the previous selection before validating a replacement. Otherwise an invalid
+  // second file could leave the old OCR/base64 payload enabled for accidental saving.
+  state.imageKnowledgeFile=null;state.imageKnowledgeBase64="";state.imageKnowledgeMime="";state.imageKnowledgeSha="";
+  $("saveImageKnowledgeBtn").disabled=true;$("imageKnowledgeOcr").value="";$("imageKnowledgeName").value="";
+  if(imageKnowledgeObjectUrl)URL.revokeObjectURL(imageKnowledgeObjectUrl);imageKnowledgeObjectUrl=null;
+  $("imageKnowledgePreview").removeAttribute("src");
+  if(file.size<1||file.size>8*1024*1024){$("imageKnowledgeHint").textContent="图片必须为 1 字节至 8 MB";toast("仅支持 1 字节至 8 MB 的图片");return}
   try{file=await normalizeImageKnowledgeFile(file)}
   catch(err){$("imageKnowledgeHint").textContent="图片格式转换失败："+err.message;toast(err.message);return}
   if(!/^image\/(jpeg|png|webp|gif)$/.test(file.type)){toast("仅支持 JPG、PNG、WEBP、GIF 图片；BMP/HEIC 会自动转换为 PNG");return}
