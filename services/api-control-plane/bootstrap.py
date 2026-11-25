@@ -18,6 +18,7 @@ import bot_web_bot_enabled
 import bot_web_bot_qa
 import bot_web_console
 import bot_web_conversation_knowledge
+import bot_web_image_knowledge
 import bot_web_settings_ack
 import chat2api_runtime_guard
 import client_data_backup
@@ -76,6 +77,7 @@ version_update_admin.install(control_plane)
 server_runtime_logs.install(control_plane)
 bot_web_bot_qa.install(control_plane)
 bot_web_conversation_knowledge.install(control_plane)
+bot_web_image_knowledge.install(control_plane, bot_web_console)
 client_data_backup.install(control_plane)
 store_rule_sync.install(control_plane)
 runtime_shop_ai_proxy.install(control_plane)
@@ -99,6 +101,7 @@ def initialize_control_plane_extensions() -> None:
     bot_client_shop_binding.init_db()
     bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
+    bot_web_image_knowledge.init_db()
     client_data_backup.init_db()
     store_rule_sync.init_db()
     message_processing_traces.init_db()
