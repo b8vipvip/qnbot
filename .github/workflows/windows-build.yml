@@ -77,7 +77,8 @@ jobs:
           $paths = @(
             'scripts\Invoke-QnBotAcceptanceDiagnostics.ps1',
             'scripts\Collect-QnBotMemory.ps1',
-            'scripts\Compare-QnBotKnowledgeV2Devices.ps1'
+            'scripts\Compare-QnBotKnowledgeV2Devices.ps1',
+            'scripts\Invoke-QnBotAutoDeliveryDiagnostics.ps1'
           )
           foreach ($path in $paths) {
             $tokens = $null
@@ -91,6 +92,9 @@ jobs:
       - name: Run Knowledge V2 two-device comparator runtime tests
         shell: powershell
         run: .\tests\windows\test-knowledge-v2-device-comparator.ps1
+      - name: Run auto-delivery read-only diagnostics runtime tests
+        shell: powershell
+        run: .\tests\windows\test-auto-delivery-diagnostics.ps1
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Restore NuGet packages
