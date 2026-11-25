@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
+import bot_client_shop_binding as shop_binding
 
 
 router = APIRouter()
@@ -32,6 +33,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS bot_web_image_knowledge (
                 id TEXT PRIMARY KEY NOT NULL,
                 client_id INTEGER NOT NULL,
+                shop_key TEXT NOT NULL DEFAULT '',
+                seller TEXT NOT NULL DEFAULT '',
                 image_name TEXT NOT NULL,
                 mime_type TEXT NOT NULL,
                 image_sha256 TEXT NOT NULL,
@@ -39,6 +42,8 @@ def init_db() -> None:
                 ocr_text TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_by TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(client_id, image_sha256),
@@ -83,6 +88,68 @@ def init_db() -> None:
             ON bot_conversation_reads(client_id, seller, buyer);
             """
         )
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(bot_web_image_knowledge)").fetchall()}
+        for name, declaration in (
+            ("shop_key", "TEXT NOT NULL DEFAULT ''"),
+            ("seller", "TEXT NOT NULL DEFAULT ''"),
+            ("revision", "INTEGER NOT NULL DEFAULT 0"),
+            ("updated_by", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE bot_web_image_knowledge ADD COLUMN {name} {declaration}")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS bot_web_image_knowledge_sync_state (
+                client_id INTEGER NOT NULL,
+                shop_key TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(client_id,shop_key),
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS bot_web_image_knowledge_tombstones (
+                client_id INTEGER NOT NULL,
+                shop_key TEXT NOT NULL,
+                id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                deleted_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(client_id,shop_key,id),
+                FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_bot_web_image_knowledge_scope
+            ON bot_web_image_knowledge(client_id,shop_key,updated_at);
+            CREATE INDEX IF NOT EXISTS idx_bot_web_image_knowledge_tombstones_scope
+            ON bot_web_image_knowledge_tombstones(client_id,shop_key,revision);
+            """
+        )
+        # Bind legacy image records to the token's authoritative ShopKey once. Rows
+        # without a verified binding remain invisible and are not guessed into a shop.
+        try:
+            legacy = conn.execute(
+                "SELECT id,client_id FROM bot_web_image_knowledge WHERE shop_key=''"
+            ).fetchall()
+            for item in legacy:
+                binding = conn.execute(
+                    "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+                    (int(item["client_id"]),),
+                ).fetchone()
+                if binding and str(binding["shop_key"] or "").strip():
+                    conn.execute(
+                        "UPDATE bot_web_image_knowledge SET shop_key=?,seller=?,revision=CASE WHEN revision=0 THEN 1 ELSE revision END,updated_by='legacy' WHERE client_id=? AND id=?",
+                        (binding["shop_key"], binding["seller"] or "", int(item["client_id"]), item["id"]),
+                    )
+                    conn.execute(
+                        """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
+                           VALUES(?,?,1,?) ON CONFLICT(client_id,shop_key) DO UPDATE SET
+                           revision=MAX(revision,1),updated_at=excluded.updated_at""",
+                        (int(item["client_id"]), binding["shop_key"], _now()),
+                    )
+        except Exception:
+            # The binding module can be in its schema-upgrade window during startup;
+            # unbound legacy rows stay hidden and the migration is retried on next init.
+            pass
 
 
 def _now() -> str:
@@ -209,6 +276,9 @@ def _cloud_sync_enabled(client_id: int) -> bool:
 
 class ImageKnowledgeSaveInput(BaseModel):
     id: str = Field(default="", max_length=80)
+    shop_key: str = Field(min_length=1, max_length=64)
+    seller: str = Field(min_length=1, max_length=160)
+    base_revision: int = Field(default=0, ge=0)
     image_name: str = Field(default="", max_length=180)
     mime_type: str = Field(min_length=1, max_length=40)
     image_sha256: str = Field(min_length=64, max_length=64)
@@ -216,6 +286,14 @@ class ImageKnowledgeSaveInput(BaseModel):
     ocr_text: str = Field(default="", max_length=12000)
     description: str = Field(min_length=1, max_length=1200)
     enabled: bool = True
+
+
+class ImageKnowledgeSyncInput(BaseModel):
+    shop_key: str = Field(min_length=1, max_length=64)
+    seller: str = Field(min_length=1, max_length=160)
+    since_revision: int = Field(default=0, ge=0)
+    upserts: List[Dict[str, Any]] = Field(default_factory=list, max_length=1)
+    deletes: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
 
 
 class ConversationReadInput(BaseModel):
@@ -249,6 +327,102 @@ class KnowledgeSyncInput(BaseModel):
     items: Optional[List[Dict[str, Any]]] = None
 
 
+def _require_image_shop_scope(client_id: int, shop_key: str, seller: str) -> str:
+    shop_key = _safe_text(shop_key, 64)
+    seller = _safe_text(seller, 160)
+    if not shop_key or not seller:
+        raise HTTPException(status_code=400, detail="图片知识必须指定ShopKey和客服账号")
+    with core._cp.db() as conn:
+        binding = conn.execute(
+            "SELECT shop_key,seller FROM bot_client_shop_binding WHERE client_id=?",
+            (client_id,),
+        ).fetchone()
+        if not binding or not str(binding["shop_key"] or "").strip():
+            raise HTTPException(status_code=409, detail="Bot客户端尚未绑定权威ShopKey")
+        if str(binding["shop_key"]).strip() != shop_key:
+            raise HTTPException(status_code=409, detail={"code":"shop_scope_mismatch","message":"图片知识请求的ShopKey与当前客户端令牌绑定不一致"})
+        canonical = str(binding["seller"] or "").strip()
+        known = []
+        state = conn.execute(
+            "SELECT seller_nicks_json FROM bot_client_state WHERE client_id=?",
+            (client_id,),
+        ).fetchone()
+        if state:
+            try:
+                values = json.loads(state["seller_nicks_json"] or "[]")
+                if isinstance(values, list):
+                    known = [str(x or "").strip() for x in values if str(x or "").strip()]
+            except Exception:
+                known = []
+        matches = (canonical and shop_binding._seller_identity_matches(seller, canonical)) or any(
+            shop_binding._seller_identity_matches(seller, value) for value in known
+        )
+        if not matches:
+            raise HTTPException(status_code=409, detail={"code":"seller_scope_mismatch","message":"客服账号不属于当前Bot令牌绑定的店铺"})
+    return canonical or seller
+
+
+def _next_image_revision(conn, client_id: int, shop_key: str) -> int:
+    row = conn.execute(
+        "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
+        (client_id, shop_key),
+    ).fetchone()
+    revision = int(row["revision"] or 0) + 1 if row else 1
+    conn.execute(
+        """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
+           VALUES(?,?,?,?) ON CONFLICT(client_id,shop_key) DO UPDATE SET
+           revision=excluded.revision,updated_at=excluded.updated_at""",
+        (client_id, shop_key, revision, _now()),
+    )
+    return revision
+
+
+def _decode_image_payload(image_base64: str, mime_type: str, expected_sha: str):
+    try:
+        raw = base64.b64decode(image_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="图片数据编码无效")
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片必须为 1 字节至 8 MB")
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest.lower() != str(expected_sha or "").lower():
+        raise HTTPException(status_code=409, detail="图片文件与 OCR 识别结果不一致，请重新上传识别")
+    from PIL import Image
+    import io
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            image.verify()
+            detected = Image.MIME.get(image.format)
+    except Exception:
+        raise HTTPException(status_code=422, detail="图片格式无效或文件损坏")
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    mime = str(mime_type or "").lower()
+    if mime not in allowed or detected not in allowed or detected != mime:
+        raise HTTPException(status_code=415, detail="图片 MIME 类型与文件内容不匹配")
+    return raw, digest, mime
+
+
+def _image_row_payload(row, include_bytes: bool = True) -> Dict[str, Any]:
+    item = {
+        "id": row["id"],
+        "image_name": row["image_name"],
+        "mime_type": row["mime_type"],
+        "image_sha256": row["image_sha256"],
+        "ocr_text": row["ocr_text"] or "",
+        "description": row["description"] or "",
+        "enabled": bool(row["enabled"]),
+        "revision": int(row["revision"] or 0),
+        "updated_at": row["updated_at"],
+    }
+    if include_bytes:
+        item["image_base64"] = base64.b64encode(bytes(row["image_bytes"])).decode("ascii")
+    return item
+
+
+def _image_tombstone_payload(row) -> Dict[str, Any]:
+    return {"id": row["id"], "revision": int(row["revision"] or 0), "deleted_at": row["deleted_at"]}
+
+
 @router.post("/api/bot-web/image-knowledge/recognize")
 async def web_image_knowledge_recognize(request: Request, client: Dict[str, Any] = Depends(core._web_client)):
     raw = await request.body()
@@ -277,95 +451,289 @@ async def web_image_knowledge_recognize(request: Request, client: Dict[str, Any]
 
 
 @router.get("/api/bot-web/image-knowledge")
-def web_image_knowledge_list(client: Dict[str, Any] = Depends(core._web_client)):
+def web_image_knowledge_list(
+    shop_key: str = Query(..., min_length=1, max_length=64),
+    seller: str = Query(..., min_length=1, max_length=160),
+    client: Dict[str, Any] = Depends(core._web_client),
+):
     client_id = int(client["id"])
+    canonical = _require_image_shop_scope(client_id, shop_key, seller)
     with core._cp.db() as conn:
         rows = conn.execute(
-            """SELECT id,image_name,mime_type,image_sha256,ocr_text,description,enabled,created_at,updated_at
-               FROM bot_web_image_knowledge WHERE client_id=? ORDER BY updated_at DESC LIMIT 500""",
-            (client_id,),
+            """SELECT id,shop_key,seller,image_name,mime_type,image_sha256,ocr_text,description,
+                      enabled,revision,created_at,updated_at
+               FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=?
+               ORDER BY updated_at DESC LIMIT 500""",
+            (client_id, shop_key, canonical),
         ).fetchall()
-    return {"items": [dict(row) for row in rows]}
+        state = conn.execute(
+            "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
+            (client_id, shop_key),
+        ).fetchone()
+    return {"shop_key": shop_key, "seller": canonical, "revision": int(state["revision"] or 0) if state else 0,
+            "items": [dict(row) for row in rows]}
 
 
 @router.get("/api/bot-web/image-knowledge/{image_id}/image")
-def web_image_knowledge_image(image_id: str, client: Dict[str, Any] = Depends(core._web_client)):
+def web_image_knowledge_image(
+    image_id: str,
+    shop_key: str = Query(..., min_length=1, max_length=64),
+    seller: str = Query(..., min_length=1, max_length=160),
+    client: Dict[str, Any] = Depends(core._web_client),
+):
+    client_id = int(client["id"])
+    canonical = _require_image_shop_scope(client_id, shop_key, seller)
     with core._cp.db() as conn:
         row = conn.execute(
-            "SELECT mime_type,image_bytes FROM bot_web_image_knowledge WHERE client_id=? AND id=?",
-            (int(client["id"]), image_id),
+            "SELECT mime_type,image_bytes FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+            (client_id, shop_key, canonical, image_id),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="图片知识不存在")
-    return {
-        "mime_type": row["mime_type"],
-        "image_base64": base64.b64encode(bytes(row["image_bytes"])).decode("ascii"),
-    }
+    return {"mime_type": row["mime_type"], "image_base64": base64.b64encode(bytes(row["image_bytes"])).decode("ascii")}
 
 
 @router.post("/api/bot-web/image-knowledge")
 def web_image_knowledge_save(data: ImageKnowledgeSaveInput, client: Dict[str, Any] = Depends(core._web_client)):
     client_id = int(client["id"])
-    try:
-        raw = base64.b64decode(data.image_base64, validate=True)
-    except Exception:
-        raise HTTPException(status_code=400, detail="图片数据编码无效")
-    if not raw or len(raw) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="图片必须为 1 字节至 8 MB")
-    digest = hashlib.sha256(raw).hexdigest()
-    if digest.lower() != data.image_sha256.lower():
-        raise HTTPException(status_code=409, detail="图片文件与 OCR 识别结果不一致，请重新上传识别")
-    from PIL import Image
-    import io
-    try:
-        with Image.open(io.BytesIO(raw)) as image:
-            image.verify()
-            detected = Image.MIME.get(image.format)
-    except Exception:
-        raise HTTPException(status_code=422, detail="图片格式无效或文件损坏")
-    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-    mime = (data.mime_type or "").lower()
-    if mime not in allowed or (detected and detected not in allowed):
-        raise HTTPException(status_code=415, detail="仅支持 JPG、PNG、WEBP、GIF 图片")
-    if detected and mime != detected:
-        raise HTTPException(status_code=415, detail="图片 MIME 类型与文件内容不一致")
-    name = (data.image_name or "").strip()[:180] or "图片-" + digest[:12] + (mimetypes.guess_extension(mime) or ".img")
-    description = (data.description or "").strip()
+    canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
+    raw, digest, mime = _decode_image_payload(data.image_base64, data.mime_type, data.image_sha256)
+    name = _safe_text(data.image_name, 180) or "图片-" + digest[:12] + (mimetypes.guess_extension(mime) or ".img")
+    description = _safe_text(data.description, 1200)
     if not description:
         raise HTTPException(status_code=400, detail="图片说明不能为空")
-    image_id = (data.id or "").strip() or uuid.uuid4().hex
+    image_id = _safe_text(data.id, 80) or uuid.uuid4().hex
     now = _now()
     with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        current = conn.execute(
+            "SELECT revision FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+            (client_id, data.shop_key, canonical, image_id),
+        ).fetchone()
+        current_revision = int(current["revision"] or 0) if current else 0
+        if current_revision != data.base_revision:
+            raise HTTPException(status_code=409, detail={"code":"image_knowledge_revision_conflict","message":"图片知识已在另一端更新，请刷新后重新编辑","current_revision":current_revision})
         duplicate = conn.execute(
-            "SELECT id FROM bot_web_image_knowledge WHERE client_id=? AND image_sha256=? AND id<>?",
-            (client_id, digest, image_id),
+            "SELECT id FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND image_sha256=? AND id<>?",
+            (client_id, data.shop_key, digest, image_id),
         ).fetchone()
         if duplicate:
-            raise HTTPException(status_code=409, detail="当前客户端已存在相同图片，请编辑已有图片知识")
+            raise HTTPException(status_code=409, detail="当前店铺已存在相同图片，请编辑已有图片知识")
+        revision = _next_image_revision(conn, client_id, data.shop_key)
         conn.execute(
             """INSERT INTO bot_web_image_knowledge
-               (id,client_id,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,enabled,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(client_id,id) DO UPDATE SET
-                 image_name=excluded.image_name,mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,
-                 image_bytes=excluded.image_bytes,ocr_text=excluded.ocr_text,description=excluded.description,
-                 enabled=excluded.enabled,updated_at=excluded.updated_at""",
-            (image_id, client_id, name, mime, digest, raw, data.ocr_text.strip(), description,
-             1 if data.enabled else 0, now, now),
+               (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,
+                enabled,revision,updated_by,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 shop_key=excluded.shop_key,seller=excluded.seller,image_name=excluded.image_name,
+                 mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,image_bytes=excluded.image_bytes,
+                 ocr_text=excluded.ocr_text,description=excluded.description,enabled=excluded.enabled,
+                 revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at
+               WHERE bot_web_image_knowledge.client_id=excluded.client_id
+                 AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
+            (image_id, client_id, data.shop_key, canonical, name, mime, digest, raw, data.ocr_text.strip(),
+             description, 1 if data.enabled else 0, revision, "web", now, now),
         )
-    return {"ok": True, "id": image_id, "image_name": name, "image_sha256": digest, "updated_at": now}
+        conn.execute(
+            "DELETE FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
+            (client_id, data.shop_key, image_id),
+        )
+    return {"ok": True, "id": image_id, "shop_key": data.shop_key, "seller": canonical,
+            "image_name": name, "image_sha256": digest, "revision": revision, "updated_at": now}
 
 
 @router.delete("/api/bot-web/image-knowledge/{image_id}")
-def web_image_knowledge_delete(image_id: str, client: Dict[str, Any] = Depends(core._web_client)):
-    with core._cp.db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM bot_web_image_knowledge WHERE client_id=? AND id=?",
-            (int(client["id"]), image_id),
+def web_image_knowledge_delete(
+    image_id: str,
+    shop_key: str = Query(..., min_length=1, max_length=64),
+    seller: str = Query(..., min_length=1, max_length=160),
+    expected_revision: int = Query(0, ge=0),
+    client: Dict[str, Any] = Depends(core._web_client),
+):
+    client_id = int(client["id"])
+    canonical = _require_image_shop_scope(client_id, shop_key, seller)
+    now = _now()
+    with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        row = conn.execute(
+            "SELECT revision FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+            (client_id, shop_key, canonical, image_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="图片知识不存在")
+        current_revision = int(row["revision"] or 0)
+        if current_revision != expected_revision:
+            raise HTTPException(status_code=409, detail={"code":"image_knowledge_revision_conflict","message":"图片知识已在另一端更新，请刷新后重试","current_revision":current_revision})
+        revision = _next_image_revision(conn, client_id, shop_key)
+        conn.execute(
+            "DELETE FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+            (client_id, shop_key, canonical, image_id),
         )
-    if cursor.rowcount < 1:
-        raise HTTPException(status_code=404, detail="图片知识不存在")
-    return {"ok": True}
+        conn.execute(
+            """INSERT INTO bot_web_image_knowledge_tombstones(client_id,shop_key,id,revision,deleted_at,updated_by)
+               VALUES(?,?,?,?,?,'web')
+               ON CONFLICT(client_id,shop_key,id) DO UPDATE SET
+                 revision=excluded.revision,deleted_at=excluded.deleted_at,updated_by=excluded.updated_by""",
+            (client_id, shop_key, image_id, revision, now),
+        )
+    return {"ok": True, "revision": revision}
+
+
+@router.post("/api/runtime/v1/bot-web/image-knowledge/sync")
+def runtime_image_knowledge_sync(
+    data: ImageKnowledgeSyncInput,
+    request: Request,
+    client: Dict[str, Any] = Depends(core._runtime_client),
+):
+    client_id = int(client["id"])
+    header_shop_key = (request.headers.get("x-shop-key") or "").strip()
+    if header_shop_key != data.shop_key:
+        raise HTTPException(status_code=409, detail="X-Shop-Key 与图片知识同步载荷不一致")
+    canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
+    conflicts: List[Dict[str, Any]] = []
+    with _KNOWLEDGE_LOCK, core._cp.db() as conn:
+        for item in data.upserts:
+            image_id = _safe_text(item.get("id"), 80)
+            if not image_id:
+                raise HTTPException(status_code=400, detail="图片知识缺少稳定ID")
+            raw, digest, mime = _decode_image_payload(
+                str(item.get("image_base64") or ""),
+                str(item.get("mime_type") or ""),
+                str(item.get("image_sha256") or ""),
+            )
+            base_revision = max(0, int(item.get("base_revision") or 0))
+            current = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+                (client_id, data.shop_key, canonical, image_id),
+            ).fetchone()
+            tombstone = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
+                (client_id, data.shop_key, image_id),
+            ).fetchone()
+            current_revision = int(current["revision"] or 0) if current else int(tombstone["revision"] or 0) if tombstone else 0
+            if current_revision != base_revision:
+                if current:
+                    conflicts.append({"kind":"upsert","item":_image_row_payload(current, True)})
+                elif tombstone:
+                    conflicts.append({"kind":"delete","item":_image_tombstone_payload(tombstone)})
+                continue
+            duplicate = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND image_sha256=? AND id<>?",
+                (client_id, data.shop_key, digest, image_id),
+            ).fetchone()
+            if duplicate:
+                conflicts.append({"kind":"upsert","local_id":image_id,"item":_image_row_payload(duplicate, True)})
+                continue
+            now = _now()
+            revision = _next_image_revision(conn, client_id, data.shop_key)
+            updated_at = _safe_text(item.get("updated_at"), 64) or now
+            image_name = _safe_text(item.get("image_name"), 180) or "图片-" + digest[:12]
+            description = _safe_text(item.get("description"), 1200)
+            if not description:
+                raise HTTPException(status_code=400, detail="图片说明不能为空")
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,
+                    enabled,revision,updated_by,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     image_name=excluded.image_name,mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,
+                     image_bytes=excluded.image_bytes,ocr_text=excluded.ocr_text,description=excluded.description,
+                     enabled=excluded.enabled,revision=excluded.revision,updated_by=excluded.updated_by,
+                     updated_at=excluded.updated_at
+                   WHERE bot_web_image_knowledge.client_id=excluded.client_id
+                     AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
+                (image_id, client_id, data.shop_key, canonical, image_name, mime, digest, raw,
+                 _safe_text(item.get("ocr_text"), 6000), description, 1 if bool(item.get("enabled", True)) else 0,
+                 revision, "windows", now, updated_at),
+            )
+            conn.execute(
+                "DELETE FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
+                (client_id, data.shop_key, image_id),
+            )
+
+        for item in data.deletes:
+            image_id = _safe_text(item.get("id"), 80)
+            if not image_id:
+                continue
+            base_revision = max(0, int(item.get("base_revision") or 0))
+            current = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+                (client_id, data.shop_key, canonical, image_id),
+            ).fetchone()
+            tombstone = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
+                (client_id, data.shop_key, image_id),
+            ).fetchone()
+            current_revision = int(current["revision"] or 0) if current else int(tombstone["revision"] or 0) if tombstone else 0
+            if current_revision != base_revision:
+                if current:
+                    conflicts.append({"kind":"upsert","item":_image_row_payload(current, True)})
+                elif tombstone:
+                    conflicts.append({"kind":"delete","item":_image_tombstone_payload(tombstone)})
+                continue
+            revision = _next_image_revision(conn, client_id, data.shop_key)
+            deleted_at = _safe_text(item.get("deleted_at"), 64) or _now()
+            conn.execute(
+                "DELETE FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
+                (client_id, data.shop_key, canonical, image_id),
+            )
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge_tombstones(client_id,shop_key,id,revision,deleted_at,updated_by)
+                   VALUES(?,?,?,?,?,'windows')
+                   ON CONFLICT(client_id,shop_key,id) DO UPDATE SET
+                     revision=excluded.revision,deleted_at=excluded.deleted_at,updated_by=excluded.updated_by""",
+                (client_id, data.shop_key, image_id, revision, deleted_at),
+            )
+
+        state = conn.execute(
+            "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
+            (client_id, data.shop_key),
+        ).fetchone()
+        current_revision = int(state["revision"] or 0) if state else 0
+        event_rows = conn.execute(
+            "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND revision>? ORDER BY revision ASC",
+            (client_id, data.shop_key, data.since_revision),
+        ).fetchall()
+        delete_rows = conn.execute(
+            "SELECT id,revision,deleted_at FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND revision>? ORDER BY revision ASC",
+            (client_id, data.shop_key, data.since_revision),
+        ).fetchall()
+        events = [(int(row["revision"]), "upsert", row) for row in event_rows]
+        events.extend((int(row["revision"]), "delete", row) for row in delete_rows)
+        events.sort(key=lambda x: x[0])
+        upserts: List[Dict[str, Any]] = []
+        deletes: List[Dict[str, Any]] = []
+        response_bytes = 0
+        page_revision = data.since_revision
+        for revision, kind, row in events:
+            if kind == "upsert":
+                raw_size = len(bytes(row["image_bytes"] or b""))
+                if response_bytes and response_bytes + raw_size > 8 * 1024 * 1024:
+                    break
+                if raw_size > 8 * 1024 * 1024:
+                    raise HTTPException(status_code=500, detail="云端图片知识数据超过同步大小限制")
+                upserts.append(_image_row_payload(row, True))
+                response_bytes += raw_size
+            else:
+                deletes.append(_image_tombstone_payload(row))
+            page_revision = revision
+            if len(upserts) >= 1 or len(deletes) >= 50:
+                break
+        if not events or page_revision == data.since_revision:
+            page_revision = current_revision
+        has_more = page_revision < current_revision
+
+    return {
+        "ok": True,
+        "shop_key": data.shop_key,
+        "seller": canonical,
+        "revision": page_revision,
+        "current_revision": current_revision,
+        "has_more": has_more,
+        "upserts": upserts,
+        "deletes": deletes,
+        "conflicts": conflicts,
+    }
 
 
 @router.get("/api/bot-web/conversations")
