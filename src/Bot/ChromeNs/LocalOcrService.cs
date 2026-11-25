@@ -1,5 +1,6 @@
 using Bot.ShopScope;
 using BotLib;
+using System.Collections.Concurrent;
 using Newtonsoft.Json;
 using System;
 using System.Globalization;
@@ -65,6 +66,8 @@ namespace Bot.ChromeNs
         private const long MaxImageBytes = 8L * 1024L * 1024L;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(30);
         private static readonly HttpClient Http = CreateHttpClient();
+        private static readonly ConcurrentDictionary<string, Lazy<Task<LocalOcrResult>>> InFlight =
+            new ConcurrentDictionary<string, Lazy<Task<LocalOcrResult>>>(StringComparer.Ordinal);
 
         public static Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
@@ -93,9 +96,7 @@ namespace Bot.ChromeNs
             var startedAt = DateTime.UtcNow;
             imagePath = (imagePath ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
-            {
                 return Failure("图片文件不存在", startedAt);
-            }
 
             long imageLength;
             try
@@ -107,9 +108,7 @@ namespace Bot.ChromeNs
                 return Failure("读取图片信息失败: " + ex.Message, startedAt);
             }
             if (imageLength <= 0 || imageLength > MaxImageBytes)
-            {
                 return Failure("图片大小不符合服务端OCR限制", startedAt);
-            }
 
             string sha256;
             try
@@ -137,6 +136,76 @@ namespace Bot.ChromeNs
                 };
             }
 
+            // The cache is content-addressed, but the in-flight key also includes the authoritative
+            // ShopKey so two shops never share an authenticated OCR request or its failure state.
+            var currentShop = ShopSettingsScope.Current;
+            var scopeKey = !string.IsNullOrWhiteSpace(shopKey)
+                ? shopKey.Trim()
+                : (!string.IsNullOrWhiteSpace(sellerNick)
+                    ? "seller:" + sellerNick.Trim()
+                    : (currentShop != null && !string.IsNullOrWhiteSpace(currentShop.ShopKey)
+                        ? currentShop.ShopKey
+                        : "unscoped:" + Guid.NewGuid().ToString("N")));
+            var inFlightKey = scopeKey + "|" + sha256;
+            var candidate = new Lazy<Task<LocalOcrResult>>(
+                () => RecognizeAndCacheAsync(imagePath, sellerNick, shopKey, sha256, timeoutMs),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var shared = InFlight.GetOrAdd(inFlightKey, candidate);
+            var sharedTask = shared.Value;
+            if (!ReferenceEquals(shared, candidate))
+            {
+                Log.Info("OCR同店同图请求合并，复用正在执行的服务端OCR任务: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", shopKey)
+                    + ", sha256=" + ShortHash(sha256));
+            }
+
+            RemoveInFlightWhenComplete(inFlightKey, shared, sharedTask);
+
+            try
+            {
+                return await AwaitSharedTaskAsync(sharedTask, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancelling a reply generation must not cancel an OCR job already started for a
+                // durable image. The caller stops waiting; the shared request continues and caches
+                // its result for the next vision/knowledge stage.
+                return Failure("服务端OCR等待已取消；后台共享任务继续执行", startedAt, sha256);
+            }
+            catch (Exception ex)
+            {
+                return Failure("服务端OCR异常: " + ex.Message, startedAt, sha256);
+            }
+        }
+
+        private static void RemoveInFlightWhenComplete(
+            string inFlightKey,
+            Lazy<Task<LocalOcrResult>> shared,
+            Task<LocalOcrResult> sharedTask)
+        {
+            sharedTask.ContinueWith(
+                _ =>
+                {
+                    Lazy<Task<LocalOcrResult>> current;
+                    if (InFlight.TryGetValue(inFlightKey, out current) && ReferenceEquals(current, shared))
+                    {
+                        Lazy<Task<LocalOcrResult>> removed;
+                        InFlight.TryRemove(inFlightKey, out removed);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private static async Task<LocalOcrResult> RecognizeAndCacheAsync(
+            string imagePath,
+            string sellerNick,
+            string shopKey,
+            string sha256,
+            int timeoutMs)
+        {
+            var startedAt = DateTime.UtcNow;
             var endpoint = ResolveControlPlaneEndpoint(sellerNick, shopKey);
             if (endpoint == null)
             {
@@ -151,7 +220,7 @@ namespace Bot.ChromeNs
             {
                 var safeTimeout = Math.Max(1500, Math.Min(30000, timeoutMs));
                 byte[] imageBytes;
-                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None))
                 {
                     timeout.CancelAfter(safeTimeout);
                     imageBytes = await ReadAllBytesAsync(imagePath, timeout.Token).ConfigureAwait(false);
@@ -169,7 +238,8 @@ namespace Bot.ChromeNs
                             + ", endpointSource=" + endpoint.Source
                             + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shopKey));
 
-                        using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false))
+                        using (var response = await Http.SendAsync(
+                            request, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false))
                         {
                             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                             if (!response.IsSuccessStatusCode)
@@ -190,14 +260,10 @@ namespace Bot.ChromeNs
                                 return Failure("服务端OCR响应解析失败: " + ex.Message, startedAt, sha256);
                             }
                             if (remote == null || !remote.ok)
-                            {
                                 return Failure("服务端OCR返回无效结果", startedAt, sha256);
-                            }
                             if (!string.IsNullOrWhiteSpace(remote.imageSha256)
                                 && !string.Equals(remote.imageSha256, sha256, StringComparison.OrdinalIgnoreCase))
-                            {
                                 return Failure("服务端OCR图片哈希回执不一致", startedAt, sha256);
-                            }
 
                             var result = new LocalOcrResult
                             {
@@ -225,12 +291,27 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
-                return Failure(cancellationToken.IsCancellationRequested ? "服务端OCR已取消" : "服务端OCR超时", startedAt, sha256);
+                return Failure("服务端OCR超时", startedAt, sha256);
             }
             catch (Exception ex)
             {
                 return Failure("服务端OCR异常: " + ex.Message, startedAt, sha256);
             }
+        }
+
+        private static async Task<LocalOcrResult> AwaitSharedTaskAsync(
+            Task<LocalOcrResult> task,
+            CancellationToken cancellationToken)
+        {
+            if (task == null) return null;
+            if (!cancellationToken.CanBeCanceled)
+                return await task.ConfigureAwait(false);
+
+            var cancellation = Task.Delay(Timeout.Infinite, cancellationToken);
+            var completed = await Task.WhenAny(task, cancellation).ConfigureAwait(false);
+            if (!ReferenceEquals(completed, task))
+                throw new OperationCanceledException(cancellationToken);
+            return await task.ConfigureAwait(false);
         }
 
         // OCR-to-text-AI fallback may reuse successful OCR evidence but must

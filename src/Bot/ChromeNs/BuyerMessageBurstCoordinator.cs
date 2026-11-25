@@ -918,6 +918,14 @@ namespace Bot.ChromeNs
                             }
                         },
                         _sessionAgent);
+                    var dispatchStartedAt = DateTime.Now;
+                    var dispatchDetectedAt = burst.Items.Min(x => x.ReceivedAt);
+                    Log.Info("买家消息合并队列派发: seller=" + burst.SellerNick
+                        + ", buyer=" + burst.BuyerNick
+                        + ", generation=" + burst.SessionGeneration
+                        + ", queueMs=" + Math.Max(0, (long)(dispatchStartedAt - dispatchDetectedAt).TotalMilliseconds)
+                        + ", itemCount=" + burst.Items.Count
+                        + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", burst.ShopKey));
                     lease.MarkProcessing("single_owner_dispatch");
                     lease.MarkGenerating("reply_generation_started");
                     StartOwnedDispatch(key, state, burst, lease);
@@ -1053,6 +1061,15 @@ namespace Bot.ChromeNs
                     && state.InFlightDispatches.Count == 0;
             }
 
+            var preMergeStartedAt = DateTime.Now;
+            var preMergeQueueMs = Math.Max(0, (long)(preMergeStartedAt - item.ReceivedAt).TotalMilliseconds);
+            Log.Info("买家消息预合并规则开始: seller=" + item.SellerNick
+                + ", buyer=" + item.BuyerNick
+                + ", generation=" + item.SessionGeneration
+                + ", queueMs=" + preMergeQueueMs
+                + ", allowLocalShortReply=" + allowLocalShortReply
+                + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey));
+
             CanonicalPreMergeOutcome outcome;
             try
             {
@@ -1070,6 +1087,15 @@ namespace Bot.ChromeNs
                     + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220), 20);
                 outcome = CanonicalPreMergeOutcome.Continue;
             }
+
+            Log.Info("买家消息预合并规则完成: seller=" + item.SellerNick
+                + ", buyer=" + item.BuyerNick
+                + ", generation=" + item.SessionGeneration
+                + ", queueMs=" + preMergeQueueMs
+                + ", durationMs=" + Math.Max(0, (long)(DateTime.Now - preMergeStartedAt).TotalMilliseconds)
+                + ", allowLocalShortReply=" + allowLocalShortReply
+                + ", outcome=" + outcome
+                + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", item.ShopKey));
 
             if (outcome == CanonicalPreMergeOutcome.Continue)
             {

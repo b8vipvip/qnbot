@@ -61,6 +61,7 @@ namespace Bot.ChromeNs
             public CDPClient BrowserClient;
             public int DownloadAttempts;
             public Task<CacheDownloadResult> DownloadTask;
+            public Task<CacheDownloadResult> OcrScheduledDownloadTask;
         }
 
         public const int CacheRetentionHours = 24;
@@ -141,6 +142,7 @@ namespace Bot.ChromeNs
                 var key = BuildKey(shopKey, messageKey, url);
                 CacheRecord record;
                 var created = false;
+                Task<CacheDownloadResult> downloadTaskToPrewarm = null;
 
                 // A locked admission path prevents ConcurrentDictionary value factories from
                 // starting duplicate downloads under contention and keeps retained records bounded.
@@ -173,6 +175,7 @@ namespace Bot.ChromeNs
                         };
                         record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                         created = Records.TryAdd(key, record);
+                        if (created) downloadTaskToPrewarm = record.DownloadTask;
                     }
                     else
                     {
@@ -204,6 +207,7 @@ namespace Bot.ChromeNs
                             record.DownloadAttempts++;
                             record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                             created = true;
+                            downloadTaskToPrewarm = record.DownloadTask;
                         }
                         else if (record.Message == null)
                         {
@@ -214,6 +218,7 @@ namespace Bot.ChromeNs
 
                 if (created)
                 {
+                    StartOcrPrewarm(record, downloadTaskToPrewarm);
                     Log.Info("买家图片本地缓存已启动: seller=" + seller
                         + ", buyer=" + buyer
                         + ", messageKey=" + Short(messageKey, 100));
@@ -224,6 +229,91 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("启动买家图片本地缓存失败：" + ex.Message, 20);
             }
+        }
+
+        private static void StartOcrPrewarm(
+            CacheRecord record,
+            Task<CacheDownloadResult> downloadTask)
+        {
+            if (record == null || downloadTask == null) return;
+            lock (record)
+            {
+                if (ReferenceEquals(record.OcrScheduledDownloadTask, downloadTask)) return;
+                record.OcrScheduledDownloadTask = downloadTask;
+            }
+
+            // This is deliberately detached from the buyer reply generation. A slow text-AI,
+            // short-rule, or send path must not postpone OCR after the image bytes are durable.
+            Task.Run(async () =>
+            {
+                var startedAt = DateTime.UtcNow;
+                try
+                {
+                    var downloaded = await downloadTask.ConfigureAwait(false);
+                    var downloadMs = Math.Max(0, (long)(DateTime.UtcNow - startedAt).TotalMilliseconds);
+                    if (downloaded == null || !downloaded.Success
+                        || string.IsNullOrWhiteSpace(downloaded.FilePath)
+                        || !File.Exists(downloaded.FilePath))
+                    {
+                        Log.Info("图片缓存未成功，跳过独立OCR预热: seller=" + record.SellerNick
+                            + ", buyer=" + record.BuyerNick
+                            + ", messageKey=" + Short(record.MessageKey, 100)
+                            + ", reason=" + (downloaded == null ? "empty_download_result" : Short(downloaded.Error, 120)));
+                        return;
+                    }
+
+                    var shop = ShopContextLocator.ResolveRuntimeByShopKey(record.ShopKey);
+                    if (shop == null
+                        || !string.Equals((shop.SellerNick ?? string.Empty).Trim(),
+                            (record.SellerNick ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    {
+                        Log.ErrorWithMaxCount("图片缓存后OCR预热无法确认原始ShopKey，已阻止跨店上传: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", record.ShopKey), 20);
+                        return;
+                    }
+
+                    bool configured;
+                    using (ShopSettingsScope.Enter(shop, false))
+                    {
+                        configured = LocalOcrService.IsServerOcrConfigured(shop.SellerNick, record.ShopKey);
+                    }
+                    if (!configured)
+                    {
+                        Log.Info("图片缓存后跳过OCR预热：本店未配置服务端OCR: shopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", record.ShopKey)
+                            + ", messageKey=" + Short(record.MessageKey, 100));
+                        return;
+                    }
+
+                    Log.Info("图片缓存完成，独立OCR预热立即开始: seller=" + record.SellerNick
+                        + ", buyer=" + record.BuyerNick
+                        + ", messageKey=" + Short(record.MessageKey, 100)
+                        + ", bytes=" + downloaded.Bytes
+                        + ", downloadMs=" + downloadMs
+                        + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", record.ShopKey));
+                    var ocr = await LocalOcrService.TryRecognizeAsync(
+                        downloaded.FilePath,
+                        record.SellerNick,
+                        record.ShopKey,
+                        CancellationToken.None).ConfigureAwait(false);
+                    Log.Info("图片独立OCR预热结束: seller=" + record.SellerNick
+                        + ", buyer=" + record.BuyerNick
+                        + ", messageKey=" + Short(record.MessageKey, 100)
+                        + ", success=" + (ocr != null && ocr.Success)
+                        + ", chars=" + (ocr == null || ocr.Text == null ? 0 : ocr.Text.Length)
+                        + ", confidence=" + (ocr == null ? 0d : ocr.Confidence).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)
+                        + ", elapsedMs=" + (ocr == null ? 0 : ocr.ElapsedMs)
+                        + ", error=" + (ocr == null ? "empty_ocr_result" : Short(ocr.Error, 160))
+                        + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", record.ShopKey));
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("图片独立OCR预热异常: seller=" + record.SellerNick
+                        + ", buyer=" + record.BuyerNick
+                        + ", messageKey=" + Short(record.MessageKey, 100)
+                        + ", error=" + Short(ex.Message, 220), 20);
+                }
+            });
         }
 
         private static void EnsureCleanupTimer()
