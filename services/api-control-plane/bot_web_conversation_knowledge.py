@@ -24,6 +24,26 @@ def install(control_plane: Any) -> None:
     control_plane.app.include_router(router)
 
 
+def _current_image_revision(conn, client_id: int, shop_key: str) -> int:
+    state = conn.execute(
+        "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
+        (client_id, shop_key),
+    ).fetchone()
+    entries = conn.execute(
+        "SELECT COALESCE(MAX(revision),0) AS revision FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=?",
+        (client_id, shop_key),
+    ).fetchone()
+    tombstones = conn.execute(
+        "SELECT COALESCE(MAX(revision),0) AS revision FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=?",
+        (client_id, shop_key),
+    ).fetchone()
+    return max(
+        int(state["revision"] or 0) if state else 0,
+        int(entries["revision"] or 0) if entries else 0,
+        int(tombstones["revision"] or 0) if tombstones else 0,
+    )
+
+
 def init_db() -> None:
     cp = core._cp
     with cp.db() as conn:
@@ -163,6 +183,44 @@ def init_db() -> None:
             ON bot_web_image_knowledge_tombstones(client_id,shop_key,revision);
             """
         )
+
+        # Recover the revision stream from durable rows if an older backup omitted
+        # the cursor table or left shop-scoped rows at revision 0. Assign unique
+        # revisions in timestamp order so paged clients cannot skip same-revision rows.
+        legacy_events = []
+        for row in conn.execute(
+            """SELECT id,client_id,shop_key,updated_at AS event_at
+               FROM bot_web_image_knowledge
+               WHERE shop_key<>'' AND revision<=0"""
+        ).fetchall():
+            legacy_events.append((str(row["event_at"] or ""), "upsert", row))
+        for row in conn.execute(
+            """SELECT id,client_id,shop_key,deleted_at AS event_at
+               FROM bot_web_image_knowledge_tombstones
+               WHERE shop_key<>'' AND revision<=0"""
+        ).fetchall():
+            legacy_events.append((str(row["event_at"] or ""), "delete", row))
+        for _, kind, row in sorted(legacy_events, key=lambda item: (item[0], item[1], str(item[2]["id"]))):
+            client_id = int(row["client_id"])
+            shop_key = str(row["shop_key"])
+            revision = _current_image_revision(conn, client_id, shop_key) + 1
+            if kind == "upsert":
+                conn.execute(
+                    "UPDATE bot_web_image_knowledge SET revision=? WHERE client_id=? AND shop_key=? AND id=? AND revision<=0",
+                    (revision, client_id, shop_key, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE bot_web_image_knowledge_tombstones SET revision=? WHERE client_id=? AND shop_key=? AND id=? AND revision<=0",
+                    (revision, client_id, shop_key, row["id"]),
+                )
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
+                   VALUES(?,?,?,?) ON CONFLICT(client_id,shop_key) DO UPDATE SET
+                   revision=MAX(bot_web_image_knowledge_sync_state.revision,excluded.revision),
+                   updated_at=excluded.updated_at""",
+                (client_id, shop_key, revision, _now()),
+            )
         # Legacy rows from the earlier client_id-only schema have no provable ShopKey.
         # Do not attach them to the token's current binding: the token may have been
         # rebound before this migration. Keep them quarantined and preserve the bytes.
@@ -397,11 +455,7 @@ def _require_image_shop_scope(client_id: int, shop_key: str, seller: str) -> str
 
 
 def _next_image_revision(conn, client_id: int, shop_key: str) -> int:
-    row = conn.execute(
-        "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
-        (client_id, shop_key),
-    ).fetchone()
-    revision = int(row["revision"] or 0) + 1 if row else 1
+    revision = _current_image_revision(conn, client_id, shop_key) + 1
     conn.execute(
         """INSERT INTO bot_web_image_knowledge_sync_state(client_id,shop_key,revision,updated_at)
            VALUES(?,?,?,?) ON CONFLICT(client_id,shop_key) DO UPDATE SET
@@ -684,11 +738,7 @@ def runtime_image_knowledge_sync(
     canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
     conflicts: List[Dict[str, Any]] = []
     with _KNOWLEDGE_LOCK, core._cp.db() as conn:
-        initial_state = conn.execute(
-            "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
-            (client_id, data.shop_key),
-        ).fetchone()
-        initial_revision = int(initial_state["revision"] or 0) if initial_state else 0
+        initial_revision = _current_image_revision(conn, client_id, data.shop_key)
         for item in data.upserts:
             image_id = _safe_text(item.get("id"), 80)
             if not image_id:
@@ -789,11 +839,7 @@ def runtime_image_knowledge_sync(
                 (client_id, data.shop_key, image_id, revision, deleted_at),
             )
 
-        state = conn.execute(
-            "SELECT revision FROM bot_web_image_knowledge_sync_state WHERE client_id=? AND shop_key=?",
-            (client_id, data.shop_key),
-        ).fetchone()
-        current_revision = int(state["revision"] or 0) if state else 0
+        current_revision = _current_image_revision(conn, client_id, data.shop_key)
         if data.since_revision > initial_revision:
             # A restored/rebuilt cloud database can legitimately have a lower revision
             # than a Windows cursor. Tell the client to re-stage local rows and perform
