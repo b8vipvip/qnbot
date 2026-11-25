@@ -1200,6 +1200,14 @@ namespace Bot.ChromeNs
                 Log.Info("千牛CDP初始化成功, sellerRef=" + DiagnosticRef("seller", qn.Seller.Nick)
                     + ", buyerRef=" + DiagnosticRef("buyer", buyerNick)
                     + ", version=" + qn.QnVersion + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
+                RefreshRpaAfterAuthoritativeSessionAsync(qn, shopKey, session.SessionID).ContinueWith(
+                    completed =>
+                    {
+                        if (completed.IsFaulted)
+                            Log.ErrorWithMaxCount("权威CDP重连后UIA刷新任务异常: "
+                                + completed.Exception.GetBaseException().Message, 10);
+                    },
+                    TaskScheduler.Default);
             }
             catch (Exception ex)
             {
@@ -1632,6 +1640,35 @@ namespace Bot.ChromeNs
         private static bool hasLoginId;
         private static bool hasQn;
         private static bool hasVs;
+        private async Task RefreshRpaAfterAuthoritativeSessionAsync(QN qn, string shopKey, string sessionId)
+        {
+            try
+            {
+                await Task.Delay(200).ConfigureAwait(false);
+                if (!IsAuthoritativeShopSession(shopKey, sessionId)) return;
+                var rpa = qn == null ? null : qn.Rpa;
+                if (rpa == null)
+                {
+                    Log.Info("权威CDP重连后跳过UIA刷新：客服RPA尚未初始化, shopRef="
+                        + DiagnosticRef("shop", shopKey));
+                    return;
+                }
+
+                var inputReady = await rpa.RefreshChatControlsAsync(true).ConfigureAwait(false);
+                if (!IsAuthoritativeShopSession(shopKey, sessionId)) return;
+                Log.Info("权威CDP重连后已刷新UIA控件诊断: shopRef="
+                    + DiagnosticRef("shop", shopKey)
+                    + ", sellerRef=" + DiagnosticRef("seller", qn.Seller == null ? string.Empty : qn.Seller.Nick)
+                    + ", sessionRef=" + DiagnosticRef("session", sessionId)
+                    + ", inputReady=" + inputReady);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("权威CDP重连后UIA刷新失败，等待下一次发送前扫描: "
+                    + SafeDiagnosticText(ex.Message, 180));
+            }
+        }
+
         private static bool cdpReady;
         private static string cdpMessage = "未获取";
         private static string seller = string.Empty;
