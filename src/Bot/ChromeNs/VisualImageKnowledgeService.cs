@@ -243,26 +243,33 @@ namespace Bot.ChromeNs
                 if (pending != null)
                 {
                     if (!IsManagedImagePath(pending.ImagePath, GetImageDirectory(shop)) || !File.Exists(pending.ImagePath))
-                        throw new IOException("图片知识原图缺失，已保留待同步状态：" + pending.EntityId);
-                    var bytes = File.ReadAllBytes(pending.ImagePath);
-                    if (bytes.Length <= 0 || bytes.Length > MaxImageBytes)
-                        throw new InvalidOperationException("图片知识原图超过同步大小限制。");
-                    var digest = ComputeSha256(bytes);
-                    if (!string.Equals(digest, pending.ImageSha256, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("图片知识原图哈希不匹配，拒绝同步损坏数据。");
-                    upserts.Add(new JObject
+                        Log.ErrorWithMaxCount("图片知识原图缺失，保留待同步记录并继续拉取云端更新: " + pending.EntityId, 5);
+                    else
                     {
-                        ["id"] = pending.EntityId,
-                        ["base_revision"] = pending.CloudRevision,
-                        ["image_name"] = pending.ImageName ?? Path.GetFileName(pending.ImagePath),
-                        ["mime_type"] = VisionImageResolver.DetectMime(bytes),
-                        ["image_sha256"] = digest,
-                        ["image_base64"] = Convert.ToBase64String(bytes),
-                        ["ocr_text"] = pending.OcrText ?? string.Empty,
-                        ["description"] = pending.Description ?? string.Empty,
-                        ["enabled"] = pending.Enabled,
-                        ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
-                    });
+                        var bytes = File.ReadAllBytes(pending.ImagePath);
+                        if (bytes.Length <= 0 || bytes.Length > MaxImageBytes)
+                            Log.ErrorWithMaxCount("图片知识原图超过同步大小限制，保留待同步记录: " + pending.EntityId, 5);
+                        else
+                        {
+                            var digest = ComputeSha256(bytes);
+                            if (!string.Equals(digest, pending.ImageSha256, StringComparison.OrdinalIgnoreCase))
+                                Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
+                            else
+                                upserts.Add(new JObject
+                                {
+                                    ["id"] = pending.EntityId,
+                                    ["base_revision"] = pending.CloudRevision,
+                                    ["image_name"] = pending.ImageName ?? Path.GetFileName(pending.ImagePath),
+                                    ["mime_type"] = VisionImageResolver.DetectMime(bytes),
+                                    ["image_sha256"] = digest,
+                                    ["image_base64"] = Convert.ToBase64String(bytes),
+                                    ["ocr_text"] = pending.OcrText ?? string.Empty,
+                                    ["description"] = pending.Description ?? string.Empty,
+                                    ["enabled"] = pending.Enabled,
+                                    ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
+                                });
+                        }
+                    }
                 }
 
                 var deletes = new JArray(tombstones.Select(x => new JObject
