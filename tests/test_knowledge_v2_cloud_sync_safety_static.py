@@ -264,3 +264,27 @@ def test_verified_human_evidence_is_deduplicated_across_different_device_record_
     assert "if (preserveLocalOnly)" in merge
     # The deterministic human-evidence SourceId, not a random record ID, is the cross-device dedupe key.
     assert "return (record.SourceId ?? string.Empty).Trim();" in merge
+
+
+def test_two_device_knowledge_v2_comparator_requires_fresh_converged_fingerprints_and_no_pii():
+    script = read("scripts/Compare-QnBotKnowledgeV2Devices.ps1")
+    assert "KnowledgeV2SyncSnapshotStatus -eq 'fresh'" in script
+    assert "KnowledgeV2ShopStates" in script
+    assert "DeviceAShopRef" in script
+    assert "DeviceBShopRef" in script
+    assert "CloudRevision" in script
+    assert "LocalFingerprintPrefix" in script
+    assert "CloudFingerprintPrefix" in script
+    assert "Converged" in script
+    assert "Syncing" in script
+    assert "Device A shop is not syncing" in script
+    assert "Device B shop is not syncing" in script
+    assert "MaxSampleSkewMinutes" in script
+    assert "MaxSampleAgeMinutes" in script
+    assert "Device A sample is recent" in script
+    assert "Device B sample is recent" in script
+    assert "Each local fingerprint matches its cloud fingerprint" in script
+    assert "RawShopKeysIncluded = $false" in script
+    assert "BuyerMessagesIncluded = $false" in script
+    assert "KnowledgeContentIncluded = $false" in script
+    assert "ShopRef aliases are not compared across devices" in script

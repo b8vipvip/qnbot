@@ -74,13 +74,23 @@ jobs:
       - name: Validate read-only acceptance diagnostics with Windows PowerShell 5.1 parser
         shell: powershell
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts\Invoke-QnBotAcceptanceDiagnostics.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Host ("line=$($_.Extent.StartLineNumber) column=$($_.Extent.StartColumnNumber) error=$($_.Message)") }
-            throw "Invoke-QnBotAcceptanceDiagnostics.ps1 has Windows PowerShell 5.1 parser errors."
+          $paths = @(
+            'scripts\Invoke-QnBotAcceptanceDiagnostics.ps1',
+            'scripts\Collect-QnBotMemory.ps1',
+            'scripts\Compare-QnBotKnowledgeV2Devices.ps1'
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path),[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Host ("path=$path line=$($_.Extent.StartLineNumber) column=$($_.Extent.StartColumnNumber) error=$($_.Message)") }
+              throw ($path + " has Windows PowerShell 5.1 parser errors.")
+            }
           }
+      - name: Run Knowledge V2 two-device comparator runtime tests
+        shell: powershell
+        run: .\tests\windows\test-knowledge-v2-device-comparator.ps1
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
       - name: Restore NuGet packages

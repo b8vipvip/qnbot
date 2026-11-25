@@ -274,7 +274,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncStatuses = @()
                 foreach ($syncShop in $syncShops) {
                     if ($null -eq $syncShop) { continue }
-                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged)
+                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged + ':' + [string]$syncShop.Syncing)
                     if (-not [string]::IsNullOrWhiteSpace([string]$syncShop.LastStatus)) {
                         $syncStatuses += [string]$syncShop.LastStatus
                     }
