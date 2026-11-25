@@ -46,6 +46,7 @@ namespace Bot.ChromeNs
         private sealed class WebMessage
         {
             public string MessageKey;
+            public string SourceMessageKey;
             public string Seller;
             public string Buyer;
             public string Role;
@@ -371,7 +372,8 @@ namespace Bot.ChromeNs
             if (text.Length == 0) return string.Empty;
 
             var occurredAt = turn.Timestamp == DateTime.MinValue ? DateTime.Now : turn.Timestamp;
-            var messageKey = (turn.MessageKey ?? string.Empty).Trim();
+            var sourceMessageKey = (turn.MessageKey ?? string.Empty).Trim();
+            var messageKey = sourceMessageKey;
             if (messageKey.Length == 0)
                 messageKey = Hash(state.Shop.ShopKey + "|" + seller + "|" + buyer + "|"
                     + role + "|" + occurredAt.ToUniversalTime().Ticks + "|" + text);
@@ -396,7 +398,7 @@ namespace Bot.ChromeNs
                     && text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
                     ? "image" : "text";
                 if (EnqueueMessage(state, seller, buyer, role, text, messageType, occurredAt,
-                    messageKey, turn.Withdrawn, isBot))
+                    messageKey, turn.Withdrawn, isBot, sourceMessageKey))
                     state.CapturedMessageSignatures[messageKey] = signature;
             }
             return messageKey;
@@ -430,7 +432,8 @@ namespace Bot.ChromeNs
             DateTime occurredAt,
             string messageKey,
             bool withdrawn = false,
-            bool isBot = false)
+            bool isBot = false,
+            string sourceMessageKey = "")
         {
             if (state == null || !state.MessageSyncEnabled) return false;
             seller = Safe(seller, 120);
@@ -448,6 +451,7 @@ namespace Bot.ChromeNs
             var item = new WebMessage
             {
                 MessageKey = Safe(messageKey, 200),
+                SourceMessageKey = Safe(sourceMessageKey, 2000),
                 Seller = seller,
                 Buyer = buyer,
                 Role = role,
@@ -701,7 +705,9 @@ namespace Bot.ChromeNs
                     using (ShopSettingsScope.Enter(state.Shop))
                     {
                         if (!VisionImageCacheService.TryGetReferenceByMessageKey(
-                            item.Seller, item.Buyer, item.MessageKey, state.Shop.ShopKey, out reference)
+                            item.Seller, item.Buyer,
+                            string.IsNullOrWhiteSpace(item.SourceMessageKey) ? item.MessageKey : item.SourceMessageKey,
+                            state.Shop.ShopKey, out reference)
                             || reference == null || reference.Message == null)
                             continue;
                         if (reference.Withdrawn)
