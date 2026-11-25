@@ -12,7 +12,7 @@ def test_image_knowledge_is_persisted_with_shop_scope_and_managed_image_files():
     service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
     targets = read("src/Directory.Build.targets")
 
-    for field in ("ShopKey", "Seller", "ImageSha256", "ImagePath", "OcrText", "Description"):
+    for field in ("ShopKey", "Seller", "ImageSha256", "ImagePath", "ImageName", "OcrText", "Description", "Deleted", "CloudContentFingerprint"):
         assert field in service
     assert "ResolveRuntimeByShopKey(shopKey)" in service
     assert "string.Equals(shop.ShopKey, shopKey" in service
@@ -21,7 +21,9 @@ def test_image_knowledge_is_persisted_with_shop_scope_and_managed_image_files():
     assert 'Paths.GetKnowledgeRoot(shop)' in service
     assert "VisualImageKnowledgeEntry" in service
     assert "create unique index if not exists UX_VisualImageKnowledge_ShopSellerImage" in service
-    assert "delete from VisualImageKnowledgeEntry where EntityId = ? and ShopKey = ? and Seller = ?" in service
+    assert "item.Deleted = true;" in service
+    assert "DbHelper.Db.SaveRecordsInTransaction(new List<object> { item });" in service
+    assert "LoadAllForCloudSync" in service
     assert "MaxImageBytes = 8 * 1024 * 1024" in service
     assert "VisualImageKnowledgeService.cs" in targets
 
@@ -96,14 +98,17 @@ def test_image_knowledge_editor_has_only_image_ocr_and_description_workflow():
     page = read("src/Bot/Knowledge/KnowledgeV2VisualUnderstandingPage.cs")
 
     for control in (
-        "上传图片", "识别图片", "保存图片知识", "删除图片知识",
+        "上传图片", "保存图片知识", "删除图片知识", "图片名称",
         "图片预览", "OCR 识别结果（可编辑、可删除文字）",
         "图片说明（用于后续图片匹配和上下文理解）",
+        "ImportImageAndRecognizeAsync", "自动调用服务端 OCR",
         "LocalOcrService.TryRecognizeAsync",
         "VisualImageKnowledgeService.Save",
         "VisualImageKnowledgeService.Delete",
     ):
         assert control in page
+    assert "识别图片" not in page
+    assert "RefreshView" in page
 
     for legacy_field in (
         "规则名称", "应用名称", "页面名称", "必需 OCR 关键词",
