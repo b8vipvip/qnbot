@@ -406,7 +406,8 @@ namespace Bot.ChromeNs
                                     attachmentSha = BitConverter.ToString(sha.ComputeHash(candidate)).Replace("-", "").ToLowerInvariant();
                                 attachmentBytes = candidate;
                                 attachmentMime = mime;
-                                attachmentName = System.IO.Path.GetFileName(imagePath);
+                                attachmentName = "买家图片-" + occurredAt.ToString("yyyyMMdd-HHmmss")
+                                    + System.IO.Path.GetExtension(imagePath);
                             }
                         }
                     }
