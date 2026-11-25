@@ -788,7 +788,7 @@ namespace Bot.ChromeNs
                 {
 
                     MergeObservedIdentity(exact, aliases, preciseTime, timestamp, fromHistory);
-                    exact.HasImage = exact.HasImage || IsImageMessage(message);
+                    exact.HasImage = exact.HasImage || IsImageMessage(message, cleanText);
                     return exact.MessageKey ?? string.Empty;
                 }
 
@@ -806,7 +806,7 @@ namespace Bot.ChromeNs
                 {
 
                     MergeObservedIdentity(precisePeers[0], aliases, preciseTime, timestamp, fromHistory);
-                    precisePeers[0].HasImage = precisePeers[0].HasImage || IsImageMessage(message);
+                    precisePeers[0].HasImage = precisePeers[0].HasImage || IsImageMessage(message, cleanText);
                     Log.Info("千牛镜像原始时间戳归并回显: origin="
                         + (fromHistory ? "history" : "live") + ", role=" + role
                         + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
@@ -832,7 +832,7 @@ namespace Bot.ChromeNs
                     {
 
                         MergeObservedIdentity(opposite[0], aliases, preciseTime, timestamp, fromHistory);
-                        opposite[0].HasImage = opposite[0].HasImage || IsImageMessage(message);
+                        opposite[0].HasImage = opposite[0].HasImage || IsImageMessage(message, cleanText);
                         Log.Info("千牛镜像单一跨源回显归并: origin="
                             + (fromHistory ? "history" : "live") + ", role=" + role
                             + ", idHash=" + StableHash(messageKey).ToString(CultureInfo.InvariantCulture));
@@ -850,7 +850,7 @@ namespace Bot.ChromeNs
                     PreciseTimeTicks = preciseTime,
                     SeenLive = !fromHistory,
                     SeenHistory = fromHistory,
-                    HasImage = IsImageMessage(message),
+                    HasImage = IsImageMessage(message, cleanText),
                     Withdrawn = false
                 });
                 Cleanup(state, DateTime.Now);
@@ -858,15 +858,9 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static bool IsImageMessage(QNChatMessage message)
+        private static bool IsImageMessage(QNChatMessage message, string messageText)
         {
-            if (message == null) return false;
-            try
-            {
-                if (message.HasImage) return true;
-                return !string.IsNullOrWhiteSpace(VisionImageResolver.ExtractUrl(message));
-            }
-            catch { return false; }
+            return IncomingMessageSafety.IsImageMessage(message, messageText);
         }
 
         private static string[] GetNativeMessageAliases(QNChatMessage message)
