@@ -861,8 +861,11 @@ namespace Bot.ChromeNs
         private static bool IsImageMessage(QNChatMessage message)
         {
             if (message == null) return false;
-            if (message.HasImage) return true;
-            try { return !string.IsNullOrWhiteSpace(VisionImageResolver.ExtractUrl(message)); }
+            try
+            {
+                if (message.HasImage) return true;
+                return !string.IsNullOrWhiteSpace(VisionImageResolver.ExtractUrl(message));
+            }
             catch { return false; }
         }
 
