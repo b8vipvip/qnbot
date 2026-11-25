@@ -34,6 +34,9 @@ def test_cloud_image_knowledge_is_bound_to_client_shop_and_uses_revisioned_tombs
     assert "seller TEXT NOT NULL DEFAULT ''" in api
     assert "bot_web_image_knowledge_sync_state" in api
     assert "bot_web_image_knowledge_tombstones" in api
+    assert "UNIQUE(client_id,shop_key,image_sha256)" in api
+    assert "legacy_unbound_count" in api
+    assert "quarantined" in api
     assert "_require_image_shop_scope" in api
     assert "shop_scope_mismatch" in api
     assert "seller_scope_mismatch" in api
