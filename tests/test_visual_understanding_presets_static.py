@@ -29,10 +29,17 @@ def test_visual_understanding_is_shop_scoped_and_uses_only_a_generic_template():
     assert "EnsureDefaultMobileAccountTemplate" in service
     assert "EnsureDefaultKugouPreset" not in service
     assert "rule.Enabled = false;" in template
-    assert "_enabled.IsChecked = item != null && item.Enabled;" in page
     assert 'Nav("视觉理解"' in shell
     assert "KnowledgeV2VisualUnderstandingPage.cs" in targets
-    assert "新增预设" in page and "保存规则" in page and "删除规则" in page
+    assert "上传图片" in page and "识别图片" in page
+    assert "保存图片知识" in page and "删除图片知识" in page
+    assert "OCR 识别结果（可编辑、可删除文字）" in page
+    assert "图片说明（用于后续图片匹配和上下文理解）" in page
+    assert "LocalOcrService.TryRecognizeAsync" in page
+    for legacy_field in ("规则名称", "应用名称", "页面名称", "必需 OCR 关键词",
+                         "可选关键词", "排除关键词", "字段提取规则", "启用此规则",
+                         "新增预设", "保存规则", "删除规则"):
+        assert legacy_field not in page
 
 
 def test_legacy_visual_preset_is_converted_to_generic_values_without_overwriting_custom_rules():
@@ -89,17 +96,18 @@ def test_unconfigured_account_template_cannot_match_or_claim_an_application_iden
 def test_ocr_visual_template_precedes_knowledge_v2_and_ai_receives_extracted_facts_on_miss():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
     vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    image_match = decision.index("VisualImageKnowledgeService.TryMatch")
     match = decision.index("VisualUnderstandingRuleService.TryMatch")
     knowledge = decision.index("KnowledgeEngineV2Service.Resolve")
-    assert match < knowledge
+    assert image_match < knowledge and match < knowledge
     assert "OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索" in decision
     match_block = decision.split("VisualUnderstandingRuleService.TryMatch", 1)[1].split(
-        "if (shop == null || knowledgeSeller.Length == 0)", 1
+        "KnowledgeV2Decision decision", 1
     )[0]
     assert "return null;" not in match_block
-    assert "if (visualMatch == null || decision == null" in decision
+    assert "(visualMatch == null && imageKnowledgeMatch == null)" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
-    assert "contextAddon = visualMatch.ContextText" in decision
+    assert "imageKnowledgeMatch.ContextText" in decision
     assert "KnowledgeV2ContextPromptAddon = contextAddon" in decision
     assert "knowledgeV2ContextAddon" in vision
     assert "requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr)" in vision
@@ -157,15 +165,18 @@ def test_new_shop_reception_settings_use_generic_schema_and_path_with_legacy_rea
 
 def test_visual_understanding_precedes_knowledge_v2_and_unmatched_images_fall_back_to_ai():
     decision = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    assert decision.index("VisualImageKnowledgeService.TryMatch") < decision.index(
+        "KnowledgeEngineV2Service.Resolve"
+    )
     assert decision.index("VisualUnderstandingRuleService.TryMatch") < decision.index(
         "KnowledgeEngineV2Service.Resolve"
     )
     assert "OCR 未命中本店视觉理解预设，仍独立执行Knowledge V2证据检索" in decision
     match_block = decision.split("VisualUnderstandingRuleService.TryMatch", 1)[1].split(
-        "if (shop == null || knowledgeSeller.Length == 0)", 1
+        "KnowledgeV2Decision decision", 1
     )[0]
     assert "return null;" not in match_block
-    assert "if (visualMatch == null || decision == null" in decision
+    assert "(visualMatch == null && imageKnowledgeMatch == null)" in decision
     assert "BuildVisualFallback(visualMatch, ocr" in decision
 
 def test_enabled_visual_rule_requires_nonempty_application_identity_at_save_and_match():
