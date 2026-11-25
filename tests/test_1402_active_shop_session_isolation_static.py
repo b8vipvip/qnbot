@@ -20,6 +20,8 @@ def test_active_shop_uses_focused_webview_and_stable_identity():
     assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in source
     assert "qn.Seller.TargetId" in source
     assert "CDP会话不一致" in source
+    assert "TotalMilliseconds < 2500" in source
+    assert "FocusProofMaxAge = TimeSpan.FromSeconds(5)" in source
 
 
 def test_background_buyer_switch_cannot_elect_active_seller():
