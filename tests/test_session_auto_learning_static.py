@@ -1134,6 +1134,16 @@ def test_active_shop_acceptance_snapshot_is_atomic_hmac_aliased_and_focus_proven
     assert "ActiveShopKey =" not in snapshot.split("snapshot = new", 1)[1]
     assert "ShopKey = activeShopKey" not in snapshot.split("snapshot = new", 1)[1]
 
+    activation = coordinator.split("private static bool Activate(", 1)[1].split(
+        "private static bool OwnsAuthoritativeSession", 1
+    )[0]
+    assert "if (focusProof)" in activation
+    assert "QueueReadOnlyAcceptanceSnapshotRefresh()" in activation
+    server_refresh = server.split("internal void QueueReadOnlyAcceptanceSnapshotRefresh()", 1)[1].split(
+        "private void WriteReadOnlyAcceptanceSnapshot", 1
+    )[0]
+    assert "Task.Run(() => WriteReadOnlyAcceptanceSnapshot())" in server_refresh
+
     diagnostic = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
     assert "ActiveShopEvidenceStatus" in diagnostic
     assert "owner_mapping_mismatch" in diagnostic
