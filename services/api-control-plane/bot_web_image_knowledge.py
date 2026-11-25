@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import unquote
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -31,6 +31,7 @@ _MAX_DESCRIPTION_CHARS = 1200
 
 
 class ImageKnowledgeSaveInput(BaseModel):
+    expected_revision: int = Field(default=0, ge=0)
     upload_id: str = Field(min_length=16, max_length=80)
     image_name: str = Field(default="", max_length=200)
     ocr_text: str = Field(default="", max_length=_MAX_OCR_CHARS)
@@ -38,6 +39,7 @@ class ImageKnowledgeSaveInput(BaseModel):
 
 
 class ImageKnowledgeUpdateInput(BaseModel):
+    expected_revision: int = Field(default=0, ge=0)
     image_name: str = Field(default="", max_length=200)
     ocr_text: str = Field(default="", max_length=_MAX_OCR_CHARS)
     description: str = Field(min_length=1, max_length=_MAX_DESCRIPTION_CHARS)
@@ -284,7 +286,8 @@ def _normalise_records(records: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def _save_state(client_id: int, shop_key: str, records: List[Dict[str, Any]], updated_by: str) -> Dict[str, Any]:
+def _save_state(client_id: int, shop_key: str, records: List[Dict[str, Any]], updated_by: str,
+                expected_revision: Optional[int] = None, raise_on_conflict: bool = False) -> Dict[str, Any]:
     clean = _normalise_records(records)
     encoded = json.dumps(clean, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     now = _now()
@@ -295,6 +298,15 @@ def _save_state(client_id: int, shop_key: str, records: List[Dict[str, Any]], up
             (int(client_id), shop_key),
         ).fetchone()
         current_revision = int(row["revision"] or 0) if row else 0
+        if expected_revision is not None and current_revision != expected_revision:
+            if raise_on_conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "revision_conflict", "current_revision": current_revision},
+                )
+            current_records = json.loads(row["records_json"] or "[]") if row else []
+            return {"revision": current_revision, "records": current_records,
+                    "updated_at": row["updated_at"] if row else "", "updated_by": row["updated_by"] if row else ""}
         current_encoded = json.dumps(
             json.loads(row["records_json"] or "[]") if row else [],
             ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -440,7 +452,18 @@ def web_save_image_knowledge(
     if not description:
         raise HTTPException(status_code=400, detail="请填写图片说明")
     image_name = _safe_image_name(data.image_name, upload["image_name"])
-    record_id = uuid.uuid4().hex
+    state = _state(client_id, scope["shop_key"])
+    active_duplicate = next((x for x in state["records"]
+                             if not bool(x.get("Deleted"))
+                             and str(x.get("ImageSha256") or "").lower() == str(upload["image_sha256"]).lower()), None)
+    if active_duplicate:
+        raise HTTPException(status_code=409, detail="这张图片已经存在于图片知识列表，请编辑已有记录")
+    tombstone_index = next((i for i, x in enumerate(state["records"])
+                            if bool(x.get("Deleted"))
+                            and str(x.get("ImageSha256") or "").lower() == str(upload["image_sha256"]).lower()), -1)
+    tombstone = state["records"][tombstone_index] if tombstone_index >= 0 else None
+    record_id = str(tombstone.get("Id")) if tombstone else uuid.uuid4().hex
+    now = _now()
     record = {
         "Id": record_id,
         "ImageName": image_name,
@@ -450,23 +473,39 @@ def web_save_image_knowledge(
         "Description": description[:_MAX_DESCRIPTION_CHARS],
         "Enabled": True,
         "Deleted": False,
-        "CreatedAt": _now(),
-        "UpdatedAt": _now(),
+        "CreatedAt": str(tombstone.get("CreatedAt") or now) if tombstone else now,
+        "UpdatedAt": now,
     }
     target = _entry_path(client_id, scope["shop_key"], record)
     target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(upload["file_path"], target)
-    state = _state(client_id, scope["shop_key"])
-    if len([x for x in state["records"] if not bool(x.get("Deleted"))]) >= _MAX_ENTRIES:
+    shutil.copy2(upload["file_path"], target)
+    records = list(state["records"])
+    if tombstone_index >= 0:
+        records[tombstone_index] = record
+    else:
+        if len([x for x in records if not bool(x.get("Deleted"))]) >= _MAX_ENTRIES:
+            try:
+                target.unlink()
+            except OSError:
+                pass
+            raise HTTPException(status_code=409, detail="当前店铺图片知识已达到 500 条上限")
+        records.append(record)
+    try:
+        result = _save_state(client_id, scope["shop_key"], records, "web",
+                             expected_revision=data.expected_revision, raise_on_conflict=True)
+    except Exception:
         try:
             target.unlink()
         except OSError:
             pass
-        raise HTTPException(status_code=409, detail="当前店铺图片知识已达到 500 条上限")
-    result = _save_state(client_id, scope["shop_key"], state["records"] + [record], "web")
+        raise
     with _cp.db() as conn:
         conn.execute("DELETE FROM bot_image_knowledge_uploads WHERE upload_id=? AND client_id=?",
                      (data.upload_id, client_id))
+    try:
+        Path(upload["file_path"]).unlink()
+    except OSError:
+        pass
     return {"ok": True, "record": _record_with_image_flag(client_id, scope["shop_key"], record),
             "revision": result["revision"]}
 
@@ -496,7 +535,8 @@ def web_update_image_knowledge(
     if not record["Description"]:
         raise HTTPException(status_code=400, detail="图片说明不能为空")
     records[index] = record
-    result = _save_state(client_id, scope["shop_key"], records, "web")
+    result = _save_state(client_id, scope["shop_key"], records, "web",
+                         expected_revision=data.expected_revision, raise_on_conflict=True)
     return {"ok": True, "record": _record_with_image_flag(client_id, scope["shop_key"], record),
             "revision": result["revision"]}
 
@@ -504,6 +544,7 @@ def web_update_image_knowledge(
 @router.delete("/api/bot-web/image-knowledge/{record_id}")
 def web_delete_image_knowledge(
     record_id: str,
+    expected_revision: int = Query(..., ge=0),
     client: Dict[str, Any] = Depends(core._web_client),
 ) -> Dict[str, Any]:
     client_id = int(client["id"])
@@ -518,7 +559,8 @@ def web_delete_image_knowledge(
     records[index]["Deleted"] = True
     records[index]["Enabled"] = False
     records[index]["UpdatedAt"] = _now()
-    result = _save_state(client_id, scope["shop_key"], records, "web-delete")
+    result = _save_state(client_id, scope["shop_key"], records, "web-delete",
+                         expected_revision=expected_revision, raise_on_conflict=True)
     return {"ok": True, "revision": result["revision"]}
 
 
@@ -656,14 +698,16 @@ def runtime_image_knowledge_sync(
     with _LOCK:
         current = _state(client_id, scope["shop_key"])
         if current["revision"] == 0 and incoming is not None:
-            current = _save_state(client_id, scope["shop_key"], incoming, "windows-seed")
+            current = _save_state(client_id, scope["shop_key"], incoming, "windows-seed",
+                                  expected_revision=0, raise_on_conflict=False)
         elif current["revision"] > data.revision:
             pass
         elif incoming is not None:
             encoded_incoming = json.dumps(incoming, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             encoded_current = json.dumps(current["records"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             if encoded_incoming != encoded_current:
-                current = _save_state(client_id, scope["shop_key"], incoming, "windows")
+                current = _save_state(client_id, scope["shop_key"], incoming, "windows",
+                                      expected_revision=data.revision, raise_on_conflict=False)
 
     records = []
     missing_uploads = []
