@@ -43,9 +43,9 @@ function imageKnowledgeScopeQuery(){const scope=imageKnowledgeScope();if(!scope.
 async function importImageKnowledgeFromMessage(){const m=state.selectedMessage;closeActionSheet();if(!m||m.role!=="user"||m.withdrawn)return;resetImageKnowledgeEditor();$("imageKnowledgeHint").textContent="正在从这条买家消息读取原始图片…";try{const data=await fetchMessageAttachment(m);const binary=atob(data.image_base64||"");const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);const file=new File([bytes],data.file_name||("buyer-image-"+m.id+".jpg"),{type:data.mime_type||"image/jpeg"});await prepareImageKnowledgeFile(file)}catch(err){$("imageKnowledgeHint").textContent="原始图片导入失败："+err.message;toast(err.message)}}
 async function normalizeImageKnowledgeFile(file){
   const type=String(file?.type||"").toLowerCase(),name=String(file?.name||"").toLowerCase();
-  if(/^image\\/(jpeg|png|webp|gif)$/.test(type))return file;
+  if(/^image\/(jpeg|png|webp|gif)$/.test(type))return file;
   const bmp=type==="image/bmp"||type==="image/x-ms-bmp"||type==="image/x-bmp"||name.endsWith(".bmp");
-  const heif=/^image\\/(heic|heif)(-sequence)?$/.test(type)||name.endsWith(".heic")||name.endsWith(".heif");
+  const heif=/^image\/(heic|heif)(-sequence)?$/.test(type)||name.endsWith(".heic")||name.endsWith(".heif");
   if(!bmp&&!heif)return file;
   if(file.size<1||file.size>8*1024*1024)throw new Error("图片必须为 1 字节至 8 MB");
   if(typeof createImageBitmap!=="function")throw new Error("当前浏览器不支持图片格式转换，请先转为 JPG 或 PNG");
@@ -72,7 +72,7 @@ async function normalizeImageKnowledgeFile(file){
     const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png"));
     if(!blob||blob.size<1)throw new Error("图片转换为 PNG 失败");
     if(blob.size>8*1024*1024)throw new Error("图片转换为 PNG 后超过 8 MB 限制");
-    const stem=String(file.name||"buyer-image").replace(/\\.[^.]+$/,"")||"buyer-image";
+    const stem=String(file.name||"buyer-image").replace(/\.[^.]+$/,"")||"buyer-image";
     return new File([blob],stem+".png",{type:"image/png",lastModified:file.lastModified||Date.now()});
   }finally{if(bitmap&&typeof bitmap.close==="function")bitmap.close()}
 }
@@ -81,7 +81,7 @@ async function prepareImageKnowledgeFile(file){
   if(file.size<1||file.size>8*1024*1024){toast("仅支持 1 字节至 8 MB 的图片");return}
   try{file=await normalizeImageKnowledgeFile(file)}
   catch(err){$("imageKnowledgeHint").textContent="图片格式转换失败："+err.message;toast(err.message);return}
-  if(!/^image\\/(jpeg|png|webp|gif)$/.test(file.type)){toast("仅支持 JPG、PNG、WEBP、GIF 图片；BMP/HEIC 会自动转换为 PNG");return}
+  if(!/^image\/(jpeg|png|webp|gif)$/.test(file.type)){toast("仅支持 JPG、PNG、WEBP、GIF 图片；BMP/HEIC 会自动转换为 PNG");return}
   state.imageKnowledgeFile=file;state.imageKnowledgeMime=file.type;state.imageKnowledgeSha="";$("imageKnowledgeName").value=file.name||"";if(imageKnowledgeObjectUrl)URL.revokeObjectURL(imageKnowledgeObjectUrl);imageKnowledgeObjectUrl=URL.createObjectURL(file);$("imageKnowledgePreview").src=imageKnowledgeObjectUrl;$("imageKnowledgeOcr").value="";$("saveImageKnowledgeBtn").disabled=true;$("imageKnowledgeHint").textContent="正在上传图片并执行服务端 OCR…";try{const raw=await file.arrayBuffer();const response=await fetch("/api/bot-web/image-knowledge/recognize",{method:"POST",credentials:"same-origin",headers:{"Content-Type":file.type},body:raw});const result=await response.json();if(!response.ok)throw new Error(result.detail||"OCR 识别失败");state.imageKnowledgeSha=result.image_sha256;state.imageKnowledgeBase64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");reader.onerror=reject;reader.readAsDataURL(file)});$("imageKnowledgeOcr").value=result.text||"";$("imageKnowledgeHint").textContent="OCR 完成："+(result.text||"").length+" 字符 · 置信度 "+Number(result.confidence||0).toFixed(3)+" · "+(result.engine||"服务端 OCR")+"。填写图片说明后保存。";$("saveImageKnowledgeBtn").disabled=false}catch(err){$("imageKnowledgeHint").textContent="图片 OCR 失败："+err.message;toast(err.message)}
 }
 async function loadImageKnowledge(show=true){try{const q=imageKnowledgeScopeQuery();const r=await api("/api/bot-web/image-knowledge?"+q.toString());state.imageKnowledge=r.items||[];const legacyCount=Number(r.legacy_unbound_count||0);if(legacyCount>0){$("imageKnowledgeScopeNotice").innerHTML="检测到 "+legacyCount+" 条旧版图片知识缺少ShopKey，已隔离以防跨店数据串用。仅当确认这些记录全部属于当前店铺时，才执行迁移。 <button id=\"migrateLegacyImageKnowledgeBtn\" type=\"button\">确认归属并迁移</button>";$("migrateLegacyImageKnowledgeBtn").onclick=async()=>{const scope=imageKnowledgeScope();if(!confirm("请确认隔离的旧版图片知识全部属于当前ShopKey："+scope.shop_key+"。若其中包含其他店铺数据，不要迁移。"))return;try{const result=await api("/api/bot-web/image-knowledge/migrate-legacy",{method:"POST",body:JSON.stringify({...scope,confirmed:true})});toast("迁移完成："+result.migrated_count+" 条，重复图片跳过："+(result.skipped_duplicates||[]).length+" 条");await loadImageKnowledge(false)}catch(err){toast("旧版图片知识迁移失败："+err.message)}}}else{$("imageKnowledgeScopeNotice").textContent="图片知识按ShopKey隔离；Windows Bot在线且同步服务启用时，会按云端版本自动双向同步。"}renderImageKnowledge()}catch(err){$("imageKnowledgeList").innerHTML='<div class="empty">'+esc(err.message)+'</div>';if(show)toast("图片知识加载失败："+err.message)}}
