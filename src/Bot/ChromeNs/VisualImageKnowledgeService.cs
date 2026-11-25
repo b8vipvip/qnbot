@@ -386,12 +386,14 @@ namespace Bot.ChromeNs
             try
             {
                 File.WriteAllBytes(temp, bytes);
+                var imageName = Clean((string)data["image_name"], 180);
+                if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
                 var entry = new VisualImageKnowledgeEntry
                 {
                     EntityId = id,
                     ShopKey = shop.ShopKey,
                     Seller = seller,
-                    ImageName = Clean((string)data["image_name"], 180),
+                    ImageName = imageName,
                     ImageSha256 = sha,
                     OcrText = Clean((string)data["ocr_text"], MaxOcrChars),
                     Description = Clean((string)data["description"], MaxDescriptionChars),
