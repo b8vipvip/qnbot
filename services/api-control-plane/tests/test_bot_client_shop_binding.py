@@ -145,6 +145,10 @@ def test_first_claim_binds_token_and_second_shop_gets_structured_409(tmp_path):
     assert result["shop_key"] == "shop_a"
     assert result["rebound"] is False
 
+    # Runtime sync middleware sends ShopKey but not seller; this must not erase
+    # the seller identity established by the explicit Windows token-binding claim.
+    binding.ensure_binding(1, "shop_a", False, "")
+
     with pytest.raises(HTTPException) as caught:
         binding.ensure_binding(1, "shop_b", False, "seller-b")
     assert caught.value.status_code == 409
