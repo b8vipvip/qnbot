@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -113,6 +114,10 @@ def init_bot_web_db() -> None:
                 message_type TEXT NOT NULL DEFAULT 'text',
                 is_bot INTEGER NOT NULL DEFAULT 0,
                 withdrawn INTEGER NOT NULL DEFAULT 0,
+                attachment_mime TEXT,
+                attachment_name TEXT,
+                attachment_sha256 TEXT,
+                attachment_bytes BLOB,
                 occurred_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(client_id, message_key),
@@ -144,6 +149,14 @@ def init_bot_web_db() -> None:
             conn.execute("ALTER TABLE bot_messages ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
         if "withdrawn" not in message_columns:
             conn.execute("ALTER TABLE bot_messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0")
+        if "attachment_mime" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_mime TEXT")
+        if "attachment_name" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_name TEXT")
+        if "attachment_sha256" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_sha256 TEXT")
+        if "attachment_bytes" not in message_columns:
+            conn.execute("ALTER TABLE bot_messages ADD COLUMN attachment_bytes BLOB")
 
 
 def _bearer(request: Request) -> str:
@@ -364,6 +377,42 @@ def _command_rows(client_id: int) -> List[Dict[str, Any]]:
     ]
 
 
+def _decode_message_attachment(item: Dict[str, Any], withdrawn: bool):
+    if withdrawn:
+        return None, None, None, None
+    attachment = item.get("attachment")
+    if not isinstance(attachment, dict):
+        return None, None, None, None
+    encoded = str(attachment.get("data_base64") or "")
+    if not encoded or len(encoded) > 12 * 1024 * 1024:
+        return None, None, None, None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except Exception:
+        return None, None, None, None
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        return None, None, None, None
+    mime = str(attachment.get("mime_type") or "").lower()
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if mime not in allowed:
+        return None, None, None, None
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != str(attachment.get("sha256") or "").lower():
+        return None, None, None, None
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as image:
+            image.verify()
+            detected = Image.MIME.get(image.format)
+        if detected != mime:
+            return None, None, None, None
+    except Exception:
+        return None, None, None, None
+    name = _safe(attachment.get("file_name") or ("image-" + digest[:12]), 180)
+    return mime, name, digest, raw
+
+
 def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     seller = _safe(item.get("seller"), 120)
     buyer = _safe(item.get("buyer"), 120)
@@ -384,12 +433,18 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
     if not message_key:
         seed = f"{seller}|{buyer}|{role}|{occurred}|{text}"
         message_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    attachment_mime, attachment_name, attachment_sha, attachment_bytes = _decode_message_attachment(item, bool(withdrawn))
+    if attachment_bytes is not None:
+        message_type = "image"
+    elif withdrawn:
+        attachment_mime = attachment_name = attachment_sha = attachment_bytes = None
     with _cp.db() as conn:
         conn.execute(
             """
             INSERT INTO bot_messages(
-                client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,occurred_at,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                client_id,message_key,seller,buyer,role,text,message_type,is_bot,withdrawn,
+                attachment_mime,attachment_name,attachment_sha256,attachment_bytes,occurred_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(client_id,message_key) DO UPDATE SET
                 seller=excluded.seller,
                 buyer=excluded.buyer,
@@ -398,11 +453,16 @@ def _save_message(client_id: int, item: Dict[str, Any]) -> None:
                 message_type=excluded.message_type,
                 is_bot=excluded.is_bot,
                 withdrawn=excluded.withdrawn,
+                attachment_mime=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_mime,bot_messages.attachment_mime) END,
+                attachment_name=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_name,bot_messages.attachment_name) END,
+                attachment_sha256=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_sha256,bot_messages.attachment_sha256) END,
+                attachment_bytes=CASE WHEN excluded.withdrawn=1 THEN NULL ELSE COALESCE(excluded.attachment_bytes,bot_messages.attachment_bytes) END,
                 occurred_at=excluded.occurred_at
             """,
             (
                 client_id, message_key, seller, buyer, role, text, message_type,
-                is_bot, withdrawn, occurred, _now(),
+                is_bot, withdrawn, attachment_mime, attachment_name, attachment_sha,
+                attachment_bytes, occurred, _now(),
             ),
         )
 
