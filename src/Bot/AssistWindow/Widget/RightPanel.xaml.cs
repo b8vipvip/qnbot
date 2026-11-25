@@ -60,50 +60,183 @@ namespace Bot.AssistWindow.Widget
 
         private void RightPanel_Loaded(object sender, RoutedEventArgs e)
         {
+            // The header is independent from the dynamically-created tab content. Recover
+            // initialization if the host did not finish the normal Init path.
+            if (_wndDontUse == null)
+            {
+                var parent = this.xFindParentWindow() as WndAssist;
+                if (parent != null) Init(parent);
+            }
+
+            // Recover the Bot tab if a stale/empty persisted tab order left the panel body blank.
+            if (tabControl.Items.Count == 0 && _wndDontUse != null)
+            {
+                Log.ErrorWithMaxCount("右侧Bot面板没有任何有效Tab，Loaded阶段自动恢复工作台。", 10);
+                EnsureRobotTab("Loaded");
+            }
+            if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
+                tabControl.SelectedIndex = 0;
             RefreshSwitches();
         }
 
         public void Init(WndAssist wnd)
         {
-            if (_wndDontUse == null)
+            if (_wndDontUse != null) return;
+            if (wnd == null)
             {
-                Wnd = wnd;
-                var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
-                var tabs = tabCsv.Split(',');
-                foreach (var tabName in tabs)
-                {
-                    var tabType = GetTabType(tabName);
-                    var tabItem = CreateTabItem(tabType);
-                    if (tabItem != null)
-                    {
-                        AddTabItem(tabItem, tabType);
-                    }
-                }
-                tabControl.SelectionChanged -= tabControl_SelectionChanged;
-                tabControl.SelectionChanged += tabControl_SelectionChanged;
-                RefreshSwitches();
+                Log.ErrorWithMaxCount("右侧Bot面板初始化失败：WndAssist为空。", 10);
+                return;
             }
+
+            Wnd = wnd;
+            BuildConfiguredTabs(false);
+            tabControl.SelectionChanged -= tabControl_SelectionChanged;
+            tabControl.SelectionChanged += tabControl_SelectionChanged;
+            if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
+                tabControl.SelectedIndex = 0;
+            RefreshSwitches();
         }
 
         public void ReShowAfterChangePanelOption()
         {
             Util.Assert(_wndDontUse != null);
-            tabControl.Items.Clear();
-            var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
-            var tabs = tabCsv.Split(',');
-            foreach (var tabName in tabs)
-            {
-                var tabVisible = Params.Panel.GetPanelOptionVisible(Wnd.Desk.WndTitle, tabName);
-                var tabType = GetTabType(tabName);
-                var tabItem = CreateTabItem(tabType);
-                if (tabItem != null)
-                {
-                    tabItem.xIsVisible(tabVisible);
-                    AddTabItem(tabItem, tabType);
-                }
-            }
+            BuildConfiguredTabs(true);
             tabControl.SelectionChanged -= tabControl_SelectionChanged;
             tabControl.SelectionChanged += tabControl_SelectionChanged;
+            if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
+                tabControl.SelectedIndex = 0;
+        }
+
+        private void BuildConfiguredTabs(bool clearExisting)
+        {
+            if (clearExisting) tabControl.Items.Clear();
+
+            var tabCsv = string.Empty;
+            try
+            {
+                tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle) ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+
+            var added = 0;
+            var tabs = (tabCsv ?? string.Empty).Split(
+                new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var rawName in tabs)
+            {
+                var tabName = (rawName ?? string.Empty).Trim();
+                if (tabName.Length == 0) continue;
+
+                var tabType = GetTabType(tabName);
+                if (tabType == TabTypeEnum.Unknown)
+                {
+                    Log.Info("忽略无法识别的右侧面板标签配置: " + tabName);
+                    continue;
+                }
+
+                try
+                {
+                    var tabItem = CreateTabItem(tabType);
+                    if (tabItem == null) continue;
+                    if (clearExisting)
+                        tabItem.xIsVisible(Params.Panel.GetPanelOptionVisible(Wnd.Desk.WndTitle, tabName));
+                    AddTabItem(tabItem, tabType);
+                    added++;
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
+            }
+
+            var robotTab = GetTabItem(TabTypeEnum.Robot);
+            if (robotTab == null)
+            {
+                Log.ErrorWithMaxCount(
+                    "右侧面板配置未生成Bot工作台，自动补回默认工作台。configured="
+                    + (tabCsv.Length > 80 ? tabCsv.Substring(0, 80) : tabCsv), 10);
+                EnsureRobotTab("InvalidOrEmptyConfiguration");
+                robotTab = GetTabItem(TabTypeEnum.Robot);
+            }
+            // A previous build treated the persisted name "工作台" as an unknown
+            // visibility option and collapsed the only Bot tab. Restore it whenever
+            // the actual Robot visibility setting says the tab should be shown.
+            if (robotTab != null && robotTab.Visibility != Visibility.Visible
+                && Params.Panel.GetRobotIsVisible(Wnd.Desk.WndTitle))
+            {
+                robotTab.Visibility = Visibility.Visible;
+                Log.ErrorWithMaxCount("检测到Bot工作台被旧版标签别名逻辑隐藏，已按RobotIsVisible配置恢复显示。", 10);
+            }
+
+            if (tabControl.Items.Count > 0 && tabControl.SelectedIndex < 0)
+                tabControl.SelectedIndex = 0;
+
+            Log.Info("右侧Bot面板初始化完成: configuredTabs="
+                + (tabCsv.Length > 80 ? tabCsv.Substring(0, 80) : tabCsv)
+                + ", createdTabs=" + added
+                + ", actualTabs=" + tabControl.Items.Count);
+        }
+
+        private void EnsureRobotTab(string reason)
+        {
+            if (GetTabItem(TabTypeEnum.Robot) != null) return;
+            try
+            {
+                Log.Info("正在恢复右侧Bot工作台，reason=" + (reason ?? string.Empty));
+                var tabItem = TabRobot();
+                AddTabItem(tabItem, TabTypeEnum.Robot);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                // Even if the Robot control itself cannot be constructed, never leave
+                // the panel as a silent white rectangle. Surface a readable error.
+                var fallback = new TabItem
+                {
+                    Header = "状态",
+                    Tag = TabTypeEnum.Robot,
+                    Content = CreateRobotInitializationErrorContent(ex)
+                };
+                tabControl.Items.Add(fallback);
+            }
+        }
+
+        private UIElement CreateRobotInitializationErrorContent(Exception ex)
+        {
+            var message = ex == null ? "未知初始化错误" : ex.GetBaseException().Message;
+            return new Border
+            {
+                Background = Brushes.White,
+                Padding = new Thickness(16),
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Bot工作台初始化失败",
+                            FontSize = 16,
+                            FontWeight = FontWeights.Bold,
+                            Foreground = Brushes.DarkRed,
+                            Margin = new Thickness(0, 0, 0, 8)
+                        },
+                        new TextBlock
+                        {
+                            Text = "界面没有继续保持空白。请查看客户端诊断日志中的 RightPanel 初始化异常。",
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 0, 0, 8)
+                        },
+                        new TextBlock
+                        {
+                            Text = message,
+                            TextWrapping = TextWrapping.Wrap,
+                            Foreground = Brushes.Gray
+                        }
+                    }
+                }
+            };
         }
 
         public void ChangeSeller(string seller)
@@ -138,6 +271,10 @@ namespace Bot.AssistWindow.Widget
                     tabType = TabTypeEnum.Goods;
                     break;
                 case "工作台":
+                case "机器人":
+                case "Bot":
+                case "Robot":
+                case "状态":
                     tabType = TabTypeEnum.Robot;
                     break;
             }
@@ -177,11 +314,17 @@ namespace Bot.AssistWindow.Widget
 
         private TabItem TabRobot()
         {
-            return new TabItem
+            var tabItem = new TabItem { Header = "状态" };
+            try
             {
-                Header = "状态",
-                Content = new CtlRobot(Wnd.Desk, this)
-            };
+                tabItem.Content = new CtlRobot(Wnd.Desk, this);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                tabItem.Content = CreateRobotInitializationErrorContent(ex);
+            }
+            return tabItem;
         }
 
         private void AddTabItem(TabItem tabItem, TabTypeEnum tabType)
