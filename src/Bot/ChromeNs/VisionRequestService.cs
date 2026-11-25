@@ -27,6 +27,8 @@ namespace Bot.ChromeNs
         public string VisualTags { get; set; }
         public string MatchedVisualKnowledgeId { get; set; }
         public double VisualKnowledgeScore { get; set; }
+        public string MatchedImageKnowledgeId { get; set; }
+        public double ImageKnowledgeScore { get; set; }
         public string LocalOcrText { get; set; }
         public double LocalOcrConfidence { get; set; }
         public long LocalOcrLatencyMs { get; set; }
@@ -79,7 +81,7 @@ namespace Bot.ChromeNs
                 // This is explicitly an OCR-TEXT fallback, not an invented
                 // image-capable provider. Only reuse verified cached OCR text;
                 // failed OCR (especially HTTP 504) must never be retried here.
-                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon);
+                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon, localDecision);
                 if (textFallback != null)
                 {
                     Log.Info("[VisionRoute] route=ocr_text_ai_fallback; visualAiCalled=false"
@@ -143,6 +145,7 @@ namespace Bot.ChromeNs
 
                         var result = await CallVisionAsync(endpoint, image.ImageUrl, requestPrompt, cts.Token);
                         ApplyLocalOcr(result, localOcr);
+                        ApplyImageKnowledgeContext(result, localDecision);
                         if (result.Success && string.IsNullOrWhiteSpace(result.VisualSummary))
                         {
                             var originalAnswer = result.Answer;
@@ -154,6 +157,7 @@ namespace Bot.ChromeNs
                                 requestPrompt + StrictSemanticRepairPrompt,
                                 cts.Token);
                             ApplyLocalOcr(repaired, localOcr);
+                            ApplyImageKnowledgeContext(repaired, localDecision);
                             if (repaired.Success && !string.IsNullOrWhiteSpace(repaired.VisualSummary))
                             {
                                 if (string.IsNullOrWhiteSpace(repaired.Answer)) repaired.Answer = originalAnswer;
@@ -233,7 +237,9 @@ namespace Bot.ChromeNs
                                 ApplyLocalOcr(blocked, localOcr);
                                 return blocked;
                             }
-                            var source = string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId) ? "AI生成" : "视觉知识";
+                            var source = !string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
+                                ? "视觉知识"
+                                : (!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId) ? "图片知识辅助AI" : "AI生成");
                             KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
                             if (!task.DeferLearningUntilDelivered && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                             {
@@ -271,7 +277,8 @@ namespace Bot.ChromeNs
         }
 
         private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync(
-            VisionReplyTask task, CancellationToken cancellationToken, string knowledgeV2ContextAddon = null)
+            VisionReplyTask task, CancellationToken cancellationToken, string knowledgeV2ContextAddon = null,
+            VisionRequestResult localDecision = null)
         {
             try
             {
@@ -301,9 +308,11 @@ namespace Bot.ChromeNs
                     new JObject
                     {
                         ["role"] = "system",
-                        ["content"] = "你是客服OCR文字辅助助手。你没有看到图片，只得到OCR提取的文字。"
-                            + "不要声称已经看到图片的布局、Logo或设备；不得猜测商品兼容性、订单状态、充值是否成功。"
-                            + "能确定的只说明文字显示的事实，不能确定时询问买家具体问题或请买家补充清晰截图。"
+                        ["content"] = "你是客服OCR文字辅助助手。你没有直接看到当前图片像素，只得到OCR提取的文字及可能存在的图片知识匹配说明。"
+                            + "如果系统提供了已匹配的人工图片知识说明，可将其作为相似图片类别/界面的参考标注，但不得推断说明之外的视觉细节；必须结合当前买家文字和同一买家的前序对话判断。"
+                            + "如果此前客服要求的设备或页面与图片知识说明不一致，应明确指出不匹配并请买家重新发送正确界面；不要把图片说明当作客服回复或买家已完成要求。"
+                            + "不得声称亲自看到了图片布局、Logo或设备；不得猜测商品兼容性、订单状态、充值是否成功。"
+                            + "能确定的只说明OCR和已提供的图片知识参考事实，不能确定时询问买家或请买家补充清晰截图。"
                             + "不要要求买家公开账号密码或验证码。只输出包含answer字段的JSON对象，内容为简洁自然的中文回复。"
                             + (knowledgeV2ContextAddon ?? string.Empty)
                     },
@@ -339,8 +348,12 @@ namespace Bot.ChromeNs
                     EndpointName = "ocr-text-ai-fallback",
                     VisionModel = "text-only-OCR-evidence",
                     VisualQuestion = question,
-                    VisualSummary = string.Empty,
-                    VisualTags = "ocr-text-only",
+                    VisualSummary = localDecision == null ? string.Empty : localDecision.VisualSummary ?? string.Empty,
+                    VisualTags = !string.IsNullOrWhiteSpace(localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeId)
+                        ? "ocr-text-only,image-knowledge"
+                        : "ocr-text-only",
+                    MatchedImageKnowledgeId = localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeId,
+                    ImageKnowledgeScore = localDecision == null ? 0d : localDecision.ImageKnowledgeScore,
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrCacheHit = true,
@@ -423,6 +436,27 @@ namespace Bot.ChromeNs
                     return ParseVisionResult(raw);
                 }
             }
+        }
+
+        private static void ApplyImageKnowledgeContext(
+            VisionRequestResult result, VisionRequestResult localDecision)
+        {
+            if (result == null || localDecision == null
+                || string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
+
+            result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
+            result.ImageKnowledgeScore = localDecision.ImageKnowledgeScore;
+            var description = (localDecision.VisualSummary ?? string.Empty).Trim();
+            if (description.Length > 0)
+            {
+                if (string.IsNullOrWhiteSpace(result.VisualSummary))
+                    result.VisualSummary = description;
+                else if (result.VisualSummary.IndexOf(description, StringComparison.OrdinalIgnoreCase) < 0)
+                    result.VisualSummary = result.VisualSummary.Trim() + "；命中图片知识：" + description;
+            }
+            var tags = (result.VisualTags ?? string.Empty).Trim();
+            if (tags.IndexOf("image-knowledge", StringComparison.OrdinalIgnoreCase) < 0)
+                result.VisualTags = tags.Length == 0 ? "image-knowledge" : tags + ",image-knowledge";
         }
 
         private static void ApplyLocalOcr(VisionRequestResult result, LocalOcrResult localOcr)

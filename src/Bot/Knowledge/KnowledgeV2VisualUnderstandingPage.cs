@@ -1,139 +1,414 @@
 using Bot.ChromeNs;
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace Bot.Knowledge
 {
+    /// <summary>
+    /// Operator-managed image knowledge. A reference image is uploaded, server OCR is
+    /// editable, and the operator supplies a concise semantic description for later
+    /// OCR-similarity matching and conversation-aware answer generation.
+    /// </summary>
     internal sealed class KnowledgeV2VisualUnderstandingPage : UserControl, IKnowledgeV2Refreshable
     {
         private readonly string _seller;
         private readonly string _shopKey;
-        private readonly ObservableCollection<VisualUnderstandingRuleEntity> _items = new ObservableCollection<VisualUnderstandingRuleEntity>();
+        private readonly ObservableCollection<VisualImageKnowledgeEntry> _items =
+            new ObservableCollection<VisualImageKnowledgeEntry>();
         private DataGrid _grid;
-        private TextBox _name, _app, _screen, _required, _optional, _excluded, _patterns, _description;
-        private CheckBox _enabled;
+        private Image _preview;
+        private TextBox _ocrText;
+        private TextBox _description;
         private TextBlock _status;
-        private VisualUnderstandingRuleEntity _selected;
+        private Button _recognizeButton;
+        private Button _saveButton;
+        private Button _deleteButton;
+        private VisualImageKnowledgeEntry _selected;
+        private string _currentImagePath = string.Empty;
+        private string _currentImageSha256 = string.Empty;
+        private bool _ocrRecognized;
+        private bool _suppressSelection;
 
         public KnowledgeV2VisualUnderstandingPage(string seller, string shopKey)
         {
-            _seller = seller ?? string.Empty;
-            _shopKey = shopKey ?? string.Empty;
+            _seller = (seller ?? string.Empty).Trim();
+            _shopKey = (shopKey ?? string.Empty).Trim();
             Build();
             Loaded += delegate { RefreshView(); };
         }
 
         public void RefreshView()
         {
-            _status.Text = "正在读取当前店铺的视觉理解规则…";
-            Task.Run(() => VisualUnderstandingRuleService.Load(_shopKey, _seller))
+            if (_status == null) return;
+            _status.Text = "正在读取当前店铺的图片知识…";
+            var selectedId = _selected == null ? string.Empty : _selected.EntityId;
+            Task.Run(() => VisualImageKnowledgeService.Load(_shopKey, _seller))
                 .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (t.IsFaulted) { _status.Text = "读取失败：" + t.Exception.GetBaseException().Message; return; }
+                    if (t.IsFaulted)
+                    {
+                        _status.Text = "读取图片知识失败：" + t.Exception.GetBaseException().Message;
+                        return;
+                    }
+
+                    _suppressSelection = true;
                     _items.Clear();
-                    foreach (var item in t.Result ?? new System.Collections.Generic.List<VisualUnderstandingRuleEntity>()) _items.Add(item);
-                    _status.Text = "共 " + _items.Count + " 条规则；规则按 ShopKey 隔离，仅当前店铺生效。";
+                    foreach (var item in t.Result ?? new System.Collections.Generic.List<VisualImageKnowledgeEntry>())
+                        _items.Add(item);
+                    _suppressSelection = false;
+
+                    var selected = _items.FirstOrDefault(x =>
+                        string.Equals(x.EntityId, selectedId, StringComparison.Ordinal));
+                    _grid.SelectedItem = selected;
+                    Select(selected);
+                    _status.Text = "共 " + _items.Count + " 条图片知识；仅当前店铺可用。";
                 })));
         }
 
         private void Build()
         {
-            var root = new Grid();
+            var root = new Grid { Background = Brushes.White };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
             var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            var add = Button("新增预设"); add.Click += delegate { Select(null); };
-            var save = Button("保存规则"); save.Click += delegate { Save(); };
-            var del = Button("删除规则"); del.Click += delegate { Delete(); };
-            var refresh = Button("刷新"); refresh.Click += delegate { RefreshView(); };
-            toolbar.Children.Add(add); toolbar.Children.Add(save); toolbar.Children.Add(del); toolbar.Children.Add(refresh);
-            Grid.SetRow(toolbar, 0); root.Children.Add(toolbar);
+            var upload = Button("上传图片");
+            upload.Click += delegate { UploadImage(); };
+            _recognizeButton = Button("识别图片");
+            _recognizeButton.Click += async delegate { await RecognizeImageAsync(); };
+            _saveButton = Button("保存图片知识");
+            _saveButton.Click += async delegate { await SaveAsync(); };
+            _deleteButton = Button("删除图片知识");
+            _deleteButton.Click += async delegate { await DeleteAsync(); };
+            var refresh = Button("刷新");
+            refresh.Click += delegate { RefreshView(); };
+            toolbar.Children.Add(upload);
+            toolbar.Children.Add(_recognizeButton);
+            toolbar.Children.Add(_saveButton);
+            toolbar.Children.Add(_deleteButton);
+            toolbar.Children.Add(refresh);
+            Grid.SetRow(toolbar, 0);
+            root.Children.Add(toolbar);
 
             var body = new Grid();
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38, GridUnitType.Star) });
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(62, GridUnitType.Star) });
-            Grid.SetRow(body, 1); root.Children.Add(body);
-            _grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true, CanUserAddRows = false,
-                ItemsSource = _items, SelectionMode = DataGridSelectionMode.Single, Margin = new Thickness(0, 0, 8, 0) };
-            _grid.Columns.Add(new DataGridTextColumn { Header = "规则名称", Binding = new System.Windows.Data.Binding("Name"), Width = 150 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "应用", Binding = new System.Windows.Data.Binding("AppName"), Width = 100 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "页面", Binding = new System.Windows.Data.Binding("ScreenName"), Width = 130 });
-            _grid.Columns.Add(new DataGridCheckBoxColumn { Header = "启用", Binding = new System.Windows.Data.Binding("Enabled"), Width = 55 });
-            _grid.SelectionChanged += delegate { Select(_grid.SelectedItem as VisualUnderstandingRuleEntity); };
-            Grid.SetColumn(_grid, 0); body.Children.Add(_grid);
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40, GridUnitType.Star) });
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60, GridUnitType.Star) });
+            Grid.SetRow(body, 1);
+            root.Children.Add(body);
 
-            var form = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
-            form.Children.Add(Label("规则名称")); _name = TextBox(); form.Children.Add(_name);
-            form.Children.Add(Label("应用名称")); _app = TextBox(); form.Children.Add(_app);
-            form.Children.Add(Label("页面名称")); _screen = TextBox(); form.Children.Add(_screen);
-            form.Children.Add(Label("必需 OCR 关键词（每行一个，必须全部命中）")); _required = Multi(58); form.Children.Add(_required);
-            form.Children.Add(Label("可选关键词（每行一个，用于提高匹配分）")); _optional = Multi(42); form.Children.Add(_optional);
-            form.Children.Add(Label("排除关键词（任一命中即拒绝）")); _excluded = Multi(42); form.Children.Add(_excluded);
-            form.Children.Add(Label("字段提取规则（每行：字段名|正则表达式；第一个捕获组为值）")); _patterns = Multi(105); form.Children.Add(_patterns);
-            form.Children.Add(Label("理解说明 / 交给知识库的上下文")); _description = Multi(62); form.Children.Add(_description);
-            _enabled = new CheckBox { Content = "启用此规则", IsChecked = true, Margin = new Thickness(0, 8, 0, 8) }; form.Children.Add(_enabled);
-            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = form };
-            Grid.SetColumn(scroll, 1); body.Children.Add(scroll);
-            _status = new TextBlock { Margin = new Thickness(0, 8, 0, 0), Foreground = Brushes.DimGray };
-            Grid.SetRow(_status, 2); root.Children.Add(_status);
+            _grid = new DataGrid
+            {
+                AutoGenerateColumns = false,
+                IsReadOnly = true,
+                CanUserAddRows = false,
+                ItemsSource = _items,
+                SelectionMode = DataGridSelectionMode.Single,
+                Margin = new Thickness(0, 0, 8, 0),
+                HeadersVisibility = DataGridHeadersVisibility.Column,
+                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal
+            };
+            _grid.Columns.Add(new DataGridTextColumn
+            {
+                Header = "图片说明",
+                Binding = new System.Windows.Data.Binding("Description"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _grid.Columns.Add(new DataGridTextColumn
+            {
+                Header = "OCR 内容预览",
+                Binding = new System.Windows.Data.Binding("OcrText"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _grid.SelectionChanged += delegate
+            {
+                if (!_suppressSelection) Select(_grid.SelectedItem as VisualImageKnowledgeEntry);
+            };
+            Grid.SetColumn(_grid, 0);
+            body.Children.Add(_grid);
+
+            var editor = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            editor.Children.Add(Label("图片预览"));
+            var previewBorder = new Border
+            {
+                Height = 190,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 226, 232)),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+                Padding = new Thickness(6)
+            };
+            _preview = new Image { Stretch = Stretch.Uniform, MaxHeight = 176, MaxWidth = 720 };
+            previewBorder.Child = _preview;
+            editor.Children.Add(previewBorder);
+
+            editor.Children.Add(Label("OCR 识别结果（可编辑、可删除文字）"));
+            _ocrText = Multi(220);
+            editor.Children.Add(_ocrText);
+
+            editor.Children.Add(Label("图片说明（用于后续图片匹配和上下文理解）"));
+            _description = Multi(88);
+            editor.Children.Add(_description);
+
+            var editorScroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = editor
+            };
+            Grid.SetColumn(editorScroll, 1);
+            body.Children.Add(editorScroll);
+
+            _status = new TextBlock
+            {
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = Brushes.DimGray,
+                Text = "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+            };
+            Grid.SetRow(_status, 2);
+            root.Children.Add(_status);
             Content = root;
         }
 
-        private void Select(VisualUnderstandingRuleEntity item)
+        private void UploadImage()
         {
-            _selected = item;
-            _name.Text = item == null ? "" : item.Name;
-            _app.Text = item == null ? "" : item.AppName;
-            _screen.Text = item == null ? "" : item.ScreenName;
-            _required.Text = item == null ? "" : item.RequiredKeywords;
-            _optional.Text = item == null ? "" : item.OptionalKeywords;
-            _excluded.Text = item == null ? "" : item.ExcludedKeywords;
-            _patterns.Text = item == null ? "" : item.FieldPatterns;
-            _description.Text = item == null ? "" : item.Description;
-            _enabled.IsChecked = item != null && item.Enabled;
-        }
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "选择要建立图片知识的图片",
+                Filter = "图片文件 (*.jpg;*.jpeg;*.png;*.webp;*.gif)|*.jpg;*.jpeg;*.png;*.webp;*.gif"
+            };
+            if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
 
-        private void Save()
-        {
             try
             {
-                var item = _selected == null ? new VisualUnderstandingRuleEntity() : _selected;
-                item.Name = _name.Text; item.AppName = _app.Text; item.ScreenName = _screen.Text;
-                item.RequiredKeywords = _required.Text; item.OptionalKeywords = _optional.Text;
-                item.ExcludedKeywords = _excluded.Text; item.FieldPatterns = _patterns.Text;
-                item.Description = _description.Text; item.Enabled = _enabled.IsChecked == true;
-                Task.Run(() => VisualUnderstandingRuleService.Save(_shopKey, _seller, item))
-                    .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        if (t.IsFaulted) { _status.Text = "保存失败：" + t.Exception.GetBaseException().Message; return; }
-                        _selected = item; _status.Text = "保存成功。规则已立即用于当前店铺的图片 OCR 匹配。"; RefreshView();
-                    })));
+                var info = new FileInfo(dialog.FileName);
+                if (info.Length <= 0 || info.Length > VisualImageKnowledgeService.MaxImageBytes)
+                    throw new InvalidOperationException("图片大小必须在 1 字节至 8 MB 之间。");
+
+                var extension = (Path.GetExtension(dialog.FileName) ?? string.Empty).ToLowerInvariant();
+                if (extension != ".jpg" && extension != ".jpeg" && extension != ".png"
+                    && extension != ".webp" && extension != ".gif")
+                    throw new InvalidOperationException("仅支持 JPG、PNG、WEBP、GIF 图片。");
+
+                _suppressSelection = true;
+                _grid.SelectedItem = null;
+                _suppressSelection = false;
+                _selected = null;
+                _currentImagePath = dialog.FileName;
+                _currentImageSha256 = string.Empty;
+                _ocrRecognized = false;
+                _ocrText.Clear();
+                _description.Clear();
+                LoadPreview(_currentImagePath);
+                _status.Text = "图片已选择，请点击“识别图片”调用服务端 OCR。";
             }
-            catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; }
+            catch (Exception ex)
+            {
+                _status.Text = "选择图片失败：" + ex.Message;
+            }
         }
 
-        private void Delete()
+        private async Task RecognizeImageAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_currentImagePath) || !File.Exists(_currentImagePath))
+            {
+                _status.Text = "请先上传或选择一张图片。";
+                return;
+            }
+
+            _recognizeButton.IsEnabled = false;
+            _status.Text = "正在上传图片并调用服务端 OCR，请稍候…";
+            try
+            {
+                var result = await LocalOcrService.TryRecognizeAsync(
+                    _currentImagePath, _seller, _shopKey, CancellationToken.None);
+                if (result == null || !result.Success)
+                {
+                    _ocrRecognized = false;
+                    _status.Text = "服务端 OCR 识别失败：" + (result == null ? "未返回结果" : result.Error);
+                    return;
+                }
+
+                _ocrText.Text = result.Text ?? string.Empty;
+                _currentImageSha256 = result.ImageSha256 ?? string.Empty;
+                _ocrRecognized = true;
+                _status.Text = "OCR 识别成功：共 " + _ocrText.Text.Length + " 个字符，置信度 "
+                    + result.Confidence.ToString("0.000")
+                    + "，引擎 " + (result.Engine ?? "服务端 OCR")
+                    + (result.CacheHit ? "（缓存命中）" : string.Empty)
+                    + "。可修改识别文字后填写图片说明并保存。";
+            }
+            catch (Exception ex)
+            {
+                _ocrRecognized = false;
+                _status.Text = "服务端 OCR 调用异常：" + ex.Message;
+            }
+            finally
+            {
+                _recognizeButton.IsEnabled = true;
+            }
+        }
+
+        private async Task SaveAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_currentImagePath) || !File.Exists(_currentImagePath))
+            {
+                _status.Text = "请先上传一张有效图片。";
+                return;
+            }
+            if (!_ocrRecognized)
+            {
+                _status.Text = "请先点击“识别图片”并等待服务端 OCR 成功后再保存。";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_description.Text))
+            {
+                _status.Text = "请填写图片说明，例如：这是手机端的账户界面截图。";
+                _description.Focus();
+                return;
+            }
+
+            var item = new VisualImageKnowledgeEntry
+            {
+                EntityId = _selected == null ? string.Empty : _selected.EntityId,
+                ImageSha256 = _currentImageSha256,
+                OcrText = _ocrText.Text,
+                Description = _description.Text
+            };
+            _saveButton.IsEnabled = false;
+            _status.Text = "正在保存图片、OCR 结果和图片说明…";
+            try
+            {
+                var saved = await Task.Run(() =>
+                    VisualImageKnowledgeService.Save(_shopKey, _seller, item, _currentImagePath));
+                _selected = saved;
+                _currentImagePath = saved.ImagePath;
+                _currentImageSha256 = saved.ImageSha256;
+                _ocrRecognized = true;
+                RefreshView();
+                _status.Text = "图片知识已保存，后续买家发送相似图片时会结合当前对话和知识库进行判断。";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "保存图片知识失败：" + ex.Message;
+            }
+            finally
+            {
+                _saveButton.IsEnabled = true;
+            }
+        }
+
+        private async Task DeleteAsync()
         {
             if (_selected == null) return;
+            if (MessageBox.Show(
+                Window.GetWindow(this),
+                "确定删除选中的图片知识及其本地图片文件吗？",
+                "删除图片知识",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
             var id = _selected.EntityId;
-            if (MessageBox.Show("确定删除选中的视觉理解规则？", "删除规则", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            Task.Run(() => VisualUnderstandingRuleService.Delete(_shopKey, _seller, id))
-                .ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (t.IsFaulted) _status.Text = "删除失败：" + t.Exception.GetBaseException().Message;
-                    else { Select(null); RefreshView(); }
-                })));
+            _deleteButton.IsEnabled = false;
+            try
+            {
+                var deleted = await Task.Run(() =>
+                    VisualImageKnowledgeService.Delete(_shopKey, _seller, id));
+                _status.Text = deleted ? "图片知识已删除。" : "图片知识不存在或已被删除。";
+                Select(null);
+                _grid.SelectedItem = null;
+                RefreshView();
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "删除图片知识失败：" + ex.Message;
+            }
+            finally
+            {
+                _deleteButton.IsEnabled = true;
+            }
         }
 
-        private static Button Button(string text) { return new Button { Content = text, MinWidth = 82, Height = 28, Margin = new Thickness(0, 0, 7, 0), Padding = new Thickness(8, 2, 8, 2) }; }
-        private static TextBlock Label(string text) { return new TextBlock { Text = text, Margin = new Thickness(0, 7, 0, 3), Foreground = Brushes.DimGray }; }
-        private static TextBox TextBox() { return new TextBox { Height = 27, Padding = new Thickness(5, 3, 5, 3) }; }
-        private static TextBox Multi(double height) { return new TextBox { Height = height, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(5), FontFamily = new System.Windows.Media.FontFamily("Consolas") }; }
+        private void Select(VisualImageKnowledgeEntry item)
+        {
+            _selected = item;
+            _currentImagePath = item == null ? string.Empty : item.ImagePath ?? string.Empty;
+            _currentImageSha256 = item == null ? string.Empty : item.ImageSha256 ?? string.Empty;
+            _ocrRecognized = item != null;
+            _ocrText.Text = item == null ? string.Empty : item.OcrText ?? string.Empty;
+            _description.Text = item == null ? string.Empty : item.Description ?? string.Empty;
+            LoadPreview(_currentImagePath);
+            _deleteButton.IsEnabled = item != null;
+            _status.Text = item == null
+                ? "上传图片后点击“识别图片”，编辑 OCR 结果并填写图片说明。"
+                : "已载入图片知识。可修改 OCR 文字或图片说明后保存。";
+        }
+
+        private void LoadPreview(string path)
+        {
+            _preview.Source = null;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+            try
+            {
+                using (var stream = File.OpenRead(path))
+                {
+                    var bitmap = new BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+                    bitmap.StreamSource = stream;
+                    bitmap.EndInit();
+                    bitmap.Freeze();
+                    _preview.Source = bitmap;
+                }
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "图片预览加载失败：" + ex.Message;
+            }
+        }
+
+        private static Button Button(string text)
+        {
+            return new Button
+            {
+                Content = text,
+                MinWidth = 86,
+                Height = 28,
+                Margin = new Thickness(0, 0, 7, 0),
+                Padding = new Thickness(8, 2, 8, 2)
+            };
+        }
+
+        private static TextBlock Label(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                Margin = new Thickness(0, 8, 0, 4),
+                Foreground = Brushes.DimGray
+            };
+        }
+
+        private static TextBox Multi(double height)
+        {
+            return new TextBox
+            {
+                Height = height,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Padding = new Thickness(6),
+                FontFamily = new FontFamily("Microsoft YaHei UI")
+            };
+        }
     }
 }

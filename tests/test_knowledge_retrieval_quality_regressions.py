@@ -94,7 +94,7 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "var evidenceText = ocr.Text;" in ocr
     assert "if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))" in ocr
     assert "visualMatch == null ? string.Empty : visualMatch.AppName" in ocr
-    assert "if (visualMatch == null || decision == null" in ocr
+    assert "if ((visualMatch == null && imageKnowledgeMatch == null) || decision == null" in ocr
     assert "仍独立执行Knowledge V2证据检索" in ocr
     assert "BuildKnowledgeQuestion" not in ocr
     assert "BuildTimelineText" not in ocr
@@ -198,7 +198,7 @@ def test_ocr_non_direct_v2_context_reaches_multimodal_and_ocr_text_fallback():
     assert "localDecision != null && localDecision.Success" in vision
     assert "localDecision.KnowledgeV2ContextPromptAddon" in vision
     assert "knowledgeV2ContextAddon ?? string.Empty" in vision
-    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon)" in vision
+    assert "TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon, localDecision)" in vision
 
 
 

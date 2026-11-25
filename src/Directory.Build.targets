@@ -175,6 +175,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualUnderstandingRuleService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualUnderstandingRuleService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualImageKnowledgeService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualImageKnowledgeService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs" />
   </ItemGroup>

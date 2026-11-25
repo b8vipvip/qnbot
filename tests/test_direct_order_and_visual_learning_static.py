@@ -29,7 +29,8 @@ def test_vision_request_returns_semantic_signature_and_reuses_human_visual_knowl
     assert '"visual_tags"' in vision
     assert "VisualKnowledgeLearningService.TryFindMatch" in vision
     assert "VisualKnowledgeLearningService.RecordVisionAnalysis" in vision
-    assert 'source = string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId) ? "AI生成" : "视觉知识"' in vision
+    assert '!string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)' in vision
+    assert '!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId) ? "图片知识辅助AI" : "AI生成"' in vision
 
 
 def test_visual_knowledge_is_persistent_human_confirmed_and_conservative():
