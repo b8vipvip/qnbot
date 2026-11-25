@@ -680,7 +680,7 @@ namespace Bot.AssistWindow.Widget.Robot
                 && !string.IsNullOrWhiteSpace(turn.Text))
             {
                 bubble.ContextMenu = BuildMessageMirrorBuyerContextMenu(
-                    seller, turn.Text, turn.MessageKey, bubble);
+                    seller, buyerIdentity, turn, bubble);
             }
 
             var stack = new StackPanel
@@ -847,9 +847,40 @@ namespace Bot.AssistWindow.Widget.Robot
         }
 
         private ContextMenu BuildMessageMirrorBuyerContextMenu(
-            string seller, string question, string sourceMessageId, FrameworkElement placementTarget)
+            string seller, string buyer, ConversationContextTurn turn, FrameworkElement placementTarget)
         {
+            var question = turn == null ? string.Empty : (turn.Text ?? string.Empty);
+            var sourceMessageId = turn == null ? string.Empty : (turn.MessageKey ?? string.Empty);
             var menu = BuildCopyOnlyContextMenu(question, placementTarget);
+            var isImageMessage = !string.IsNullOrWhiteSpace(sourceMessageId)
+                && (question.Trim() == "[图片]" || question.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                    || question.IndexOf("图片消息", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (isImageMessage)
+            {
+                var importImage = new MenuItem { Header = "导入图片知识" };
+                importImage.Click += async (s, e) =>
+                {
+                    var shopKey = ResolveShopKeyForConversation(seller, buyer);
+                    if (string.IsNullOrWhiteSpace(shopKey))
+                    {
+                        MessageBox.Show(Window.GetWindow(this), "无法确认这条图片消息所属店铺，已阻止导入。",
+                            "导入图片知识", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    var imagePath = await VisionImageCacheService.TryGetCachedImagePathAsync(
+                        shopKey, seller, buyer, sourceMessageId);
+                    if (string.IsNullOrWhiteSpace(imagePath))
+                    {
+                        MessageBox.Show(Window.GetWindow(this),
+                            "这条消息的原始图片仍在缓存或下载中，请稍后重试。",
+                            "图片暂不可用", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+                    KnowledgeCenterV2UiBridge.ImportBuyerImage(
+                        Window.GetWindow(this), seller, buyer, shopKey, sourceMessageId);
+                };
+                menu.Items.Add(importImage);
+            }
             var add = new MenuItem { Header = "添加直答消息" };
             add.Click += async (s, e) =>
                 await AddBuyerDirectAnswerFromMirror(seller, question, sourceMessageId);
