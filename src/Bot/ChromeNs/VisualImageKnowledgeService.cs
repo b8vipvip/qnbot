@@ -318,6 +318,27 @@ namespace Bot.ChromeNs
                 throw new InvalidOperationException("云端图片知识响应的ShopKey不匹配。");
             EnsureSchema();
 
+            if (response.Value<bool?>("reset_cursor") == true)
+            {
+                // The cloud database was restored to a revision older than this desktop's
+                // cursor. Re-stage every local record/tombstone and restart from revision 0;
+                // otherwise max(cursor) would permanently prevent a full reconciliation.
+                lock (Sync)
+                {
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeEntry set SyncDirty=1,CloudRevision=0 where ShopKey=? and Seller=?",
+                        shop.ShopKey, seller);
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeSyncTombstone set SyncDirty=1,CloudRevision=0 where ShopKey=? and Seller=?",
+                        shop.ShopKey, seller);
+                    DbHelper.Db.Execute(
+                        "insert or replace into VisualImageKnowledgeSyncState(ShopKey,Seller,LastCloudRevision,UpdatedAtTicks) values(?,?,0,?)",
+                        shop.ShopKey, seller, DateTime.Now.Ticks);
+                }
+                Log.ErrorWithMaxCount("图片知识云端修订号低于本地游标，已启动本店全量重新对账。", 5);
+                return;
+            }
+
             var upserts = response["upserts"] as JArray ?? new JArray();
             var deletes = response["deletes"] as JArray ?? new JArray();
             var conflicts = response["conflicts"] as JArray ?? new JArray();
@@ -396,6 +417,33 @@ namespace Bot.ChromeNs
             if (!string.Equals(mime, Clean((string)data["mime_type"], 40), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("云端图片知识MIME与文件内容不匹配。");
 
+            var revision = data.Value<long?>("revision") ?? 0;
+            var cloudUpdatedAt = ParseUtcTicks((string)data["updated_at"]);
+            lock (Sync)
+            {
+                var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (local != null && local.SyncDirty && local.UpdatedAtTicks > cloudUpdatedAt)
+                {
+                    // A user edit made while the HTTP request was in flight must not be
+                    // overwritten by the acknowledgement of the older payload.
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeEntry set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        revision, id, shop.ShopKey, seller);
+                    return;
+                }
+                var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt)
+                {
+                    // A delete performed during the upload wins over the older in-flight upsert.
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeSyncTombstone set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        revision, id, shop.ShopKey, seller);
+                    return;
+                }
+            }
+
             var root = GetImageDirectory(shop);
             Directory.CreateDirectory(root);
             var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));
@@ -416,7 +464,6 @@ namespace Bot.ChromeNs
                     Enabled = data.Value<bool?>("enabled") ?? true
                 };
                 Save(shop.ShopKey, seller, entry, temp);
-                var revision = data.Value<long?>("revision") ?? 0;
                 lock (Sync)
                 {
                     DbHelper.Db.Execute(
@@ -444,6 +491,27 @@ namespace Bot.ChromeNs
             {
                 old = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
+                var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                    id, shop.ShopKey, seller).FirstOrDefault();
+
+                if (old != null && old.SyncDirty && old.UpdatedAtTicks > deletedAt)
+                {
+                    // A local edit newer than the remote delete is a deliberate restore/update.
+                    // Advance its base revision but keep it dirty for the next upload.
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeEntry set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        revision, id, shop.ShopKey, seller);
+                    return;
+                }
+                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > deletedAt)
+                {
+                    // Preserve a newer local delete; its next upload will acknowledge this base revision.
+                    DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeSyncTombstone set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        revision, id, shop.ShopKey, seller);
+                    return;
+                }
+
                 if (old != null)
                 {
                     DbHelper.Db.Execute("delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
