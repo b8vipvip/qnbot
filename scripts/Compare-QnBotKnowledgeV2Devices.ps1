@@ -51,7 +51,7 @@ function Get-LatestDeviceShopState {
 
         $match = [regex]::Match(
             $pair[1],
-            '^(?<revision>[0-9]+):(?<local>[0-9a-fA-F]{4,64})/(?<cloud>[0-9a-fA-F]{4,64}):(?<status>[^:;]*):(?<converged>True|False)$'
+            '^(?<revision>[0-9]+):(?<local>[0-9a-fA-F]{4,64})/(?<cloud>[0-9a-fA-F]{4,64}):(?<status>.*):(?<converged>True|False):(?<syncing>True|False)$'
         )
         if (-not $match.Success) { continue }
 
@@ -62,6 +62,7 @@ function Get-LatestDeviceShopState {
             CloudFingerprintPrefix = $match.Groups['cloud'].Value.ToLowerInvariant()
             LastStatus = $match.Groups['status'].Value
             Converged = [bool]::Parse($match.Groups['converged'].Value)
+            Syncing = [bool]::Parse($match.Groups['syncing'].Value)
         }
     }
 
@@ -106,6 +107,7 @@ function Get-LatestDeviceShopState {
         CloudFingerprintPrefix = $selected[0].CloudFingerprintPrefix
         LastStatus = $selected[0].LastStatus
         Converged = $selected[0].Converged
+        Syncing = $selected[0].Syncing
     }
 }
 
@@ -126,6 +128,8 @@ $checks = @(
     [pscustomobject]@{ Name = 'Device B sample is recent'; Passed = ($sampleAgeBSeconds -ge -60 -and $sampleAgeBSeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device A cloud sync converged'; Passed = ($deviceA.Converged -eq $true) }
     [pscustomobject]@{ Name = 'Device B cloud sync converged'; Passed = ($deviceB.Converged -eq $true) }
+    [pscustomobject]@{ Name = 'Device A shop is not syncing'; Passed = ($deviceA.Syncing -eq $false) }
+    [pscustomobject]@{ Name = 'Device B shop is not syncing'; Passed = ($deviceB.Syncing -eq $false) }
     [pscustomobject]@{ Name = 'Cloud revision matches'; Passed = ($deviceA.CloudRevision -eq $deviceB.CloudRevision) }
     [pscustomobject]@{ Name = 'Local fingerprint matches'; Passed = ($deviceA.LocalFingerprintPrefix -eq $deviceB.LocalFingerprintPrefix) }
     [pscustomobject]@{ Name = 'Cloud fingerprint matches'; Passed = ($deviceA.CloudFingerprintPrefix -eq $deviceB.CloudFingerprintPrefix) }
@@ -181,13 +185,13 @@ $markdown = @(
     ('- ShopRef: ' + $deviceA.ShopRef)
     ('- Cloud revision: ' + $deviceA.CloudRevision)
     ('- Local / cloud fingerprint: ' + $deviceA.LocalFingerprintPrefix + ' / ' + $deviceA.CloudFingerprintPrefix)
-    ('- Converged: ' + $deviceA.Converged + '; last status: ' + $deviceA.LastStatus)
+    ('- Converged: ' + $deviceA.Converged + '; syncing: ' + $deviceA.Syncing + '; last status: ' + $deviceA.LastStatus)
     ''
     '## Device B'
     ('- ShopRef: ' + $deviceB.ShopRef)
     ('- Cloud revision: ' + $deviceB.CloudRevision)
     ('- Local / cloud fingerprint: ' + $deviceB.LocalFingerprintPrefix + ' / ' + $deviceB.CloudFingerprintPrefix)
-    ('- Converged: ' + $deviceB.Converged + '; last status: ' + $deviceB.LastStatus)
+    ('- Converged: ' + $deviceB.Converged + '; syncing: ' + $deviceB.Syncing + '; last status: ' + $deviceB.LastStatus)
     ''
     '## Checks'
 )
