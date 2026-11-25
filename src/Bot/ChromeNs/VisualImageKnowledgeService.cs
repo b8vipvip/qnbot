@@ -240,6 +240,7 @@ namespace Bot.ChromeNs
                 var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
                     shop.ShopKey, seller);
                 var upserts = new JArray();
+                long pendingImageBytes = 0;
                 foreach (var pending in pendingItems)
                 {
                     try
@@ -261,6 +262,9 @@ namespace Bot.ChromeNs
                             Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
                             continue;
                         }
+                        if (upserts.Count >= 5) break;
+                        if (upserts.Count > 0 && pendingImageBytes + bytes.Length > 8L * 1024L * 1024L)
+                            continue;
                         upserts.Add(new JObject
                         {
                             ["id"] = pending.EntityId,
@@ -274,7 +278,7 @@ namespace Bot.ChromeNs
                             ["enabled"] = pending.Enabled,
                             ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
                         });
-                        break;
+                        pendingImageBytes += bytes.Length;
                     }
                     catch (Exception ex)
                     {
