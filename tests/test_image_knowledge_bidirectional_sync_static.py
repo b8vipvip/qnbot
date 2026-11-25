@@ -220,3 +220,26 @@ def test_captioned_buyer_images_keep_their_question_and_offer_import_action():
     assert 'caption + " [图片]"' in preserve
     assert "turn.HasImage" in menu
     assert 'Header = "导入图片知识"' in menu
+
+
+def test_web_mirror_only_treats_real_image_flags_or_exact_media_placeholders_as_attachments():
+    sync = read("src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
+    capture = sync.split("var normalizedPlaceholder =", 1)[1].split("if (turn.Withdrawn", 1)[0]
+    assert "var isImage = turn.HasImage" in capture
+    assert 'string.Equals(normalizedPlaceholder, "[图片]"' in capture
+    assert 'string.Equals(normalizedPlaceholder, "图片消息"' in capture
+    assert 'string.Equals(normalizedPlaceholder, "[image]"' in capture
+    assert 'text.IndexOf("[图片]"' not in capture
+    assert 'text.IndexOf("图片消息"' not in capture
+
+
+def test_windows_buyer_image_import_menu_does_not_match_image_mentions_in_plain_text():
+    mirror = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MessageMirror.cs")
+    menu = mirror.split("private ContextMenu BuildMessageMirrorBuyerContextMenu", 1)[1].split(
+        "private async Task AddBuyerDirectAnswerFromMirror", 1
+    )[0]
+    assert "turn.HasImage" in menu
+    assert 'string.Equals(normalizedQuestion, "[图片]"' in menu
+    assert 'string.Equals(normalizedQuestion, "图片消息"' in menu
+    assert 'question.IndexOf("[图片]"' not in menu
+    assert 'question.IndexOf("图片消息"' not in menu
