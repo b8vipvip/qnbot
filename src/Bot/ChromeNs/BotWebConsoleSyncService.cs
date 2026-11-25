@@ -8,6 +8,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -59,6 +60,8 @@ namespace Bot.ChromeNs
         {
             public ShopContext Shop;
             public readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
+                new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
+            public readonly ConcurrentDictionary<string, WebMessage> PendingImageUploads =
                 new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
             public readonly object PendingMessagesSync = new object();
             public long PendingMessageBytes;
@@ -389,7 +392,10 @@ namespace Bot.ChromeNs
                     && string.Equals(previous, signature, StringComparison.Ordinal))
                     return messageKey;
 
-                if (EnqueueMessage(state, seller, buyer, role, text, "text", occurredAt,
+                var messageType = role == "user"
+                    && text.IndexOf("[图片]", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? "image" : "text";
+                if (EnqueueMessage(state, seller, buyer, role, text, messageType, occurredAt,
                     messageKey, turn.Withdrawn, isBot))
                     state.CapturedMessageSignatures[messageKey] = signature;
             }
@@ -482,6 +488,13 @@ namespace Bot.ChromeNs
                 }
                 state.PendingMessages[item.MessageKey] = item;
                 state.PendingMessageBytes = nextBytes;
+                if (item.Role == "user" && item.MessageType == "image" && !item.Withdrawn)
+                    state.PendingImageUploads[item.MessageKey] = item;
+                else if (item.Withdrawn)
+                {
+                    WebMessage ignoredImage;
+                    state.PendingImageUploads.TryRemove(item.MessageKey, out ignoredImage);
+                }
             }
             return true;
         }
@@ -655,7 +668,113 @@ namespace Bot.ChromeNs
                 }
 
                 AcknowledgeCommandResults(state, resultSnapshot);
+                string refreshedToken;
+                string refreshedTokenError;
+                if (connection.TryGetToken(out refreshedToken, out refreshedTokenError)
+                    && !string.IsNullOrWhiteSpace(refreshedToken))
+                    await UploadPendingImagesAsync(state, serverUrl, refreshedToken);
             }
+        }
+
+        private static async Task UploadPendingImagesAsync(ShopWebState state, string serverUrl, string token)
+        {
+            if (state == null || !state.MessageSyncEnabled || string.IsNullOrWhiteSpace(token)) return;
+            var pending = state.PendingImageUploads.Values
+                .OrderBy(x => x.OccurredAt)
+                .Take(10)
+                .ToList();
+            foreach (var item in pending)
+            {
+                if (item == null) continue;
+                if (item.OccurredAt != DateTime.MinValue
+                    && DateTime.Now - item.OccurredAt > TimeSpan.FromHours(VisionImageCacheService.CacheRetentionHours))
+                {
+                    WebMessage expired;
+                    state.PendingImageUploads.TryRemove(item.MessageKey, out expired);
+                    continue;
+                }
+
+                try
+                {
+                    VisionCachedImageReference reference;
+                    VisionImageResult image;
+                    using (ShopSettingsScope.Enter(state.Shop))
+                    {
+                        if (!VisionImageCacheService.TryGetReferenceByMessageKey(
+                            item.Seller, item.Buyer, item.MessageKey, state.Shop.ShopKey, out reference)
+                            || reference == null || reference.Message == null)
+                            continue;
+                        if (reference.Withdrawn)
+                        {
+                            WebMessage withdrawn;
+                            state.PendingImageUploads.TryRemove(item.MessageKey, out withdrawn);
+                            continue;
+                        }
+                        image = await VisionImageCacheService.ResolveAsync(
+                            reference.Message, null, CancellationToken.None, state.Shop.ShopKey);
+                    }
+
+                    if (image == null || !image.Success || string.IsNullOrWhiteSpace(image.LocalCachePath)
+                        || !File.Exists(image.LocalCachePath))
+                        continue;
+                    var info = new FileInfo(image.LocalCachePath);
+                    if (info.Length <= 0 || info.Length > 8L * 1024L * 1024L)
+                    {
+                        WebMessage invalid;
+                        state.PendingImageUploads.TryRemove(item.MessageKey, out invalid);
+                        continue;
+                    }
+
+                    var bytes = File.ReadAllBytes(image.LocalCachePath);
+                    var sha256 = HashBytes(bytes);
+                    var imageName = "买家图片_" + item.OccurredAt.ToString("yyyyMMdd_HHmmss")
+                        + (Path.GetExtension(image.LocalCachePath) ?? ".png");
+                    ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                    using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+                    using (var http = new HttpClient(handler))
+                    using (var request = new HttpRequestMessage(
+                        HttpMethod.Post, serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/message-image"))
+                    using (var content = new ByteArrayContent(bytes))
+                    {
+                        http.Timeout = TimeSpan.FromSeconds(25);
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                        request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-image-sync/1.0");
+                        request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
+                        request.Headers.TryAddWithoutValidation("X-Message-Key", item.MessageKey);
+                        request.Headers.TryAddWithoutValidation("X-Seller", item.Seller);
+                        request.Headers.TryAddWithoutValidation("X-Buyer", item.Buyer);
+                        request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
+                        request.Headers.TryAddWithoutValidation("X-Image-Name", Uri.EscapeDataString(imageName));
+                        content.Headers.ContentType = new MediaTypeHeaderValue(
+                            string.IsNullOrWhiteSpace(image.MimeType) ? "application/octet-stream" : image.MimeType);
+                        request.Content = content;
+                        using (var response = await http.SendAsync(request).ConfigureAwait(false))
+                        {
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                Log.Info("Bot Web买家图片同步暂未成功，保留队列稍后重试: HTTP "
+                                    + (int)response.StatusCode + ", messageKey=" + Safe(item.MessageKey, 80));
+                                continue;
+                            }
+                        }
+                    }
+
+                    WebMessage uploaded;
+                    state.PendingImageUploads.TryRemove(item.MessageKey, out uploaded);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Bot Web买家原图同步失败，保留队列稍后重试: " + Safe(ex.Message, 240), 10);
+                }
+            }
+        }
+
+        private static string HashBytes(byte[] value)
+        {
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(value ?? new byte[0]))
+                    .Replace("-", string.Empty).ToLowerInvariant();
         }
 
         private static JObject BuildStatus(ShopWebState state)
