@@ -27,6 +27,8 @@ namespace Bot.ChromeNs
         public string VisualTags { get; set; }
         public string MatchedVisualKnowledgeId { get; set; }
         public double VisualKnowledgeScore { get; set; }
+        public string MatchedImageKnowledgeId { get; set; }
+        public double ImageKnowledgeScore { get; set; }
         public string LocalOcrText { get; set; }
         public double LocalOcrConfidence { get; set; }
         public long LocalOcrLatencyMs { get; set; }
@@ -79,7 +81,7 @@ namespace Bot.ChromeNs
                 // This is explicitly an OCR-TEXT fallback, not an invented
                 // image-capable provider. Only reuse verified cached OCR text;
                 // failed OCR (especially HTTP 504) must never be retried here.
-                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon);
+                var textFallback = await TryOcrTextAiFallbackAsync(task, cancellationToken, knowledgeV2ContextAddon, localDecision);
                 if (textFallback != null)
                 {
                     Log.Info("[VisionRoute] route=ocr_text_ai_fallback; visualAiCalled=false"
@@ -143,6 +145,7 @@ namespace Bot.ChromeNs
 
                         var result = await CallVisionAsync(endpoint, image.ImageUrl, requestPrompt, cts.Token);
                         ApplyLocalOcr(result, localOcr);
+                        ApplyImageKnowledgeContext(result, localDecision);
                         if (result.Success && string.IsNullOrWhiteSpace(result.VisualSummary))
                         {
                             var originalAnswer = result.Answer;
@@ -154,6 +157,7 @@ namespace Bot.ChromeNs
                                 requestPrompt + StrictSemanticRepairPrompt,
                                 cts.Token);
                             ApplyLocalOcr(repaired, localOcr);
+                            ApplyImageKnowledgeContext(repaired, localDecision);
                             if (repaired.Success && !string.IsNullOrWhiteSpace(repaired.VisualSummary))
                             {
                                 if (string.IsNullOrWhiteSpace(repaired.Answer)) repaired.Answer = originalAnswer;
@@ -233,7 +237,9 @@ namespace Bot.ChromeNs
                                 ApplyLocalOcr(blocked, localOcr);
                                 return blocked;
                             }
-                            var source = string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId) ? "AI生成" : "视觉知识";
+                            var source = !string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId)
+                                ? "视觉知识"
+                                : (!string.IsNullOrWhiteSpace(result.MatchedImageKnowledgeId) ? "图片知识辅助AI" : "AI生成");
                             KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
                             if (!task.DeferLearningUntilDelivered && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                             {
@@ -271,7 +277,8 @@ namespace Bot.ChromeNs
         }
 
         private async Task<VisionRequestResult> TryOcrTextAiFallbackAsync(
-            VisionReplyTask task, CancellationToken cancellationToken, string knowledgeV2ContextAddon = null)
+            VisionReplyTask task, CancellationToken cancellationToken, string knowledgeV2ContextAddon = null,
+            VisionRequestResult localDecision = null)
         {
             try
             {
@@ -339,8 +346,12 @@ namespace Bot.ChromeNs
                     EndpointName = "ocr-text-ai-fallback",
                     VisionModel = "text-only-OCR-evidence",
                     VisualQuestion = question,
-                    VisualSummary = string.Empty,
-                    VisualTags = "ocr-text-only",
+                    VisualSummary = localDecision == null ? string.Empty : localDecision.VisualSummary ?? string.Empty,
+                    VisualTags = !string.IsNullOrWhiteSpace(localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeId)
+                        ? "ocr-text-only,image-knowledge"
+                        : "ocr-text-only",
+                    MatchedImageKnowledgeId = localDecision == null ? string.Empty : localDecision.MatchedImageKnowledgeId,
+                    ImageKnowledgeScore = localDecision == null ? 0d : localDecision.ImageKnowledgeScore,
                     LocalOcrText = ocr.Text,
                     LocalOcrConfidence = ocr.Confidence,
                     LocalOcrCacheHit = true,
@@ -423,6 +434,27 @@ namespace Bot.ChromeNs
                     return ParseVisionResult(raw);
                 }
             }
+        }
+
+        private static void ApplyImageKnowledgeContext(
+            VisionRequestResult result, VisionRequestResult localDecision)
+        {
+            if (result == null || localDecision == null
+                || string.IsNullOrWhiteSpace(localDecision.MatchedImageKnowledgeId)) return;
+
+            result.MatchedImageKnowledgeId = localDecision.MatchedImageKnowledgeId;
+            result.ImageKnowledgeScore = localDecision.ImageKnowledgeScore;
+            var description = (localDecision.VisualSummary ?? string.Empty).Trim();
+            if (description.Length > 0)
+            {
+                if (string.IsNullOrWhiteSpace(result.VisualSummary))
+                    result.VisualSummary = description;
+                else if (result.VisualSummary.IndexOf(description, StringComparison.OrdinalIgnoreCase) < 0)
+                    result.VisualSummary = result.VisualSummary.Trim() + "；命中图片知识：" + description;
+            }
+            var tags = (result.VisualTags ?? string.Empty).Trim();
+            if (tags.IndexOf("image-knowledge", StringComparison.OrdinalIgnoreCase) < 0)
+                result.VisualTags = tags.Length == 0 ? "image-knowledge" : tags + ",image-knowledge";
         }
 
         private static void ApplyLocalOcr(VisionRequestResult result, LocalOcrResult localOcr)
