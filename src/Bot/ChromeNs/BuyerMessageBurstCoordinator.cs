@@ -429,11 +429,12 @@ namespace Bot.ChromeNs
                         || (qn.Rpa != null
                             && qn.Rpa.LastSendWasCancelled
                             && firstFailureReason.IndexOf("人工接管", StringComparison.OrdinalIgnoreCase) >= 0);
-                    if (!failedBeforeSend) return firstOutcome;
+                    var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
+                    if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
 
                     Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续规则/视觉理解: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
-                        + ", reason=" + firstFailureReason);
+                        + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
                 }
             }
 
