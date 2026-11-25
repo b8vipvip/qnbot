@@ -562,6 +562,14 @@ namespace Bot.ChromeNs
                     + ", seller=" + seller + ", shopKey=" + shopKey + ", targetId=" + _activeTargetId
                     + ", session=" + sessionId + ", focusProof=" + focusProof + ", evidence=" + (evidence ?? string.Empty));
             }
+            // Persist the read-only acceptance snapshot immediately after verified foreground
+            // evidence. The periodic WebSocket sweep is 30 seconds and would otherwise miss
+            // the 5-second focus-proof window required for A/B/A acceptance sampling.
+            if (focusProof)
+            {
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (server != null) server.RefreshReadOnlyAcceptanceSnapshot();
+            }
             return true;
         }
 
