@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
         public string OcrText { get; set; }
         public string Description { get; set; }
         public bool Enabled { get; set; }
+        public bool Deleted { get; set; }
         public long CreatedAtTicks { get; set; }
         public long UpdatedAtTicks { get; set; }
     }
@@ -61,8 +62,30 @@ namespace Bot.ChromeNs
             var imageRoot = GetImageDirectory(shop);
             lock (Sync)
             {
-                return Select("where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "
+                return Select("where ShopKey = ? and Seller = ? and Deleted = 0 order by UpdatedAtTicks desc limit "
                     + MaxEntriesPerShop, shop.ShopKey, seller)
+                    .Select(item =>
+                    {
+                        if (!IsManagedImagePath(item.ImagePath, imageRoot))
+                            item.ImagePath = string.Empty;
+                        if (string.IsNullOrWhiteSpace(item.ImageName))
+                            item.ImageName = Path.GetFileName(item.ImagePath ?? string.Empty);
+                        return item;
+                    })
+                    .ToList();
+            }
+        }
+
+        public static List<VisualImageKnowledgeEntry> LoadAllForCloudSync(string shopKey, string seller)
+        {
+            var shop = ResolveScope(shopKey, seller);
+            seller = (shop.SellerNick ?? string.Empty).Trim();
+            EnsureSchema();
+            var imageRoot = GetImageDirectory(shop);
+            lock (Sync)
+            {
+                return Select("where ShopKey = ? and Seller = ? order by UpdatedAtTicks desc limit "
+                    + (MaxEntriesPerShop * 2), shop.ShopKey, seller)
                     .Select(item =>
                     {
                         if (!IsManagedImagePath(item.ImagePath, imageRoot))
@@ -110,7 +133,6 @@ namespace Bot.ChromeNs
                 entry.ImageName = "图片知识_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + extension;
             entry.OcrText = Clean(entry.OcrText, MaxOcrChars);
             entry.Description = Clean(entry.Description, MaxDescriptionChars);
-            entry.Enabled = true;
             if (entry.Description.Length == 0)
                 throw new InvalidOperationException("请填写图片说明后再保存。");
 
@@ -128,6 +150,8 @@ namespace Bot.ChromeNs
                 if (duplicate != null)
                     throw new InvalidOperationException("当前店铺已存在这张图片，请在左侧列表中编辑已有图片知识。");
             }
+            entry.Enabled = old == null ? true : entry.Enabled;
+            entry.Deleted = false;
 
             var createdImage = false;
             if (!SamePath(sourceImagePath, targetPath) && !File.Exists(targetPath))
@@ -183,19 +207,20 @@ namespace Bot.ChromeNs
             id = Clean(id, 80);
             if (id.Length == 0) return false;
             EnsureSchema();
-            var imageRoot = GetImageDirectory(shop);
             VisualImageKnowledgeEntry item;
             lock (Sync)
             {
                 item = Select("where EntityId = ? and ShopKey = ? and Seller = ? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
-                if (item == null) return false;
-                DbHelper.Db.Execute(
-                    "delete from VisualImageKnowledgeEntry where EntityId = ? and ShopKey = ? and Seller = ?",
-                    id, shop.ShopKey, seller);
+                if (item == null || item.Deleted) return false;
+                // Keep a tombstone so a Web-side or Windows-side deletion can be
+                // replicated to the other client without resurrecting the record.
+                item.Deleted = true;
+                item.Enabled = false;
+                item.UpdatedAtTicks = DateTime.UtcNow.Ticks;
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { item });
             }
-            TryDeleteManagedImage(item.ImagePath, imageRoot);
-            Log.Info("图片知识已删除: shopRef="
+            Log.Info("图片知识已删除并保留云同步墓碑: shopRef="
                 + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey) + ", knowledgeId=" + id);
             return true;
         }
@@ -400,7 +425,7 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,Deleted integer not null default 0,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try
                 {
                     // Existing installations have the pre-ImageName schema. Keep all
@@ -412,7 +437,16 @@ namespace Bot.ChromeNs
                     if ((ex.Message ?? string.Empty).IndexOf("duplicate column name", StringComparison.OrdinalIgnoreCase) < 0)
                         throw;
                 }
-                DbHelper.Db.Execute("create index if not exists IX_VisualImageKnowledge_ShopSeller on VisualImageKnowledgeEntry(ShopKey,Seller,Enabled,UpdatedAtTicks)");
+                try
+                {
+                    DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column Deleted integer not null default 0");
+                }
+                catch (Exception ex)
+                {
+                    if ((ex.Message ?? string.Empty).IndexOf("duplicate column name", StringComparison.OrdinalIgnoreCase) < 0)
+                        throw;
+                }
+                DbHelper.Db.Execute("create index if not exists IX_VisualImageKnowledge_ShopSeller on VisualImageKnowledgeEntry(ShopKey,Seller,Enabled,Deleted,UpdatedAtTicks)");
                 DbHelper.Db.Execute("create unique index if not exists UX_VisualImageKnowledge_ShopSellerImage on VisualImageKnowledgeEntry(ShopKey,Seller,ImageSha256)");
                 System.Threading.Volatile.Write(ref _schemaReady, 1);
             }
