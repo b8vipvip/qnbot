@@ -119,7 +119,8 @@ def test_sync_preserves_local_edits_and_deletes_that_race_with_cloud_responses()
     delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
         "private static VisualImageKnowledgeSyncState SelectSyncState", 1
     )[0]
-    assert "local.SyncDirty && local.UpdatedAtTicks > cloudUpdatedAt" in upsert
+    assert "local.SyncDirty" in upsert
+    assert "local.UpdatedAtTicks > cloudUpdatedAt || localContentChanged" in upsert
     assert "localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt" in upsert
     assert "Save(shop.ShopKey, seller, entry, temp)" in upsert
     assert upsert.index("lock (Sync)") < upsert.index("Save(shop.ShopKey, seller, entry, temp)")
@@ -132,6 +133,9 @@ def test_cloud_cursor_rollback_triggers_full_shop_reconciliation():
     api = read("services/api-control-plane/bot_web_conversation_knowledge.py")
     service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
     assert "initial_revision" in api
+    assert "def _current_image_revision(conn, client_id: int, shop_key: str)" in api
+    assert "legacy_events" in api
+    assert "revision = _current_image_revision(conn, client_id, shop_key) + 1" in api
     assert "data.since_revision > initial_revision" in api
     assert '"reset_cursor": True' in api
     assert 'response.Value<bool?>("reset_cursor") == true' in service
