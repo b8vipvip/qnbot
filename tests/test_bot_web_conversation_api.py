@@ -313,3 +313,15 @@ def test_original_buyer_image_attachment_is_persisted_served_and_removed_on_with
         assert withdrawn["withdrawn"] == 1
         assert withdrawn["attachment_bytes"] is None
         assert withdrawn["attachment_sha256"] is None
+
+        with pytest.raises(core.HTTPException) as invalid_attachment:
+            core._save_message(1, {
+                "message_key": "buyer-image-invalid",
+                "seller": "seller",
+                "buyer": "buyer",
+                "role": "user",
+                "text": "[图片]",
+                "message_type": "image",
+                "attachment": "not-an-attachment-object",
+            })
+        assert invalid_attachment.value.status_code == 400
