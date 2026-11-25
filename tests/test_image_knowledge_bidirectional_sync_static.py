@@ -166,3 +166,21 @@ def test_generic_file_ids_are_not_misclassified_as_original_buyer_images():
     assert "VisionImageResolver.ExtractUrl(message)" not in helper
     assert "original.header.summary" in safety
     assert "original.header.title" in safety
+
+
+
+def test_plain_text_image_mentions_are_not_treated_as_media_attachments():
+    safety = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
+    detect = safety.split("private static string DetectUnsupportedType", 1)[1].split(
+        "private static bool IsExplicitImagePlaceholder", 1
+    )[0]
+    placeholder = safety.split("private static bool IsExplicitImagePlaceholder", 1)[1].split(
+        "private static string DetectUnsupportedType", 1
+    )[0]
+    assert "ContainsMarker(imageMetadata, \"图片\", \"image\", \"photo\")" in detect
+    assert "IsExplicitImagePlaceholder(messageText)" in detect
+    assert "IsExplicitImagePlaceholder(message.summary)" in detect
+    assert "ContainsMarker(combined, \"图片\", \"image\", \"photo\")" not in detect
+    assert 'value == "[图片]"' in placeholder
+    assert 'value == "图片消息"' in placeholder
+    assert 'value == "图片"' not in placeholder
