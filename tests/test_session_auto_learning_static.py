@@ -1136,5 +1136,7 @@ def test_active_shop_acceptance_snapshot_is_atomic_hmac_aliased_and_focus_proven
 
     diagnostic = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
     assert "ActiveShopEvidenceStatus" in diagnostic
+    assert "owner_mapping_mismatch" in diagnostic
+    assert "owner_mapping_missing_or_ambiguous" in diagnostic
     assert "Active shop focus proof" in diagnostic
     assert "ActiveShopRef = $activeShopRef" in diagnostic
