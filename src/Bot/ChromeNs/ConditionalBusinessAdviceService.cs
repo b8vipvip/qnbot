@@ -172,25 +172,20 @@ namespace Bot.ChromeNs
                     return false;
             }
 
-            List<VisualKnowledgeObservationEntity> observations;
+            VisualKnowledgeObservationEntity image;
             try
             {
-                observations = RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 30);
+                // Always use the newest image event, including an unmatched one. A newer
+                // unmatched/withdrawn image must supersede an older curated match.
+                image = RecentVisualContextService.GetLatestImageObservation(shopKey, seller, buyer);
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("条件性业务建议无法读取图片证据，拒绝本地直答：" + ex.Message, 10);
                 return false;
             }
-
-            var image = (observations ?? new List<VisualKnowledgeObservationEntity>())
-                .Where(x => x != null
-                    && !string.IsNullOrWhiteSpace(x.MessageKey)
-                    && !string.IsNullOrWhiteSpace(x.OcrImageSha256)
-                    && !string.IsNullOrWhiteSpace(x.MatchedImageKnowledgeId))
-                .OrderByDescending(x => x.ObservedAtTicks)
-                .FirstOrDefault();
-            if (image == null) return false;
+            if (image == null || string.IsNullOrWhiteSpace(image.MatchedImageKnowledgeId))
+                return false;
 
             var imageObservedAt = SafeTime(image.ObservedAtTicks);
             var orderEvidenceTime = order.PaidAt
@@ -357,12 +352,11 @@ namespace Bot.ChromeNs
                         && string.Equals(x.EntityId, imageKnowledgeId, StringComparison.Ordinal));
                 if (!activeImage) return false;
 
-                var image = RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 30)
-                    .FirstOrDefault(x => x != null
-                        && string.Equals(x.MessageKey, imageMessageKey, StringComparison.Ordinal)
-                        && string.Equals(x.MatchedImageKnowledgeId, imageKnowledgeId, StringComparison.Ordinal)
-                        && !string.IsNullOrWhiteSpace(x.OcrImageSha256));
-                if (image == null) return false;
+                var image = RecentVisualContextService.GetLatestImageObservation(shopKey, seller, buyer);
+                if (image == null
+                    || !string.Equals(image.MessageKey, imageMessageKey, StringComparison.Ordinal)
+                    || !string.Equals(image.MatchedImageKnowledgeId, imageKnowledgeId, StringComparison.Ordinal))
+                    return false;
                 var imageTime = SafeTime(image.ObservedAtTicks);
                 var orderTime = order.PaidAt
                     ?? (order.EventType == OrderEventType.Paid
