@@ -99,6 +99,8 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
 
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
     assert "KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(" in ocr
+    assert "imageKnowledgeMatch.Description" in ocr
+    assert "var evidenceSubject = imageKnowledgeMatch != null" in ocr
     assert "task.CombinedQuestion" in ocr
     assert "var evidenceText = ocr.Text;" in ocr
     assert "if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))" in ocr
