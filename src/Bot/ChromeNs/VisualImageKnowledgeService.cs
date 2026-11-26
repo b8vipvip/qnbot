@@ -514,8 +514,22 @@ namespace Bot.ChromeNs
                 || string.Equals(localId, cloudId, StringComparison.Ordinal)) return;
             lock (Sync)
             {
-                var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
-                    localId, shop.ShopKey, seller).FirstOrDefault();
+                var local = string.IsNullOrWhiteSpace(localId) ? null
+                    : Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
+                        localId, shop.ShopKey, seller).FirstOrDefault();
+                if (local == null)
+                {
+                    // A stale client base_revision can make the server return the canonical
+                    // delta without a local_id conflict wrapper. Recover the duplicate by the
+                    // already-validated content hash, but only inside this exact ShopKey/seller.
+                    var duplicates = Select(
+                        "where ShopKey=? and Seller=? and ImageSha256=? and EntityId<>? order by UpdatedAtTicks desc limit 2",
+                        shop.ShopKey, seller, imageSha256, cloudId);
+                    if (duplicates.Count > 1)
+                        throw new InvalidOperationException("同一店铺发现多个相同图片哈希的本地知识记录；拒绝自动选择并覆盖。");
+                    local = duplicates.FirstOrDefault();
+                    if (local != null) localId = local.EntityId;
+                }
                 if (local == null) return;
                 if (!string.Equals(local.ImageSha256, imageSha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("图片知识冲突ID的本地图片哈希与云端规范记录不一致；保留本地文件和记录，等待人工复核。");

@@ -335,3 +335,23 @@ def test_duplicate_id_conflict_mapping_is_applied_before_same_revision_cloud_del
     assert ".OrderBy(x => x.Item1)" in apply
     assert '.ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1)' in apply
     assert "Re-key the local duplicate first" in apply
+
+
+def test_stale_base_revision_still_returns_duplicate_id_mapping_and_client_has_hash_fallback():
+    api = read("services/api-control-plane/bot_web_conversation_knowledge.py")
+    server = api.split("def runtime_image_knowledge_sync", 1)[1].split(
+        "def web_image_knowledge_list", 1
+    )[0]
+    mismatch = server.split("if current_revision != base_revision:", 1)[1].split(
+        "now = _now()", 1
+    )[0]
+    client = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    rekey = client.split("private static void RekeyLocalDuplicateForCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudUpsert", 1
+    )[0]
+    assert "duplicate = conn.execute(" in mismatch
+    assert '"local_id":image_id' in mismatch
+    assert "if (local == null)" in rekey
+    assert "where ShopKey=? and Seller=? and ImageSha256=? and EntityId<>?" in rekey
+    assert "duplicates.Count > 1" in rekey
+    assert "拒绝自动选择并覆盖" in rekey
