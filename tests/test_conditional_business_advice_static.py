@@ -274,3 +274,19 @@ def test_ledger_cleanup_never_drops_uncertain_or_delivered_dedupe_markers():
     assert "x.DeliveryUncertain" in cleanup
     assert "x.DeliveredAt == DateTime.MinValue" in cleanup
     assert "Take(10000)" not in cleanup
+
+
+def test_knowledge_v2_typed_evidence_requirements_cannot_bypass_the_authorization_gate():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    helper = source[
+        source.index("public static bool RequiresEvidenceGate"):
+        source.index("public static bool TryAuthorizeRefundSuggestion")
+    ]
+    assert "selected.Record.RequiredContext" in helper
+    assert ".Any(IsEvidenceRequirement)" in helper
+    assert "RequiresEvidenceGate(decision)" in runtime
+    assert "RequiresEvidenceGate(decision)" in ocr
+    assert "禁止本地直答" in runtime
+    assert "禁止本地直答" in ocr
