@@ -199,6 +199,31 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
     if current["revision"] > payload.revision:
         return current
     if payload.records is not None:
+        # Runtime snapshots are full-corpus replacements. A physical disappearance
+        # of an existing ID is not a valid delete: Windows deletion writes a tombstone
+        # with the same ID (Enabled=false, Status=deleted). Reject an incomplete local
+        # snapshot rather than letting a damaged/partially restored SQLite file erase
+        # the cloud corpus. New records and explicit tombstones remain valid.
+        if current["revision"] == payload.revision:
+            current_ids = {
+                str(item.get("Id") or "").strip()
+                for item in current["records"]
+                if isinstance(item, dict) and str(item.get("Id") or "").strip()
+            }
+            incoming_ids = {
+                str(item.get("Id") or "").strip()
+                for item in payload.records
+                if isinstance(item, dict) and str(item.get("Id") or "").strip()
+            }
+            missing_ids = current_ids - incoming_ids
+            if missing_ids:
+                return {
+                    **current,
+                    "sync_warning": {
+                        "code": "missing_tombstones",
+                        "missing_count": len(missing_ids),
+                    },
+                }
         return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
     return current
 
