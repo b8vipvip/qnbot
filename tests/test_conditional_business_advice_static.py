@@ -102,7 +102,8 @@ def test_conditional_advice_delivery_is_shop_buyer_order_and_record_scoped():
     assert "WriteAllTextAtomic" in source
     assert "已经发送" in source
     assert "发送状态不确定" in source
-    assert "AddDays(30)" in source
+    assert "DateTime.MaxValue" in source
+    assert "DeliveryUncertain = true" in source
 
 
 def test_text_and_image_reply_paths_share_conditional_advice_guard():
