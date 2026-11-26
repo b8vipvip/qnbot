@@ -95,7 +95,7 @@ namespace Bot.ChromeNs
         private const string OrderProductMatches = "evidence:order.product_matches_record";
         private static readonly object LedgerSync = new object();
         private static readonly Regex ClosedOrFulfilledRegex = new Regex(
-            "已退款|退款成功|退款完成|退款中|退款申请|已申请退款|退货退款|已退货|退货完成|关闭|已关闭|已取消|订单取消|取消交易|已发货|卖家已发货|等待买家收货|待收货|已签收|确认收货|买家已收货|交易完成|交易成功|已完成|waitbuyerconfirmgoods|trade[_ ]?closed|trade[_ ]?finished|trade[_ ]?success|refunded|refund[_ ]?(success|closed|finished|completed|requested|processing)|cancel|shipped|delivered|completed",
+            "已退款|退款成功|退款完成|退款中|退款申请|已申请退款|退货退款|已退货|退货完成|关闭|已关闭|已取消|订单取消|取消交易|已发货|卖家已发货|等待买家收货|待收货|已签收|确认收货|买家已收货|交易完成|交易成功|已完成|waitbuyerconfirmgoods|trade[_ ]?buyer[_ ]?signed|buyersigned|trade[_ ]?closed|trade[_ ]?finished|trade[_ ]?success|refunded|refund[_ ]?(success|closed|finished|completed|requested|processing)|cancel|shipped|delivered|completed",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex PaidRegex = new Regex(
             "已付款|付款成功|支付成功|waitsellersendgoods|trade[_ ]?paid",
