@@ -185,7 +185,8 @@ namespace Bot.Knowledge
                         var snapshotAcknowledged=string.Equals(cloudFingerprint,localFingerprint,StringComparison.Ordinal);
                         var syncWarning = root["sync_warning"] as JObject;
                         var missingTombstones = syncWarning != null
-                            && string.Equals((string)syncWarning["code"], "missing_tombstones", StringComparison.Ordinal);
+                            && (string.Equals((string)syncWarning["code"], "missing_tombstones", StringComparison.Ordinal)
+                                || string.Equals((string)syncWarning["code"], "cloud_delete_wins", StringComparison.Ordinal));
 
                         if(missingTombstones && cloudRevision == state.Revision)
                         {
@@ -209,9 +210,11 @@ namespace Bot.Knowledge
                                         + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey));
                                     return;
                                 }
-                                Log.Info("Knowledge V2已拒绝无墓碑删除并从云端恢复缺失记录: shopRef="
+                                var conflictCountToken = syncWarning["missing_count"] ?? syncWarning["conflict_count"];
+                                var conflictCount = conflictCountToken == null ? 0 : (int)conflictCountToken;
+                                Log.Info("Knowledge V2已应用云端删除墓碑优先规则并从权威快照恢复本地记录: shopRef="
                                     + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
-                                    + ", missing_count=" + (int?)syncWarning["missing_count"]
+                                    + ", tombstone_conflicts=" + conflictCount
                                     + ", cloud_records=" + records.Count
                                     + ", merged_records=" + merged.Count
                                     + ", backup=" + Path.GetFileName(backup));
