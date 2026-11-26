@@ -1003,13 +1003,6 @@ namespace Bot.ChromeNs
                 return false;
             }
             remoteScopeHash = (remoteScopeHash ?? string.Empty).Trim();
-            var remoteResolved = false;
-            if (!string.IsNullOrWhiteSpace(remoteScopeHash))
-            {
-                if (!TryResolveRemoteUncertainDelivery(shopKey, remoteScopeHash, confirmedDelivered, out reason))
-                    return false;
-                remoteResolved = true;
-            }
             var path = GetLedgerPath();
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
             lock (LedgerSync)
@@ -1029,27 +1022,63 @@ namespace Bot.ChromeNs
                 var key = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
                 var record = (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
                     .FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (record == null)
+
+                // Do not release the server-wide barrier while this process still owns
+                // an in-flight sender. CompleteDelivery removes this owner only after
+                // it has persisted the local outcome and attempted the remote update.
+                ConditionalBusinessAdviceDistributedLease activeLease;
+                if (DistributedLeases.TryGetValue(key, out activeLease)
+                    && activeLease != null
+                    && !string.IsNullOrWhiteSpace(activeLease.LeaseToken))
                 {
-                    if (remoteResolved)
-                    {
-                        reason = confirmedDelivered
-                            ? "服务端已记录确认送达；本机没有对应待核对副本"
-                            : "服务端已解除不确定发送锁；本机没有对应待核对副本";
-                        return true;
-                    }
+                    reason = "当前发送实例仍持有全局条件性建议租约，无法人工核对";
+                    return false;
+                }
+
+                // A local successful-send marker is stronger than an uncertain remote
+                // acknowledgement. Reject a contradictory "not delivered" decision
+                // before it can release the cross-device lease.
+                if (record != null && record.DeliveredAt != DateTime.MinValue && !confirmedDelivered)
+                {
+                    reason = "本机已记录为送达，不允许将其改为未发送";
+                    return false;
+                }
+                if (record == null && string.IsNullOrWhiteSpace(remoteScopeHash))
+                {
                     reason = "记录不存在或已不需要人工核对，请先刷新列表";
                     return false;
                 }
+                if (record != null && record.DeliveredAt == DateTime.MinValue
+                    && !record.DeliveryUncertain && string.IsNullOrWhiteSpace(remoteScopeHash))
+                {
+                    reason = "本机发送租约仍有效或尚未进入待核对状态";
+                    return false;
+                }
+
+                // Keep the local ledger lock through remote reconciliation. This
+                // prevents a concurrent local completion from changing a successful
+                // send into a contradictory release between validation and the API call.
+                var remoteResolved = false;
+                if (!string.IsNullOrWhiteSpace(remoteScopeHash))
+                {
+                    if (!TryResolveRemoteUncertainDelivery(shopKey, remoteScopeHash, confirmedDelivered, out reason))
+                        return false;
+                    remoteResolved = true;
+                }
+
+                if (record == null)
+                {
+                    reason = confirmedDelivered
+                        ? "服务端已记录确认送达；本机没有对应待核对副本"
+                        : "服务端已解除不确定发送锁；本机没有对应待核对副本";
+                    return true;
+                }
                 if (record.DeliveredAt != DateTime.MinValue)
                 {
-                    if (remoteResolved && confirmedDelivered)
-                    {
-                        reason = "服务端和本机均已记录确认送达";
-                        return true;
-                    }
-                    reason = "本机已记录为送达，不允许将其改为未发送";
-                    return false;
+                    reason = remoteResolved
+                        ? "服务端和本机均已记录确认送达"
+                        : "本机已记录确认送达";
+                    return true;
                 }
                 if (!record.DeliveryUncertain && !remoteResolved)
                 {
