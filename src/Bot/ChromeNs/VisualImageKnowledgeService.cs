@@ -155,18 +155,43 @@ namespace Bot.ChromeNs
             }
 
             var createdImage = false;
-            if (!SamePath(sourceImagePath, targetPath) && !File.Exists(targetPath))
+            var replacedImage = false;
+            if (!SamePath(sourceImagePath, targetPath))
             {
-                var tempPath = targetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                try
+                var targetExists = File.Exists(targetPath);
+                var targetMatches = targetExists
+                    && string.Equals(ComputeSha256(targetPath), sha256, StringComparison.OrdinalIgnoreCase);
+                if (!targetMatches)
                 {
-                    File.Copy(sourceImagePath, tempPath, false);
-                    File.Move(tempPath, targetPath);
-                    createdImage = true;
-                }
-                finally
-                {
-                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                    // If the existing row points at this exact path but claims a different
+                    // digest, replacing it would corrupt the still-committed row if the
+                    // following SQLite transaction failed. Refuse that ambiguous repair.
+                    if (targetExists && old != null && SamePath(old.ImagePath, targetPath)
+                        && !string.Equals(old.ImageSha256, sha256, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("现有图片记录引用了内容哈希不一致的文件，拒绝覆盖；请先修复原图记录。");
+
+                    var tempPath = targetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    try
+                    {
+                        File.Copy(sourceImagePath, tempPath, false);
+                        if (!string.Equals(ComputeSha256(tempPath), sha256, StringComparison.OrdinalIgnoreCase))
+                            throw new IOException("原图在复制期间发生变化，已拒绝提交不一致的图片文件。");
+                        if (targetExists)
+                        {
+                            // Same-directory replacement is atomic on the managed image volume.
+                            File.Replace(tempPath, targetPath, null);
+                            replacedImage = true;
+                        }
+                        else
+                        {
+                            File.Move(tempPath, targetPath);
+                            createdImage = true;
+                        }
+                    }
+                    finally
+                    {
+                        try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                    }
                 }
             }
             else if (!File.Exists(targetPath))
@@ -206,7 +231,11 @@ namespace Bot.ChromeNs
             }
             catch
             {
-                if (createdImage) TryDeleteManagedImage(targetPath, imageRoot);
+                // Never delete a path still owned by the previous committed row. If that
+                // row referenced this same digest, replacement only repaired its bytes.
+                if ((createdImage || replacedImage)
+                    && (old == null || !SamePath(old.ImagePath, targetPath)))
+                    TryDeleteManagedImage(targetPath, imageRoot);
                 throw;
             }
 
