@@ -292,6 +292,7 @@ namespace Bot.ChromeNs
                 decision.Answer = (record.Answer ?? string.Empty).Trim();
                 decision.ConditionalAdviceKey = "refund-advice:" + record.Id;
                 decision.ConditionalAdviceOrderId = evidence.OrderId;
+                decision.ConditionalAdviceItemId = evidence.ItemId;
                 decision.ConditionalAdviceImageMessageKey = evidence.ImageMessageKey;
                 decision.ConditionalAdviceImageKnowledgeId = evidence.ImageKnowledgeId;
                 decision.Reason = "条件性售后建议通过图片知识、商品关联、已付款且未终态订单证据门禁";
@@ -308,6 +309,7 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string orderId,
+            string itemId,
             string imageMessageKey,
             string imageKnowledgeId)
         {
@@ -320,17 +322,24 @@ namespace Bot.ChromeNs
                     .OrderByDescending(x => x.EventTime)
                     .FirstOrDefault();
                 if (!IsPaidAndOpen(order)) return false;
+                if (!string.IsNullOrWhiteSpace(itemId)
+                    && !string.Equals((order.ItemId ?? string.Empty).Trim(), itemId.Trim(), StringComparison.Ordinal))
+                    return false;
 
                 var activeImage = VisualImageKnowledgeService.Load(shopKey, seller)
                     .Any(x => x != null && x.Enabled
                         && string.Equals(x.EntityId, imageKnowledgeId, StringComparison.Ordinal));
                 if (!activeImage) return false;
 
-                return RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 30)
-                    .Any(x => x != null
+                var image = RecentVisualContextService.GetRecentWorkflowEvidence(shopKey, seller, buyer, 30)
+                    .FirstOrDefault(x => x != null
                         && string.Equals(x.MessageKey, imageMessageKey, StringComparison.Ordinal)
                         && string.Equals(x.MatchedImageKnowledgeId, imageKnowledgeId, StringComparison.Ordinal)
                         && !string.IsNullOrWhiteSpace(x.OcrImageSha256));
+                if (image == null) return false;
+                var imageTime = SafeTime(image.ObservedAtTicks);
+                var orderTime = order.EventTime == DateTime.MinValue ? order.DetectedAt : order.EventTime;
+                return imageTime != DateTime.MinValue && imageTime >= orderTime;
             }
             catch (Exception ex)
             {
@@ -344,6 +353,7 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             string orderId,
+            string itemId,
             string adviceKey,
             string imageMessageKey,
             string imageKnowledgeId,
@@ -357,7 +367,7 @@ namespace Bot.ChromeNs
                 reason = "条件性建议缺少店铺、买家、订单或知识标识";
                 return false;
             }
-            if (!IsEvidenceStillValid(shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId))
+            if (!IsEvidenceStillValid(shopKey, seller, buyer, orderId, itemId, imageMessageKey, imageKnowledgeId))
             {
                 reason = "订单或图片证据已变化、失效或无法复核";
                 return false;
