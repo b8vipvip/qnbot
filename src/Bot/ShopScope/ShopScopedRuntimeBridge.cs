@@ -88,8 +88,18 @@ namespace Bot.ShopScope
                     {
                         object marker;
                         if (ForegroundSubscribed.TryGetValue(qn, out marker)) continue;
-                        qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
-                        ForegroundSubscribed.Add(qn, new object());
+                        var subscriptionAttempted = false;
+                        try
+                        {
+                            subscriptionAttempted = true;
+                            qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
+                            ForegroundSubscribed.Add(qn, new object());
+                        }
+                        catch
+                        {
+                            if (subscriptionAttempted) try { qn.EvBuyerSwitched -= Qn_EvBuyerSwitched; } catch { }
+                            throw;
+                        }
                     }
                 }
                 catch (Exception ex)

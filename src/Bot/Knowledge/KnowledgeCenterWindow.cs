@@ -1009,8 +1009,18 @@ namespace Bot.ChromeNs
                         {
                             object marker;
                             if (Attached.TryGetValue(qn, out marker)) continue;
-                            qn.EvRecieveNewMessage += OnReceive;
-                            Attached.Add(qn, new object());
+                            var subscriptionAttempted = false;
+                            try
+                            {
+                                subscriptionAttempted = true;
+                                qn.EvRecieveNewMessage += OnReceive;
+                                Attached.Add(qn, new object());
+                            }
+                            catch
+                            {
+                                if (subscriptionAttempted) try { qn.EvRecieveNewMessage -= OnReceive; } catch { }
+                                throw;
+                            }
                         }
                     }
                     catch (Exception ex)

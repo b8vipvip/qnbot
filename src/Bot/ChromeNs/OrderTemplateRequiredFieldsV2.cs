@@ -148,9 +148,22 @@ namespace Bot.ChromeNs
                         {
                             object marker;
                             if (Attached.TryGetValue(qn, out marker)) continue;
-                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                            qn.EvMessageNotity += OnMessageNotify;
-                            Attached.Add(qn, new object());
+                            var receiveAttempted = false;
+                            var notifyAttempted = false;
+                            try
+                            {
+                                receiveAttempted = true;
+                                qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                                notifyAttempted = true;
+                                qn.EvMessageNotity += OnMessageNotify;
+                                Attached.Add(qn, new object());
+                            }
+                            catch
+                            {
+                                if (notifyAttempted) try { qn.EvMessageNotity -= OnMessageNotify; } catch { }
+                                if (receiveAttempted) try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { }
+                                throw;
+                            }
                         }
                         Log.Info("订单模板字段完整性 V2 已绑定: seller="
                             + (qn.Seller == null ? string.Empty : qn.Seller.Nick));

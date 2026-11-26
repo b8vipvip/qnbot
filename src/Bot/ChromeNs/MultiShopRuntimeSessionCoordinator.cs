@@ -85,8 +85,16 @@ namespace Bot.ChromeNs
                             object marker;
                             if (!Subscribed.TryGetValue(qn, out marker))
                             {
-                                Subscribe(qn);
-                                Subscribed.Add(qn, new object());
+                                try
+                                {
+                                    Subscribe(qn);
+                                    Subscribed.Add(qn, new object());
+                                }
+                                catch
+                                {
+                                    Unsubscribe(qn);
+                                    throw;
+                                }
                             }
                         }
                         var seller = Seller(qn);
@@ -215,6 +223,14 @@ namespace Bot.ChromeNs
             qn.EvBuyerSwitched += Qn_EvBuyerSwitched;
             qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
             Log.Info("已订阅店铺运行时会话: seller=" + Seller(qn));
+        }
+
+        private static void Unsubscribe(QN qn)
+        {
+            if (qn == null) return;
+            try { qn.EvRecieveNewMessage -= Qn_EvRecieveNewMessage; } catch { }
+            try { qn.EvBuyerSwitched -= Qn_EvBuyerSwitched; } catch { }
+            try { qn.EvSellerSwitched -= Qn_EvSellerSwitched; } catch { }
         }
 
         private static void Qn_EvSellerSwitched(object sender, SellerSwitchedEventArgs e)

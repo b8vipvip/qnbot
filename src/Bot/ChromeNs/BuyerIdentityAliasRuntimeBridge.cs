@@ -41,10 +41,26 @@ namespace Bot.ChromeNs
                         {
                             object marker;
                             if (Attached.TryGetValue(qn, out marker)) continue;
-                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                            qn.EvBuyerSwitched += OnBuyerSwitched;
-                            qn.EvSellerSwitched += OnSellerSwitched;
-                            Attached.Add(qn, new object());
+                            var messageAttempted = false;
+                            var buyerSwitchAttempted = false;
+                            var sellerSwitchAttempted = false;
+                            try
+                            {
+                                messageAttempted = true;
+                                qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                                buyerSwitchAttempted = true;
+                                qn.EvBuyerSwitched += OnBuyerSwitched;
+                                sellerSwitchAttempted = true;
+                                qn.EvSellerSwitched += OnSellerSwitched;
+                                Attached.Add(qn, new object());
+                            }
+                            catch
+                            {
+                                if (sellerSwitchAttempted) try { qn.EvSellerSwitched -= OnSellerSwitched; } catch { }
+                                if (buyerSwitchAttempted) try { qn.EvBuyerSwitched -= OnBuyerSwitched; } catch { }
+                                if (messageAttempted) try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { }
+                                throw;
+                            }
                         }
                         Log.Info("买家昵称别名桥接已绑定客服实例: seller="
                             + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
