@@ -64,7 +64,8 @@ namespace Bot.ChromeNs
             string buyer,
             string currentQuestion,
             IList<ConversationContextTurn> turns,
-            ConversationStateSnapshot state)
+            ConversationStateSnapshot state,
+            string shopKey = null)
         {
             var result = new CommerceContextSnapshot
             {
@@ -79,7 +80,8 @@ namespace Bot.ChromeNs
                 currentQuestion,
                 turns,
                 state,
-                out selectionReason);
+                out selectionReason,
+                shopKey);
             if (order != null)
             {
                 ApplyOrder(result, order);
@@ -108,13 +110,14 @@ namespace Bot.ChromeNs
             string currentQuestion,
             IList<ConversationContextTurn> turns,
             ConversationStateSnapshot state,
-            out string selectionReason)
+            out string selectionReason,
+            string shopKey = null)
         {
             selectionReason = "none";
             List<OrderSnapshot> candidates;
             try
             {
-                candidates = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12);
+                candidates = OrderGuidanceDeliveryGuard.GetRecentOrderSnapshots(seller, buyer, 12, shopKey);
             }
             catch (Exception ex)
             {
