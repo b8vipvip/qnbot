@@ -81,6 +81,16 @@ try {
     $failedProcess = Invoke-ComparatorChild -CsvA $csvA -CsvB $csvB -OutputPath (Join-Path $tempRoot 'failed')
     if ($failedProcess.ExitCode -eq 0) { throw 'A failed last sync was incorrectly accepted.' }
 
+    # Run the actual sampler for one iteration. Process rows must use the system
+    # CSV header, including empty diagnostics columns, instead of failing append.
+    $samplerPath = Join-Path $PSScriptRoot '..\..\scripts\Collect-QnBotMemory.ps1'
+    $samplerOutput = Join-Path $tempRoot 'sampler'
+    & $samplerPath -Minutes 1 -IntervalSeconds 300 -TopProcessCount 5 -OutputDirectory $samplerOutput -RuntimeSnapshotPath (Join-Path $tempRoot 'missing-runtime.json') -KnowledgeV2SyncSnapshotPath (Join-Path $tempRoot 'missing-sync.json') -KnowledgeV2LearningSnapshotPath (Join-Path $tempRoot 'missing-learning.json')
+    $samplerCsv = Get-ChildItem -LiteralPath $samplerOutput -Filter 'qnbot-memory-*.csv' | Select-Object -First 1 -ExpandProperty FullName
+    $samples = @(Import-Csv -LiteralPath $samplerCsv)
+    if (@($samples | Where-Object { $_.SampleKind -eq 'system' }).Count -ne 1) { throw 'Expected one system sample.' }
+    if (@($samples | Where-Object { $_.SampleKind -in @('target','top') -and $_.Pid -gt 0 -and $_.WorkingSetMiB -ne '' }).Count -lt 1) { throw 'Process samples were not appended to the CSV.' }
+
     Write-Host 'Knowledge V2 two-device convergence comparator runtime tests passed.'
 }
 finally {
