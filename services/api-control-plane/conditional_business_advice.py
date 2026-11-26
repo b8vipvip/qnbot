@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 import bot_client_shop_binding
@@ -209,7 +209,7 @@ def _scope_for_payload(shop_key: str, buyer: str, order_id: str, advice_key: str
 def runtime_claim(
     payload: ConditionalAdviceClaimInput,
     request: Request,
-    x_shop_key: str = "",
+    x_shop_key: str = Header(default=""),
 ) -> dict[str, Any]:
     client_id, shop_key = _runtime_scope(request, x_shop_key)
     scope_hash, buyer, order_id, advice_key = _scope_for_payload(
@@ -271,7 +271,7 @@ def runtime_claim(
                    (shop_key,scope_hash,state,request_id,lease_token_hash,lease_token_cipher,
                     lease_expires_at,buyer_cipher,order_id_cipher,advice_key_cipher,
                     created_at,updated_at,reason_code)
-                   VALUES(?,?,'reserved',?,?,?,?,?,?,?,?,?,?,'')""",
+                   VALUES(?,?,'reserved',?,?,?,?,?,?,?,?,?,'')""",
                 (shop_key, scope_hash) + values,
             )
         else:
