@@ -141,8 +141,12 @@ namespace Bot.ChromeNs
             // If multiple paid orders exist and the conversation selector had to choose
             // a latest-order fallback, do not guess which order the image belongs to.
             var paidOpenOrders = (orders ?? new List<OrderSnapshot>()).Where(IsPaidAndOpen).ToList();
-            if (paidOpenOrders.Count > 1
-                && string.Equals(commerce.SelectionReason, "latest_confirmed_fallback", StringComparison.OrdinalIgnoreCase))
+            var selectionReason = commerce.SelectionReason ?? string.Empty;
+            var hasCurrentUniqueOrderSignal =
+                selectionReason.IndexOf("current_order_id", StringComparison.OrdinalIgnoreCase) >= 0
+                || selectionReason.IndexOf("current_item_id", StringComparison.OrdinalIgnoreCase) >= 0
+                || selectionReason.IndexOf("current_sku_id", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (paidOpenOrders.Count > 1 && !hasCurrentUniqueOrderSignal)
                 return false;
 
             List<VisualKnowledgeObservationEntity> observations;
