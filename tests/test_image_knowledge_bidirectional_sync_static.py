@@ -355,3 +355,30 @@ def test_stale_base_revision_still_returns_duplicate_id_mapping_and_client_has_h
     assert "where ShopKey=? and Seller=? and ImageSha256=? and EntityId<>?" in rekey
     assert "duplicates.Count > 1" in rekey
     assert "拒绝自动选择并覆盖" in rekey
+
+
+def test_invalid_image_sync_timestamps_fail_closed_instead_of_becoming_now():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    outbound = service.split("private static string ToUtcIso", 1)[1].split(
+        "private static string ExtensionForMime", 1
+    )[0]
+    assert "DateTimeOffset.TryParse(value ?? string.Empty, CultureInfo.InvariantCulture" in outbound
+    assert "DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal" in outbound
+    assert "throw new InvalidOperationException" in outbound
+    assert "DateTime.Now.Ticks" not in outbound
+    assert "DateTime.UtcNow.ToString" not in outbound
+    assert "拒绝以当前时间覆盖云端版本" in outbound
+    assert "保留本地状态并等待重试" in outbound
+
+
+def test_invalid_old_image_tombstone_cannot_starve_later_valid_deletes():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    build = service.split("public static JObject BuildCloudSyncRequest", 1)[1].split(
+        "public static void ApplyCloudSyncResponse", 1
+    )[0]
+    assert "order by DeletedAtTicks asc, EntityId asc" in build
+    assert "order by DeletedAtTicks asc limit 50" not in build
+    assert "foreach (var tombstone in tombstones)" in build
+    assert "if (deletes.Count >= 50) break;" in build
+    assert "ToUtcIso(tombstone.DeletedAtTicks)" in build
+    assert "保留该记录并继续处理后续删除" in build

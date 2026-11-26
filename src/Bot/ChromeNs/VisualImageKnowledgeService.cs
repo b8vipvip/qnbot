@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -268,7 +269,9 @@ namespace Bot.ChromeNs
                 // The outgoing payload is still bounded by count and byte limits below.
                 var pendingItems = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc, EntityId asc",
                     shop.ShopKey, seller);
-                var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
+                // Scan all dirty tombstones so one malformed oldest timestamp cannot
+                // starve valid deletes behind it. The outgoing batch remains capped at 50.
+                var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc, EntityId asc",
                     shop.ShopKey, seller);
                 var upserts = new JArray();
                 long pendingImageBytes = 0;
@@ -317,12 +320,28 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                var deletes = new JArray(tombstones.Select(x => new JObject
+                var deletes = new JArray();
+                foreach (var tombstone in tombstones)
                 {
-                    ["id"] = x.EntityId,
-                    ["base_revision"] = x.CloudRevision,
-                    ["deleted_at"] = ToUtcIso(x.DeletedAtTicks)
-                }));
+                    if (deletes.Count >= 50) break;
+                    try
+                    {
+                        var tombstoneId = Clean(tombstone.EntityId, 80);
+                        if (tombstoneId.Length == 0)
+                            throw new InvalidOperationException("图片知识删除墓碑缺少实体ID。");
+                        deletes.Add(new JObject
+                        {
+                            ["id"] = tombstoneId,
+                            ["base_revision"] = tombstone.CloudRevision,
+                            ["deleted_at"] = ToUtcIso(tombstone.DeletedAtTicks)
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("图片知识删除墓碑无效，保留该记录并继续处理后续删除: "
+                            + tombstone.EntityId + " " + ex.Message, 5);
+                    }
+                }
                 return new JObject
                 {
                     ["shop_key"] = shop.ShopKey,
@@ -725,15 +744,25 @@ namespace Bot.ChromeNs
 
         private static string ToUtcIso(long ticks)
         {
-            try { return new DateTime(ticks, DateTimeKind.Local).ToUniversalTime().ToString("o"); }
-            catch { return DateTime.UtcNow.ToString("o"); }
+            try
+            {
+                if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
+                    throw new ArgumentOutOfRangeException(nameof(ticks));
+                return new DateTime(ticks, DateTimeKind.Local).ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("本地图片知识时间戳无效；拒绝以当前时间覆盖云端版本。", ex);
+            }
         }
 
         private static long ParseUtcTicks(string value)
         {
             DateTimeOffset parsed;
-            return DateTimeOffset.TryParse(value ?? string.Empty, out parsed)
-                ? parsed.LocalDateTime.Ticks : DateTime.Now.Ticks;
+            if (!DateTimeOffset.TryParse(value ?? string.Empty, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsed))
+                throw new InvalidOperationException("云端图片知识时间戳无效；保留本地状态并等待重试。");
+            return parsed.LocalDateTime.Ticks;
         }
 
         private static string ExtensionForMime(string mime)
