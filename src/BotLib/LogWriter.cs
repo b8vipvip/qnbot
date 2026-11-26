@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 namespace BotLib
 {
-    public class LogWriter
+    public class LogWriter : IDisposable
     {
         public LogWriter(string fn, bool saveLogByDay, int maxByte)
         {
@@ -27,7 +27,10 @@ namespace BotLib
 
         public void Flush()
         {
-            if (_file != null) _file.Flush();
+            lock (_lifecycleSync)
+            {
+                if (_file != null) _file.Flush();
+            }
         }
 
         public void WriteEnvironmentString(string env)
@@ -38,54 +41,68 @@ namespace BotLib
 
         public void Close(string reason)
         {
-            WriteLine(string.Format("日志关闭({1})：原因={3},持续时间={0},托管内存占用={4}MB\r\n程序版本={2}\r\n===============================\r\n", new object[]
+            lock (_lifecycleSync)
             {
-                (DateTime.Now - _start).TotalSeconds,
-                DateTime.Now.ToString(),
-                _environmentStr,
-                reason,
-                ((double)GC.GetTotalMemory(false) / Math.Pow(2.0, 20.0)).ToString("0.0")
-            }));
-            _file.Close();
+                if (_isClosed) return;
+                if (_file != null)
+                {
+                    _file.WriteLine(string.Format("日志关闭({1})：原因={3},持续时间={0},托管内存占用={4}MB\r\n程序版本={2}\r\n===============================\r\n", new object[]
+                    {
+                        (DateTime.Now - _start).TotalSeconds,
+                        DateTime.Now.ToString(),
+                        _environmentStr,
+                        reason,
+                        ((double)GC.GetTotalMemory(false) / Math.Pow(2.0, 20.0)).ToString("0.0")
+                    }));
+                }
+                _isClosed = true;
+                if (_file != null) _file.Close();
+            }
+        }
+
+        public void Dispose()
+        {
+            Close("Dispose");
         }
 
         public void Clear()
         {
-            _file.Clear();
+            lock (_lifecycleSync)
+            {
+                if (!_isClosed && _file != null) _file.Clear();
+            }
         }
 
         public void Write(string text, string tag, bool writeStackTrace = false, string stackTrace = null)
         {
-            bool limitSameStringWriteCount = LimitSameStringWriteCount;
-            if (limitSameStringWriteCount)
+            lock (_lifecycleSync)
             {
-                int cnt = UpdateWriteCount(text);
-                if (cnt > 0 && cnt < 20 && cnt % 10 == 0)
+                if (_isClosed || _file == null) return;
+                bool limitSameStringWriteCount = LimitSameStringWriteCount;
+                if (limitSameStringWriteCount)
                 {
-                    text = string.Concat(new object[]
+                    int cnt = UpdateWriteCount(text);
+                    if (cnt > 0 && cnt < 20 && cnt % 10 == 0)
                     {
-                        "第",
-                        cnt,
-                        "次发生该写入,超出20次将不再提示",
-                        Environment.NewLine,
-                        text
-                    });
+                        text = string.Concat(new object[]
+                        {
+                            "第",
+                            cnt,
+                            "次发生该写入,超出20次将不再提示",
+                            Environment.NewLine,
+                            text
+                        });
+                    }
+                    if (cnt > 20) return;
                 }
-                if (cnt > 20)
+                text = string.Concat(tag,"(",DateTime.Now.ToString(),"):",text, Environment.NewLine);
+                if (writeStackTrace)
                 {
-                    return;
+                    if (string.IsNullOrEmpty(stackTrace)) stackTrace = GetStackTrace(4);
+                    text = text + stackTrace + Environment.NewLine;
                 }
+                _file.WriteLine(text);
             }
-            text = string.Concat(tag,"(",DateTime.Now.ToString(),"):",text, Environment.NewLine);
-            if (writeStackTrace)
-            {
-                if (string.IsNullOrEmpty(stackTrace))
-                {
-                    stackTrace = GetStackTrace(4);
-                }
-                text = text + stackTrace + Environment.NewLine;
-            }
-            _file.WriteLine(text);
         }
 
         public static string GetStackTrace(int skipFrames = 1)
@@ -173,7 +190,10 @@ namespace BotLib
 
         public void WriteLine(string msg)
         {
-            _file.WriteLine(msg);
+            lock (_lifecycleSync)
+            {
+                if (!_isClosed && _file != null) _file.WriteLine(msg);
+            }
         }
 
         public void StackTrace()
@@ -191,6 +211,8 @@ namespace BotLib
             File.Copy(_file.FileName, dest);
         }
 
+        private readonly object _lifecycleSync = new object();
+        private bool _isClosed;
         private LoopSaveFile _file;
 
         private string _environmentStr = "未命名版本";
@@ -214,6 +236,8 @@ namespace BotLib
             public string FileName { get; set; }
             private bool _saveLogByDay;
             private NoReEnterTimer _timer;
+            private readonly object _writeSync = new object();
+            private int _closed;
             private int _limitFileSize;
             private DateTime _lastMaintenanceUtc = DateTime.MinValue;
             private ConcurrentQueue<string> _cache = new ConcurrentQueue<string>();
@@ -251,6 +275,11 @@ namespace BotLib
             }
 
             private void WriteLoop()
+            {
+                lock (_writeSync) WriteLoopCore();
+            }
+
+            private void WriteLoopCore()
             {
                 try
                 {
@@ -456,7 +485,11 @@ namespace BotLib
 
             public void WriteLine(string text)
             {
-                _cache.Enqueue(text);
+                lock (_writeSync)
+                {
+                    if (_closed != 0) return;
+                    _cache.Enqueue(text);
+                }
             }
 
             public void Flush()
@@ -466,7 +499,19 @@ namespace BotLib
 
             public void Close()
             {
-                Flush();
+                NoReEnterTimer timer;
+                lock (_writeSync)
+                {
+                    if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+                    timer = _timer;
+                    _timer = null;
+                }
+
+                // Stop the per-file background thread before the final serialized flush.
+                // The write lock prevents the timer callback and Close from opening the
+                // same active file concurrently.
+                if (timer != null) timer.Stop();
+                lock (_writeSync) WriteLoopCore();
             }
         }
     }
