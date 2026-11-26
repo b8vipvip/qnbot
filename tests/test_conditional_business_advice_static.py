@@ -63,6 +63,7 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "imageObservedAt < orderEvidenceTime" in build
     assert "VisualImageKnowledgeService.Load(shopKey, seller)" in build
     assert "paidOpenOrders.Count > 1" in build
+    assert ".GroupBy(x => x.OrderId.Trim(), StringComparer.Ordinal)" in build
 
 
 def test_refund_suggestion_never_claims_or_executes_a_refund():
