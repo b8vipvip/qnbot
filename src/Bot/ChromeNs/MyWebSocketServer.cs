@@ -1270,7 +1270,15 @@ namespace Bot.ChromeNs
                 lock (_sellerSessionSync)
                 {
                     _connectedSessions.TryRemove(sessionId, out ignoredBool);
+                    // Invalidate any in-flight status/identity probes before removing their
+                    // generation entries. SessionClosed may never fire when the listener
+                    // disappears, so this path must release the same per-session state.
                     NextStatusBindingGenerationLocked(sessionId);
+                    long ignoredStatusGeneration;
+                    _statusBindingGenerations.TryRemove(sessionId, out ignoredStatusGeneration);
+                    NextShopIdentityProbeGenerationLocked(sessionId);
+                    long ignoredIdentityProbeGeneration;
+                    _shopIdentityProbeGenerations.TryRemove(sessionId, out ignoredIdentityProbeGeneration);
                 }
                 _sessionLastActivityUtc.TryRemove(sessionId, out ignoredTime);
                 _closingDuplicateSessions.TryRemove(sessionId, out ignoredBool);
