@@ -253,6 +253,14 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.Continue();
             }
 
+            if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
+            {
+                decision.CanDirectReply = false;
+                decision.Answer = string.Empty;
+                Log.Info("Knowledge Engine V2命中需要外部证据的知识记录，但本轮未进入对应证据门禁，禁止本地直答: buyer="
+                    + burst.BuyerNick);
+            }
+
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);
