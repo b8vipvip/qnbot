@@ -96,6 +96,10 @@ namespace Bot.ChromeNs
         public DateTime UpdatedAt { get; set; }
         public string ScopeHash { get; set; }
         public bool IsRemote { get; set; }
+        public string SourceLabel
+        {
+            get { return IsRemote ? "服务端（跨设备）" : "本机"; }
+        }
     }
 
     internal sealed class ConditionalBusinessAdviceDistributedLease
@@ -897,10 +901,22 @@ namespace Bot.ChromeNs
         public static List<ConditionalBusinessAdviceReconciliationItem> GetPendingReconciliationRecords(
             string shopKey, string seller, int maxCount = 100)
         {
+            string ignoredRemoteStatus;
+            return GetPendingReconciliationRecords(shopKey, seller, out ignoredRemoteStatus, maxCount);
+        }
+
+        public static List<ConditionalBusinessAdviceReconciliationItem> GetPendingReconciliationRecords(
+            string shopKey, string seller, out string remoteStatus, int maxCount = 100)
+        {
+            remoteStatus = "服务端跨设备记录尚未读取";
             var result = new List<ConditionalBusinessAdviceReconciliationItem>();
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
-            if (shopKey.Length == 0 || seller.Length == 0) return result;
+            if (shopKey.Length == 0 || seller.Length == 0)
+            {
+                remoteStatus = "缺少店铺身份，无法读取服务端跨设备记录";
+                return result;
+            }
             var path = GetLedgerPath();
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
             lock (LedgerSync)
@@ -951,6 +967,7 @@ namespace Bot.ChromeNs
             try
             {
                 var remote = GetRemotePendingReconciliationRecords(shopKey, maxCount);
+                remoteStatus = "服务端跨设备同步正常";
                 foreach (var item in remote)
                 {
                     var existing = result.FirstOrDefault(x =>
@@ -971,6 +988,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                remoteStatus = "服务端跨设备同步失败；当前列表仅包含本机记录，请勿据此判断其他设备没有待核对项：" + Safe(ex.Message, 160);
                 Log.ErrorWithMaxCount("读取服务端跨设备待核对条件性建议失败；保留本机待核对记录：" + Safe(ex.Message, 180), 10);
             }
 
