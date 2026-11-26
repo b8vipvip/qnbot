@@ -111,6 +111,7 @@ def test_expired_lease_becomes_uncertain_until_operator_reconciles(advice_api, m
     assert pending["items"][0]["buyer"] == "buyer-1"
     assert pending["items"][0]["order_id"] == "order-1"
     scope_hash = pending["items"][0]["scope_hash"]
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=7))
 
     resolved = advice_api.runtime_resolve(
         advice_api.ConditionalAdviceResolveInput(scope_hash=scope_hash, confirmed_delivered=False),
