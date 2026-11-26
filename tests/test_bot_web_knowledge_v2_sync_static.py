@@ -453,6 +453,19 @@ def test_runtime_sync_rejects_physical_deletion_and_accepts_same_id_tombstones(t
     assert accepted["records"][1]["Status"] == "deleted"
     assert module._state(1)["revision"] == 2
 
+    # A stale restored snapshot that still contains the same ID as an enabled
+    # record must not resurrect a cloud tombstone at the same revision.
+    stale_resurrection = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=2, records=initial),
+        types.SimpleNamespace(),
+        x_shop_key="qn_0123456789ab",
+    )
+    assert stale_resurrection["revision"] == 2
+    assert stale_resurrection["sync_warning"]["code"] == "cloud_delete_wins"
+    assert stale_resurrection["sync_warning"]["conflict_count"] == 1
+    assert module._state(1)["records"][1]["Status"] == "deleted"
+    assert module._state(1)["records"][1]["Enabled"] is False
+
 
 def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
     service = read(WINDOWS)
@@ -466,6 +479,7 @@ def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
     ]
     assert 'root["sync_warning"] as JObject' in sync
     assert '["code"], "missing_tombstones"' in sync
+    assert '["code"], "cloud_delete_wins"' in sync
     assert "MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true)" in recovery
     assert "Backup(shop, latestLocal, cloudRevision)" in recovery
     assert recovery.index("Backup(shop, latestLocal, cloudRevision)") < recovery.index("TryReplaceAllIfUnchanged")
