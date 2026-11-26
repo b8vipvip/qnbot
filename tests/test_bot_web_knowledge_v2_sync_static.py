@@ -412,3 +412,76 @@ def test_two_windows_syncing_from_the_same_revision_cannot_overwrite_the_winner(
     # Both clients must receive the single committed winner, never a stale local write.
     assert all(result["revision"] == 1 for result in results)
     assert all(result["records"][0]["Answer"] == state["records"][0]["Answer"] for result in results)
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_runtime_sync_rejects_physical_deletion_and_accepts_same_id_tombstones(tmp_path):
+    module = _load_v2_cas_module(tmp_path)
+    first = _v2_cas_record("first answer")
+    second = _v2_cas_record("second answer")
+    second["Id"] = "b"
+    initial = [first, second]
+    seeded = module._save(1, initial, "windows", expected_revision=0)
+    assert seeded["revision"] == 1
+
+    # A damaged/partially restored local database must not erase a previously
+    # synchronized cloud record by sending a shorter full-corpus snapshot.
+    rejected = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=1, records=[first]),
+        types.SimpleNamespace(),
+        x_shop_key="qn_0123456789ab",
+    )
+    assert rejected["revision"] == 1
+    assert rejected["records"] == initial
+    assert rejected["sync_warning"]["code"] == "missing_tombstones"
+    assert rejected["sync_warning"]["missing_count"] == 1
+    assert module._state(1)["records"] == initial
+
+    # The supported delete path keeps the original ID and writes a disabled
+    # tombstone, so the server can distinguish intentional deletion from data loss.
+    tombstone = dict(second)
+    tombstone["Enabled"] = False
+    tombstone["Status"] = "deleted"
+    accepted = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=1, records=[first, tombstone]),
+        types.SimpleNamespace(),
+        x_shop_key="qn_0123456789ab",
+    )
+    assert accepted["revision"] == 2
+    assert accepted["records"][1]["Id"] == "b"
+    assert accepted["records"][1]["Enabled"] is False
+    assert accepted["records"][1]["Status"] == "deleted"
+    assert module._state(1)["revision"] == 2
+
+    # A stale restored snapshot that still contains the same ID as an enabled
+    # record must not resurrect a cloud tombstone at the same revision.
+    stale_resurrection = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=2, records=initial),
+        types.SimpleNamespace(),
+        x_shop_key="qn_0123456789ab",
+    )
+    assert stale_resurrection["revision"] == 2
+    assert stale_resurrection["sync_warning"]["code"] == "cloud_delete_wins"
+    assert stale_resurrection["sync_warning"]["conflict_count"] == 1
+    assert module._state(1)["records"][1]["Status"] == "deleted"
+    assert module._state(1)["records"][1]["Enabled"] is False
+
+
+def test_windows_cloud_sync_recovers_missing_tombstone_snapshot_from_cloud():
+    service = read(WINDOWS)
+    sync = service[
+        service.index("private static async Task SyncOnce"):
+        service.index("private static State LoadState")
+    ]
+    recovery = sync[
+        sync.index("if(missingTombstones && cloudRevision == state.Revision)"):
+        sync.index("if(cloudRevision<state.Revision)")
+    ]
+    assert 'root["sync_warning"] as JObject' in sync
+    assert '["code"], "missing_tombstones"' in sync
+    assert '["code"], "cloud_delete_wins"' in sync
+    assert "MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true)" in recovery
+    assert "Backup(shop, latestLocal, cloudRevision)" in recovery
+    assert recovery.index("Backup(shop, latestLocal, cloudRevision)") < recovery.index("TryReplaceAllIfUnchanged")
+    assert "local_changed_during_tombstone_recovery" in recovery
+    assert "PersistState(shop, state, cloudRevision, cloudFingerprint)" in recovery
