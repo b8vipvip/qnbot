@@ -337,6 +337,13 @@ def setup_v2_revision_cp(tmp_path):
             """
             CREATE TABLE client_tokens(id INTEGER PRIMARY KEY);
             INSERT INTO client_tokens(id) VALUES(1);
+            CREATE TABLE bot_client_shop_binding(
+                client_id INTEGER PRIMARY KEY,
+                shop_key TEXT NOT NULL,
+                seller TEXT NOT NULL DEFAULT '',
+                bound_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE bot_commands(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 client_id INTEGER NOT NULL,
