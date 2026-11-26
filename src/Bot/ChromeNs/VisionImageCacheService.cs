@@ -478,8 +478,14 @@ namespace Bot.ChromeNs
             if (shop == null) return true;
             var record = FindRecord(
                 messageKey, VisionImageResolver.ExtractUrl(message), shop.ShopKey, seller, buyer);
-            // Withdrawal is a message-scoped tombstone. A previous withdrawn image in the
-            // same conversation must never suppress a later, unrelated image.
+            // The in-memory cache is deliberately short-lived and is rebuilt after restart.
+            // The durable observation tombstone is the source of truth for replayed messages.
+            // Keep the message-key guard so a withdrawn earlier image cannot suppress a
+            // different later image in the same conversation.
+            if (!string.IsNullOrWhiteSpace(messageKey)
+                && VisualKnowledgeLearningService.IsObservationWithdrawn(
+                    shop.ShopKey, seller, buyer, messageKey))
+                return true;
             return record != null && record.Withdrawn;
         }
 
@@ -491,7 +497,9 @@ namespace Bot.ChromeNs
             if (shop == null || !string.Equals(shop.ShopKey, shopKey, StringComparison.Ordinal))
                 return true;
             var record = FindRecord(messageKey, string.Empty, shop.ShopKey, seller, buyer);
-            return record != null && record.Withdrawn;
+            return (record != null && record.Withdrawn)
+                || VisualKnowledgeLearningService.IsObservationWithdrawn(
+                    shop.ShopKey, seller, buyer, messageKey);
         }
 
         public static async Task<string> TryGetCachedImagePathAsync(

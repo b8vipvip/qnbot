@@ -255,3 +255,18 @@ def test_withdrawal_notice_after_restart_falls_back_to_durable_visual_observatio
     assert "VisualKnowledgeLearningService.FindLatestObservationMessageKey(" in withdraw
     assert "MarkObservationWithdrawn(" in withdraw
     assert "FindLatestObservationMessageKey" in learning
+
+
+def test_vision_withdrawal_checks_durable_observation_tombstone_after_cache_restart():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    is_withdrawn = cache.split("public static bool IsWithdrawn(", 1)[1].split(
+        "internal static bool IsMessageKeyWithdrawn", 1
+    )[0]
+    by_message_key = cache.split("internal static bool IsMessageKeyWithdrawn(", 1)[1].split(
+        "public static async Task<string> TryGetCachedImagePathAsync", 1
+    )[0]
+    assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in is_withdrawn
+    assert "!string.IsNullOrWhiteSpace(messageKey)" in is_withdrawn
+    assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in by_message_key
+    assert "record != null && record.Withdrawn" in is_withdrawn
+    assert "record != null && record.Withdrawn" in by_message_key
