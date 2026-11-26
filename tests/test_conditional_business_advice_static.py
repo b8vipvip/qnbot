@@ -207,3 +207,31 @@ def test_acceptance_script_never_exports_raw_order_or_buyer_identifiers():
     assert "BuyerNick" not in script
     assert "HMAC" in script
     assert "RecentEvents" in script
+
+
+def test_conditional_advice_revalidates_latest_order_item_and_sku_before_send():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    method = source[
+        source.index("public static bool IsEvidenceStillValid"):
+        source.index("public static bool TryReserveDelivery")
+    ]
+    assert ".OrderByDescending(x => x.EventTime)" in method
+    assert ".ThenByDescending(x => x.DetectedAt)" in method
+    assert "order.ItemId" in method
+    assert "Compact(order.ItemTitle)" in method
+    assert "Compact(order.SkuText)" in method
+    assert "ConditionalAdviceItemTitle" in source
+    assert "ConditionalAdviceSkuText" in source
+    assert "device_support" not in source
+
+
+def test_cancelled_retry_does_not_release_a_key_after_an_earlier_send_may_have_started():
+    for path in (
+        "src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs",
+        "src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs",
+        "src/Bot/ChromeNs/QN.cs",
+    ):
+        source = read(path)
+        assert "conditionalAdviceSendMayHaveStarted" in source
+        assert "sendCancelled && !conditionalAdviceSendMayHaveStarted" in source
+        assert "!conditionalAdviceSendMayHaveStarted" in source
