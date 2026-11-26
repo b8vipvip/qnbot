@@ -201,6 +201,8 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick
                     + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
+                if (string.IsNullOrWhiteSpace(commercePrompt))
+                    return KnowledgeV2RuntimeResult.Continue();
                 return KnowledgeV2RuntimeResult.Continue(commercePrompt);
             }
 
