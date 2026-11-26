@@ -53,6 +53,17 @@ def init_db():
                 FOREIGN KEY(client_id) REFERENCES client_tokens(id) ON DELETE CASCADE
             )
         """)
+        # Canonical V2 corpus is shared by every client token bound to the same
+        # ShopKey. The client_id table above remains as a migration/fallback source.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_knowledge_v2_shop_state (
+                shop_key TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 0,
+                records_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL DEFAULT '',
+                updated_by TEXT NOT NULL DEFAULT ''
+            )
+        """)
 
 def _validate_records(records):
     if not isinstance(records, list):
@@ -125,6 +136,126 @@ def _state(client_id):
         return {"revision":0,"records":[],"updated_at":"","updated_by":""}
     return {"revision":int(row["revision"] or 0),"records":json.loads(row["records_json"] or "[]"),"updated_at":row["updated_at"] or "","updated_by":row["updated_by"] or ""}
 
+def _client_shop_key(client_id):
+    with _cp.db() as conn:
+        row = conn.execute(
+            "SELECT shop_key FROM bot_client_shop_binding WHERE client_id=?",
+            (int(client_id),),
+        ).fetchone()
+    return ((row["shop_key"] if row else "") or "").strip()
+
+
+def _state_for_shop(shop_key, seed_client_id=None):
+    shop_key = (shop_key or "").strip()
+    if not shop_key:
+        raise HTTPException(status_code=400, detail="ShopKey 不能为空")
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT revision,records_json,updated_at,updated_by FROM bot_knowledge_v2_shop_state WHERE shop_key=?",
+            (shop_key,),
+        ).fetchone()
+        if row:
+            return {
+                "revision": int(row["revision"] or 0),
+                "records": json.loads(row["records_json"] or "[]"),
+                "updated_at": row["updated_at"] or "",
+                "updated_by": row["updated_by"] or "",
+            }
+
+        # Existing installs may have token-scoped snapshots. Seed the new shared
+        # ShopKey namespace from the newest legacy snapshot and advance beyond every
+        # legacy revision for this shop. Each other device will then receive the
+        # shared baseline and merge its own local-only edits before its next CAS save.
+        legacy_rows = conn.execute(
+            """SELECT s.client_id,s.revision,s.records_json,s.updated_at,s.updated_by
+               FROM bot_knowledge_v2_state s
+               JOIN bot_client_shop_binding b ON b.client_id=s.client_id
+               WHERE b.shop_key=?
+               ORDER BY s.revision DESC,s.updated_at DESC,s.client_id ASC""",
+            (shop_key,),
+        ).fetchall()
+        if not legacy_rows and seed_client_id is not None:
+            legacy = conn.execute(
+                "SELECT client_id,revision,records_json,updated_at,updated_by FROM bot_knowledge_v2_state WHERE client_id=?",
+                (int(seed_client_id),),
+            ).fetchone()
+            legacy_rows = [legacy] if legacy else []
+
+        if not legacy_rows:
+            return {"revision": 0, "records": [], "updated_at": "", "updated_by": ""}
+
+        selected = legacy_rows[0]
+        max_legacy_revision = max(int(item["revision"] or 0) for item in legacy_rows)
+        revision = max_legacy_revision + 1
+        now = _cp.iso_now()
+        records_json = selected["records_json"] or "[]"
+        records = json.loads(records_json)
+        if not isinstance(records, list):
+            raise HTTPException(status_code=503, detail="旧版 Knowledge V2 云端快照格式无效")
+        conn.execute(
+            """INSERT INTO bot_knowledge_v2_shop_state
+               (shop_key,revision,records_json,updated_at,updated_by)
+               VALUES(?,?,?,?,?)""",
+            (shop_key, revision, records_json, now, "shop_key_migration"),
+        )
+        return {
+            "revision": revision,
+            "records": records,
+            "updated_at": now,
+            "updated_by": "shop_key_migration",
+        }
+
+
+def _save_shop(shop_key, records, updated_by, expected_revision=None, raise_on_conflict=False):
+    records = _validate_records(records)
+    encoded = json.dumps(records, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    now = _cp.iso_now()
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT revision,records_json,updated_at,updated_by FROM bot_knowledge_v2_shop_state WHERE shop_key=?",
+            (shop_key,),
+        ).fetchone()
+        if not row:
+            current = {"revision": 0, "records": [], "updated_at": "", "updated_by": ""}
+        else:
+            current = {
+                "revision": int(row["revision"] or 0),
+                "records": json.loads(row["records_json"] or "[]"),
+                "updated_at": row["updated_at"] or "",
+                "updated_by": row["updated_by"] or "",
+            }
+        if expected_revision is not None and current["revision"] != expected_revision:
+            if raise_on_conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "revision_conflict",
+                        "message": "Knowledge V2 云端版本已被另一设备修改，请刷新后重试",
+                        "current_revision": current["revision"],
+                    },
+                )
+            return current
+        current_encoded = json.dumps(
+            current["records"], ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        if encoded == current_encoded:
+            return current
+        revision = current["revision"] + 1
+        conn.execute(
+            """INSERT INTO bot_knowledge_v2_shop_state(shop_key,revision,records_json,updated_at,updated_by)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(shop_key) DO UPDATE SET
+                 revision=excluded.revision,
+                 records_json=excluded.records_json,
+                 updated_at=excluded.updated_at,
+                 updated_by=excluded.updated_by""",
+            (shop_key, revision, encoded, now, updated_by),
+        )
+        return {"revision": revision, "records": records, "updated_at": now, "updated_by": updated_by}
+
+
 def _save(client_id, records, updated_by, expected_revision=None, raise_on_conflict=False):
     records=_validate_records(records)
     encoded=json.dumps(records,ensure_ascii=False,separators=(",",":"),sort_keys=True)
@@ -168,12 +299,27 @@ def _save(client_id, records, updated_by, expected_revision=None, raise_on_confl
 
 @router.get("/api/bot-web/knowledge-v2")
 def web_get(client=Depends(bot_web_console._web_client)):
-    return _state(int(client["id"]))
+    client_id = int(client["id"])
+    shop_key = _client_shop_key(client_id)
+    if not shop_key:
+        return _state(client_id)
+    return _state_for_shop(shop_key, client_id)
 
 @router.put("/api/bot-web/knowledge-v2")
 def web_put(payload: KnowledgeV2WebInput, client=Depends(bot_web_console._web_client)):
-    return _save(
-        int(client["id"]),
+    client_id = int(client["id"])
+    shop_key = _client_shop_key(client_id)
+    if not shop_key:
+        return _save(
+            client_id,
+            payload.records,
+            "web",
+            expected_revision=payload.expected_revision,
+            raise_on_conflict=True,
+        )
+    _state_for_shop(shop_key, client_id)
+    return _save_shop(
+        shop_key,
         payload.records,
         "web",
         expected_revision=payload.expected_revision,
@@ -187,19 +333,21 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
     shop_key=(x_shop_key or "").strip()
     if not shop_key:
         raise HTTPException(status_code=400,detail="缺少 X-Shop-Key")
+    bound_shop_key = _client_shop_key(client_id)
+    if not bound_shop_key or bound_shop_key != shop_key:
+        raise HTTPException(status_code=409,detail="Bot 客户端令牌尚未绑定当前 ShopKey")
     if payload.revision < 0:
         raise HTTPException(status_code=400,detail="revision 无效")
-    current=_state(client_id)
-    # First Windows report seeds cloud state. Later, a newer cloud revision wins and is
-    # returned to Windows; an equal revision with changed local data is treated as a
-    # Windows-originated update. This keeps the existing local repository authoritative
-    # during first adoption without allowing stale clients to overwrite Web changes.
+    current=_state_for_shop(shop_key,client_id)
+    # All client tokens bound to one ShopKey share this revision namespace. A legacy
+    # token snapshot is migrated above the maximum old revision so each device must
+    # first receive the shared baseline and reconcile its own local-only edits.
     if current["revision"] == 0 and payload.records is not None:
-        return _save(client_id,payload.records,"windows",expected_revision=0)
+        return _save_shop(shop_key,payload.records,"windows",expected_revision=0)
     if current["revision"] > payload.revision:
         return current
     if payload.records is not None:
-        return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
+        return _save_shop(shop_key,payload.records,"windows",expected_revision=payload.revision)
     return current
 
 
