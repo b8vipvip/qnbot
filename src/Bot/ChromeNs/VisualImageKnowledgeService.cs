@@ -390,7 +390,13 @@ namespace Bot.ChromeNs
                 var data = wrapper["item"] as JObject ?? wrapper;
                 actions.Add(Tuple.Create(data.Value<long?>("revision") ?? 0, kind, data, wrapper));
             }
-            foreach (var action in actions.OrderBy(x => x.Item1))
+            foreach (var action in actions
+                .OrderBy(x => x.Item1)
+                // The server may return the same canonical image in both its delta and
+                // duplicate-ID conflict list. Re-key the local duplicate first, otherwise
+                // the ordinary upsert hits the ShopKey/image-hash unique index and blocks
+                // the conflict wrapper that tells us which local ID must be adopted.
+                .ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1))
             {
                 var kind = action.Item2;
                 var data = action.Item3;
