@@ -194,7 +194,9 @@ namespace Bot.Knowledge
             _conditions = Field(panel, "适用条件", true, 58);
             _exclusions = Field(panel, "排除条件", true, 58);
             _required = Field(panel, "必要上下文", true, 58);
+            _required.ToolTip = "可填写通用证据条件（每行一项）。条件性售后建议可使用：evidence:image.matches_record、evidence:order.paid、evidence:order.open、evidence:order.product_matches_record。图片知识本身不限定行业；只有明确依赖订单的知识才填写订单证据条件。";
             _products = Field(panel, "绑定商品ID", true, 48);
+            _products.ToolTip = "可填写当前知识适用的商品ID；订单条件性建议会核对订单商品ID，避免跨商品误答。";
             _risk = Combo(panel, "风险等级", new[] { "normal", "high" });
             _confidence = Field(panel, "可信度 0~1", false, 30);
             _authority = Field(panel, "权威度 0~1", false, 30);
