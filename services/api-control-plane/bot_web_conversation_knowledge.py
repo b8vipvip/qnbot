@@ -7,7 +7,7 @@ import json
 import mimetypes
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -253,6 +253,30 @@ def _hash_items(items: List[Dict[str, Any]]) -> str:
 def _safe_text(value: Any, limit: int) -> str:
     text = str(value or "").replace("\x00", "").strip()
     return text if len(text) <= limit else text[:limit]
+
+
+def _sync_revision(value: Any, field: str) -> int:
+    try:
+        revision = int(value if value is not None else 0)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail=f"图片知识{field}无效")
+    if revision < 0:
+        raise HTTPException(status_code=400, detail=f"图片知识{field}不能为负数")
+    return revision
+
+
+def _sync_timestamp(value: Any, field: str, fallback: str) -> str:
+    raw = _safe_text(value, 64)
+    if not raw:
+        return fallback
+    try:
+        normalized = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("timezone is required")
+        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail=f"图片知识{field}必须是带时区的ISO-8601时间")
 
 
 def _normalize_item(item: Dict[str, Any], existing_id: str = "") -> Dict[str, Any]:
@@ -748,7 +772,7 @@ def runtime_image_knowledge_sync(
                 str(item.get("mime_type") or ""),
                 str(item.get("image_sha256") or ""),
             )
-            base_revision = max(0, int(item.get("base_revision") or 0))
+            base_revision = _sync_revision(item.get("base_revision"), "base_revision")
             global_id = conn.execute(
                 "SELECT client_id,shop_key FROM bot_web_image_knowledge WHERE id=?",
                 (image_id,),
@@ -790,7 +814,10 @@ def runtime_image_knowledge_sync(
                 continue
             now = _now()
             revision = _next_image_revision(conn, client_id, data.shop_key)
-            updated_at = _safe_text(item.get("updated_at"), 64) or now
+            updated_at = _sync_timestamp(item.get("updated_at"), "updated_at", now)
+            enabled_value = item.get("enabled", True)
+            if not isinstance(enabled_value, bool):
+                raise HTTPException(status_code=400, detail="图片知识enabled必须是布尔值")
             image_name = _safe_text(item.get("image_name"), 180) or "图片-" + digest[:12]
             description = _safe_text(item.get("description"), 1200)
             if not description:
@@ -808,7 +835,7 @@ def runtime_image_knowledge_sync(
                    WHERE bot_web_image_knowledge.client_id=excluded.client_id
                      AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
                 (image_id, client_id, data.shop_key, canonical, image_name, mime, digest, raw,
-                 _safe_text(item.get("ocr_text"), 12000), description, 1 if bool(item.get("enabled", True)) else 0,
+                 _safe_text(item.get("ocr_text"), 12000), description, 1 if enabled_value else 0,
                  revision, "windows", now, updated_at),
             )
             conn.execute(
@@ -820,7 +847,7 @@ def runtime_image_knowledge_sync(
             image_id = _safe_text(item.get("id"), 80)
             if not image_id:
                 continue
-            base_revision = max(0, int(item.get("base_revision") or 0))
+            base_revision = _sync_revision(item.get("base_revision"), "base_revision")
             current = conn.execute(
                 "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
                 (client_id, data.shop_key, canonical, image_id),
@@ -837,7 +864,7 @@ def runtime_image_knowledge_sync(
                     conflicts.append({"kind":"delete","item":_image_tombstone_payload(tombstone)})
                 continue
             revision = _next_image_revision(conn, client_id, data.shop_key)
-            deleted_at = _safe_text(item.get("deleted_at"), 64) or _now()
+            deleted_at = _sync_timestamp(item.get("deleted_at"), "deleted_at", _now())
             conn.execute(
                 "DELETE FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=? AND id=?",
                 (client_id, data.shop_key, canonical, image_id),
