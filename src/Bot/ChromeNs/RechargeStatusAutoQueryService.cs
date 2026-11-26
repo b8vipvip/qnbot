@@ -105,8 +105,18 @@ namespace Bot.ChromeNs
                         {
                             object marker;
                             if (Attached.TryGetValue(qn, out marker)) continue;
-                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                            Attached.Add(qn, new object());
+                            var subscriptionAttempted = false;
+                            try
+                            {
+                                subscriptionAttempted = true;
+                                qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                                Attached.Add(qn, new object());
+                            }
+                            catch
+                            {
+                                if (subscriptionAttempted) { try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { } }
+                                throw;
+                            }
                         }
                         Log.Info("充值结果自动查询已绑定: seller="
                             + (qn.Seller == null ? string.Empty : qn.Seller.Nick));

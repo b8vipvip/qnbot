@@ -86,8 +86,18 @@ namespace Bot.ChromeNs
                             object marker;
                             if (!Subscribed.TryGetValue(qn, out marker))
                             {
-                                qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
-                                Subscribed.Add(qn, new object());
+                                var subscriptionAttempted = false;
+                                try
+                                {
+                                    subscriptionAttempted = true;
+                                    qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
+                                    Subscribed.Add(qn, new object());
+                                }
+                                catch
+                                {
+                                    if (subscriptionAttempted) { try { qn.EvRecieveNewMessage -= Qn_EvRecieveNewMessage; } catch { } }
+                                    throw;
+                                }
                             }
                         }
                         ScheduleConversationProbe(qn);

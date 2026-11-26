@@ -77,8 +77,18 @@ namespace Bot.ChromeNs
                         {
                             object marker;
                             if (Attached.TryGetValue(qn, out marker)) continue;
-                            qn.EvMessageNotity += OnMessageNotify;
-                            Attached.Add(qn, new object());
+                            var subscriptionAttempted = false;
+                            try
+                            {
+                                subscriptionAttempted = true;
+                                qn.EvMessageNotity += OnMessageNotify;
+                                Attached.Add(qn, new object());
+                            }
+                            catch
+                            {
+                                if (subscriptionAttempted) { try { qn.EvMessageNotity -= OnMessageNotify; } catch { } }
+                                throw;
+                            }
                         }
                     }
                     catch (Exception ex)
