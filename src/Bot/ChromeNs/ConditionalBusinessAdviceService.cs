@@ -174,7 +174,10 @@ namespace Bot.ChromeNs
             if (image == null) return false;
 
             var imageObservedAt = SafeTime(image.ObservedAtTicks);
-            if (imageObservedAt == DateTime.MinValue || imageObservedAt < commerce.EvidenceTime)
+            var orderEvidenceTime = order.PaidAt
+                ?? (order.EventType == OrderEventType.Paid ? order.EventTime : commerce.EvidenceTime);
+            if (imageObservedAt == DateTime.MinValue || orderEvidenceTime == DateTime.MinValue
+                || imageObservedAt < orderEvidenceTime)
                 return false;
 
             var activeImage = VisualImageKnowledgeService.Load(shopKey, seller)
@@ -196,7 +199,7 @@ namespace Bot.ChromeNs
                 HasStructuredOrder = commerce.HasStructuredOrder,
                 IsPaid = commerce.IsPaid,
                 OrderEventType = commerce.OrderEventType,
-                OrderEvidenceTime = commerce.EvidenceTime,
+                OrderEvidenceTime = orderEvidenceTime,
                 ImageKnowledgeId = image.MatchedImageKnowledgeId,
                 ImageMessageKey = image.MessageKey,
                 ImageDescription = image.VisualSummary,
@@ -342,8 +345,11 @@ namespace Bot.ChromeNs
                         && !string.IsNullOrWhiteSpace(x.OcrImageSha256));
                 if (image == null) return false;
                 var imageTime = SafeTime(image.ObservedAtTicks);
-                var orderTime = order.EventTime == DateTime.MinValue ? order.DetectedAt : order.EventTime;
-                return imageTime != DateTime.MinValue && imageTime >= orderTime;
+                var orderTime = order.PaidAt
+                    ?? (order.EventType == OrderEventType.Paid
+                        ? order.EventTime
+                        : (order.EventTime == DateTime.MinValue ? order.DetectedAt : order.EventTime));
+                return imageTime != DateTime.MinValue && orderTime != DateTime.MinValue && imageTime >= orderTime;
             }
             catch (Exception ex)
             {
