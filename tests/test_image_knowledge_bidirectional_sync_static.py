@@ -323,3 +323,13 @@ def test_image_save_and_remote_delete_commit_row_and_tombstone_as_single_sqlite_
     assert "DbHelper.Db.RunInTransaction(conn =>" in remote_delete
     assert "ImageSha256" in remote_delete
     assert "TryDeleteManagedImage(old.ImagePath" in remote_delete
+
+
+def test_duplicate_id_conflict_mapping_is_applied_before_same_revision_cloud_delta_upsert():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    apply = service.split("public static void ApplyCloudSyncResponse", 1)[1].split(
+        "private static bool ReconcileDeletedImageByHash", 1
+    )[0]
+    assert ".OrderBy(x => x.Item1)" in apply
+    assert '.ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1)' in apply
+    assert "Re-key the local duplicate first" in apply
