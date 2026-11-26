@@ -539,6 +539,7 @@ namespace Bot.Knowledge
             _grid.Columns.Add(new DataGridTextColumn { Header = "买家", Binding = new Binding("Buyer"), Width = 150 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "订单号", Binding = new Binding("OrderId"), Width = 170 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "知识记录", Binding = new Binding("AdviceKey"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "记录来源", Binding = new Binding("SourceLabel"), Width = 120 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "状态更新时间", Binding = new Binding("UpdatedAt"), Width = 160 });
             root.Children.Add(_grid);
 
@@ -569,19 +570,30 @@ namespace Bot.Knowledge
         private void RefreshItems()
         {
             _status.Text = "正在读取待核对记录…";
-            Task.Run(() => ConditionalBusinessAdviceService.GetPendingReconciliationRecords(_shopKey, _seller))
-                .ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
+            Task.Run(() =>
+            {
+                string remoteStatus;
+                var items = ConditionalBusinessAdviceService.GetPendingReconciliationRecords(
+                    _shopKey, _seller, out remoteStatus);
+                return new { Items = items, RemoteStatus = remoteStatus ?? string.Empty };
+            }).ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (task.IsFaulted)
                 {
-                    if (task.IsFaulted)
-                    {
-                        _status.Text = "读取失败：" + task.Exception.GetBaseException().Message;
-                        return;
-                    }
-                    _items.Clear();
-                    foreach (var item in task.Result ?? new List<ConditionalBusinessAdviceReconciliationItem>())
-                        _items.Add(item);
-                    _status.Text = "待核对记录：" + _items.Count;
-                })));
+                    _status.Text = "读取失败：" + task.Exception.GetBaseException().Message;
+                    _status.Foreground = Brushes.DarkRed;
+                    return;
+                }
+                _items.Clear();
+                foreach (var item in task.Result.Items ?? new List<ConditionalBusinessAdviceReconciliationItem>())
+                    _items.Add(item);
+                _status.Text = "待核对记录：" + _items.Count + "；" + task.Result.RemoteStatus;
+                _status.Foreground = task.Result.RemoteStatus.IndexOf(
+                    "失败", StringComparison.Ordinal) >= 0
+                    || task.Result.RemoteStatus.IndexOf("无法", StringComparison.Ordinal) >= 0
+                    ? Brushes.DarkRed
+                    : Brushes.DimGray;
+            })));
         }
 
         private void ResolveSelected(bool confirmedDelivered)
