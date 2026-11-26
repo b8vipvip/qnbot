@@ -22,7 +22,8 @@ def test_windows_image_knowledge_has_per_shop_delta_state_and_conflict_safe_appl
     assert "since_revision" in service
     assert "base_revision" in service
     assert "pendingImageBytes" in service
-    assert "actions.OrderBy(x => x.Item1)" in service
+    assert ".OrderBy(x => x.Item1)" in service
+    assert '.ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1)' in service
     assert "SyncImageKnowledgeAsync" in sync
     assert '"/api/runtime/v1/bot-web/image-knowledge/sync"' in sync
     assert '"X-Shop-Key"' in sync
@@ -201,7 +202,8 @@ def test_windows_sqlite_enforces_shopkey_image_knowledge_id_and_hash_boundaries(
     final_write = save.split("            try\n            {", 1)[1].split("            catch", 1)[0]
     assert "currentGlobalId" in final_write
     assert "currentDuplicate" in final_write
-    assert final_write.index("currentDuplicate") < final_write.index("SaveRecordsInTransaction")
+    assert final_write.index("currentDuplicate") < final_write.index("RunInTransaction")
+    assert "conn.InsertOrReplace(entry)" in final_write
 
 
 def test_captioned_buyer_images_keep_their_question_and_offer_import_action():
