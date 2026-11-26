@@ -208,7 +208,11 @@ namespace Bot.ChromeNs
                 QueueWarm(burst.ShopKey, burst.SellerNick);
                 Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
                     + burst.BuyerNick);
-                return KnowledgeV2RuntimeResult.Continue();
+                var warmContext = conditionalOnly
+                    ? ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext)
+                    : string.Empty;
+                return KnowledgeV2RuntimeResult.Continue(warmContext);
             }
 
             KnowledgeV2Decision decision;
