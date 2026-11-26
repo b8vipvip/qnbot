@@ -544,6 +544,51 @@ namespace Bot.ChromeNs
             throw new InvalidOperationException("控制面条件性建议请求失败：" + Safe(lastError == null ? string.Empty : lastError.Message, 180));
         }
 
+        public static bool RenewDistributedDelivery(
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string adviceKey,
+            out string reason)
+        {
+            reason = string.Empty;
+            var localKey = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
+            ConditionalBusinessAdviceDistributedLease lease;
+            if (!DistributedLeases.TryGetValue(localKey, out lease) || lease == null
+                || string.IsNullOrWhiteSpace(lease.LeaseToken))
+            {
+                reason = "当前发送实例不再持有全局条件性建议租约";
+                return false;
+            }
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var payload = new JObject
+                {
+                    ["buyer"] = buyer,
+                    ["order_id"] = orderId,
+                    ["advice_key"] = adviceKey,
+                    ["lease_token"] = lease.LeaseToken,
+                    ["lease_seconds"] = DistributedLeaseSeconds
+                };
+                var root = SendDistributedAdviceRequest(
+                    shop, HttpMethod.Post,
+                    "/api/runtime/v1/bot-web/conditional-business-advice/renew", payload);
+                if (root["renewed"] != null && root["renewed"].Type == JTokenType.Boolean
+                    && root["renewed"].Value<bool>())
+                    return true;
+                reason = "服务端全局条件性建议租约已失效或已被人工核对，禁止发送";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                reason = "无法续租全局条件性建议发送锁：" + Safe(ex.Message, 180);
+                Log.ErrorWithMaxCount(reason, 10);
+                return false;
+            }
+        }
+
         private static bool TryClaimDistributedDelivery(
             string shopKey,
             string buyer,
