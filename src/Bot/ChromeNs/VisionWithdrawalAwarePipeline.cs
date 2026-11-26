@@ -457,6 +457,9 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // Once any attempt passes the final guard, a later cancellation cannot
+            // prove that an earlier attempt was not delivered.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> preSendGuard = () =>
             {
                 if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
@@ -487,8 +490,11 @@ namespace Bot.ChromeNs
                         + latestRelevanceReason);
                     return false;
                 }
-                return workflowDecision == null || !workflowDecision.RequiresSend
+                var workflowCurrent = workflowDecision == null || !workflowDecision.RequiresSend
                     || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+                if (workflowCurrent && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
+                return workflowCurrent;
             };
 
             bool sendOk;
@@ -502,7 +508,7 @@ namespace Bot.ChromeNs
                 if (conditionalAdviceReserved)
                     ConditionalBusinessAdviceService.CompleteDelivery(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
-                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
                 ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
@@ -528,7 +534,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
-                    sendOk, sendCancelled);
+                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
