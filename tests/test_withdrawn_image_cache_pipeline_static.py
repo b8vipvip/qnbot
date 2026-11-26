@@ -244,3 +244,14 @@ def test_delayed_withdrawal_notice_cannot_mark_an_image_that_arrived_after_the_n
     assert "SameConversation(seller, buyer, x.SellerNick, x.BuyerNick)" in method
     assert "ThenBy(x => x.MessageKey, StringComparer.Ordinal)" in method
 
+
+
+def test_withdrawal_notice_after_restart_falls_back_to_durable_visual_observation():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    withdraw = cache.split("public static void MarkLatestBuyerImageWithdrawn", 1)[1].split(
+        "public static async Task<VisionImageResult> ResolveAsync", 1
+    )[0]
+    assert "VisualKnowledgeLearningService.FindLatestObservationMessageKey(" in withdraw
+    assert "MarkObservationWithdrawn(" in withdraw
+    assert "FindLatestObservationMessageKey" in learning

@@ -135,3 +135,32 @@ def test_visual_learning_restart_recovers_all_pending_observations_within_retent
     assert "ObservedAtTicks >= ?" not in resume
     assert "AddDays(-1)" not in resume
     assert "观察时间无效，需人工复核" in resume
+
+
+def test_withdrawal_observation_tombstones_are_not_expired_or_evicted_with_normal_learning_rows():
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    cleanup = learning.split("private static void Cleanup()", 1)[1].split(
+        "private static double Similarity", 1
+    )[0]
+    assert "coalesce(Status,'') <> ?" in cleanup
+    assert '"图片已撤回"' in cleanup
+    assert "ObservationRetentionDays" in cleanup
+    assert "MaxObservations" in cleanup
+    assert "never evict withdrawal tombstones" in cleanup
+
+
+def test_withdrawal_after_restart_can_recover_recent_image_identity_from_persisted_observation():
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    lookup = learning.split("internal static string FindLatestObservationMessageKey", 1)[1].split(
+        "internal static void MarkObservationWithdrawn", 1
+    )[0]
+    withdraw = cache.split("public static void MarkLatestBuyerImageWithdrawn", 1)[1].split(
+        "public static async Task<VisionImageResult> ResolveAsync", 1
+    )[0]
+    assert "FindLatestObservationMessageKey(" in cache
+    assert "VisualKnowledgeLearningService.FindLatestObservationMessageKey(" in withdraw
+    assert "notBefore.Ticks" in lookup and "notAfter.Ticks" in lookup
+    assert "SameBuyerForWithdrawal" in lookup
+    assert "图片已撤回" in lookup
+    assert "持久化视觉观察均未找到" in withdraw
