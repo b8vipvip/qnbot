@@ -21,6 +21,7 @@ import bot_web_conversation_knowledge
 import bot_web_settings_ack
 import chat2api_runtime_guard
 import client_data_backup
+import conditional_business_advice
 import console_cache_guard
 import deep_test_guard
 import github_vless_proxy
@@ -70,6 +71,7 @@ bot_web_ai_model_settings.install(control_plane, bot_web_console)
 bot_web_auto_reply_rules.install(control_plane, bot_web_console)
 bot_web_settings_ack.install(control_plane, bot_web_console)
 bot_client_shop_binding.install(control_plane)
+conditional_business_advice.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
 version_update_admin.install(control_plane)
@@ -104,6 +106,7 @@ def initialize_control_plane_extensions() -> None:
     message_processing_traces.init_db()
     ai_request_records.init_db()
     knowledge_v2_sync.init_db()
+    conditional_business_advice.init_db()
     github_vless_proxy.init_github_vless_proxy()
     bot_update_cache.init_bot_update_cache()
     bot_update_prefetch.init_bot_update_prefetch()
