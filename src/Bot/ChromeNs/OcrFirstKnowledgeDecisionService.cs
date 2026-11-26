@@ -398,6 +398,8 @@ namespace Bot.ChromeNs
                 ConditionalAdviceKey = decision.ConditionalAdviceKey,
                 ConditionalAdviceOrderId = decision.ConditionalAdviceOrderId,
                 ConditionalAdviceItemId = decision.ConditionalAdviceItemId,
+                ConditionalAdviceItemTitle = decision.ConditionalAdviceItemTitle,
+                ConditionalAdviceSkuText = decision.ConditionalAdviceSkuText,
                 ConditionalAdviceImageMessageKey = decision.ConditionalAdviceImageMessageKey,
                 ConditionalAdviceImageKnowledgeId = decision.ConditionalAdviceImageKnowledgeId
             };
