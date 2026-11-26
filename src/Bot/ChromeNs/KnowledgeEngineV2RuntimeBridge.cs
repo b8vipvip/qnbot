@@ -241,8 +241,7 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    decision = KnowledgeEngineV2Service.Resolve(
-                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
                 }
             }
             catch (Exception ex)
