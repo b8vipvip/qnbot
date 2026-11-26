@@ -29,7 +29,8 @@ def test_suffix_setting_is_shop_scoped_and_defaults_to_ai_marker():
 def test_final_send_path_applies_suffix_before_echo_tracking_and_retry():
     source = read("src/Bot/ChromeNs/QN.cs")
     start = source.index("public async Task<bool> SendTextWithRetryAsync")
-    block = source[start:start + 5000]
+    end = source.index("private bool IsPreSendGuardSatisfied", start)
+    block = source[start:end]
     apply_pos = block.index("BotMessageSuffixService.Apply(")
     gate_pos = block.index("await _sendGate.WaitAsync(cancellationToken)")
     send_pos = block.index("var ok = await SendTextAsync(buyer, text, preSendGuard)")

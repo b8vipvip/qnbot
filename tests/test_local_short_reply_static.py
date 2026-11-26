@@ -41,6 +41,7 @@ def test_defaults_cover_common_acknowledgement_thanks_wait_solved_and_closing_ph
         "好的", "好", "OK", "嗯", "收到", "知道了", "明白了",
         "谢谢", "辛苦了", "已经好了", "解决了", "稍等一下",
         "我试试", "不用了", "不好意思", "再见", "晚安",
+        "在么", "在吗", "请问在么", "客服在么", "亲在么", "亲亲在么", "哈喽在么",
     ]:
         assert phrase in service
 

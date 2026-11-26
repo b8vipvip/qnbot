@@ -30,9 +30,11 @@ namespace Bot.ChromeNs
         private static readonly HashSet<string> GreetingOnlyTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "你好", "您好", "哈喽", "哈罗", "嗨", "hi", "hello", "hey",
-            "在吗", "在不在", "有人吗", "客服在吗", "客服", "亲", "亲亲",
+            "在吗", "在么", "请问在吗", "请问在么", "在不在", "有人吗",
+            "客服在吗", "客服在么", "客服", "亲", "亲亲",
             "早", "早上好", "上午好", "中午好", "下午好", "晚上好",
-            "你好在吗", "您好在吗", "亲在吗", "亲亲在吗", "哈喽在吗"
+            "你好在吗", "您好在吗", "亲在吗", "亲在么",
+            "亲亲在吗", "亲亲在么", "哈喽在吗", "哈喽在么"
         };
 
         private static readonly HashSet<string> MeaninglessOnlyTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

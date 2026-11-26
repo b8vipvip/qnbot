@@ -85,7 +85,10 @@ def test_first_inquiry_requires_substantive_actual_problem_and_keeps_buxing_mean
 
     greeting_block = service[service.index("GreetingOnlyTexts"):service.index("MeaninglessOnlyTexts")]
     noise_block = service[service.index("MeaninglessOnlyTexts"):service.index("private sealed class PendingReply")]
-    for text in ["你好", "您好", "在吗", "有人吗", "hi", "hello"]:
+    for text in [
+        "你好", "您好", "在吗", "在么", "请问在吗", "请问在么",
+        "有人吗", "客服在么", "亲在么", "亲亲在么", "hi", "hello",
+    ]:
         assert f'"{text}"' in greeting_block
     for text in ["嗯", "哦", "好的", "谢谢", "111", "666"]:
         assert f'"{text}"' in noise_block
