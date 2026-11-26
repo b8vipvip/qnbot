@@ -1026,42 +1026,72 @@ namespace Bot.ChromeNs
             bool delivered,
             bool cancelled)
         {
+            var key = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
+            ConditionalBusinessAdviceDistributedLease distributedLease;
+            DistributedLeases.TryGetValue(key, out distributedLease);
+
+            var localUpdated = false;
             var path = GetLedgerPath();
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
             lock (LedgerSync)
             {
-                if (!lease.Acquired) return;
-                string error;
-                var state = LoadLedger(path, out error);
-                if (state == null) return;
-                var key = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
-                var record = state.Records.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (record == null) return;
-                if (delivered)
+                if (lease.Acquired)
                 {
-                    record.DeliveredAt = DateTime.Now;
-                    record.DeliveryUncertain = false;
-                    record.ReservedUntil = DateTime.MinValue;
-                }
-                else if (cancelled)
-                {
-                    record.ReservedUntil = DateTime.MinValue;
-                    record.DeliveryUncertain = false;
+                    string error;
+                    var state = LoadLedger(path, out error);
+                    if (state != null)
+                    {
+                        var record = state.Records.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                        if (record != null)
+                        {
+                            if (delivered)
+                            {
+                                record.DeliveredAt = DateTime.Now;
+                                record.DeliveryUncertain = false;
+                                record.ReservedUntil = DateTime.MinValue;
+                            }
+                            else if (cancelled)
+                            {
+                                record.ReservedUntil = DateTime.MinValue;
+                                record.DeliveryUncertain = false;
+                            }
+                            else
+                            {
+                                // A failed send after entering the delivery call is ambiguous.
+                                // Hold the key until manual reconciliation.
+                                record.DeliveryUncertain = true;
+                                record.ReservedUntil = DateTime.MaxValue;
+                            }
+                            record.UpdatedAt = DateTime.Now;
+                            AppendDiagnosticEvent(state,
+                                delivered ? "delivery_sent" : (cancelled ? "delivery_cancelled" : "delivery_uncertain"),
+                                delivered ? "send_confirmed" : (cancelled ? "send_cancelled_before_delivery" : "send_outcome_uncertain"),
+                                shopKey, seller, buyer, orderId, string.Empty, string.Empty, adviceKey);
+                            localUpdated = SaveLedger(path, state, out error);
+                            if (!localUpdated)
+                                Log.ErrorWithMaxCount("条件性建议本机发送结果写回失败：" + Safe(error, 180), 10);
+                        }
+                    }
+                    else
+                    {
+                        Log.ErrorWithMaxCount("条件性建议本机账本不可读取，发送结果只尝试写入服务端：" + Safe(error, 180), 10);
+                    }
                 }
                 else
                 {
-                    // A failed send after entering the delivery call is ambiguous. Hold the
-                    // advice key until manual reconciliation instead of risking a duplicate.
-                    record.DeliveryUncertain = true;
-                    record.ReservedUntil = DateTime.MaxValue;
+                    Log.ErrorWithMaxCount("条件性建议本机账本锁不可用，发送结果只尝试写入服务端。", 10);
                 }
-                record.UpdatedAt = DateTime.Now;
-                AppendDiagnosticEvent(state,
-                    delivered ? "delivery_sent" : (cancelled ? "delivery_cancelled" : "delivery_uncertain"),
-                    delivered ? "send_confirmed" : (cancelled ? "send_cancelled_before_delivery" : "send_outcome_uncertain"),
-                    shopKey, seller, buyer, orderId, string.Empty, string.Empty, adviceKey);
-                SaveLedger(path, state, out error);
             }
+
+            if (distributedLease != null)
+            {
+                var outcome = delivered ? "delivered" : (cancelled ? "cancelled_before_send" : "uncertain");
+                CompleteDistributedDelivery(shopKey, buyer, orderId, adviceKey, distributedLease, outcome);
+                ConditionalBusinessAdviceDistributedLease ignored;
+                DistributedLeases.TryRemove(key, out ignored);
+            }
+            if (!localUpdated && distributedLease == null)
+                Log.ErrorWithMaxCount("条件性建议本机与服务端发送状态均无可用租约，需人工检查发送结果。", 10);
         }
 
         private static bool RejectBuild(
