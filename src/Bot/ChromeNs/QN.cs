@@ -1416,7 +1416,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
-                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             if (sendOk) lease.MarkCompleted("vision_send_completed");
             else if (sendCancelled) lease.MarkCompleted("vision_send_cancelled");
             else lease.MarkFailed("vision_send_failed");
