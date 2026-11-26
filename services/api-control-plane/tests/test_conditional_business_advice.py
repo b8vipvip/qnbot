@@ -195,3 +195,21 @@ def test_server_audit_events_never_store_raw_buyer_or_order_identifiers(advice_a
     assert "private-buyer" not in serialized
     assert "private-order" not in serialized
     assert "private-advice" not in serialized
+
+
+def test_concurrent_devices_have_exactly_one_global_winner(advice_api):
+    from concurrent.futures import ThreadPoolExecutor
+
+    shop = "qn_0123456789ab"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(
+            lambda index: claim(
+                advice_api,
+                100 + index,
+                shop,
+                request_id=("request-race-" + str(index).zfill(8)),
+            ),
+            range(8),
+        ))
+    assert sum(1 for item in results if item["claimed"]) == 1
+    assert all(item["state"] == "reserved" for item in results)
