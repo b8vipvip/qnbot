@@ -62,6 +62,14 @@ Run these against the same test shop with auto-reply enabled and record the diag
 
 Also verify that normal non-order image knowledge continues to work for unrelated shop types and does not require any order evidence unless its own record explicitly requests it.
 
+After each real scenario, run the existing read-only diagnostics command:
+
+```powershell
+powershell.exe -NoProfile -File scripts\\Invoke-QnBotAcceptanceDiagnostics.ps1
+```
+
+The report now includes the conditional-advice ledger summary and recent gate/delivery outcomes. It exposes only HMAC-pseudonymized Shop/Buyer/Order/Image/Knowledge/Advice references and fixed reason codes; it does not export raw buyer names, order IDs, image message IDs, chat text, or logs. `delivery_sent` means the client send call was confirmed by the local sender, not that a human buyer has visually acknowledged receipt.
+
 ## Windows package
 
 The branch is based on current `master`, which already contains #504 deterministic HitInfo matching and #505 curated-image short follow-up handling. The Windows release workflow builds the complete `Bin + data` package and intentionally excludes local `params.db`.
