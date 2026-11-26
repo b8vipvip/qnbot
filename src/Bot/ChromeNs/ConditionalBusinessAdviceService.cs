@@ -319,11 +319,8 @@ namespace Bot.ChromeNs
                 var afterSaleQuestion = string.Equals(record.Intent, "after_sale", StringComparison.OrdinalIgnoreCase)
                     && (string.Equals(record.Predicate, "refund_policy", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));
-                var compatibilityQuestion = string.Equals(record.Intent, "capability", StringComparison.OrdinalIgnoreCase)
-                    && (string.Equals(record.Predicate, "device_support", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));
                 if (!string.Equals(record.Type, "after_sale", StringComparison.OrdinalIgnoreCase)
-                    || !(afterSaleQuestion || compatibilityQuestion)
+                    || !afterSaleQuestion
                     || !string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
                     || record.Authority < 0.90d)
                     continue;
