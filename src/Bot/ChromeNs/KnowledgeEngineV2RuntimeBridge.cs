@@ -187,7 +187,8 @@ namespace Bot.ChromeNs
             var commerceAuthority = CommerceReplyAuthorityService.Evaluate(
                 burst.SellerNick,
                 burst.BuyerNick,
-                burst.CombinedQuestion);
+                burst.CombinedQuestion,
+                burst.ShopKey);
             var conditionalOnly = !commerceAuthority.AllowLocalTerminalReply;
             var typedEvidenceGateAttempted = false;
             ConditionalBusinessAdviceEvidence conditionalAdviceEvidence = null;
