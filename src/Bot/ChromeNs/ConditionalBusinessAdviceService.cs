@@ -942,6 +942,7 @@ namespace Bot.ChromeNs
             string buyer,
             string orderId,
             string adviceKey,
+            string remoteScopeHash,
             bool confirmedDelivered,
             out string reason)
         {
@@ -952,6 +953,14 @@ namespace Bot.ChromeNs
             {
                 reason = "核对记录缺少完整作用域标识";
                 return false;
+            }
+            remoteScopeHash = (remoteScopeHash ?? string.Empty).Trim();
+            var remoteResolved = false;
+            if (!string.IsNullOrWhiteSpace(remoteScopeHash))
+            {
+                if (!TryResolveRemoteUncertainDelivery(shopKey, remoteScopeHash, confirmedDelivered, out reason))
+                    return false;
+                remoteResolved = true;
             }
             var path = GetLedgerPath();
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
@@ -975,6 +984,13 @@ namespace Bot.ChromeNs
                 if (record == null || !record.DeliveryUncertain
                     || record.DeliveredAt != DateTime.MinValue)
                 {
+                    if (remoteResolved)
+                    {
+                        reason = confirmedDelivered
+                            ? "服务端已记录确认送达；本机没有对应待核对副本"
+                            : "服务端已解除不确定发送锁；本机没有对应待核对副本";
+                        return true;
+                    }
                     reason = "记录不存在或已不需要人工核对，请先刷新列表";
                     return false;
                 }
@@ -993,8 +1009,10 @@ namespace Bot.ChromeNs
                     return false;
                 }
                 reason = confirmedDelivered
-                    ? "已记录为确认送达，后续不会重复建议"
-                    : "已解除不确定发送锁；后续重试仍必须重新通过订单和图片证据门禁";
+                    ? (remoteResolved ? "已同步记录为确认送达，后续不会重复建议" : "已记录为确认送达，后续不会重复建议")
+                    : (remoteResolved
+                        ? "已同步解除跨设备不确定发送锁；后续重试仍必须重新通过订单和图片证据门禁"
+                        : "已解除不确定发送锁；后续重试仍必须重新通过订单和图片证据门禁");
                 return true;
             }
         }
