@@ -62,6 +62,7 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "order.PaidAt" in build
     assert "imageObservedAt < orderEvidenceTime" in build
     assert "VisualImageKnowledgeService.Load(shopKey, seller)" in build
+    assert "IsImageKnowledgeMatchStillValid(shopKey, seller, image)" in build
     assert "paidOpenOrders.Count > 1" in build
     assert ".GroupBy(x => x.OrderId.Trim(), StringComparer.Ordinal)" in build
 
@@ -87,6 +88,18 @@ def test_order_terminal_states_and_fulfilled_orders_block_refund_advice():
     assert "ClosedOrFulfilledRegex.IsMatch(status)" in method
     assert "order.IsPaid != true" in method
     assert "OrderEventType.Paid || PaidRegex.IsMatch(status)" in method
+
+
+def test_image_match_is_revalidated_against_current_shop_rules():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    method = source[
+        source.index("private static bool IsImageKnowledgeMatchStillValid"):
+        source.index("private static bool MatchesImage")
+    ]
+    assert "VisualImageKnowledgeService.Load(shopKey, seller)" in method
+    assert "VisualImageKnowledgeService.TryMatch" in method
+    assert "image.OcrImageSha256" in method
+    assert "currentMatch.KnowledgeId" in method
 
 
 def test_newer_unmatched_or_withdrawn_image_supersedes_an_older_match():
