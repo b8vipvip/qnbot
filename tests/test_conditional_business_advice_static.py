@@ -418,3 +418,16 @@ def test_manual_reconciliation_validates_local_send_state_before_remote_release(
     assert "CrossProcessAtomicStateFile.Acquire" in method[:remote_resolution]
     assert "lock (LedgerSync)" in method[:remote_resolution]
     assert remote_resolution < local_release
+
+
+def test_reconciliation_ui_exposes_remote_sync_failure_and_record_source():
+    service = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    assert "out string remoteStatus" in service
+    assert "服务端跨设备同步正常" in service
+    assert "当前列表仅包含本机记录，请勿据此判断其他设备没有待核对项" in service
+    assert "SourceLabel" in service
+    assert 'Binding("SourceLabel")' in ui
+    assert "out remoteStatus" in ui
+    assert "task.Result.RemoteStatus" in ui
+    assert "Brushes.DarkRed" in ui
