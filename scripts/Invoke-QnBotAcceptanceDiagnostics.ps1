@@ -544,8 +544,8 @@ function Read-ConditionalBusinessAdviceLedger {
             $empty.Status = 'invalid_schema'
             return $empty
         }
-        $records = @($ledger.Records)
-        $events = @($ledger.Events)
+        $records = if ($null -eq $ledger.Records) { @() } else { @($ledger.Records) }
+        $events = if ($null -eq $ledger.Events) { @() } else { @($ledger.Events) }
         $deliveredCount = @($records | Where-Object {
             try { ([DateTime]::Parse([string]$_.DeliveredAt)).Year -gt 1 } catch { $false }
         }).Count
