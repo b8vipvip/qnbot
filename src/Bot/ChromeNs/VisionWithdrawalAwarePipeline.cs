@@ -537,7 +537,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
-                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
