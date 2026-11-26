@@ -57,6 +57,8 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert 'commerce.PurchasePhase, "paid"' in build
     assert "commerce.OrderId" in build
     assert "GetLatestImageObservation(shopKey, seller, buyer)" in build
+    assert "expectedImageMessageKey" in build
+    assert "expectedImageKnowledgeId" in build
     assert "MatchedImageKnowledgeId" in build
     assert "order.PaidAt" in build
     assert "imageObservedAt < orderEvidenceTime" in build
@@ -145,6 +147,7 @@ def test_text_and_image_reply_paths_share_conditional_advice_guard():
     assert "CompleteDelivery" in runtime
     assert "CommerceReplyAuthorityService.Evaluate" in ocr
     assert "TryBuild(" in ocr
+    assert "imageKnowledgeMatch.KnowledgeId, out conditionalAdviceEvidence" in ocr
     assert "TryAuthorizeRefundSuggestion" in ocr
     assert "ConditionalAdviceKey = decision.ConditionalAdviceKey" in ocr
     assert "TryReserveDelivery" in vision
