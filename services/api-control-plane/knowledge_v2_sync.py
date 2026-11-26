@@ -224,6 +224,43 @@ def runtime_sync(payload: KnowledgeV2SyncInput, request: Request, x_shop_key: st
                         "missing_count": len(missing_ids),
                     },
                 }
+
+            # A cloud delete tombstone is monotonic. A restored/older Windows
+            # snapshot may still contain the same ID as an enabled record even
+            # though its revision checkpoint was restored independently. Never
+            # let that stale copy resurrect the deleted answer; the client will
+            # merge the cloud tombstone and preserve the stale copy as a disabled
+            # conflict candidate for operator review.
+            cloud_deleted_ids = {
+                str(item.get("Id") or "").strip()
+                for item in current["records"]
+                if isinstance(item, dict)
+                and str(item.get("Id") or "").strip()
+                and item.get("Enabled") is False
+                and str(item.get("Status") or "").strip().lower() == "deleted"
+            }
+            incoming_by_id = {
+                str(item.get("Id") or "").strip(): item
+                for item in payload.records
+                if isinstance(item, dict) and str(item.get("Id") or "").strip()
+            }
+            resurrected_ids = {
+                record_id
+                for record_id in cloud_deleted_ids
+                if record_id in incoming_by_id
+                and not (
+                    incoming_by_id[record_id].get("Enabled") is False
+                    and str(incoming_by_id[record_id].get("Status") or "").strip().lower() == "deleted"
+                )
+            }
+            if resurrected_ids:
+                return {
+                    **current,
+                    "sync_warning": {
+                        "code": "cloud_delete_wins",
+                        "conflict_count": len(resurrected_ids),
+                    },
+                }
         return _save(client_id,payload.records,"windows",expected_revision=payload.revision)
     return current
 
