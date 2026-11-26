@@ -1355,6 +1355,15 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey)
+                && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：条件性售后建议最终话术未通过安全复核");
+                lease.MarkCompleted("conditional_advice_final_text_unsafe");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return;
+            }
+
             var conditionalAdviceReserved = false;
             if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey))
             {
