@@ -300,6 +300,18 @@ namespace Bot.ChromeNs
             return sb.ToString();
         }
 
+        public static bool RequiresEvidenceGate(KnowledgeV2Decision decision)
+        {
+            if (decision == null || decision.Matches == null || decision.Matches.Count == 0)
+                return false;
+            var selected = decision.Matches
+                .Where(x => x != null && x.Record != null)
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+            return selected != null && (selected.Record.RequiredContext ?? new List<string>())
+                .Any(IsEvidenceRequirement);
+        }
+
         public static bool TryAuthorizeRefundSuggestion(
             KnowledgeV2Decision decision,
             ConditionalBusinessAdviceEvidence evidence,
