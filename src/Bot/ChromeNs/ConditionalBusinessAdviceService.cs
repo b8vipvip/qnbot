@@ -194,10 +194,8 @@ namespace Bot.ChromeNs
                 || imageObservedAt < orderEvidenceTime)
                 return false;
 
-            var activeImage = VisualImageKnowledgeService.Load(shopKey, seller)
-                .FirstOrDefault(x => x != null && x.Enabled
-                    && string.Equals(x.EntityId, image.MatchedImageKnowledgeId, StringComparison.Ordinal));
-            if (activeImage == null) return false;
+            if (!IsImageKnowledgeMatchStillValid(shopKey, seller, image))
+                return false;
 
             evidence = new ConditionalBusinessAdviceEvidence
             {
@@ -347,15 +345,11 @@ namespace Bot.ChromeNs
                     && !string.Equals((order.ItemId ?? string.Empty).Trim(), itemId.Trim(), StringComparison.Ordinal))
                     return false;
 
-                var activeImage = VisualImageKnowledgeService.Load(shopKey, seller)
-                    .Any(x => x != null && x.Enabled
-                        && string.Equals(x.EntityId, imageKnowledgeId, StringComparison.Ordinal));
-                if (!activeImage) return false;
-
                 var image = RecentVisualContextService.GetLatestImageObservation(shopKey, seller, buyer);
                 if (image == null
                     || !string.Equals(image.MessageKey, imageMessageKey, StringComparison.Ordinal)
-                    || !string.Equals(image.MatchedImageKnowledgeId, imageKnowledgeId, StringComparison.Ordinal))
+                    || !string.Equals(image.MatchedImageKnowledgeId, imageKnowledgeId, StringComparison.Ordinal)
+                    || !IsImageKnowledgeMatchStillValid(shopKey, seller, image))
                     return false;
                 var imageTime = SafeTime(image.ObservedAtTicks);
                 var orderTime = order.PaidAt
@@ -495,6 +489,24 @@ namespace Bot.ChromeNs
                 record.UpdatedAt = DateTime.Now;
                 SaveLedger(path, state, out error);
             }
+        }
+
+        private static bool IsImageKnowledgeMatchStillValid(
+            string shopKey, string seller, VisualKnowledgeObservationEntity image)
+        {
+            if (image == null || string.IsNullOrWhiteSpace(image.MatchedImageKnowledgeId)
+                || string.IsNullOrWhiteSpace(image.OcrImageSha256))
+                return false;
+            var active = VisualImageKnowledgeService.Load(shopKey, seller)
+                .Any(x => x != null && x.Enabled
+                    && string.Equals(x.EntityId, image.MatchedImageKnowledgeId, StringComparison.Ordinal));
+            if (!active) return false;
+            VisualImageKnowledgeMatch currentMatch;
+            return VisualImageKnowledgeService.TryMatch(
+                    shopKey, seller, image.OcrText, image.OcrImageSha256, image.OcrConfidence,
+                    out currentMatch)
+                && currentMatch != null
+                && string.Equals(currentMatch.KnowledgeId, image.MatchedImageKnowledgeId, StringComparison.Ordinal);
         }
 
         private static bool MatchesImage(KnowledgeV2Record record, ConditionalBusinessAdviceEvidence evidence)
