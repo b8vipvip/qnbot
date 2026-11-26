@@ -283,10 +283,19 @@ def test_completed_legacy_report_without_shopkey_can_be_terminally_marked_withou
 def test_structured_order_only_routes_order_dependent_questions_to_commerce_context():
     authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
     state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    commerce = read("src/Bot/ChromeNs/CommerceContextService.cs")
     assert "IsOrderDependentQuestion(currentQuestion)" in authority
     assert "当前问题不依赖订单状态，不注入订单证据" in authority
     assert "当前问题明确涉及订单/支付/履约/售后" in authority
     assert "public string CurrentQuestion { get; set; }" in state
     assert "CurrentQuestion = (currentQuestion ?? string.Empty).Trim()" in state
+    enrich = commerce[
+        commerce.index("public static void EnrichState"):
+        commerce.index("public static string BuildPromptAddon")
+    ]
+    assert "IsOrderDependentQuestion(routingQuestion)" in enrich
+    assert enrich.index("IsOrderDependentQuestion(routingQuestion)") < enrich.index("var commerce = Build(")
+    assert 'Source = "not_required"' in enrich
+    assert 'context.Source, "not_required"' in commerce
     assert "设备|电视|会员|充值" not in authority
 
