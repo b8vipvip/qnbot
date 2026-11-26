@@ -206,12 +206,23 @@ namespace Bot.Knowledge
         {
             IList<ShopProfile> profiles;
             try { profiles = Profiles.GetAll(); }
-            catch { return; }
-            foreach (var profile in profiles)
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("知识库云同步读取店铺列表失败：" + ex.Message, 10);
+                return;
+            }
+            foreach (var profile in profiles ?? new List<ShopProfile>())
             {
                 if (profile == null) continue;
-                var shop = profile.ToContext();
-                if (IsEnabledForShop(shop)) QueueSync(shop);
+                try
+                {
+                    var shop = profile.ToContext();
+                    if (IsEnabledForShop(shop)) QueueSync(shop);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("知识库云同步跳过异常店铺并继续：" + ex.Message, 10);
+                }
             }
         }
 
