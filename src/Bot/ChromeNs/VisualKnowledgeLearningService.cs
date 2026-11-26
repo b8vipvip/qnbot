@@ -251,6 +251,38 @@ namespace Bot.ChromeNs
             catch { return false; }
         }
 
+        internal static string FindLatestObservationMessageKey(
+            string shopKey, string seller, string buyer, DateTime notBefore, DateTime notAfter)
+        {
+            shopKey = Clean(shopKey, 200);
+            seller = Clean(seller, 160);
+            buyer = Clean(buyer, 160);
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0
+                || notBefore == DateTime.MinValue || notAfter < notBefore)
+                return string.Empty;
+            try
+            {
+                EnsureInitialized();
+                lock (DbSync)
+                {
+                    return SelectObservations(
+                            "where ShopKey=? and Seller=? and ObservedAtTicks>=? and ObservedAtTicks<=? order by ObservedAtTicks desc, UpdatedAtTicks desc",
+                            shopKey, seller, notBefore.Ticks, notAfter.Ticks)
+                        .Where(x => x != null
+                            && !string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal)
+                            && SameBuyerForWithdrawal(seller, x.Buyer, buyer)
+                            && !string.IsNullOrWhiteSpace(x.MessageKey))
+                        .Select(x => Clean(x.MessageKey, 500))
+                        .FirstOrDefault() ?? string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("从持久化视觉观察记录恢复撤回图片消息身份失败：" + ex.Message, 10);
+                return string.Empty;
+            }
+        }
+
         internal static void MarkObservationWithdrawn(
             string shopKey, string seller, string buyer, string messageKey)
         {
@@ -745,8 +777,17 @@ namespace Bot.ChromeNs
             {
                 lock (DbSync)
                 {
-                    DbHelper.Db.Execute("delete from VisualKnowledgeObservationEntity where UpdatedAtTicks < ?", DateTime.Now.AddDays(-ObservationRetentionDays).Ticks);
-                    DbHelper.Db.Execute("delete from VisualKnowledgeObservationEntity where EntityId not in (select EntityId from VisualKnowledgeObservationEntity order by UpdatedAtTicks desc limit " + MaxObservations + ")");
+                    // A withdrawal is a durable safety tombstone, not an ordinary observation.
+                    // Keep it after the 30-day learning window so replayed history or a late
+                    // OCR retry cannot resurrect a knowledge entry learned from withdrawn media.
+                    DbHelper.Db.Execute(
+                        "delete from VisualKnowledgeObservationEntity where coalesce(Status,'') <> ? and UpdatedAtTicks < ?",
+                        "图片已撤回", DateTime.Now.AddDays(-ObservationRetentionDays).Ticks);
+                    // Bound ordinary observations independently; never evict withdrawal tombstones
+                    // to satisfy the normal 2,000-row retention cap.
+                    DbHelper.Db.Execute(
+                        "delete from VisualKnowledgeObservationEntity where coalesce(Status,'') <> ? and EntityId not in (select EntityId from VisualKnowledgeObservationEntity where coalesce(Status,'') <> ? order by UpdatedAtTicks desc limit " + MaxObservations + ")",
+                        "图片已撤回", "图片已撤回");
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("清理视觉知识学习记录失败：" + ex.Message, 10); }

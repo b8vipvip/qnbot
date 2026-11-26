@@ -371,17 +371,26 @@ namespace Bot.ChromeNs
                     .OrderByDescending(x => x.ObservedAt)
                     .ThenBy(x => x.MessageKey, StringComparer.Ordinal)
                     .FirstOrDefault();
-                if (candidate == null)
+                // The in-memory cache is intentionally short-lived. After a Bot restart,
+                // recover the same recent image identity from the durable OCR/vision observation
+                // store before giving up; otherwise a late withdrawal notice could be lost.
+                var messageKey = candidate == null ? string.Empty : (candidate.MessageKey ?? string.Empty);
+                if (messageKey.Length == 0)
+                    messageKey = VisualKnowledgeLearningService.FindLatestObservationMessageKey(
+                        shop.ShopKey, seller, buyer, cutoff, noticeAt.AddSeconds(2));
+                if (messageKey.Length == 0)
                 {
-                    Log.Info("检测到买家撤回图片，但未找到近期图片缓存记录: seller=" + seller + ", buyer=" + buyer);
+                    Log.Info("检测到买家撤回图片，但内存缓存和持久化视觉观察均未找到可确认的原图消息: seller="
+                        + seller + ", buyer=" + buyer
+                        + ", shopRef=" + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey));
                     return;
                 }
 
-                candidate.Withdrawn = true;
+                if (candidate != null) candidate.Withdrawn = true;
                 try
                 {
                     VisualKnowledgeLearningService.MarkObservationWithdrawn(
-                        shop.ShopKey, seller, buyer, candidate.MessageKey);
+                        shop.ShopKey, seller, buyer, messageKey);
                 }
                 catch (Exception ex)
                 {
@@ -389,8 +398,8 @@ namespace Bot.ChromeNs
                 }
                 Log.Info("已标记买家图片撤回，视觉分析仍将继续: seller=" + seller
                     + ", buyer=" + buyer
-                    + ", messageKey=" + Short(candidate.MessageKey, 100)
-                    + ", cacheComplete=" + IsTaskSuccessful(candidate.DownloadTask));
+                    + ", messageKey=" + Short(messageKey, 100)
+                    + ", cacheComplete=" + (candidate != null && IsTaskSuccessful(candidate.DownloadTask)));
             }
             catch (Exception ex)
             {
