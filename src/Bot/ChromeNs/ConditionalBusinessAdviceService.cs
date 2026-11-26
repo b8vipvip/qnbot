@@ -303,6 +303,10 @@ namespace Bot.ChromeNs
                 || decision.Matches == null || decision.Matches.Count == 0)
             {
                 reason = "缺少无冲突的Knowledge V2候选或业务证据";
+                if (evidence != null)
+                    RecordDiagnosticEvent("advice_rejected", "knowledge_candidate_missing_or_conflict",
+                        evidence.ShopKey, evidence.Seller, evidence.Buyer, evidence.OrderId,
+                        evidence.ImageMessageKey, evidence.ImageKnowledgeId, string.Empty);
                 return false;
             }
 
@@ -358,10 +362,16 @@ namespace Bot.ChromeNs
                 decision.ConditionalAdviceImageKnowledgeId = evidence.ImageKnowledgeId;
                 decision.Reason = "条件性售后建议通过图片知识、商品关联、已付款且未终态订单证据门禁";
                 reason = decision.Reason;
+                RecordDiagnosticEvent("advice_authorized", "production_approved_safe_refund_recommendation",
+                    evidence.ShopKey, evidence.Seller, evidence.Buyer, evidence.OrderId,
+                    evidence.ImageMessageKey, evidence.ImageKnowledgeId, decision.ConditionalAdviceKey);
                 return true;
             }
 
             reason = "没有知识记录同时满足售后类型、显式证据要求、商品关联和安全建议话术";
+            RecordDiagnosticEvent("advice_rejected", "knowledge_record_or_image_order_match_failed",
+                evidence.ShopKey, evidence.Seller, evidence.Buyer, evidence.OrderId,
+                evidence.ImageMessageKey, evidence.ImageKnowledgeId, string.Empty);
             return false;
         }
 
