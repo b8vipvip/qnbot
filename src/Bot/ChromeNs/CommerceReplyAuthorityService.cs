@@ -37,7 +37,7 @@ namespace Bot.ChromeNs
 
         private static readonly System.Text.RegularExpressions.Regex OrderDependentQuestionRegex =
             new System.Text.RegularExpressions.Regex(
-                "订单|订单号|订单状态|我的订单|这笔订单|这单|交易状态|交易号|下单后|已下单|刚买|买的东西|支付|付款|付钱|实付款|付款金额|未付款|已付款|支付成功|发货|物流|快递|运单|收货|签收|退款|退货|售后|退换|取消订单|关闭订单",
+                "订单|订单号|订单状态|我的订单|这笔订单|这单|交易状态|交易号|下单后|已下单|刚买|买的东西|支付|付款|付钱|实付款|付款金额|未付款|已付款|支付成功|发货|物流|快递|运单|收货|签收|退款|退货|售后|退换|取消订单|关闭订单|\\border\\b|order status|payment|paid|unpaid|shipping|delivery|tracking|refund|return",
                 System.Text.RegularExpressions.RegexOptions.Compiled
                     | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
@@ -63,7 +63,13 @@ namespace Bot.ChromeNs
                 return decision;
             }
 
-            var currentQuestion = state.CurrentQuestion ?? string.Empty;
+            var currentQuestion = string.Join(" ", new[]
+            {
+                state.CurrentQuestion ?? string.Empty,
+                state.CurrentTopic ?? string.Empty,
+                state.BuyerGoal ?? string.Empty,
+                state.PendingQuestion ?? string.Empty
+            });
             var orderDependent = IsOrderDependentQuestion(currentQuestion);
             if (orderDependent && commerce.HasStructuredOrder)
             {
