@@ -658,6 +658,7 @@ namespace Bot.ChromeNs
 
             var deadlineUtc = DateTime.UtcNow.AddMilliseconds(Math.Max(0, timeoutMs));
             var loggedWaiting = false;
+            var loggedMismatch = false;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -669,29 +670,48 @@ namespace Bot.ChromeNs
 
                 var client = CDP;
                 var server = MyWebSocketServer.WSocketSvrInst;
-                if (client != null
+                var clientShopMismatch = client != null
                     && !string.IsNullOrWhiteSpace(client.ShopKey)
-                    && !string.Equals(client.ShopKey, expectedShopKey, StringComparison.Ordinal))
+                    && !string.Equals((client.ShopKey ?? string.Empty).Trim(),
+                        expectedShopKey, StringComparison.Ordinal);
+                if (clientShopMismatch)
                 {
-                    var mismatchReason = "当前QN实例绑定了其他ShopKey，已阻止跨店发送";
-                    Log.Info((stage ?? "发送") + "作用域复核发现CDP ShopKey不匹配: expectedShopRef="
-                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
-                        + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client.ShopKey)
-                        + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client.SessionId));
-                    return mismatchReason;
+                    if (!loggedMismatch)
+                    {
+                        Log.Info((stage ?? "发送") + "当前QN实例绑定了其他ShopKey，已阻止跨店发送并等待同店权威会话接管: expectedShopRef="
+                            + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                            + ", actualShopRef=" + MyWebSocketServer.DiagnosticRef("shop", client.ShopKey)
+                            + ", sessionRef=" + MyWebSocketServer.DiagnosticRef("session", client.SessionId));
+                        loggedMismatch = true;
+                    }
+                }
+                else
+                {
+                    var authoritative = client != null
+                        && !client.IsInvalidated
+                        && !client.IsShopIdentityRetired
+                        && string.Equals((client.ShopKey ?? string.Empty).Trim(),
+                            expectedShopKey, StringComparison.Ordinal)
+                        && server != null
+                        && server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId);
+                    if (authoritative)
+                    {
+                        string reason;
+                        return IsCurrentShopScopeValidForSend(out reason) ? string.Empty : reason;
+                    }
                 }
 
-                var authoritative = client != null
-                    && !client.IsInvalidated
-                    && !client.IsShopIdentityRetired
-                    && string.Equals((client.ShopKey ?? string.Empty).Trim(),
-                        expectedShopKey, StringComparison.Ordinal)
-                    && server != null
-                    && server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId);
-                if (authoritative)
+                // The old QN wrapper may remain alive after the same ShopKey is rebound to a
+                // replacement wrapper. Detect that exact authoritative owner while waiting,
+                // then let SendTextWithRetryAsync release this gate and hand off before any send.
+                var replacement = FindAuthoritativeShopSendOwner(expectedShopKey);
+                if (replacement != null && !ReferenceEquals(replacement, this))
                 {
-                    string reason;
-                    return IsCurrentShopScopeValidForSend(out reason) ? string.Empty : reason;
+                    Log.Info((stage ?? "发送") + "检测到同ShopKey权威QN实例已切换，交由发送层安全转交: shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                        + ", fromSessionRef=" + MyWebSocketServer.DiagnosticRef("session", client == null ? string.Empty : client.SessionId)
+                        + ", toSessionRef=" + MyWebSocketServer.DiagnosticRef("session", replacement.CDP == null ? string.Empty : replacement.CDP.SessionId));
+                    return "同ShopKey权威QN实例已切换，等待发送层安全转交";
                 }
 
                 if (!loggedWaiting)
