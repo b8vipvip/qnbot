@@ -11,6 +11,12 @@ The image knowledge record supplies:
 
 Knowledge V2 supplies the business meaning and the reply. Typed evidence requirements are evaluated by the conditional-advice policy, not inferred from the OCR text alone.
 
+## Reply routing and order-evidence boundaries
+
+The commerce authority is question-aware. It loads the structured order ledger only when the current question or its active conversation topic indicates an order-dependent request (order, payment, shipping, delivery, refund, return, etc.). For unrelated questions it marks commerce context as `not_required`, does not read the order ledger, and does not inject order fields into the model prompt.
+
+A Knowledge V2 record containing any supported `evidence:*` requirement cannot become a local direct reply unless the dedicated evidence policy authorizes that selected record. An OCR match alone, a visual description alone, or a high model confidence score is not authorization. The current local allow-list is deliberately narrow: the four image + paid/open order requirements below can authorize only a safe refund recommendation.
+
 ## Typed RequiredContext values
 
 The first supported conditional action is a *refund recommendation*, not a refund operation. A production-approved Knowledge V2 record may opt in by including all four values below in `RequiredContext`:
