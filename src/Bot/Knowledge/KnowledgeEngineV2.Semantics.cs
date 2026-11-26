@@ -324,7 +324,18 @@ namespace Bot.Knowledge
             // Typed business-evidence requirements are evaluated by the dedicated
             // conditional-advice gate, which has access to authoritative order and image
             // ledgers. They must not be treated as buyer-authored text terms here.
-            var required = NormalizeScopeTerms(record.RequiredContext)
+            var allRequired = NormalizeScopeTerms(record.RequiredContext);
+            var evidenceRequirements = allRequired
+                .Where(ConditionalBusinessAdviceService.IsEvidenceRequirement)
+                .ToList();
+            var isConditionalAfterSale = string.Equals(record.Type, "after_sale", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase);
+            if (evidenceRequirements.Count > 0 && !isConditionalAfterSale)
+            {
+                reason = "当前知识类型不支持专用业务证据条件";
+                return false;
+            }
+            var required = allRequired
                 .Where(x => !ConditionalBusinessAdviceService.IsEvidenceRequirement(x))
                 .ToList();
             var missing = required.FirstOrDefault(x => !ScopeTermMatches(x, query));
