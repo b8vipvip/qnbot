@@ -46,3 +46,22 @@ def test_multi_seller_active_shop_fix_remains_present_after_runtime_hardening():
     assert "活动店铺会话已切换" in coordinator
     assert "ActiveSellerByHwnd" in registry
     assert "同一Desk不能绑定两个seller" not in registry
+
+
+def test_shop_identity_cache_isolates_bad_profiles_and_preserves_last_good_mappings():
+    bridge = read("src/Bot/ShopScope/ShopScopedRuntimeBridge.cs")
+    refresh = bridge.split("private static void RefreshProfileCacheIfNeeded()", 1)[1].split(
+        "private static string StableSellerRef", 1
+    )[0]
+    assert "IList<ShopProfile> profiles;" in refresh
+    assert "profiles = Profiles.GetAll();" in refresh
+    assert "Keep the last good identity cache" in refresh
+    assert "foreach (var profile in profiles.Where(x => x != null))" in refresh
+    assert "catch (Exception ex)" in refresh
+    assert "failedShopKeys.Add(failedKey)" in refresh
+    assert "failedSellerRefs.Add(failedRef)" in refresh
+    assert "ShopByKey.TryGetValue(failedKey, out previous)" in refresh
+    assert "ShopBySellerRef.TryGetValue(failedRef, out previous)" in refresh
+    assert "ShopByKey.Clear();" not in refresh
+    assert "ShopBySellerRef.Clear();" not in refresh
+    assert "nextByKey" in refresh and "nextBySellerRef" in refresh

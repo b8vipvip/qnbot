@@ -2,6 +2,7 @@ using Bot.ChromeNs;
 using BotLib;
 using BotLib.Extensions;
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
@@ -204,43 +205,118 @@ namespace Bot.ShopScope
             {
                 if (DateTime.UtcNow - _lastProfileCacheRefreshUtc < TimeSpan.FromSeconds(5)
                     && !ShopByKey.IsEmpty) return;
-                try
+
+                IList<ShopProfile> profiles;
+                try { profiles = Profiles.GetAll(); }
+                catch (Exception ex)
                 {
-                    ShopByKey.Clear();
-                    ShopBySellerRef.Clear();
-                    foreach (var profile in Profiles.GetAll().Where(x => x != null))
+                    // Keep the last good identity cache if the registry cannot be read.
+                    Log.ErrorWithMaxCount("刷新店铺身份缓存读取配置失败，保留上次有效缓存：" + ex.Message, 10);
+                    _lastProfileCacheRefreshUtc = DateTime.UtcNow;
+                    return;
+                }
+                if (profiles == null)
+                {
+                    Log.ErrorWithMaxCount("刷新店铺身份缓存返回空配置列表，保留上次有效缓存。", 10);
+                    _lastProfileCacheRefreshUtc = DateTime.UtcNow;
+                    return;
+                }
+
+                var nextByKey = new Dictionary<string, ShopContext>(StringComparer.Ordinal);
+                var nextBySellerRef = new Dictionary<string, ShopContext>(StringComparer.Ordinal);
+                var failedShopKeys = new HashSet<string>(StringComparer.Ordinal);
+                var failedSellerRefs = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var profile in profiles.Where(x => x != null))
+                {
+                    try
                     {
                         var shop = profile.ToContext();
                         if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
-                        ShopByKey[shop.ShopKey] = shop;
+                        nextByKey[shop.ShopKey] = shop;
                         var sellerRef = StableSellerRef(profile.DisplayName);
-                        if (sellerRef.Length > 0) ShopBySellerRef[sellerRef] = shop;
+                        if (sellerRef.Length > 0) nextBySellerRef[sellerRef] = shop;
                     }
-
-                    // Profile display names can be shorter than the authenticated Qianniu login
-                    // identity (for example "客服名" vs "主账号:客服名"). Add the live seller
-                    // identities as aliases so privacy-safe sellerRef logs always reach the right
-                    // per-shop runtime file.
-                    foreach (var qn in QN.GetRuntimeSafetySnapshot().Where(x => x != null && x.Seller != null))
+                    catch (Exception ex)
                     {
+                        var failedKey = (profile.ShopKey ?? string.Empty).Trim();
+                        if (failedKey.Length > 0) failedShopKeys.Add(failedKey);
+                        var failedRef = StableSellerRef(profile.DisplayName);
+                        if (failedRef.Length > 0) failedSellerRefs.Add(failedRef);
+                        Log.ErrorWithMaxCount("刷新店铺身份缓存跳过异常店铺并继续：" + ex.Message, 10);
+                    }
+                }
+
+                // Profile display names can be shorter than the authenticated Qianniu login
+                // identity (for example "客服名" vs "主账号:客服名"). Add live seller aliases.
+                var runtimeSnapshotSucceeded = false;
+                try
+                {
+                    var runtimeSellers = QN.GetRuntimeSafetySnapshot();
+                    runtimeSnapshotSucceeded = runtimeSellers != null;
+                    foreach (var qn in (runtimeSellers ?? new System.Collections.Generic.List<QN>()).Where(x => x != null && x.Seller != null))
+                    {
+                        var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+                        var sellerRef = StableSellerRef(seller);
                         try
                         {
-                            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
                             if (seller.Length == 0) continue;
                             var shop = ShopIdentityResolver.Resolve(qn.Seller);
                             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
-                            ShopByKey[shop.ShopKey] = shop;
-                            var sellerRef = StableSellerRef(seller);
-                            if (sellerRef.Length > 0) ShopBySellerRef[sellerRef] = shop;
+                            nextByKey[shop.ShopKey] = shop;
+                            if (sellerRef.Length > 0) nextBySellerRef[sellerRef] = shop;
                         }
-                        catch
+                        catch (Exception ex)
                         {
+                            if (sellerRef.Length > 0) failedSellerRefs.Add(sellerRef);
+                            Log.ErrorWithMaxCount("刷新运行时客服身份别名失败并继续：" + ex.Message, 10);
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Log.ErrorWithMaxCount("刷新运行时客服身份快照失败，保留现有别名：" + ex.Message, 10);
                 }
+
+                // Preserve the last good mapping for a profile that failed conversion. A bad
+                // entry must not make later ShopKeys disappear from the shared identity cache.
+                foreach (var failedKey in failedShopKeys)
+                {
+                    ShopContext previous;
+                    if (ShopByKey.TryGetValue(failedKey, out previous)) nextByKey[failedKey] = previous;
+                }
+                foreach (var failedRef in failedSellerRefs)
+                {
+                    ShopContext previous;
+                    if (!nextBySellerRef.ContainsKey(failedRef)
+                        && ShopBySellerRef.TryGetValue(failedRef, out previous))
+                        nextBySellerRef[failedRef] = previous;
+                }
+                if (!runtimeSnapshotSucceeded)
+                {
+                    foreach (var pair in ShopBySellerRef)
+                        if (nextByKey.ContainsKey(pair.Value.ShopKey)
+                            && !nextBySellerRef.ContainsKey(pair.Key))
+                            nextBySellerRef[pair.Key] = pair.Value;
+                }
+
+                // Apply the completed snapshot incrementally instead of clearing both shared
+                // dictionaries before profile conversion has succeeded.
+                foreach (var key in ShopByKey.Keys.ToList())
+                    if (!nextByKey.ContainsKey(key))
+                    {
+                        ShopContext ignored;
+                        ShopByKey.TryRemove(key, out ignored);
+                    }
+                foreach (var pair in nextByKey) ShopByKey[pair.Key] = pair.Value;
+
+                foreach (var key in ShopBySellerRef.Keys.ToList())
+                    if (!nextBySellerRef.ContainsKey(key))
+                    {
+                        ShopContext ignored;
+                        ShopBySellerRef.TryRemove(key, out ignored);
+                    }
+                foreach (var pair in nextBySellerRef) ShopBySellerRef[pair.Key] = pair.Value;
+
                 _lastProfileCacheRefreshUtc = DateTime.UtcNow;
             }
         }
