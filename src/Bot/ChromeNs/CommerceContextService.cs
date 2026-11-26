@@ -264,7 +264,9 @@ namespace Bot.ChromeNs
 
         public static string BuildPromptAddon(CommerceContextSnapshot context)
         {
-            if (context == null) return string.Empty;
+            if (context == null
+                || string.Equals(context.Source, "not_required", StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
             var sb = new StringBuilder();
             sb.Append("\n【电商业务上下文｜高于聊天文字推断】\n");
             if (context.HasStructuredOrder)
