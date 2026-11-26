@@ -123,12 +123,15 @@ def test_sync_preserves_local_edits_and_deletes_that_race_with_cloud_responses()
     assert "local.SyncDirty" in upsert
     assert "local.UpdatedAtTicks > cloudUpdatedAt || localContentChanged" in upsert
     assert "localDelete != null && localDelete.SyncDirty" in upsert
+    assert "localDelete.DeletedAtTicks > cloudUpdatedAt" not in upsert
     assert "Save(shop.ShopKey, seller, entry, temp)" in upsert
     assert upsert.index("lock (Sync)") < upsert.index("Save(shop.ShopKey, seller, entry, temp)")
     assert "set Enabled=?,SyncDirty=0,CloudRevision=?" in upsert
     assert "cloudEnabled ? 1 : 0" in upsert
-    assert "old != null && old.SyncDirty && old.CloudRevision >= revision" in delete
+    assert "old.SyncDirty && old.CloudRevision >= revision" in delete
+    assert "old.UpdatedAtTicks > deletedAt" not in delete
     assert "localDelete != null && localDelete.SyncDirty" in delete
+    assert "localDelete.DeletedAtTicks > deletedAt" not in delete
     assert "CloudRevision=?" in delete
 
 
@@ -298,7 +301,8 @@ def test_image_delete_tombstone_is_atomic_and_survives_duplicate_id_cloud_restor
     assert "item.ImageSha256" in delete
     assert "delete from VisualImageKnowledgeEntry" in delete
     assert "where ShopKey=? and Seller=? and ImageSha256=?" in reconcile
-    assert "only an already-acknowledged tombstone may be superseded by a later cloud upsert" in reconcile
+    assert "pendingTombstones = tombstones.Where(x => x.SyncDirty).ToList()" in reconcile
+    assert "if (pendingTombstones.Count == 0)" in reconcile
     assert "set EntityId=?,SyncDirty=1,CloudRevision=?,ImageSha256=?" in reconcile
     assert "delete from VisualImageKnowledgeEntry" in reconcile
     assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision)" in service
@@ -423,7 +427,8 @@ def test_pending_image_delete_wins_without_comparing_unsynchronized_device_clock
     assert "localDelete.DeletedAtTicks > cloudUpdatedAt" not in upsert
     assert "localDelete != null && localDelete.SyncDirty" in delete
     assert "localDelete.DeletedAtTicks > deletedAt" not in delete
-    assert "Wall clocks on two Windows devices are not a safe conflict-ordering primitive" in reconcile
+    assert "Wall clocks on two Windows devices are not a safe conflict-ordering" in reconcile
+    assert "unacknowledged local tombstone is a delete-wins barrier" in reconcile
 
 
 def test_remote_image_delete_uses_cloud_revision_not_cross_device_wall_clock():
