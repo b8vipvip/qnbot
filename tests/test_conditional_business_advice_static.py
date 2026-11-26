@@ -433,6 +433,10 @@ def test_order_evidence_is_loaded_lazily_only_after_a_knowledge_record_requires_
     assert "ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey)" in helper
     assert "CommerceContextService.Build(" in helper
     assert "state.CommerceContext = commerce" in helper
+    assert "string shopKey = null" in authority
+    assert "GetRecentTurns(seller, buyer, question, 16, shopKey)" in authority
+    assert "burst.ShopKey);" in runtime
+    assert "question, task.ShopKey);" in ocr
 
     build = commerce[
         commerce.index("public static CommerceContextSnapshot Build"):
