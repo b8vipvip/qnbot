@@ -1352,19 +1352,61 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    result.ConditionalAdviceImageMessageKey, result.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    return;
+                }
+            }
+
             Func<bool> visionPreSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
                     || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId,
+                        result.ConditionalAdviceImageMessageKey,
+                        result.ConditionalAdviceImageKnowledgeId))
                     return false;
                 string latestReason;
                 return ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
             };
-            var sendOk = await SendTextWithRetryAsync(
-                burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard);
+            bool sendOk;
+            try
+            {
+                sendOk = await SendTextWithRetryAsync(
+                    burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard);
+            }
+            catch (OperationCanceledException)
+            {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
+                throw;
+            }
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    sendOk, sendCancelled);
             if (sendOk) lease.MarkCompleted("vision_send_completed");
             else if (sendCancelled) lease.MarkCompleted("vision_send_cancelled");
             else lease.MarkFailed("vision_send_failed");
