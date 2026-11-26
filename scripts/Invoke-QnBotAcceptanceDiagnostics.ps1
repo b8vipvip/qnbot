@@ -549,7 +549,7 @@ function Read-ConditionalBusinessAdviceLedger {
         $deliveredCount = @($records | Where-Object {
             try { ([DateTime]::Parse([string]$_.DeliveredAt)).Year -gt 1 } catch { $false }
         }).Count
-        $uncertainCount = @($records | Where-Object { $_.DeliveryUncertain -eq $true }).Count
+        $reservedOrUncertainCount = @($records | Where-Object { $_.DeliveryUncertain -eq $true }).Count
         $safeEvents = @()
         foreach ($event in ($events | Sort-Object -Property { [DateTime]$_.AtUtc } -Descending | Select-Object -First 30)) {
             $atUtc = 'unknown'
@@ -557,7 +557,53 @@ function Read-ConditionalBusinessAdviceLedger {
             $refs = @{}
             foreach ($field in @('ShopRef', 'BuyerRef', 'OrderRef', 'ImageRef', 'ImageKnowledgeRef', 'AdviceRef')) {
                 $value = [string]$event.$field
-                if ($value -match '^[a-z][a-z0-9-]*#(?:[0-9a-f]{16}|none)
+                if ($value -match '^[a-z][a-z0-9-]*#(?:[0-9a-f]{16}|none)$') {
+                    $refs[$field] = $value
+                } else {
+                    $refs[$field] = 'invalid'
+                }
+            }
+            $outcome = [string]$event.Outcome
+            $reason = [string]$event.Reason
+            if ($outcome -notmatch '^[a-z0-9_]{1,80}$') { $outcome = 'unknown' }
+            if ($reason -notmatch '^[a-z0-9_]{1,180}$') { $reason = 'unknown' }
+            $safeEvents += [pscustomobject]@{
+                AtUtc = $atUtc
+                Outcome = $outcome
+                Reason = $reason
+                ShopRef = $refs.ShopRef
+                BuyerRef = $refs.BuyerRef
+                OrderRef = $refs.OrderRef
+                ImageRef = $refs.ImageRef
+                ImageKnowledgeRef = $refs.ImageKnowledgeRef
+                AdviceRef = $refs.AdviceRef
+            }
+        }
+        return [pscustomobject]@{
+            Status = 'ok'
+            RecordCount = $records.Count
+            DeliveredCount = $deliveredCount
+            ReservedOrUncertainCount = $reservedOrUncertainCount
+            RecentEvents = $safeEvents
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Status = 'invalid_or_unreadable'
+            RecordCount = 0
+            DeliveredCount = 0
+            ReservedOrUncertainCount = 0
+            RecentEvents = @()
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ConditionalBusinessAdviceLedgerPath)) {
+    $ConditionalBusinessAdviceLedgerPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\data\conditional-business-advice-ledger.json'
+}
+$conditionalBusinessAdvice = Read-ConditionalBusinessAdviceLedger -Path $ConditionalBusinessAdviceLedgerPath
+$runtimeSnapshot = Read-RuntimeAcceptanceSnapshot -Path $RuntimeSnapshotPath -BotProcesses $botProcesses
+
 $webSocketOwnedByBot = @($webSocketListeners | Where-Object {
     $botPids -contains [int]$_.OwningProcess
 }).Count -gt 0
