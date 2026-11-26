@@ -74,3 +74,24 @@ def test_failed_first_greeting_does_not_swallow_short_reply_or_image_vision():
     assert "LocalShortReplyService.TryResolve(" in coordinator
     assert "if (firstDelivered)" in coordinator
     assert "return firstOutcome;" in coordinator
+
+
+def test_send_gate_rebinds_to_current_authoritative_qn_for_same_shop_before_first_physical_send():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    send = qn[
+        qn.index("private async Task<bool> SendTextWithRetryAsyncCore"):
+        qn.index("private bool IsPreSendGuardSatisfied")
+    ]
+
+    assert "FindAuthoritativeShopSendOwner(expectedShopKey)" in send
+    assert "ShopContextLocator.FindConnectedQnByShopKey(expectedShopKey)" in send
+    assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in send
+    assert "TryHandoffToAuthoritativeShopQnAsync(" in send
+    assert "ReleaseSendGate(ref sendGateHeld" in send
+    assert "shopOwnerHandoffDepth < 1" in send
+
+    first_physical_send = send.index("var ok = await SendTextAsync(buyer, text, preSendGuard);")
+    pre_send_handoff = send.index("TryHandoffToAuthoritativeShopQnAsync(", send.index("WaitForCurrentShopAuthorityAsync("))
+    assert pre_send_handoff < first_physical_send
+    assert "owner.SendTextWithRetryAsyncCore(" in send
+    assert "同ShopKey权威会话转交" in send
