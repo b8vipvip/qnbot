@@ -101,7 +101,7 @@ def test_expired_lease_becomes_uncertain_until_operator_reconciles(advice_api, m
     start = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(advice_api, "_utc_now", lambda: start)
     first = claim(advice_api, 11, shop)
-    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=3))
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=5))
 
     blocked = claim(advice_api, 12, shop, request_id="request-second-000000")
     assert blocked["claimed"] is False
@@ -213,3 +213,68 @@ def test_concurrent_devices_have_exactly_one_global_winner(advice_api):
         ))
     assert sum(1 for item in results if item["claimed"]) == 1
     assert all(item["state"] == "reserved" for item in results)
+
+
+def test_original_sender_can_renew_expired_lease_but_other_devices_cannot_claim(advice_api, monkeypatch):
+    shop = "qn_0123456789ab"
+    start = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start)
+    first = claim(advice_api, 11, shop)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=3))
+
+    renewed = advice_api.runtime_renew(
+        advice_api.ConditionalAdviceRenewInput(
+            buyer="buyer-1",
+            order_id="order-1",
+            advice_key="knowledge-1",
+            lease_token=first["lease_token"],
+            lease_seconds=180,
+        ),
+        request_for(11),
+        x_shop_key=shop,
+    )
+    assert renewed["renewed"] is True
+
+    blocked = claim(advice_api, 12, shop, request_id="request-other-device-000")
+    assert blocked["claimed"] is False
+    assert blocked["state"] == "reserved"
+
+    completed = advice_api.runtime_complete(
+        advice_api.ConditionalAdviceCompleteInput(
+            buyer="buyer-1",
+            order_id="order-1",
+            advice_key="knowledge-1",
+            lease_token=first["lease_token"],
+            outcome="delivered",
+        ),
+        request_for(11),
+        x_shop_key=shop,
+    )
+    assert completed["state"] == "delivered"
+
+
+def test_manual_resolution_waits_for_expired_lease_grace_period(advice_api, monkeypatch):
+    shop = "qn_0123456789ab"
+    start = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start)
+    claim(advice_api, 11, shop)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=3))
+    blocked = claim(advice_api, 12, shop, request_id="request-other-device-000")
+    assert blocked["state"] == "uncertain"
+    pending = advice_api.runtime_pending(request_for(12), x_shop_key=shop)
+    scope_hash = pending["items"][0]["scope_hash"]
+
+    with pytest.raises(Exception):
+        advice_api.runtime_resolve(
+            advice_api.ConditionalAdviceResolveInput(scope_hash=scope_hash, confirmed_delivered=False),
+            request_for(12),
+            x_shop_key=shop,
+        )
+
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=5, seconds=1))
+    resolved = advice_api.runtime_resolve(
+        advice_api.ConditionalAdviceResolveInput(scope_hash=scope_hash, confirmed_delivered=False),
+        request_for(12),
+        x_shop_key=shop,
+    )
+    assert resolved["state"] == "released"
