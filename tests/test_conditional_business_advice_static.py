@@ -165,3 +165,15 @@ def test_conditional_advice_is_not_a_generic_image_classifier():
     assert "MatchesOrderProduct(record, evidence)" in source
     assert "ProductIds" in source
     assert "GetSpecificTerms" in source
+
+
+def test_windows_acceptance_diagnostics_reports_only_pseudonymized_conditional_advice_events():
+    script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+    assert "Read-ConditionalBusinessAdviceLedger" in script
+    assert "ConditionalBusinessAdvice = $conditionalBusinessAdvice" in script
+    assert "RecentEvents" in script
+    assert "ShopRef" in script and "BuyerRef" in script and "OrderRef" in script
+    assert "ImageKnowledgeRef" in script and "AdviceRef" in script
+    assert "DeliveryUncertain" in script
+    assert "OrderId" not in script
+    assert "BuyerNick" not in script
