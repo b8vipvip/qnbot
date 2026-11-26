@@ -37,6 +37,7 @@ namespace Bot.ChromeNs
         public string KnowledgeV2ContextPromptAddon { get; set; }
         public string ConditionalAdviceKey { get; set; }
         public string ConditionalAdviceOrderId { get; set; }
+        public string ConditionalAdviceItemId { get; set; }
         public string ConditionalAdviceImageMessageKey { get; set; }
         public string ConditionalAdviceImageKnowledgeId { get; set; }
     }
