@@ -422,9 +422,37 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
 
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
+                    decision.ConditionalAdviceImageMessageKey, decision.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    Log.Info("条件性售后建议被幂等/证据门禁阻止: buyer=" + burst.BuyerNick
+                        + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", decision.ConditionalAdviceOrderId)
+                        + ", reason=" + reserveReason);
+                    return KnowledgeV2RuntimeResult.HandledResult();
+                }
+            }
+
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        decision.ConditionalAdviceOrderId,
+                        decision.ConditionalAdviceImageMessageKey,
+                        decision.ConditionalAdviceImageKnowledgeId))
                     return false;
                 if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                 {
@@ -450,6 +478,10 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey, false, true);
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效", burst.ShopKey);
@@ -461,6 +493,11 @@ namespace Bot.ChromeNs
             var failureReason = sendOk || sendCancelled || qn.Rpa == null
                 ? string.Empty
                 : qn.Rpa.GetSendFailureReason();
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
+                    sendOk, sendCancelled);
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
