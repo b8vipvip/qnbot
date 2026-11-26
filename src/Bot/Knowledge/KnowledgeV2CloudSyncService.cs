@@ -191,10 +191,10 @@ namespace Bot.Knowledge
                         if(missingTombstones && cloudRevision == state.Revision)
                         {
                             // The server refused a Windows full-snapshot replacement because
-                            // one or more previously-clouded IDs disappeared without a delete
-                            // tombstone. Reconcile from the authoritative cloud snapshot and
-                            // preserve local-only facts as disabled candidates. Never retry the
-                            // incomplete snapshot as a destructive overwrite.
+                            // the snapshot omitted cloud IDs without tombstones or attempted to
+                            // resurrect a cloud-deleted record. Reconcile from the authoritative
+                            // cloud snapshot and preserve local-only/stale facts as disabled
+                            // conflict candidates. Never retry the unsafe snapshot as an overwrite.
                             var latestLocal = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                             var latestFingerprint = Fingerprint(latestLocal);
                             var merged = MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true);
