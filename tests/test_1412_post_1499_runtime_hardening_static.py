@@ -65,3 +65,18 @@ def test_shop_identity_cache_isolates_bad_profiles_and_preserves_last_good_mappi
     assert "ShopByKey.Clear();" not in refresh
     assert "ShopBySellerRef.Clear();" not in refresh
     assert "nextByKey" in refresh and "nextBySellerRef" in refresh
+
+
+def test_shop_log_seller_ref_aliases_fail_closed_when_nickname_maps_to_multiple_shops():
+    bridge = read("src/Bot/ShopScope/ShopScopedRuntimeBridge.cs")
+    refresh = bridge.split("private static void RefreshProfileCacheIfNeeded()", 1)[1].split(
+        "private static string StableSellerRef", 1
+    )[0]
+    assert "var ambiguousSellerRefs = new HashSet<string>(StringComparer.Ordinal);" in refresh
+    assert "void AddSellerRefAlias(string sellerRef, ShopContext shop)" in refresh
+    assert "existing.ShopKey, shop.ShopKey" in refresh
+    assert "nextBySellerRef.Remove(sellerRef);" in refresh
+    assert "ambiguousSellerRefs.Add(sellerRef);" in refresh
+    assert "AddSellerRefAlias(sellerRef, shop);" in refresh
+    assert "if (!ambiguousSellerRefs.Contains(failedRef)" in refresh
+    assert "if (!ambiguousSellerRefs.Contains(pair.Key)" in refresh
