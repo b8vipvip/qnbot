@@ -35,6 +35,10 @@ namespace Bot.ChromeNs
         public bool LocalOcrCacheHit { get; set; }
         public string LocalOcrEngine { get; set; }
         public string KnowledgeV2ContextPromptAddon { get; set; }
+        public string ConditionalAdviceKey { get; set; }
+        public string ConditionalAdviceOrderId { get; set; }
+        public string ConditionalAdviceImageMessageKey { get; set; }
+        public string ConditionalAdviceImageKnowledgeId { get; set; }
     }
 
     internal sealed class VisionRequestService
