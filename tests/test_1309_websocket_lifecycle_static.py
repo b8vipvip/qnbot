@@ -190,3 +190,34 @@ def test_listener_restart_releases_both_session_generation_dictionaries():
     assert "NextShopIdentityProbeGenerationLocked(sessionId);" in release
     assert "_shopIdentityProbeGenerations.TryRemove(sessionId, out ignoredIdentityProbeGeneration);" in release
     assert "ReleaseClosedSession(sessionId, reason, removed);" in release
+
+
+def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_before_rebuild():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    start = server.split("public void Start()", 1)[1].split(
+        "private bool IsLoopbackListenerActive", 1
+    )[0]
+    stale = start.split("if (_webSocketServer != null)", 1)[1].split(
+        "else if (IsLoopbackListenerActive())", 1
+    )[0]
+    assert "var staleServer = _webSocketServer;" in stale
+    assert 'StopAndDisposeWebSocketServer(staleServer, "listener disappeared");' in stale
+    assert "ReleaseStaleSessions(" in stale
+    assert stale.index("StopAndDisposeWebSocketServer(staleServer,") < stale.index("ReleaseStaleSessions(")
+    assert stale.index("ReleaseStaleSessions(") < stale.index("_webSocketServer = null;")
+
+
+def test_failed_websocket_setup_and_start_dispose_unpublished_server_instances():
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    start = server.split("public void Start()", 1)[1].split(
+        "private async Task RefreshRpaAfterAuthoritativeSessionAsync", 1
+    )[0]
+    helper = server.split("private static void StopAndDisposeWebSocketServer", 1)[1].split(
+        "public void Start()", 1
+    )[0]
+    assert "server.Stop();" in helper
+    assert "server as IDisposable" in helper
+    assert "StopAndDisposeWebSocketServer(webSocket, \"setup failed\")" in start
+    assert "StopAndDisposeWebSocketServer(webSocket, \"start failed\")" in start
+    assert "StopAndDisposeWebSocketServer(webSocket, \"startup exception\")" in start
+    assert "WebSocketServer webSocket = null;" in start

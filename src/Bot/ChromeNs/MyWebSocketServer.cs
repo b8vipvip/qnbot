@@ -1308,6 +1308,25 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static void StopAndDisposeWebSocketServer(WebSocketServer server, string reason)
+        {
+            if (server == null) return;
+            try { server.Stop(); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("停止Bot WebSocket服务实例失败(" + reason + ")：" + ex.Message, 10);
+            }
+            try
+            {
+                var disposableServer = server as IDisposable;
+                if (disposableServer != null) disposableServer.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("释放Bot WebSocket服务资源失败(" + reason + ")：" + ex.Message, 10);
+            }
+        }
+
         public void Start()
         {
             lock (_webSocketStartSync)
@@ -1320,7 +1339,11 @@ namespace Bot.ChromeNs
 
                 if (_webSocketServer != null)
                 {
-                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；释放失效会话并重建服务实例。");
+                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；停止并释放失效服务实例后重建。");
+                    var staleServer = _webSocketServer;
+                    // Stop and dispose the old listener even if it had already failed;
+                    // the helper isolates shutdown errors so session cleanup still runs.
+                    StopAndDisposeWebSocketServer(staleServer, "listener disappeared");
                     ReleaseStaleSessions("Bot WebSocket listener disappeared");
                     _webSocketServer = null;
                 }
@@ -1332,9 +1355,10 @@ namespace Bot.ChromeNs
                     return;
                 }
 
+                WebSocketServer webSocket = null;
                 try
                 {
-                    var webSocket = new WebSocketServer();
+                    webSocket = new WebSocketServer();
                     webSocket.NewSessionConnected += (session) =>
                     {
                         try
@@ -1574,6 +1598,7 @@ namespace Bot.ChromeNs
                         const string setupError = "Bot WebSocket服务启动失败：Setup返回false，127.0.0.1:41010 未建立监听。";
                         BotConnectionDiagnostics.RecordWebSocketServerError(setupError);
                         Log.Error(setupError);
+                        StopAndDisposeWebSocketServer(webSocket, "setup failed");
                         return;
                     }
 
@@ -1615,6 +1640,7 @@ namespace Bot.ChromeNs
                             : "Bot WebSocket服务启动失败：连续" + WebSocketStartMaxAttempts + "次Start未成功，127.0.0.1:41010 未建立监听。最后异常=" + lastStartException.Message;
                         BotConnectionDiagnostics.RecordWebSocketServerError(startError);
                         Log.Error(startError);
+                        StopAndDisposeWebSocketServer(webSocket, "start failed");
                         return;
                     }
 
@@ -1628,6 +1654,7 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception ex)
                 {
+                    StopAndDisposeWebSocketServer(webSocket, "startup exception");
                     BotConnectionDiagnostics.RecordWebSocketServerError(ex.Message);
                     Log.Exception(ex);
                 }
