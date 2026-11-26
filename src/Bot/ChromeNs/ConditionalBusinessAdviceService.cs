@@ -146,8 +146,7 @@ namespace Bot.ChromeNs
                 || commerce == null || !commerce.HasStructuredOrder
                 || commerce.IsPaid != true
                 || !string.Equals(commerce.PurchasePhase, "paid", StringComparison.OrdinalIgnoreCase)
-                || string.IsNullOrWhiteSpace(commerce.OrderId)
-                || commerce.EvidenceTime == DateTime.MinValue)
+                || string.IsNullOrWhiteSpace(commerce.OrderId))
                 return RejectBuild("order_unverified_or_not_paid", shopKey, seller, buyer,
                     commerce == null ? string.Empty : commerce.OrderId, expectedImageMessageKey,
                     expectedImageKnowledgeId, out evidence);
