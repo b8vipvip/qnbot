@@ -47,7 +47,9 @@ No local conditional refund suggestion is sent when:
 
 The current image must be the newest same-shop/same-buyer image observation and must still match the active image-knowledge rule; a newer unmatched or withdrawn image invalidates an older match. The image message must also be the exact current OCR message when the decision is made in the image path.
 
-A separate cross-process delivery ledger reserves the advice key by ShopKey + seller + buyer + order ID + knowledge record ID. Confirmed delivery is recorded; uncertain delivery (including a process crash after reservation) is held for manual reconciliation instead of being sent again. This ledger coordinates processes under the same Windows user profile; cross-device exactly-once delivery still depends on a single authoritative shop runtime and is not claimed as globally synchronized.
+A separate cross-process delivery ledger reserves the advice key by ShopKey + seller + buyer + order ID + knowledge record ID. Confirmed delivery is recorded; uncertain delivery (including a process crash after reservation) is held for manual reconciliation instead of being sent again. The Knowledge V2 records page exposes **条件性建议发送核对** for an operator to inspect the actual Qianniu conversation and explicitly mark the record delivered or not delivered. Releasing a not-delivered reservation does not bypass any evidence check on the next attempt.
+
+This ledger coordinates processes under the same Windows user profile; cross-device exactly-once delivery still depends on a single authoritative shop runtime and is not claimed as globally synchronized. The reconciliation window displays this limitation explicitly.
 
 ## Four Windows / Qianniu acceptance scenarios
 
