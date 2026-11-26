@@ -10,6 +10,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -52,6 +53,8 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan PendingDeliveryUncertainAfter = TimeSpan.FromMinutes(2);
         private static readonly ConcurrentDictionary<string, CatalogIndex> CatalogCache =
             new ConcurrentDictionary<string, CatalogIndex>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, byte> RollbackRetryWorkers =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
         private sealed class CatalogIndex
         {
@@ -538,6 +541,10 @@ namespace Bot.ChromeNs
                             && x.Value<bool?>("quarantined") == true);
                         if (quarantinedFault != null)
                         {
+                            // A previous rollback attempt may have failed because the file lock,
+                            // backup file or process was temporarily unavailable. Quarantine stops
+                            // sends, but it must not permanently suppress recovery retries.
+                            EnsureRollbackRetryScheduled(seller, shopKey, flowId, catalog.Revision);
                             QueueHandoff(shop, seller, buyer, question, shopKey, flowId);
                             return Suppressed(seller, buyer, shopKey, flowId, flowVersion,
                                 catalog.Revision, currentState, currentState, "HANDOFF", sourceKey,
@@ -1156,6 +1163,8 @@ namespace Bot.ChromeNs
                     if (count >= AutoRollbackFailureThreshold && fault.Value<bool?>("quarantined") != true)
                     {
                         fault["quarantined"] = true;
+                        fault["rollback_pending"] = true;
+                        fault["rollback_retry_after_utc_ticks"] = 0;
                         shouldRollback = true;
                     }
                     return true;
@@ -1174,16 +1183,160 @@ namespace Bot.ChromeNs
                     ReceptionWorkflowCatalogService.RollbackToPreviousPublished(
                         seller, shopKey, revision);
                     InvalidateShop(shopKey);
+                    UpdateRollbackRetryState(shop, flowId, revision, false, true, false, 0, string.Empty);
                     Log.ErrorWithMaxCount("Reception Agent检测到同一目录版本连续异常，已自动回滚：flow="
                         + flowId + ", revision=" + revision, 10);
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    Log.ErrorWithMaxCount("Reception Agent自动回滚未执行（无有效历史版本或CAS变化），当前流程保持隔离：" + ex.Message, 10);
+                    try
+                    {
+                        UpdateRollbackRetryState(shop, flowId, revision, true, false, false,
+                            DateTime.UtcNow.AddSeconds(30).Ticks, ex.Message);
+                    }
+                    catch (Exception stateError)
+                    {
+                        Log.ErrorWithMaxCount("Reception Agent回滚重试状态持久化失败：" + stateError.Message, 10);
+                    }
+                    EnsureRollbackRetryScheduled(seller, shopKey, flowId, revision);
+                    Log.ErrorWithMaxCount("Reception Agent自动回滚暂未执行；当前流程保持隔离并已安排持久化重试：" + ex.Message, 10);
                 }
             }
             return false;
+        }
+
+        private static string RollbackRetryKey(string shopKey, string flowId, long revision)
+        {
+            return (shopKey ?? string.Empty) + "|" + (flowId ?? string.Empty) + "|"
+                + revision.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryReadRollbackRetryState(
+            ShopContext shop, string flowId, long revision, out long retryAfterUtcTicks)
+        {
+            retryAfterUtcTicks = 0;
+            var key = flowId + "|" + revision.ToString(CultureInfo.InvariantCulture);
+            var path = RuntimePath(shop);
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowRuntime", 3000))
+            {
+                if (lease == null || !lease.Acquired)
+                    throw new IOException("Reception Agent rollback recovery lock unavailable");
+                var document = ReadDocument(path);
+                var faults = document["faults"] as JArray;
+                var fault = faults == null ? null : faults.OfType<JObject>().FirstOrDefault(x =>
+                    string.Equals(Convert.ToString(x["key"]), key, StringComparison.Ordinal));
+                if (fault == null || fault.Value<bool?>("quarantined") != true) return false;
+                // Older quarantined fault records predate rollback_pending. Treat them as
+                // pending so an upgrade can recover a previously failed rollback.
+                if (fault.Value<bool?>("rollback_pending") == false
+                    || fault.Value<bool?>("rollback_completed") == true
+                    || fault.Value<bool?>("rollback_superseded") == true) return false;
+                retryAfterUtcTicks = fault.Value<long?>("rollback_retry_after_utc_ticks") ?? 0;
+                return true;
+            }
+        }
+
+        private static void UpdateRollbackRetryState(
+            ShopContext shop, string flowId, long revision, bool pending, bool completed,
+            bool superseded, long retryAfterUtcTicks, string error)
+        {
+            Mutate(shop, document =>
+            {
+                var key = flowId + "|" + revision.ToString(CultureInfo.InvariantCulture);
+                var faults = document["faults"] as JArray;
+                var fault = faults == null ? null : faults.OfType<JObject>().FirstOrDefault(x =>
+                    string.Equals(Convert.ToString(x["key"]), key, StringComparison.Ordinal));
+                if (fault == null) return false;
+                fault["rollback_pending"] = pending;
+                fault["rollback_completed"] = completed;
+                fault["rollback_superseded"] = superseded;
+                fault["rollback_retry_after_utc_ticks"] = retryAfterUtcTicks;
+                fault["last_rollback_error"] = SafeMetadata(error, 320);
+                if (completed) fault["rollback_completed_utc_ticks"] = DateTime.UtcNow.Ticks;
+                return true;
+            });
+        }
+
+        private static void EnsureRollbackRetryScheduled(
+            string seller, string shopKey, string flowId, long revision)
+        {
+            var workerKey = RollbackRetryKey(shopKey, flowId, revision);
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(shopKey)
+                || string.IsNullOrWhiteSpace(flowId) || !RollbackRetryWorkers.TryAdd(workerKey, 0)) return;
+
+            Task.Run(async () =>
+            {
+                var delay = TimeSpan.FromSeconds(30);
+                try
+                {
+                    while (true)
+                    {
+                        await Task.Delay(delay).ConfigureAwait(false);
+                        ShopContext shop;
+                        try { shop = ResolveShop(seller, shopKey); }
+                        catch { return; }
+
+                        long retryAfter;
+                        bool pending;
+                        try { pending = TryReadRollbackRetryState(shop, flowId, revision, out retryAfter); }
+                        catch (Exception ex)
+                        {
+                            Log.ErrorWithMaxCount("Reception Agent回滚重试读取状态失败，稍后重试：" + ex.Message, 10);
+                            delay = TimeSpan.FromMinutes(1);
+                            continue;
+                        }
+                        if (!pending) return;
+                        var now = DateTime.UtcNow.Ticks;
+                        if (retryAfter > now)
+                        {
+                            delay = TimeSpan.FromTicks(Math.Min(
+                                TimeSpan.FromMinutes(5).Ticks, retryAfter - now));
+                            continue;
+                        }
+
+                        try
+                        {
+                            var currentCatalog = JObject.Parse(
+                                ReceptionWorkflowCatalogService.GetActiveJson(seller, shopKey));
+                            var currentRevision = currentCatalog.Value<long?>("catalog_revision") ?? 0;
+                            if (currentRevision != revision)
+                            {
+                                UpdateRollbackRetryState(shop, flowId, revision, false, false, true, 0,
+                                    "目录版本已变化，旧版本自动回滚已由新发布取代");
+                                return;
+                            }
+
+                            ReceptionWorkflowCatalogService.RollbackToPreviousPublished(
+                                seller, shopKey, revision);
+                            InvalidateShop(shopKey);
+                            UpdateRollbackRetryState(shop, flowId, revision, false, true, false, 0, string.Empty);
+                            Log.ErrorWithMaxCount("Reception Agent持久化回滚重试成功：flow="
+                                + flowId + ", failedRevision=" + revision, 10);
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            delay = TimeSpan.FromSeconds(Math.Min(300, Math.Max(30, delay.TotalSeconds * 2)));
+                            try
+                            {
+                                UpdateRollbackRetryState(shop, flowId, revision, true, false, false,
+                                    DateTime.UtcNow.Add(delay).Ticks, ex.Message);
+                            }
+                            catch (Exception stateError)
+                            {
+                                Log.ErrorWithMaxCount("Reception Agent回滚失败后的退避状态写入失败：" + stateError.Message, 10);
+                            }
+                            Log.ErrorWithMaxCount("Reception Agent回滚重试失败，已退避后继续保持流程隔离：" + ex.Message, 10);
+                        }
+                    }
+                }
+                finally
+                {
+                    byte ignored;
+                    RollbackRetryWorkers.TryRemove(workerKey, out ignored);
+                }
+            });
         }
     }
 }
