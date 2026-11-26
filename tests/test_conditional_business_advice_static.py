@@ -73,6 +73,7 @@ def test_refund_suggestion_never_claims_or_executes_a_refund():
     assert "SafeRefundSuggestionRegex" in source
     assert "record.Authority < 0.90d" in source
     assert "IsSafeRefundSuggestionText" in source
+    assert "var minimumScore = exactAlias ? 0.72d : 0.82d" in source
     assert "UnsafeRefundActionRegex" in source
     assert "已退款|退款成功|退款已完成" in source
     assert "自动退款|直接退款|立即退款" in source
