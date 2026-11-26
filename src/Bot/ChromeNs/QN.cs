@@ -1402,9 +1402,12 @@ namespace Bot.ChromeNs
                         result.ConditionalAdviceImageKnowledgeId))
                     return false;
                 string latestReason;
-                return ParallelReplyRelevanceGate.ShouldSend(
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
+                if (shouldSend && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
+                return shouldSend;
             };
             bool sendOk;
             try
