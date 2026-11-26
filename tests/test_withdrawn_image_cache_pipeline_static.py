@@ -270,3 +270,14 @@ def test_vision_withdrawal_checks_durable_observation_tombstone_after_cache_rest
     assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in by_message_key
     assert "record != null && record.Withdrawn" in is_withdrawn
     assert "record != null && record.Withdrawn" in by_message_key
+
+
+def test_duplicate_withdrawal_notice_reuses_latest_existing_tombstone_instead_of_marking_older_image():
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    lookup = learning.split("internal static string FindLatestObservationMessageKey", 1)[1].split(
+        "internal static void MarkObservationWithdrawn", 1
+    )[0]
+    assert "Duplicate/replayed" in lookup
+    assert 'x.Status, "图片已撤回"' not in lookup
+    assert "SameBuyerForWithdrawal(seller, x.Buyer, buyer)" in lookup
+    assert "order by ObservedAtTicks desc, UpdatedAtTicks desc" in lookup
