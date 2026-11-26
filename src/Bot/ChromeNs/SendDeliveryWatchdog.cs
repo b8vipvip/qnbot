@@ -446,6 +446,7 @@ namespace Bot.ChromeNs
                 .ToList();
 
             var confirmed = false;
+            var confirmedCount = 0;
             foreach (var pair in matched)
             {
                 var pending = pair.Value;
@@ -461,6 +462,7 @@ namespace Bot.ChromeNs
                     pending.Terminal = 1;
                 }
                 confirmed = true;
+                confirmedCount++;
                 ReplyQualityMetricsService.RecordSendResult(
                     true,
                     Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
@@ -475,7 +477,7 @@ namespace Bot.ChromeNs
                 CleanupKnownAnswers();
                 Log.Info("通过本店卖家消息回显确认Bot真实发送: shop=" + shopKey
                     + ", seller=" + seller + ", buyer=" + buyer
-                    + ", matchedWatchdogs=" + matched.Count);
+                    + ", matchedWatchdogs=" + confirmedCount);
                 return true;
             }
 
