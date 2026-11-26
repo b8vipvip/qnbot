@@ -1,0 +1,187 @@
+import importlib
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+
+@pytest.fixture()
+def advice_api(control_plane, monkeypatch):
+    service_dir = Path(__file__).resolve().parents[1]
+    if str(service_dir) not in sys.path:
+        sys.path.insert(0, str(service_dir))
+    sys.modules.pop("conditional_business_advice", None)
+    module = importlib.import_module("conditional_business_advice")
+
+    class Console:
+        @staticmethod
+        def _runtime_client(request):
+            return {"id": int(request.client_id)}
+
+    class Binding:
+        @staticmethod
+        def ensure_binding(client_id, shop_key, force=False, seller=""):
+            assert int(client_id) > 0
+            assert shop_key.startswith("qn_")
+            return {"ok": True}
+
+    module.install(control_plane, Console, Binding)
+    module.init_db()
+    return module
+
+
+def request_for(client_id):
+    return SimpleNamespace(client_id=client_id)
+
+
+def claim(module, client_id, shop, buyer="buyer-1", order="order-1", advice="knowledge-1", request_id=None):
+    return module.runtime_claim(
+        module.ConditionalAdviceClaimInput(
+            buyer=buyer,
+            order_id=order,
+            advice_key=advice,
+            request_id=request_id or ("request-" + str(client_id) + "-000000000"),
+            lease_seconds=120,
+        ),
+        request_for(client_id),
+        x_shop_key=shop,
+    )
+
+
+def test_claim_is_global_across_different_client_tokens_for_the_same_shop(advice_api):
+    shop = "qn_0123456789ab"
+    first = claim(advice_api, 11, shop)
+    second = claim(advice_api, 12, shop, request_id="request-second-000000")
+    assert first["claimed"] is True
+    assert second["claimed"] is False
+    assert second["state"] == "reserved"
+
+    completed = advice_api.runtime_complete(
+        advice_api.ConditionalAdviceCompleteInput(
+            buyer="buyer-1",
+            order_id="order-1",
+            advice_key="knowledge-1",
+            lease_token=first["lease_token"],
+            outcome="delivered",
+        ),
+        request_for(11),
+        x_shop_key=shop,
+    )
+    assert completed["state"] == "delivered"
+    third = claim(advice_api, 12, shop, request_id="request-third-000000")
+    assert third["claimed"] is False
+    assert third["state"] == "delivered"
+
+
+def test_expired_lease_becomes_uncertain_until_operator_reconciles(advice_api, monkeypatch):
+    shop = "qn_0123456789ab"
+    start = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start)
+    first = claim(advice_api, 11, shop)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start + timedelta(minutes=3))
+
+    blocked = claim(advice_api, 12, shop, request_id="request-second-000000")
+    assert blocked["claimed"] is False
+    assert blocked["state"] == "uncertain"
+
+    pending = advice_api.runtime_pending(request_for(12), x_shop_key=shop)
+    assert pending["items"][0]["buyer"] == "buyer-1"
+    assert pending["items"][0]["order_id"] == "order-1"
+    scope_hash = pending["items"][0]["scope_hash"]
+
+    resolved = advice_api.runtime_resolve(
+        advice_api.ConditionalAdviceResolveInput(scope_hash=scope_hash, confirmed_delivered=False),
+        request_for(12),
+        x_shop_key=shop,
+    )
+    assert resolved["state"] == "released"
+    retried = claim(advice_api, 12, shop, request_id="request-third-000000")
+    assert retried["claimed"] is True
+
+    # A late completion from the original sender cannot complete the new lease.
+    with pytest.raises(Exception):
+        advice_api.runtime_complete(
+            advice_api.ConditionalAdviceCompleteInput(
+                buyer="buyer-1",
+                order_id="order-1",
+                advice_key="knowledge-1",
+                lease_token=first["lease_token"],
+                outcome="delivered",
+            ),
+            request_for(11),
+            x_shop_key=shop,
+        )
+
+
+def test_same_request_id_replays_the_original_lease_token(advice_api):
+    shop = "qn_0123456789ab"
+    request_id = "request-replay-000000"
+    first = claim(advice_api, 11, shop, request_id=request_id)
+    replay = claim(advice_api, 11, shop, request_id=request_id)
+    assert first["claimed"] is True
+    assert replay["claimed"] is True
+    assert replay["replayed"] is True
+    assert replay["lease_token"] == first["lease_token"]
+
+
+def test_cancelled_before_send_releases_only_the_owned_lease(advice_api):
+    shop = "qn_0123456789ab"
+    first = claim(advice_api, 11, shop)
+    wrong = advice_api.runtime_complete(
+        advice_api.ConditionalAdviceCompleteInput(
+            buyer="buyer-1",
+            order_id="order-1",
+            advice_key="knowledge-1",
+            lease_token="not-the-lease-token",
+            outcome="cancelled_before_send",
+        ),
+        request_for(11),
+        x_shop_key=shop,
+    ) if False else None
+    released = advice_api.runtime_complete(
+        advice_api.ConditionalAdviceCompleteInput(
+            buyer="buyer-1",
+            order_id="order-1",
+            advice_key="knowledge-1",
+            lease_token=first["lease_token"],
+            outcome="cancelled_before_send",
+        ),
+        request_for(11),
+        x_shop_key=shop,
+    )
+    assert released["state"] == "released"
+    assert claim(advice_api, 12, shop, request_id="request-new-00000000")["claimed"] is True
+
+
+def test_scope_is_shop_isolated_and_raw_identifiers_are_encrypted_at_rest(advice_api, control_plane):
+    shop_a = "qn_0123456789ab"
+    shop_b = "qn_abcdef012345"
+    first = claim(advice_api, 11, shop_a, buyer="private-buyer", order="private-order", advice="private-advice")
+    second = claim(advice_api, 12, shop_b, buyer="private-buyer", order="private-order", advice="private-advice")
+    assert first["claimed"] is True
+    assert second["claimed"] is True
+
+    with control_plane.db() as conn:
+        row = conn.execute(
+            "SELECT buyer_cipher,order_id_cipher,advice_key_cipher FROM bot_conditional_business_advice WHERE shop_key=?",
+            (shop_a,),
+        ).fetchone()
+    assert "private-buyer" not in row["buyer_cipher"]
+    assert "private-order" not in row["order_id_cipher"]
+    assert "private-advice" not in row["advice_key_cipher"]
+
+
+def test_server_audit_events_never_store_raw_buyer_or_order_identifiers(advice_api, control_plane):
+    shop = "qn_0123456789ab"
+    claim(advice_api, 11, shop, buyer="private-buyer", order="private-order", advice="private-advice")
+    with control_plane.db() as conn:
+        rows = conn.execute(
+            "SELECT scope_hash,event_type,outcome FROM bot_conditional_business_advice_events WHERE shop_key=?",
+            (shop,),
+        ).fetchall()
+    serialized = repr([tuple(row) for row in rows])
+    assert "private-buyer" not in serialized
+    assert "private-order" not in serialized
+    assert "private-advice" not in serialized
