@@ -364,8 +364,9 @@ namespace Bot.ChromeNs
                 var cutoff = noticeAt.AddMinutes(-5);
                 var candidate = Records.Values
                     .Where(x => x != null && string.Equals(x.ShopKey, shop.ShopKey, StringComparison.Ordinal))
-                    .Where(x => !x.Withdrawn
-                        && x.ObservedAt >= cutoff
+                    // Duplicate/replayed withdrawal notices must keep selecting the same
+                    // latest cached image even after its first notice marked it withdrawn.
+                    .Where(x => x.ObservedAt >= cutoff
                         && x.ObservedAt <= noticeAt.AddSeconds(2))
                     .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                     .OrderByDescending(x => x.ObservedAt)

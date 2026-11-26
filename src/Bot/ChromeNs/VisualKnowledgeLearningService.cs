@@ -269,7 +269,9 @@ namespace Bot.ChromeNs
                             "where ShopKey=? and Seller=? and ObservedAtTicks>=? and ObservedAtTicks<=? order by ObservedAtTicks desc, UpdatedAtTicks desc",
                             shopKey, seller, notBefore.Ticks, notAfter.Ticks)
                         .Where(x => x != null
-                            && !string.Equals(x.Status, "图片已撤回", StringComparison.Ordinal)
+                            // Include an existing withdrawal tombstone. Duplicate/replayed
+                            // notices must resolve to the same latest image key, not skip it
+                            // and accidentally withdraw an older unrelated image.
                             && SameBuyerForWithdrawal(seller, x.Buyer, buyer)
                             && !string.IsNullOrWhiteSpace(x.MessageKey))
                         .Select(x => Clean(x.MessageKey, 500))
