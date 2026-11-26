@@ -134,6 +134,8 @@ $checks = @(
     [pscustomobject]@{ Name = 'Device A sample is recent'; Passed = ($sampleAgeASeconds -ge -60 -and $sampleAgeASeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device B sample is recent'; Passed = ($sampleAgeBSeconds -ge -60 -and $sampleAgeBSeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device A cloud sync converged'; Passed = ($deviceA.Converged -eq $true) }
+    [pscustomobject]@{ Name = 'Device A last sync succeeded'; Passed = ($deviceA.LastStatus -eq 'synced') }
+    [pscustomobject]@{ Name = 'Device B last sync succeeded'; Passed = ($deviceB.LastStatus -eq 'synced') }
     [pscustomobject]@{ Name = 'Device B cloud sync converged'; Passed = ($deviceB.Converged -eq $true) }
     [pscustomobject]@{ Name = 'Device A shop is not syncing'; Passed = ($deviceA.Syncing -eq $false) }
     [pscustomobject]@{ Name = 'Device B shop is not syncing'; Passed = ($deviceB.Syncing -eq $false) }
