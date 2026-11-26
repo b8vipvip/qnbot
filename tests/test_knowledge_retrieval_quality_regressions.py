@@ -92,10 +92,10 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
     assert "decision.Query = query;" in internal
     assert "curatedImageEvidence && IsSafeCuratedImageFollowUp(query, message)" in internal
-    assert "private static bool IsSafeCuratedImageFollowUp" in internal
-    assert "query.ContextDependent" in internal
-    assert "KnowledgeV2Semantics.IsHighRisk(message)" in internal
-    assert "你" in internal and "看看" in internal
+    assert "private static bool IsSafeCuratedImageFollowUp" in service
+    assert "query.ContextDependent" in service
+    assert "KnowledgeV2Semantics.IsHighRisk(message)" in service
+    assert "你" in service and "看看" in service
 
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
     assert "KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(" in ocr
