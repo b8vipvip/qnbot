@@ -129,7 +129,7 @@ namespace Bot.ChromeNs
             return salt;
         }
 
-        private static string RuntimeAcceptanceDiagnosticRef(string kind, string value)
+        internal static string RuntimeAcceptanceDiagnosticRef(string kind, string value)
         {
             value = (value ?? string.Empty).Trim();
             if (value.Length == 0) return (kind ?? "id") + "#none";
