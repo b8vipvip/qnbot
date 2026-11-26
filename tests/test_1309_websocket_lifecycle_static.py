@@ -178,3 +178,15 @@ def test_closed_websocket_status_generation_entries_are_pruned_without_generatio
     assert "NextStatusBindingGenerationLocked(session.SessionID);" in closed
     assert "_statusBindingGenerations.TryRemove(session.SessionID, out ignoredStatusGeneration);" in closed
     assert closed.index("NextStatusBindingGenerationLocked(session.SessionID);") < closed.index("_statusBindingGenerations.TryRemove(session.SessionID, out ignoredStatusGeneration);")
+
+
+def test_listener_restart_releases_both_session_generation_dictionaries():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    release = server.split("private void ReleaseStaleSessions", 1)[1].split(
+        "public void Start()", 1
+    )[0]
+    assert "NextStatusBindingGenerationLocked(sessionId);" in release
+    assert "_statusBindingGenerations.TryRemove(sessionId, out ignoredStatusGeneration);" in release
+    assert "NextShopIdentityProbeGenerationLocked(sessionId);" in release
+    assert "_shopIdentityProbeGenerations.TryRemove(sessionId, out ignoredIdentityProbeGeneration);" in release
+    assert "ReleaseClosedSession(sessionId, reason, removed);" in release
