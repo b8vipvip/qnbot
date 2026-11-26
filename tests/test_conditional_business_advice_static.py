@@ -59,7 +59,8 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "GetRecentWorkflowEvidence(shopKey, seller, buyer, 30)" in build
     assert "MatchedImageKnowledgeId" in build
     assert "OcrImageSha256" in build
-    assert "imageObservedAt < commerce.EvidenceTime" in build
+    assert "order.PaidAt" in build
+    assert "imageObservedAt < orderEvidenceTime" in build
     assert "VisualImageKnowledgeService.Load(shopKey, seller)" in build
     assert "paidOpenOrders.Count > 1" in build
 
@@ -103,6 +104,7 @@ def test_conditional_advice_delivery_is_shop_buyer_order_and_record_scoped():
     assert "已经发送" in source
     assert "发送状态不确定" in source
     assert "DateTime.MaxValue" in source
+    assert "order.PaidAt" in source
     assert "DeliveryUncertain = true" in source
 
 
