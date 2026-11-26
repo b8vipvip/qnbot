@@ -271,3 +271,11 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 3. 验证自动回复的人工接管、撤回、失败重试、并发与防重复发送。
 4. 使用测试订单验收自动发货的状态核验、崩溃恢复和防重复确认；验收后运行 `powershell.exe -NoProfile -File scripts\\Invoke-QnBotAutoDeliveryDiagnostics.ps1 -OutputDirectory .\\acceptance`，检查四个持久状态文件均为 readable，pending/intent/uncertain 与 ledger resolved/unresolved 计数符合预期，且 `SafetyAssessment` 不为 `REVIEW_REQUIRED`。报告只包含聚合计数，不包含 ShopKey、店铺昵称、买家姓名、订单号或事件正文。
 5. 对 Reception Agent 已实现的状态机进行真实千牛图文/订单流程、同昵称多店铺、重启、转人工通知、异常回滚和长期运行验收；另行完成 GPTAuto Reconcile 真实终态验收。
+
+
+### 2026-11-26 — acceptance evidence integrity
+
+- Memory sampler projects process rows onto the system CSV header so per-process CPU, memory, handle and thread rows are not lost on append.
+- Cloud-sync and full-corpus-learning diagnostics now share the runtime snapshot's process-local HMAC ShopRef format. Older 10-hex-digit sync aliases are not accepted by the comparator; collect new samples after updating.
+- The comparator evaluates the newest system row rather than an earlier successful row, rejects identical CSV content, requires 16-digit fingerprint prefixes and successful last sync status. The sampler treats individual shops with no successful sync in the past 180 seconds as not converged, even when another shop keeps the snapshot file fresh.
+- Matching fingerprints are evidence of convergence for the operator-selected shops, not independent proof that the two files originate from different physical devices or that the shops are the same. Use independent captures from the intended shops.
