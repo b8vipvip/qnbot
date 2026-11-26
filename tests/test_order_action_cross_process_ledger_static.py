@@ -126,7 +126,7 @@ def test_live_inflight_order_reply_barrier_never_expires_while_owner_process_is_
         code.index("internal static void MarkDeliveryUncertain")
     ]
 
-    assert "(!x.InFlight && x.Until <= now)" in begin
+    assert "(!x.InFlight && !x.DeliveryUncertain && x.Until <= now)" in begin
     assert "if (priorAction != null && priorAction.InFlight)" in begin
     assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
 
