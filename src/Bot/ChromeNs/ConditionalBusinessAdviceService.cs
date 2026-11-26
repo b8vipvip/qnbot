@@ -106,6 +106,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             CommerceContextSnapshot commerce,
+            string expectedImageMessageKey,
+            string expectedImageKnowledgeId,
             out ConditionalBusinessAdviceEvidence evidence)
         {
             evidence = null;
@@ -185,6 +187,12 @@ namespace Bot.ChromeNs
                 return false;
             }
             if (image == null || string.IsNullOrWhiteSpace(image.MatchedImageKnowledgeId))
+                return false;
+            if (!string.IsNullOrWhiteSpace(expectedImageMessageKey)
+                && !string.Equals(image.MessageKey, expectedImageMessageKey, StringComparison.Ordinal))
+                return false;
+            if (!string.IsNullOrWhiteSpace(expectedImageKnowledgeId)
+                && !string.Equals(image.MatchedImageKnowledgeId, expectedImageKnowledgeId, StringComparison.Ordinal))
                 return false;
 
             var imageObservedAt = SafeTime(image.ObservedAtTicks);
