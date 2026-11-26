@@ -578,3 +578,22 @@ def test_runtime_retention_never_evicts_uncertain_delivery_or_pending_rollback_s
     assert 'item.Value<bool?>("rollback_superseded") != true' in write
     assert "pendingRollbacks.Concat(recentFaults)" in write
     assert "Math.Max(0, MaxFaultRecords - pendingRollbacks.Count)" in write
+
+
+def test_persisted_reception_rollbacks_resume_after_restart_without_waiting_for_buyer_message():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    bootstrap = runtime.split("public static object InitializeForApp()", 1)[1].split(
+        "private static void QueuePendingRollbackRecovery", 1
+    )[0]
+    recovery = runtime.split("private static void QueuePendingRollbackRecovery()", 1)[1].split(
+        "private static bool IsPendingRollback", 1
+    )[0]
+    assert "_receptionWorkflowRuntimeBootstrap" in runtime
+    assert "new Timer(" in bootstrap
+    assert "TimeSpan.FromSeconds(15)" in bootstrap
+    assert "TimeSpan.FromMinutes(1)" in bootstrap
+    assert "Profiles.GetAll()" in recovery
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowRuntime", 3000)' in recovery
+    assert "Where(IsPendingRollback)" in recovery
+    assert "EnsureRollbackRetryScheduled(shop.SellerNick, shop.ShopKey, item.Item1, item.Item2)" in recovery
+    assert "buyer message" in bootstrap
