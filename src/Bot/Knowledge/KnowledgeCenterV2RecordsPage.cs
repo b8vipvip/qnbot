@@ -607,7 +607,7 @@ namespace Bot.Knowledge
                 string reason;
                 var ok = ConditionalBusinessAdviceService.ResolveUncertainDelivery(
                     _shopKey, _seller, item.Buyer, item.OrderId, item.AdviceKey,
-                    confirmedDelivered, out reason);
+                    item.ScopeHash, confirmedDelivered, out reason);
                 return new { Ok = ok, Reason = reason };
             }).ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
             {
