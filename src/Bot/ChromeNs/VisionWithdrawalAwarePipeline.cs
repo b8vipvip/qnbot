@@ -270,7 +270,15 @@ namespace Bot.ChromeNs
                 return;
             }
             if (workflowDecision != null && workflowDecision.RequiresSend)
+            {
+                // A published workflow owns this reply; do not carry an unrelated
+                // conditional-advice idempotency key onto its different response text.
+                result.ConditionalAdviceKey = string.Empty;
+                result.ConditionalAdviceOrderId = string.Empty;
+                result.ConditionalAdviceImageMessageKey = string.Empty;
+                result.ConditionalAdviceImageKnowledgeId = string.Empty;
                 result.Answer = workflowDecision.ReplyText;
+            }
 
             // OCR-first direct knowledge has already passed Knowledge Engine V2's production
             // authority gate. Running the generic dedupe/validator without preserveTrustedAnswer
