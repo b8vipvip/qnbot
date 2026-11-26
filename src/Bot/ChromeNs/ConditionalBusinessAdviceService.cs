@@ -474,10 +474,10 @@ namespace Bot.ChromeNs
                 if (record != null && record.ReservedUntil > DateTime.Now)
                 {
                     reason = record.DeliveryUncertain
-                        ? "该订单的售后建议发送状态不确定，需要人工核实，禁止重复发送"
+                        ? "该订单的售后建议已被保留或发送状态不确定，禁止重复发送；如长时间未完成需人工核实"
                         : "该订单的售后建议正在发送，禁止并发重复发送";
                     AppendDiagnosticEvent(state, "delivery_blocked_reserved_or_uncertain",
-                        record.DeliveryUncertain ? "delivery_uncertain" : "delivery_in_progress",
+                        record.DeliveryUncertain ? "delivery_reserved_or_uncertain" : "delivery_in_progress",
                         shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
                     SaveLedger(path, state, out loadError);
                     return false;
