@@ -118,9 +118,15 @@ namespace Bot.ChromeNs
                 entity.OcrText = Clean(ocr.Text, 12000);
                 entity.OcrConfidence = Math.Max(0d, Math.Min(1d, ocr.Confidence));
                 entity.OcrEngine = Clean(ocr.Engine, 80);
-                entity.MatchedImageKnowledgeId = Clean(matchedImageKnowledgeId, 80);
-                entity.ImageKnowledgeScore = double.IsNaN(imageKnowledgeScore) || double.IsInfinity(imageKnowledgeScore)
-                    ? 0d : Math.Max(0d, Math.Min(1d, imageKnowledgeScore));
+                // A later multimodal OCR pass may not carry the earlier OCR-first match
+                // object. Empty input must not erase the already persisted message-to-image
+                // knowledge link.
+                if (!string.IsNullOrWhiteSpace(matchedImageKnowledgeId))
+                {
+                    entity.MatchedImageKnowledgeId = Clean(matchedImageKnowledgeId, 80);
+                    entity.ImageKnowledgeScore = double.IsNaN(imageKnowledgeScore) || double.IsInfinity(imageKnowledgeScore)
+                        ? 0d : Math.Max(0d, Math.Min(1d, imageKnowledgeScore));
+                }
                 if (string.IsNullOrWhiteSpace(entity.VisualSummary)
                     && !string.IsNullOrWhiteSpace(matchedImageDescription))
                     entity.VisualSummary = Redact(Clean(matchedImageDescription, 1600));
