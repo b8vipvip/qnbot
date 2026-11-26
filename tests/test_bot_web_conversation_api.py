@@ -427,3 +427,59 @@ def test_runtime_image_sync_requests_full_reconciliation_when_cloud_cursor_was_r
         assert result["reset_cursor"] is True
         assert result["revision"] == 0
         assert result["current_revision"] == 5
+
+
+def test_image_knowledge_hit_info_column_migrates_and_roundtrips_payload(tmp_path):
+    with loaded_modules() as (core, conversations):
+        cp = FakeControlPlane(tmp_path / "image-hit-info-migration.db")
+        core._cp = cp
+        with cp.db() as conn:
+            conn.execute("CREATE TABLE client_tokens(id INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+            # Simulate an installed version whose image table predates hit_info.
+            conn.execute(
+                """CREATE TABLE bot_web_image_knowledge (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    shop_key TEXT NOT NULL DEFAULT '',
+                    seller TEXT NOT NULL DEFAULT '',
+                    image_name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    image_sha256 TEXT NOT NULL,
+                    image_bytes BLOB NOT NULL,
+                    ocr_text TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    updated_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(client_id,shop_key,image_sha256)
+                )"""
+            )
+
+        conversations.init_db()
+        now = cp.iso_now()
+        with cp.db() as conn:
+            columns = {row["name"] for row in conn.execute(
+                "PRAGMA table_info(bot_web_image_knowledge)"
+            ).fetchall()}
+            assert "hit_info" in columns
+            conn.execute(
+                """INSERT INTO bot_web_image_knowledge
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,
+                    ocr_text,description,enabled,revision,updated_by,created_at,updated_at)
+                   VALUES('image-hit',1,'shop-a','seller-a','tv.png','image/png',?,?, 'ocr','说明',1,1,'test',?,?)""",
+                ("b" * 64, b"image-bytes", now, now),
+            )
+            conn.execute(
+                "UPDATE bot_web_image_knowledge SET hit_info=? WHERE id='image-hit'",
+                ("必须包含：账号管理\\n必须包含：NewTV ID",),
+            )
+            row = conn.execute(
+                "SELECT * FROM bot_web_image_knowledge WHERE id='image-hit'"
+            ).fetchone()
+
+        payload = conversations._image_row_payload(row, include_bytes=False)
+        assert payload["hit_info"] == "必须包含：账号管理\\n必须包含：NewTV ID"
+
