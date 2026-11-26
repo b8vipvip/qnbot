@@ -56,8 +56,8 @@ try {
     Write-TestJson -Path (Join-Path $dataDir 'virtual-goods-auto-delivery-confirmation-ledger.json') -Value ([pscustomobject]@{
         Schema = 2
         Records = @(
-            [pscustomobject]@{ Key = 'confirmation-key-secret'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345678'; IntentAt = $now; Resolution = '' }
-            [pscustomobject]@{ Key = 'confirmation-key-secret-2'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345679'; IntentAt = $now; Resolution = 'confirmed' }
+            [pscustomobject]@{ Key = 'confirmation-key-secret'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345678'; IntentAt = $now; Resolution = 'intent_persisted'; ResolvedAt = $null }
+            [pscustomobject]@{ Key = 'confirmation-key-secret-2'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345679'; IntentAt = $now; Resolution = 'confirmed'; ResolvedAt = $now }
         )
     })
     Write-TestJson -Path (Join-Path $dataDir 'virtual-goods-auto-delivery-event-cursor.json') -Value ([pscustomobject]@{
@@ -100,7 +100,29 @@ try {
     Write-TestJson -Path (Join-Path $dataDir 'virtual-goods-auto-delivery-confirmation-ledger.json') -Value ([pscustomobject]@{
         Schema = 2
         Records = @(
-            [pscustomobject]@{ Key = 'confirmation-key-secret'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345678'; IntentAt = $now; Resolution = 'confirmed' }
+            [pscustomobject]@{ Key = 'confirmation-key-secret'; ShopKey = 'shop-key-secret'; Seller = 'seller-name-secret'; OrderId = '123456789012345678'; IntentAt = $now; Resolution = 'confirmed'; ResolvedAt = $now }
+        )
+    })
+    # A migrated, unresolved intent can outlive its queue item; the ledger alone
+    # must still trigger REVIEW_REQUIRED.
+    $ledgerPath = Join-Path $dataDir 'virtual-goods-auto-delivery-confirmation-ledger.json'
+    Write-TestJson -Path $ledgerPath -Value ([pscustomobject]@{
+        Schema = 2
+        Records = @(
+            [pscustomobject]@{ Key = 'confirmation-key-secret'; IntentAt = $now; Resolution = 'migrated_pending_intent'; ResolvedAt = $null }
+        )
+    })
+    $migratedOutput = Join-Path $tempRoot 'migrated'
+    $migratedProcess = Invoke-DiagnosticsChild -DataPath $dataDir -OutputPath $migratedOutput
+    if ($migratedProcess.ExitCode -ne 0) { throw 'Expected readable migrated intent.' }
+    $migrated = Get-LatestReport -Path $migratedOutput
+    if ($migrated.SafetyAssessment -ne 'REVIEW_REQUIRED' -or $migrated.ConfirmationLedger.UnresolvedCount -ne 1) {
+        throw 'Migrated pending intent was incorrectly classified as resolved.'
+    }
+    Write-TestJson -Path $ledgerPath -Value ([pscustomobject]@{
+        Schema = 2
+        Records = @(
+            [pscustomobject]@{ Key = 'confirmation-key-secret'; IntentAt = $now; Resolution = 'confirmed'; ResolvedAt = $now }
         )
     })
     $resolvedOutput = Join-Path $tempRoot 'resolved'

@@ -4057,8 +4057,8 @@ namespace Bot.ChromeNs
                         var transcriptFingerprint=Convert.ToString(coverage["knowledgeCorpusTranscriptFingerprint"])??string.Empty;
                         rows.Add(new JObject
                         {
-                            ["shopRef"]=MyWebSocketServer.DiagnosticRef("shop",report.ShopKey),
-                            ["sessionRef"]=MyWebSocketServer.DiagnosticRef("learning-session",report.EntityId??string.Empty),
+                            ["shopRef"]=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",report.ShopKey),
+                            ["sessionRef"]=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("learning-session",report.EntityId??string.Empty),
                             ["status"]=LearningStatusCode(report.Status),
                             ["sessionStartedAtUtc"]=LearningTicksToUtc(report.SessionStartedAtTicks),
                             ["updatedAtUtc"]=LearningTicksToUtc(report.UpdatedAtTicks),

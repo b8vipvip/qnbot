@@ -264,8 +264,8 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncShops = @()
                 if ($null -ne $knowledgeSync.Shops) { $syncShops = @($knowledgeSync.Shops) }
                 $knowledgeSyncShopCount = $syncShops.Count
-                $knowledgeSyncConvergedShopCount = @($syncShops | Where-Object { $_.Converged -eq $true }).Count
-                $knowledgeSyncDivergentShopCount = @($syncShops | Where-Object { $_.Converged -eq $false }).Count
+                $knowledgeSyncConvergedShopCount = 0
+                $knowledgeSyncDivergentShopCount = 0
                 $knowledgeSyncSyncingShopCount = @($syncShops | Where-Object { $_.Syncing -eq $true }).Count
                 if ($syncShops.Count -gt 0) {
                     $knowledgeSyncLatestRevision = ($syncShops | Measure-Object -Property CloudRevision -Maximum).Maximum
@@ -274,7 +274,18 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncStatuses = @()
                 foreach ($syncShop in $syncShops) {
                     if ($null -eq $syncShop) { continue }
-                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged + ':' + [string]$syncShop.Syncing)
+                    # Snapshot freshness is not per-shop freshness: another shop can refresh the file.
+                    $shopConverged = $false
+                    if ($syncShop.Converged -eq $true -and $syncShop.LastStatus -eq 'synced' -and
+                        -not [string]::IsNullOrWhiteSpace([string]$syncShop.LastSuccessUtc)) {
+                        $lastSuccess = [DateTimeOffset]::MinValue
+                        if ([DateTimeOffset]::TryParse([string]$syncShop.LastSuccessUtc, [ref]$lastSuccess)) {
+                            $successAge = ([DateTimeOffset]::UtcNow - $lastSuccess).TotalSeconds
+                            $shopConverged = $successAge -ge -30 -and $successAge -le 180
+                        }
+                    }
+                    if ($shopConverged) { $knowledgeSyncConvergedShopCount++ } else { $knowledgeSyncDivergentShopCount++ }
+                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$shopConverged + ':' + [string]$syncShop.Syncing)
                     if (-not [string]::IsNullOrWhiteSpace([string]$syncShop.LastStatus)) {
                         $syncStatuses += [string]$syncShop.LastStatus
                     }
@@ -367,7 +378,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
     }
 
     # Always write machine totals, even if the user has closed both applications.
-    [pscustomobject]@{
+    $systemRow = [pscustomobject]@{
         Time                = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
         Sample              = $sample
         SampleKind          = 'system'
@@ -442,7 +453,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         KnowledgeV2LatestSourceFingerprintPrefix = $learningLatestSourceFingerprintPrefix
         KnowledgeV2LatestTranscriptFingerprintPrefix = $learningLatestTranscriptFingerprintPrefix
         KnowledgeV2LearningReportStates = $learningReportStates
-    } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
+    }
+    $csvColumns = @($systemRow.PSObject.Properties.Name)
+    $systemRow | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
     $byPid = @{}
     $targetPids = @{}
@@ -495,7 +508,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 SystemFreeMiB       = $freeMiB
                 SystemTotalMiB      = $totalMiB
                 SystemUsedPercent   = $usedPercent
-            } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
+            } | Select-Object -Property $csvColumns | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
         } catch {
             Write-Warning ('Could not sample a process: ' + $_.Exception.GetType().Name)
         }

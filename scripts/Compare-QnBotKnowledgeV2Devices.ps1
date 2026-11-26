@@ -30,18 +30,19 @@ function Get-LatestDeviceShopState {
     }
 
     $rows = @(Import-Csv -LiteralPath $Path)
-    $validRows = @($rows | Where-Object {
-        $_.SampleKind -eq 'system' -and
-        $_.KnowledgeV2SyncSnapshotStatus -eq 'fresh' -and
-        -not [string]::IsNullOrWhiteSpace([string]$_.KnowledgeV2ShopStates)
-    })
-    if ($validRows.Count -eq 0) {
-        throw ($DeviceLabel + ' CSV has no fresh Knowledge V2 sync snapshot rows.')
+    $systemRows = @($rows | Where-Object { $_.SampleKind -eq 'system' })
+    if ($systemRows.Count -eq 0) {
+        throw ($DeviceLabel + ' CSV has no system sample rows.')
     }
 
-    $latest = $validRows |
+    # Never skip a later stale, invalid or missing snapshot in favor of old success.
+    $latest = $systemRows |
         Sort-Object -Property @{ Expression = { [DateTimeOffset]::Parse([string]$_.Time).UtcDateTime }; Descending = $true } |
         Select-Object -First 1
+    if (-not ($latest.KnowledgeV2SyncSnapshotStatus -eq 'fresh') -or
+        [string]::IsNullOrWhiteSpace([string]$latest.KnowledgeV2ShopStates)) {
+        throw ($DeviceLabel + ' latest system sample has no fresh Knowledge V2 sync snapshot.')
+    }
 
     $states = @()
     foreach ($entry in ([string]$latest.KnowledgeV2ShopStates -split ';')) {
@@ -51,7 +52,7 @@ function Get-LatestDeviceShopState {
 
         $match = [regex]::Match(
             $pair[1],
-            '^(?<revision>[0-9]+):(?<local>[0-9a-fA-F]{4,64})/(?<cloud>[0-9a-fA-F]{4,64}):(?<status>.*):(?<converged>True|False):(?<syncing>True|False)$'
+            '^(?<revision>[0-9]+):(?<local>[0-9a-fA-F]{16})/(?<cloud>[0-9a-fA-F]{16}):(?<status>.*):(?<converged>True|False):(?<syncing>True|False)$'
         )
         if (-not $match.Success) { continue }
 
@@ -111,6 +112,12 @@ function Get-LatestDeviceShopState {
     }
 }
 
+# An identical file (including a renamed copy) is not evidence from two devices.
+if ((Get-FileHash -LiteralPath $DeviceACsv -Algorithm SHA256).Hash -eq
+    (Get-FileHash -LiteralPath $DeviceBCsv -Algorithm SHA256).Hash) {
+    throw 'Device A and Device B CSVs are identical; provide independent samples.'
+}
+
 $deviceA = Get-LatestDeviceShopState -Path $DeviceACsv -RequestedShopRef $DeviceAShopRef -DeviceLabel 'DeviceA'
 $deviceB = Get-LatestDeviceShopState -Path $DeviceBCsv -RequestedShopRef $DeviceBShopRef -DeviceLabel 'DeviceB'
 
@@ -127,6 +134,8 @@ $checks = @(
     [pscustomobject]@{ Name = 'Device A sample is recent'; Passed = ($sampleAgeASeconds -ge -60 -and $sampleAgeASeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device B sample is recent'; Passed = ($sampleAgeBSeconds -ge -60 -and $sampleAgeBSeconds -le $maxAgeSeconds) }
     [pscustomobject]@{ Name = 'Device A cloud sync converged'; Passed = ($deviceA.Converged -eq $true) }
+    [pscustomobject]@{ Name = 'Device A last sync succeeded'; Passed = ($deviceA.LastStatus -eq 'synced') }
+    [pscustomobject]@{ Name = 'Device B last sync succeeded'; Passed = ($deviceB.LastStatus -eq 'synced') }
     [pscustomobject]@{ Name = 'Device B cloud sync converged'; Passed = ($deviceB.Converged -eq $true) }
     [pscustomobject]@{ Name = 'Device A shop is not syncing'; Passed = ($deviceA.Syncing -eq $false) }
     [pscustomobject]@{ Name = 'Device B shop is not syncing'; Passed = ($deviceB.Syncing -eq $false) }

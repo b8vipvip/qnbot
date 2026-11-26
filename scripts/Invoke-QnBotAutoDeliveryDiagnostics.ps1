@@ -119,7 +119,13 @@ if ($ledgerFile.Status -eq 'readable' -and
     $ledgerStatus = 'readable'
     $ledgerRecordCount = $records.Count
     $ledgerResolvedCount = @($records | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_.Resolution)
+        # A persisted/migrated intent has a nonempty Resolution but is not resolved.
+        # Require the actual durable terminal timestamp written by MarkResolved.
+        $resolvedAt = [DateTime]::MinValue
+        -not [string]::IsNullOrWhiteSpace([string]$_.Resolution) -and
+            $_.Resolution -notin @('intent_persisted','migrated_pending_intent') -and
+            [DateTime]::TryParse([string]$_.ResolvedAt, [ref]$resolvedAt) -and
+            $resolvedAt -gt [DateTime]::MinValue
     }).Count
     $ledgerUnresolvedCount = $ledgerRecordCount - $ledgerResolvedCount
     $cutoff = [DateTime]::Now.AddHours(-24)

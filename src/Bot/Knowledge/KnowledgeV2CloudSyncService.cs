@@ -79,6 +79,7 @@ namespace Bot.Knowledge
             {
                 state.LastAttemptUtc=DateTime.UtcNow;
                 state.LastStatus="running";
+                state.LastConverged=false;
             }
             WriteDiagnosticsSnapshot();
             Task.Run(async()=>
@@ -272,7 +273,7 @@ namespace Bot.Knowledge
                 {
                     Revision=Math.Max(0,revision),
                     Fingerprint=fingerprint??string.Empty,
-                    ShopRef=MyWebSocketServer.DiagnosticRef("shop",shop.ShopKey),
+                    ShopRef=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",shop.ShopKey),
                     LastCloudFingerprintPrefix=FingerprintPrefix(fingerprint??string.Empty),
                     LastStatus="loaded"
                 };

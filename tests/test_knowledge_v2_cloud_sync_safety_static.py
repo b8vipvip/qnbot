@@ -288,3 +288,17 @@ def test_two_device_knowledge_v2_comparator_requires_fresh_converged_fingerprint
     assert "BuyerMessagesIncluded = $false" in script
     assert "KnowledgeContentIncluded = $false" in script
     assert "ShopRef aliases are not compared across devices" in script
+
+def test_acceptance_uses_same_process_local_hmac_shop_alias_and_current_sample():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    learning = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    script = read("scripts/Compare-QnBotKnowledgeV2Devices.ps1")
+    assert 'ShopRef=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",shop.ShopKey)' in service
+    assert '["shopRef"]=MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop",report.ShopKey)' in learning
+    assert "internal static string RuntimeAcceptanceDiagnosticRef" in server
+    assert "state.LastConverged=false;" in service
+    assert "$latest = $systemRows |" in script
+    assert "latest system sample has no fresh" in script
+    assert "CSV" in script and "Get-FileHash" in script
+    assert "Device A last sync succeeded" in script
