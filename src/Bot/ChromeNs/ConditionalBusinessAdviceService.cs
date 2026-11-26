@@ -1029,8 +1029,7 @@ namespace Bot.ChromeNs
                 var key = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
                 var record = (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
                     .FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (record == null || !record.DeliveryUncertain
-                    || record.DeliveredAt != DateTime.MinValue)
+                if (record == null)
                 {
                     if (remoteResolved)
                     {
@@ -1040,6 +1039,21 @@ namespace Bot.ChromeNs
                         return true;
                     }
                     reason = "记录不存在或已不需要人工核对，请先刷新列表";
+                    return false;
+                }
+                if (record.DeliveredAt != DateTime.MinValue)
+                {
+                    if (remoteResolved && confirmedDelivered)
+                    {
+                        reason = "服务端和本机均已记录确认送达";
+                        return true;
+                    }
+                    reason = "本机已记录为送达，不允许将其改为未发送";
+                    return false;
+                }
+                if (!record.DeliveryUncertain && !remoteResolved)
+                {
+                    reason = "本机发送租约仍有效或尚未进入待核对状态";
                     return false;
                 }
 
