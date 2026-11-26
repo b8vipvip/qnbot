@@ -47,8 +47,9 @@ def test_seller_echo_accepts_only_known_equivalent_buyer_aliases():
     start = source.index("public bool HasRecentSellerEcho")
     block = source[start: start + 1200]
 
-    assert "BuyerIdentityAliasService.AreEquivalent(sellerNick, _lastSellerEchoBuyer, buyerNick)" in block
-    assert "_lastSellerEchoText == text" in block
+    assert "BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick)" in block
+    assert "echo.Text == text" in block
+    assert "string.Equals(echo.ShopKey, shopKey, StringComparison.Ordinal)" in block
 
 
 def test_connection_summary_is_not_overwritten_by_last_send_failure():
@@ -62,3 +63,18 @@ def test_connection_summary_is_not_overwritten_by_last_send_failure():
     assert "最近发送失败" not in block
     assert "wsOk && injectionOk && qnOk && sellerOk && uiOk && buttonOk && inputOk" in block
     assert "SendStatus = lastSendStatus" in source
+
+
+def test_recent_seller_echo_history_is_bounded_and_does_not_lose_other_buyer_confirmations():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    record = source.split("private void RecordSellerEcho", 1)[1].split("public bool HasRecentSellerEcho", 1)[0]
+    lookup = source.split("public bool HasRecentSellerEcho", 1)[1].split("private bool IsBuyerMessage", 1)[0]
+    assert "Queue<SellerEchoEntry>" in source
+    assert "MaxRecentSellerEchoes = 512" in source
+    assert "_recentSellerEchoes.Dequeue()" in record
+    assert "_recentSellerEchoes.Enqueue" in record
+    assert "ShopKey = shopKey" in record
+    assert "_recentSellerEchoes.Any" in lookup
+    assert "echo.ReceivedAt >= cutoff" in lookup
+    assert "scopedShop.ShopKey, shopKey" in lookup
+    assert "_lastSellerEcho" not in source

@@ -72,9 +72,16 @@ namespace Bot.ChromeNs
         public Conversation Buyer { get; set; }
 
         private readonly object _sellerEchoLock = new object();
-        private string _lastSellerEchoBuyer = string.Empty;
-        private string _lastSellerEchoText = string.Empty;
-        private DateTime _lastSellerEchoTime = DateTime.MinValue;
+        private sealed class SellerEchoEntry
+        {
+            public string ShopKey;
+            public string Buyer;
+            public string Text;
+            public DateTime ReceivedAt;
+        }
+        private const int MaxRecentSellerEchoes = 512;
+        private static readonly TimeSpan SellerEchoRetention = TimeSpan.FromMinutes(5);
+        private readonly Queue<SellerEchoEntry> _recentSellerEchoes = new Queue<SellerEchoEntry>();
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
         private long _sendGateHeldSinceUtcTicks;
@@ -327,6 +334,15 @@ namespace Bot.ChromeNs
                     {
                         rpa.SetSendFailure("重试ShopKey作用域复核", shopScopeReason);
                         return false;
+                    }
+                    // Shop authority and buyer activation can take several seconds.
+                    // An echo arriving during those awaits still confirms the first send.
+                    if (HasRecentSellerEcho(buyer, text, sendStartedAt))
+                    {
+                        rpa.ResetSendFailure();
+                        ok = true;
+                        Log.Info("重试会话确认期间收到卖家回显，取消重复发送: buyer=" + buyer);
+                        break;
                     }
                     if (!IsPreSendGuardSatisfied(preSendGuard, "重试发送"))
                         return false;
@@ -659,11 +675,23 @@ namespace Bot.ChromeNs
             text = NormalizeMessageText(text);
             if (string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(text)) return;
 
+            var client = CDP;
+            var shopKey = client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim();
+            if (shopKey.Length == 0) return;
+            var now = DateTime.Now;
             lock (_sellerEchoLock)
             {
-                _lastSellerEchoBuyer = buyerNick;
-                _lastSellerEchoText = text;
-                _lastSellerEchoTime = DateTime.Now;
+                while (_recentSellerEchoes.Count > 0
+                    && (_recentSellerEchoes.Count >= MaxRecentSellerEchoes
+                        || _recentSellerEchoes.Peek().ReceivedAt < now - SellerEchoRetention))
+                    _recentSellerEchoes.Dequeue();
+                _recentSellerEchoes.Enqueue(new SellerEchoEntry
+                {
+                    ShopKey = shopKey,
+                    Buyer = buyerNick,
+                    Text = text,
+                    ReceivedAt = now
+                });
             }
             Log.Info("已记录卖家消息回显: buyer=" + buyerNick + ", text=" + text);
         }
@@ -674,12 +702,21 @@ namespace Bot.ChromeNs
             text = NormalizeMessageText(text);
             if (string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(text)) return false;
 
+            var client = CDP;
+            var shopKey = client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim();
+            var scopedShop = ShopSettingsScope.Current;
+            if (shopKey.Length == 0 || (scopedShop != null
+                && !string.Equals(scopedShop.ShopKey, shopKey, StringComparison.Ordinal))) return false;
+            var cutoff = since.AddMilliseconds(-500);
+            var now = DateTime.Now;
+            if (cutoff < now - SellerEchoRetention) cutoff = now - SellerEchoRetention;
+            var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
             lock (_sellerEchoLock)
             {
-                if (_lastSellerEchoTime < since.AddMilliseconds(-500)) return false;
-                var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
-                if (!BuyerIdentityAliasService.AreEquivalent(sellerNick, _lastSellerEchoBuyer, buyerNick)) return false;
-                return _lastSellerEchoText == text;
+                return _recentSellerEchoes.Any(echo => echo.ReceivedAt >= cutoff
+                    && string.Equals(echo.ShopKey, shopKey, StringComparison.Ordinal)
+                    && echo.Text == text
+                    && BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick));
             }
         }
 

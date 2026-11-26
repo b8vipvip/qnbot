@@ -321,3 +321,14 @@ def test_first_inquiry_delay_is_shop_scoped_persisted_and_verified_before_cloud_
     assert "FirstInquiryFixedReplyService.Save(" in options
     assert "FirstInquiryFixedReplyService.Load(shop.SellerNick, shop.ShopKey)" in sync
     assert '"first_inquiry_fixed_reply_delay_seconds"' in sync
+
+
+def test_retry_rechecks_delayed_seller_echo_after_buyer_activation():
+    source = (Path(__file__).resolve().parents[1] / "src/Bot/ChromeNs/QN.cs").read_text(encoding="utf-8-sig")
+    retry = source.split("for (var i = 0; !ok && i < retry; i++)", 1)[1].split("if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 1400", 1)[0]
+    activate = retry.index("await EnsureActiveBuyerForSendAsync")
+    final_echo = retry.index("HasRecentSellerEcho(buyer, text, sendStartedAt)", activate)
+    guard = retry.index('IsPreSendGuardSatisfied(preSendGuard, "重试发送")', final_echo)
+    send = retry.index("ok = await SendTextAsync", guard)
+    assert activate < final_echo < guard < send
+    assert "break;" in retry[final_echo:guard]
