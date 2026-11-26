@@ -181,7 +181,7 @@ def test_closed_websocket_status_generation_entries_are_pruned_without_generatio
 
 
 def test_listener_restart_releases_both_session_generation_dictionaries():
-    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
     release = server.split("private void ReleaseStaleSessions", 1)[1].split(
         "public void Start()", 1
     )[0]
