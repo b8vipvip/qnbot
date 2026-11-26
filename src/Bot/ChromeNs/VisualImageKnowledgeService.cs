@@ -64,7 +64,7 @@ namespace Bot.ChromeNs
 
     /// <summary>
     /// Shop-scoped image knowledge curated by the operator. OCR text is editable and
-    /// used as a matching fingerprint; the description is contextual evidence only,
+    /// used as a fallback fingerprint; configured hit-info rules are authoritative, and the description is contextual evidence only,
     /// never a standalone reply or proof that the buyer fulfilled a prior instruction.
     /// </summary>
     internal static class VisualImageKnowledgeService
@@ -1013,13 +1013,13 @@ namespace Bot.ChromeNs
             double score)
         {
             return "【已命中本店人工维护的图片知识】"
-                + "\\n图片说明：" + description
-                + (string.IsNullOrWhiteSpace(hitInfo) ? string.Empty : "\\n配置的命中信息：" + hitInfo)
-                + (string.IsNullOrWhiteSpace(matchedHitInfo) ? string.Empty : "\\n本次实际命中：" + matchedHitInfo)
-                + "\\n匹配分：" + score.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
-                + "\\n这条说明只用于识别图片所属的界面/设备/场景，不是客服回复，也不代表买家已完成此前要求、账号状态或业务结果。"
-                + "\\n必须结合当前买家文字以及同一客服、同一买家的前序对话判断图片是否符合要求。"
-                + "\\n如果此前客服要求的是某种设备或页面，而图片说明表明买家发来的是另一种设备或页面，应明确指出不一致并请买家重新发送正确界面。";
+                + "\n图片说明：" + description
+                + (string.IsNullOrWhiteSpace(hitInfo) ? string.Empty : "\n配置的命中信息：" + hitInfo)
+                + (string.IsNullOrWhiteSpace(matchedHitInfo) ? string.Empty : "\n本次实际命中：" + matchedHitInfo)
+                + "\n匹配分：" + score.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                + "\n这条说明只用于识别图片所属的界面/设备/场景，不是客服回复，也不代表买家已完成此前要求、账号状态或业务结果。"
+                + "\n必须结合当前买家文字以及同一客服、同一买家的前序对话判断图片是否符合要求。"
+                + "\n如果此前客服要求的是某种设备或页面，而图片说明表明买家发来的是另一种设备或页面，应明确指出不一致并请买家重新发送正确界面。";
         }
 
         private static double TextSimilarity(string left, string right)
