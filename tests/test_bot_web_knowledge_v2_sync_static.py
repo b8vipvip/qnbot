@@ -19,10 +19,13 @@ PROPS=ROOT/"src/Bot/Directory.Build.props"
 
 def read(p): return p.read_text(encoding="utf-8-sig")
 
-def test_server_exposes_client_isolated_v2_bridge():
+def test_server_exposes_legacy_client_and_shared_shopkey_v2_states():
     s=read(SERVER)
     assert "CREATE TABLE IF NOT EXISTS bot_knowledge_v2_state" in s
     assert "client_id INTEGER PRIMARY KEY" in s
+    assert "CREATE TABLE IF NOT EXISTS bot_knowledge_v2_shop_state" in s
+    assert "shop_key TEXT PRIMARY KEY" in s
+    assert "def _state_for_shop(" in s and "def _save_shop(" in s
     assert '@router.get("/api/bot-web/knowledge-v2")' in s
     assert '@router.put("/api/bot-web/knowledge-v2")' in s
     assert '@router.post("/api/runtime/v1/bot-web/knowledge-v2-sync")' in s
@@ -43,8 +46,8 @@ def test_first_runtime_report_seeds_state_and_stale_runtime_cannot_overwrite_web
     s=read(SERVER)
     assert 'current["revision"] == 0 and payload.records is not None' in s
     assert 'current["revision"] > payload.revision' in s
-    assert 'return _save(client_id,payload.records,"windows",expected_revision=0)' in s
-    assert 'return _save(client_id,payload.records,"windows",expected_revision=payload.revision)' in s
+    assert 'return _save_shop(shop_key,payload.records,"windows",expected_revision=0)' in s
+    assert 'return _save_shop(shop_key,payload.records,"windows",expected_revision=payload.revision)' in s
     assert 'expected_revision=payload.expected_revision' in s
     assert 'raise_on_conflict=True' in s
 
@@ -87,12 +90,14 @@ def test_windows_v2_cloud_revision_and_fingerprint_survive_process_restart():
 
 def test_runtime_sync_save_uses_atomic_revision_compare_and_swap():
     s=read(SERVER)
-    save=s[s.index("def _save("):s.index("@router.get(\"/api/bot-web/knowledge-v2\")")]
+    save=s[s.index("def _save_shop("):s.index("@router.get(\"/api/bot-web/knowledge-v2\")")]
     runtime=s[s.index("def runtime_sync("):s.index("def web_smart_import(")]
     assert 'conn.execute("BEGIN IMMEDIATE")' in save
     assert 'expected_revision is not None and current["revision"] != expected_revision' in save
     assert 'expected_revision=0' in runtime
     assert 'expected_revision=payload.revision' in runtime
+    assert '_state_for_shop(shop_key,client_id)' in runtime
+    assert '_client_shop_key(client_id)' in runtime
     assert runtime.index('current["revision"] > payload.revision') < runtime.index('expected_revision=payload.revision')
     assert 'return current' in save
 
