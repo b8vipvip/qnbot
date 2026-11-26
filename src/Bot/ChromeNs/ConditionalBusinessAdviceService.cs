@@ -360,7 +360,7 @@ namespace Bot.ChromeNs
                 var exactAlias = decision.Query != null
                     && (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
                         .Any(alias => string.Equals(
-                            KnowledgeV2Semantics.Compact(alias),
+                            Compact(alias),
                             decision.Query.Normalized,
                             StringComparison.Ordinal));
                 var minimumScore = exactAlias ? 0.72d : 0.82d;
