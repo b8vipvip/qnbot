@@ -512,7 +512,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
-                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
