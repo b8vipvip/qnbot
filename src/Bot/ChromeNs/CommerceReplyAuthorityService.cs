@@ -30,7 +30,7 @@ namespace Bot.ChromeNs
             string buyer,
             string question)
         {
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
             var state = ConversationStateService.Build(seller, buyer, question, turns);
             return Evaluate(state);
         }
