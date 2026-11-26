@@ -226,13 +226,13 @@ namespace Bot.ChromeNs
                 : (scopedShop.ShopKey ?? string.Empty).Trim();
             if (expectedShopKey.Length > 0 && shopOwnerHandoffDepth < 1)
             {
-                var initialOwner = FindAuthoritativeShopSendOwner(expectedShopKey);
-                if (initialOwner != null && !ReferenceEquals(initialOwner, this))
+                var owner = FindAuthoritativeShopSendOwner(expectedShopKey);
+                if (owner != null && !ReferenceEquals(owner, this))
                 {
-                    var initialHandoff = await TryHandoffToAuthoritativeShopQnAsync(
-                        initialOwner, expectedShopKey, buyer, text, retryCount,
+                    var handoff = await TryHandoffToAuthoritativeShopQnAsync(
+                        owner, expectedShopKey, buyer, text, retryCount,
                         cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
-                    if (initialHandoff.HasValue) return initialHandoff.Value;
+                    if (handoff.HasValue) return handoff.Value;
                 }
             }
 
@@ -247,8 +247,7 @@ namespace Bot.ChromeNs
                 {
                     var segment = segments[segmentIndex];
                     Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
-                    if (!await SendTextWithRetryAsync(
-                        buyer, segment, retryCount, cancellationToken, preSendGuard).ConfigureAwait(false))
+                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard))
                         return false;
                     if (segmentIndex + 1 < segments.Count) await Task.Delay(220, cancellationToken);
                 }
