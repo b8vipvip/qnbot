@@ -285,11 +285,7 @@ namespace Bot.ChromeNs
             if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason, snapshot.ShopKey)) return Denied(reason);
 
             var protectSeconds = OrderAttentionSettings.GetHumanProtectionSeconds();
-            DateTime lastSellerEcho;
-            lock (_sellerEchoLock)
-            {
-                lastSellerEcho = _lastSellerEchoTime;
-            }
+            var lastSellerEcho = LastSellerEchoTimeForShop(snapshot.ShopKey);
             if (lastSellerEcho != DateTime.MinValue
                 && DateTime.Now - lastSellerEcho < TimeSpan.FromSeconds(protectSeconds))
             {

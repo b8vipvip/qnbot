@@ -80,7 +80,7 @@ namespace Bot.ChromeNs
             public DateTime ReceivedAt;
         }
         private const int MaxRecentSellerEchoes = 512;
-        private static readonly TimeSpan SellerEchoRetention = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan SellerEchoRetention = TimeSpan.FromMinutes(20);
         private readonly Queue<SellerEchoEntry> _recentSellerEchoes = new Queue<SellerEchoEntry>();
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
@@ -717,6 +717,42 @@ namespace Bot.ChromeNs
                     && string.Equals(echo.ShopKey, shopKey, StringComparison.Ordinal)
                     && echo.Text == text
                     && BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick));
+            }
+        }
+
+        internal DateTime LastSellerEchoTimeForShop(string shopKey)
+        {
+            if (string.IsNullOrWhiteSpace(shopKey)) return DateTime.MinValue;
+            lock (_sellerEchoLock)
+            {
+                return _recentSellerEchoes.Where(x => string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal))
+                    .Select(x => x.ReceivedAt).DefaultIfEmpty(DateTime.MinValue).Max();
+            }
+        }
+
+        internal bool TryGetRecentSellerEchoForLearning(string shopKey, string buyer, DateTime since,
+            out string text, out DateTime receivedAt)
+        {
+            text = string.Empty;
+            receivedAt = DateTime.MinValue;
+            var client = CDP;
+            if (client == null || client.IsInvalidated || client.IsShopIdentityRetired
+                || string.IsNullOrWhiteSpace(shopKey)
+                || !string.Equals(client.ShopKey, shopKey, StringComparison.Ordinal)) return false;
+            var cutoff = since.AddMilliseconds(-500);
+            var oldest = DateTime.Now - SellerEchoRetention;
+            if (cutoff < oldest) cutoff = oldest;
+            lock (_sellerEchoLock)
+            {
+                // Preserve the strict buyer identity used by the learning path; never
+                // turn a fuzzy alias or a different shop's echo into human evidence.
+                var echo = _recentSellerEchoes.LastOrDefault(x => x.ReceivedAt >= cutoff
+                    && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                    && string.Equals(x.Buyer, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal));
+                if (echo == null) return false;
+                text = echo.Text;
+                receivedAt = echo.ReceivedAt;
+                return true;
             }
         }
 

@@ -78,3 +78,16 @@ def test_recent_seller_echo_history_is_bounded_and_does_not_lose_other_buyer_con
     assert "echo.ReceivedAt >= cutoff" in lookup
     assert "scopedShop.ShopKey, shopKey" in lookup
     assert "_lastSellerEcho" not in source
+
+
+def test_learning_and_order_focus_read_scoped_echo_history_instead_of_old_private_fields():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    focus = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
+    assert "LastSellerEchoTimeForShop(snapshot.ShopKey)" in focus
+    assert "TryGetRecentSellerEchoForLearning(shopKey, buyer, questionTime" in learning
+    assert 'GetField("_lastSellerEcho' not in learning
+    method = source.split("internal bool TryGetRecentSellerEchoForLearning", 1)[1].split("private bool IsBuyerMessage", 1)[0]
+    assert "string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)" in method
+    assert 'string.Equals(x.Buyer, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)' in method
+    assert "LastOrDefault" in method

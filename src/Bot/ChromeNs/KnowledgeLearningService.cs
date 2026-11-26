@@ -6,7 +6,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -238,17 +237,9 @@ namespace Bot.ChromeNs
             var ambiguousSellerEcho = false;
             try
             {
-                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
-                var type = typeof(QN);
-                var buyerField = type.GetField("_lastSellerEchoBuyer", flags);
-                var textField = type.GetField("_lastSellerEchoText", flags);
-                var timeField = type.GetField("_lastSellerEchoTime", flags);
-                if (buyerField == null || textField == null || timeField == null) return false;
-                var echoBuyer = Convert.ToString(buyerField.GetValue(qn));
-                var echoText = Convert.ToString(textField.GetValue(qn));
-                var echoTime = (DateTime)timeField.GetValue(qn);
-                if (!string.Equals((echoBuyer ?? string.Empty).Trim(), (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)) return false;
-                if (echoTime < questionTime.AddMilliseconds(-500) || echoTime < DateTime.Now.AddMinutes(-20)) return false;
+                string echoText;
+                DateTime echoTime;
+                if (!qn.TryGetRecentSellerEchoForLearning(shopKey, buyer, questionTime, out echoText, out echoTime)) return false;
                 if (string.IsNullOrWhiteSpace(echoText)) return false;
 
                 // Once a recent seller echo is observed, uncertainty must block this
