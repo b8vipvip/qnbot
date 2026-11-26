@@ -397,3 +397,24 @@ def test_every_conditional_advice_runtime_route_reads_shop_key_from_header():
         next_route = api.find("\\n@router.", start)
         body = api[start: next_route if next_route >= 0 else len(api)]
         assert "x_shop_key: str = Header(default=\"\")" in body, name
+
+
+def test_manual_reconciliation_validates_local_send_state_before_remote_release():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    method = source[
+        source.index("public static bool ResolveUncertainDelivery("):
+        source.index("public static void CompleteDelivery(")
+    ]
+
+    local_lease_check = method.index("DistributedLeases.TryGetValue(key")
+    delivered_conflict_check = method.index(
+        "record.DeliveredAt != DateTime.MinValue && !confirmedDelivered"
+    )
+    remote_resolution = method.index("TryResolveRemoteUncertainDelivery(")
+    local_release = method.index("record.DeliveryUncertain = false")
+
+    assert local_lease_check < remote_resolution
+    assert delivered_conflict_check < remote_resolution
+    assert "CrossProcessAtomicStateFile.Acquire" in method[:remote_resolution]
+    assert "lock (LedgerSync)" in method[:remote_resolution]
+    assert remote_resolution < local_release
