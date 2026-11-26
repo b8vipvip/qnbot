@@ -56,9 +56,9 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "commerce.IsPaid != true" in build
     assert 'commerce.PurchasePhase, "paid"' in build
     assert "commerce.OrderId" in build
-    assert "GetRecentWorkflowEvidence(shopKey, seller, buyer, 30)" in build
+    assert "GetLatestImageObservation(shopKey, seller, buyer)" in build
     assert "MatchedImageKnowledgeId" in build
-    assert "OcrImageSha256" in build
+    assert "MatchedImageKnowledgeId" in build
     assert "order.PaidAt" in build
     assert "imageObservedAt < orderEvidenceTime" in build
     assert "VisualImageKnowledgeService.Load(shopKey, seller)" in build
@@ -88,6 +88,18 @@ def test_order_terminal_states_and_fulfilled_orders_block_refund_advice():
     assert "order.IsPaid != true" in method
     assert "OrderEventType.Paid || PaidRegex.IsMatch(status)" in method
 
+
+def test_newer_unmatched_or_withdrawn_image_supersedes_an_older_match():
+    recent = read("src/Bot/ChromeNs/RecentVisualContextService.cs")
+    method = recent[
+        recent.index("internal static VisualKnowledgeObservationEntity GetLatestImageObservation"):
+        recent.index("public static bool TryGetRecentAccountEvidence")
+    ]
+    assert "LoadRecent(" in method
+    assert "OcrImageSha256" in method
+    assert "FirstOrDefault()" in method
+    assert "IsWithdrawnObservation" in method
+    assert "return latest;" in method
 
 def test_conditional_advice_delivery_is_shop_buyer_order_and_record_scoped():
     source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
@@ -133,7 +145,7 @@ def test_text_and_image_reply_paths_share_conditional_advice_guard():
 def test_conditional_advice_is_not_a_generic_image_classifier():
     source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
     assert "VisualImageKnowledgeService.Load(shopKey, seller)" in source
-    assert "RecentVisualContextService.GetRecentWorkflowEvidence" in source
+    assert "RecentVisualContextService.GetLatestImageObservation" in source
     assert "MatchesImage(record, evidence)" in source
     assert "MatchesOrderProduct(record, evidence)" in source
     assert "ProductIds" in source
