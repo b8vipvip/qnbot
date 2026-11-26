@@ -12,6 +12,15 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace Bot
+{
+    public partial class App
+    {
+        private readonly object _receptionWorkflowRuntimeBootstrap =
+            ChromeNs.ReceptionWorkflowRuntimeService.InitializeForApp();
+    }
+}
+
 namespace Bot.ChromeNs
 {
     internal sealed class ReceptionWorkflowDecision
@@ -55,11 +64,84 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, CatalogIndex>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> RollbackRetryWorkers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
+        private static Timer _rollbackRecoveryTimer;
+        private static int _initialized;
 
         private sealed class CatalogIndex
         {
             public long Revision;
             public List<JObject> Flows;
+        }
+
+        public static object InitializeForApp()
+        {
+            if (Interlocked.Exchange(ref _initialized, 1) == 0)
+            {
+                // Rollback retries are persisted, so recovery must not depend on a new
+                // buyer message arriving after a process restart.
+                _rollbackRecoveryTimer = new Timer(
+                    _ => QueuePendingRollbackRecovery(),
+                    null,
+                    TimeSpan.FromSeconds(15),
+                    TimeSpan.FromMinutes(1));
+                Log.Info("Reception Agent 持久化回滚恢复扫描已启动。");
+            }
+            return new object();
+        }
+
+        private static void QueuePendingRollbackRecovery()
+        {
+            IList<ShopProfile> profiles;
+            try { profiles = Profiles.GetAll(); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Reception Agent启动回滚恢复读取店铺配置失败：" + ex.Message, 10);
+                return;
+            }
+            foreach (var profile in profiles ?? new List<ShopProfile>())
+            {
+                if (profile == null) continue;
+                ShopContext shop;
+                try { shop = profile.ToContext(); }
+                catch { continue; }
+                if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
+                try
+                {
+                    var pending = new List<Tuple<string, long>>();
+                    var path = RuntimePath(shop);
+                    using (var lease = CrossProcessAtomicStateFile.Acquire(path, "ReceptionWorkflowRuntime", 3000))
+                    {
+                        if (lease == null || !lease.Acquired) continue;
+                        var document = ReadDocument(path);
+                        var faults = document["faults"] as JArray;
+                        foreach (var fault in (faults ?? new JArray()).OfType<JObject>().Where(IsPendingRollback))
+                        {
+                            var flowId = Convert.ToString(fault["flow_id"]);
+                            var revision = fault.Value<long?>("catalog_revision") ?? 0;
+                            if (!string.IsNullOrWhiteSpace(flowId) && revision > 0)
+                                pending.Add(Tuple.Create(flowId, revision));
+                        }
+                    }
+                    foreach (var item in pending)
+                        EnsureRollbackRetryScheduled(shop.SellerNick, shop.ShopKey, item.Item1, item.Item2);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Reception Agent启动回滚恢复扫描失败：shopRef="
+                        + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey) + ", " + ex.Message, 10);
+                }
+            }
+        }
+
+        private static bool IsPendingRollback(JObject item)
+        {
+            return item != null
+                && item.Value<bool?>("quarantined") == true
+                && item.Value<bool?>("rollback_pending") != false
+                && item.Value<bool?>("rollback_completed") != true
+                && item.Value<bool?>("rollback_superseded") != true;
         }
 
         private static string Digest(string value)
@@ -177,13 +259,6 @@ namespace Bot.ChromeNs
             // A quarantined flow with rollback_pending (including legacy quarantined rows
             // where the field is absent) must survive arbitrarily long outages and retries.
             // Only completed/superseded rollback records may age out with ordinary diagnostics.
-            bool IsPendingRollback(JObject item)
-            {
-                return item.Value<bool?>("quarantined") == true
-                    && item.Value<bool?>("rollback_pending") != false
-                    && item.Value<bool?>("rollback_completed") != true
-                    && item.Value<bool?>("rollback_superseded") != true;
-            }
             var pendingRollbacks = faults.OfType<JObject>().Where(IsPendingRollback).ToList();
             var recentFaults = faults.OfType<JObject>()
                 .Where(x => !IsPendingRollback(x)
