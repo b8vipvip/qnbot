@@ -94,7 +94,11 @@ namespace Bot.ChromeNs
 
         public static bool IsEvidenceRequirement(string value)
         {
-            return (value ?? string.Empty).Trim().StartsWith("evidence:", StringComparison.OrdinalIgnoreCase);
+            value = (value ?? string.Empty).Trim();
+            return string.Equals(value, ImageMatchesRecord, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, OrderPaid, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, OrderOpen, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, OrderProductMatches, StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool TryBuild(
