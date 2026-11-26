@@ -367,7 +367,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
     }
 
     # Always write machine totals, even if the user has closed both applications.
-    [pscustomobject]@{
+    $systemRow = [pscustomobject]@{
         Time                = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
         Sample              = $sample
         SampleKind          = 'system'
@@ -442,7 +442,9 @@ for ($sample = 1; $sample -le $loops; $sample++) {
         KnowledgeV2LatestSourceFingerprintPrefix = $learningLatestSourceFingerprintPrefix
         KnowledgeV2LatestTranscriptFingerprintPrefix = $learningLatestTranscriptFingerprintPrefix
         KnowledgeV2LearningReportStates = $learningReportStates
-    } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
+    }
+    $csvColumns = @($systemRow.PSObject.Properties.Name)
+    $systemRow | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
 
     $byPid = @{}
     $targetPids = @{}
@@ -495,7 +497,7 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 SystemFreeMiB       = $freeMiB
                 SystemTotalMiB      = $totalMiB
                 SystemUsedPercent   = $usedPercent
-            } | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
+            } | Select-Object -Property $csvColumns | Export-Csv -Path $csv -Encoding UTF8 -NoTypeInformation -Append
         } catch {
             Write-Warning ('Could not sample a process: ' + $_.Exception.GetType().Name)
         }
