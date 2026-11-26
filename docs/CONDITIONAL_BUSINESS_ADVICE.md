@@ -28,7 +28,7 @@ The record must also:
 - use `Type=after_sale`;
 - use `RiskLevel=high`;
 - use `Intent=after_sale` with `Predicate=refund_policy/refund_advice`, or `Intent=capability` with `Predicate=device_support/refund_advice`;
-- be active and production-approved;
+- be active and production-approved, with `Authority >= 0.90` and match confidence at least `0.94`;
 - match an exact saved alias (or a very strong same-intent/same-predicate match);
 - include a safe suggestion such as “建议您在订单详情页面申请退款”;
 - not claim that a refund was submitted, completed, or executed.
