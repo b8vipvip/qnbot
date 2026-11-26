@@ -30,7 +30,7 @@ namespace Bot.ChromeNs
             string buyer,
             string question)
         {
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
             var state = ConversationStateService.Build(seller, buyer, question, turns);
             return Evaluate(state);
         }
@@ -49,7 +49,7 @@ namespace Bot.ChromeNs
             CommerceReplyAuthorityDecision authority)
         {
             var state = authority == null ? null : authority.ConversationState;
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
             var commerce = CommerceContextService.Build(
                 seller, buyer, question, turns, state, shopKey);
             if (authority != null) authority.CommerceContext = commerce;
