@@ -442,7 +442,8 @@ namespace Bot.ChromeNs
                 string reserveReason;
                 conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
-                    result.ConditionalAdviceOrderId, result.ConditionalAdviceItemId, result.ConditionalAdviceKey,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceItemId,
+                    result.ConditionalAdviceItemTitle, result.ConditionalAdviceSkuText, result.ConditionalAdviceKey,
                     result.ConditionalAdviceImageMessageKey, result.ConditionalAdviceImageKnowledgeId,
                     out reserveReason);
                 if (!conditionalAdviceReserved)
@@ -469,6 +470,8 @@ namespace Bot.ChromeNs
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                         result.ConditionalAdviceOrderId,
                         result.ConditionalAdviceItemId,
+                        result.ConditionalAdviceItemTitle,
+                        result.ConditionalAdviceSkuText,
                         result.ConditionalAdviceImageMessageKey,
                         result.ConditionalAdviceImageKnowledgeId))
                     return false;
