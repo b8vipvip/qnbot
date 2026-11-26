@@ -53,6 +53,7 @@ namespace Bot.ChromeNs
         public string Buyer { get; set; }
         public string OrderId { get; set; }
         public string AdviceKey { get; set; }
+        public string DistributedScopeHash { get; set; }
         public DateTime ReservedUntil { get; set; }
         public DateTime DeliveredAt { get; set; }
         public bool DeliveryUncertain { get; set; }
@@ -824,7 +825,8 @@ namespace Bot.ChromeNs
                         Seller = seller,
                         Buyer = buyer,
                         OrderId = orderId,
-                        AdviceKey = adviceKey
+                        AdviceKey = adviceKey,
+                        DistributedScopeHash = string.Empty
                     };
                     state.Records.Add(record);
                 }
@@ -859,7 +861,27 @@ namespace Bot.ChromeNs
                 string error;
                 var state = LoadLedger(path, out error);
                 if (state == null) throw new IOException("条件性建议账本不可读取：" + error);
-                return (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
+                var changed = false;
+                var now = DateTime.Now;
+                foreach (var record in state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
+                {
+                    if (record == null || record.DeliveredAt != DateTime.MinValue
+                        || record.DeliveryUncertain || record.ReservedUntil == DateTime.MinValue
+                        || record.ReservedUntil > now
+                        || !string.Equals(record.ShopKey, shopKey, StringComparison.Ordinal)
+                        || !string.Equals(record.Seller, seller, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    record.DeliveryUncertain = true;
+                    record.ReservedUntil = DateTime.MaxValue;
+                    record.UpdatedAt = now;
+                    AppendDiagnosticEvent(state, "delivery_local_lease_expired", "manual_review_required",
+                        shopKey, seller, record.Buyer, record.OrderId, string.Empty, string.Empty, record.AdviceKey);
+                    changed = true;
+                }
+                if (changed && !SaveLedger(path, state, out error))
+                    throw new IOException("条件性建议本机发送状态保存失败：" + error);
+
+                result = (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
                     .Where(x => x != null && x.DeliveryUncertain
                         && x.DeliveredAt == DateTime.MinValue
                         && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
@@ -871,10 +893,42 @@ namespace Bot.ChromeNs
                         Buyer = x.Buyer,
                         OrderId = x.OrderId,
                         AdviceKey = x.AdviceKey,
+                        ScopeHash = x.DistributedScopeHash ?? string.Empty,
+                        IsRemote = !string.IsNullOrWhiteSpace(x.DistributedScopeHash),
                         UpdatedAt = x.UpdatedAt
                     })
                     .ToList();
             }
+
+            try
+            {
+                var remote = GetRemotePendingReconciliationRecords(shopKey, maxCount);
+                foreach (var item in remote)
+                {
+                    var existing = result.FirstOrDefault(x =>
+                        string.Equals(x.Buyer, item.Buyer, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(x.OrderId, item.OrderId, StringComparison.Ordinal)
+                        && string.Equals(x.AdviceKey, item.AdviceKey, StringComparison.Ordinal));
+                    if (existing != null)
+                    {
+                        existing.ScopeHash = item.ScopeHash;
+                        existing.IsRemote = true;
+                        if (item.UpdatedAt > existing.UpdatedAt) existing.UpdatedAt = item.UpdatedAt;
+                    }
+                    else
+                    {
+                        result.Add(item);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取服务端跨设备待核对条件性建议失败；保留本机待核对记录：" + Safe(ex.Message, 180), 10);
+            }
+
+            return result.OrderByDescending(x => x.UpdatedAt)
+                .Take(Math.Max(1, Math.Min(500, maxCount)))
+                .ToList();
         }
 
         /// <summary>
