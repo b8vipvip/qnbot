@@ -418,3 +418,51 @@ def test_manual_reconciliation_validates_local_send_state_before_remote_release(
     assert "CrossProcessAtomicStateFile.Acquire" in method[:remote_resolution]
     assert "lock (LedgerSync)" in method[:remote_resolution]
     assert remote_resolution < local_release
+
+
+def test_order_evidence_is_loaded_lazily_only_after_a_knowledge_record_requires_it():
+    authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
+    commerce = read("src/Bot/ChromeNs/CommerceContextService.cs")
+    ocr = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+
+    helper = authority[
+        authority.index("public static CommerceContextSnapshot LoadForTypedEvidence"):
+        authority.index("private static readonly System.Text.RegularExpressions.Regex OrderDependentQuestionRegex")
+    ]
+    assert "ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey)" in helper
+    assert "CommerceContextService.Build(" in helper
+    assert "state.CommerceContext = commerce" in helper
+
+    build = commerce[
+        commerce.index("public static CommerceContextSnapshot Build"):
+        commerce.index("internal static OrderSnapshot SelectRelevantOrderSnapshot")
+    ]
+    select = commerce[
+        commerce.index("internal static OrderSnapshot SelectRelevantOrderSnapshot"):
+        commerce.index("private static bool ContainsSignal")
+    ]
+    assert "string shopKey = null" in build
+    assert "out selectionReason,\n                shopKey" in build
+    assert "GetRecentOrderSnapshots(seller, buyer, 12, shopKey)" in select
+
+    ocr_gate = ocr[
+        ocr.index("if (commerceAuthority != null && commerceAuthority.AllowLocalTerminalReply"):
+        ocr.index("catch (OperationCanceledException)")
+    ]
+    assert "ConditionalBusinessAdviceService.RequiresEvidenceGate(decision)" in ocr_gate
+    assert "LoadForTypedEvidence(" in ocr_gate
+    assert "task.ShopKey" in ocr_gate
+    assert "TryAuthorizeRefundSuggestion(" in ocr_gate
+
+    runtime_gate = runtime[
+        runtime.index("if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))"):
+        runtime.index("if (decision == null || !decision.CanDirectReply")
+    ]
+    assert "LoadForTypedEvidence(" in runtime_gate
+    assert "burst.ShopKey" in runtime_gate
+    assert "TryBuild(" in runtime_gate
+    assert "TryAuthorizeRefundSuggestion(" in runtime_gate
+    assert "conditionalOnly || typedEvidenceGateAttempted" in runtime
+    assert "设备|电视|会员|充值" not in authority
+
