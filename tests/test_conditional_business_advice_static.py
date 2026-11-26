@@ -15,7 +15,7 @@ def test_image_knowledge_and_vision_prompt_are_domain_neutral():
     assert "HitInfo" in matcher
     assert "TryMatchHitInfo" in matcher
     assert "legacy_ocr_similarity" in matcher
-    assert "不预设图片一定属于设备、电视、账号、会员、充值" in prompt
+    assert "不得预设图片一定属于设备、电视、账号、会员、充值" in prompt
     assert "所有行业与店铺类型" in prompt
     assert "电视应用界面" not in prompt
     assert "电视系统自带" not in prompt
