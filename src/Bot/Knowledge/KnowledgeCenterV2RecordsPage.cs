@@ -520,7 +520,7 @@ namespace Bot.Knowledge
             });
             header.Children.Add(new TextBlock
             {
-                Text = "注意：此账本属于当前Windows用户配置文件；同一店铺若在多台电脑同时运行，仍需要单一发送主实例或云端共享幂等服务。",
+                Text = "跨设备发送锁由服务端按ShopKey共享；所有设备必须连接同一控制面及持久化数据库。发送前会续租，租约过期后转入人工核对，不会自动释放。服务端不可用时条件性建议将被阻止。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DarkRed,
                 Margin = new Thickness(0, 0, 0, 10)
