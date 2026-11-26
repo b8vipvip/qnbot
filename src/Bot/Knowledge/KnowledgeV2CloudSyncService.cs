@@ -79,6 +79,7 @@ namespace Bot.Knowledge
             {
                 state.LastAttemptUtc=DateTime.UtcNow;
                 state.LastStatus="running";
+                state.LastConverged=false;
             }
             WriteDiagnosticsSnapshot();
             Task.Run(async()=>
