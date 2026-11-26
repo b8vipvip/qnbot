@@ -218,6 +218,7 @@ namespace Bot.ChromeNs
                 {
                     PendingDelivery current;
                     if (pending.Terminal != 0
+                        || Interlocked.CompareExchange(ref pending.Started, 0, 0) != 0
                         || !Pending.TryGetValue(pair.Key, out current)
                         || !ReferenceEquals(current, pending)) continue;
                     PendingDelivery removed;

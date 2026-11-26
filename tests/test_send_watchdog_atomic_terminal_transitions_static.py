@@ -46,5 +46,7 @@ def test_echo_manual_takeover_and_cancel_cannot_mutate_a_terminal_delivery():
         method = source.split(start, 1)[1].split(end, 1)[0]
         assert "lock (pending.Sync)" in method
         assert "pending.Terminal != 0" in method
+        if start == "public static int CancelPending":
+            assert "Interlocked.CompareExchange(ref pending.Started, 0, 0) != 0" in method
         assert "Pending.TryGetValue(" in method
         assert "pending.Terminal = 1;" in method or "SupersededByManual" in method
