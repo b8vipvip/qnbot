@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -725,15 +726,25 @@ namespace Bot.ChromeNs
 
         private static string ToUtcIso(long ticks)
         {
-            try { return new DateTime(ticks, DateTimeKind.Local).ToUniversalTime().ToString("o"); }
-            catch { return DateTime.UtcNow.ToString("o"); }
+            try
+            {
+                if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
+                    throw new ArgumentOutOfRangeException(nameof(ticks));
+                return new DateTime(ticks, DateTimeKind.Local).ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("本地图片知识时间戳无效；拒绝以当前时间覆盖云端版本。", ex);
+            }
         }
 
         private static long ParseUtcTicks(string value)
         {
             DateTimeOffset parsed;
-            return DateTimeOffset.TryParse(value ?? string.Empty, out parsed)
-                ? parsed.LocalDateTime.Ticks : DateTime.Now.Ticks;
+            if (!DateTimeOffset.TryParse(value ?? string.Empty, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsed))
+                throw new InvalidOperationException("云端图片知识时间戳无效；保留本地状态并等待重试。");
+            return parsed.LocalDateTime.Ticks;
         }
 
         private static string ExtensionForMime(string mime)
