@@ -280,3 +280,24 @@ def test_duplicate_image_conflict_rekeys_atomically_without_deleting_local_file(
     assert "public void RunInTransaction(Action<SQLiteConnection> action)" in helper
     assert "conn.RunInTransaction(() => action(conn))" in helper
     assert "conn.Execute(" in rekey
+
+
+def test_image_delete_tombstone_is_atomic_and_survives_duplicate_id_cloud_restore():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    delete = service.split("public static bool Delete", 1)[1].split("public static JObject BuildCloudSyncRequest", 1)[0]
+    reconcile = service.split("private static bool ReconcileDeletedImageByHash", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    tombstone = service.split("internal sealed class VisualImageKnowledgeSyncTombstone", 1)[1].split(
+        "internal sealed class VisualImageKnowledgeSyncState", 1
+    )[0]
+    assert "ImageSha256" in tombstone
+    assert "DbHelper.Db.RunInTransaction(conn =>" in delete
+    assert "item.ImageSha256" in delete
+    assert "delete from VisualImageKnowledgeEntry" in delete
+    assert "where ShopKey=? and Seller=? and ImageSha256=?" in reconcile
+    assert "latest.DeletedAtTicks <= cloudUpdatedAt" in reconcile
+    assert "set EntityId=?,SyncDirty=1,CloudRevision=?,ImageSha256=?" in reconcile
+    assert "delete from VisualImageKnowledgeEntry" in reconcile
+    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision, cloudUpdatedAt)" in service
+    assert "add column ImageSha256 text not null default ''" in service
