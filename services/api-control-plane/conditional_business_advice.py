@@ -402,8 +402,15 @@ def runtime_resolve(
             "SELECT state FROM bot_conditional_business_advice WHERE shop_key=? AND scope_hash=?",
             (shop_key, scope_hash),
         ).fetchone()
-        if row is None or str(row["state"] or "") != "uncertain":
-            raise HTTPException(status_code=409, detail="记录不存在、仍在发送或已完成核对")
+        if row is None:
+            raise HTTPException(status_code=404, detail="条件性建议核对记录不存在")
+        current_state = str(row["state"] or "")
+        if current_state == "delivered" and payload.confirmed_delivered:
+            return {"ok": True, "state": "delivered", "reason": "operator_confirmed_delivered", "replayed": True}
+        if current_state == "released" and not payload.confirmed_delivered:
+            return {"ok": True, "state": "released", "reason": "operator_confirmed_not_delivered", "replayed": True}
+        if current_state != "uncertain":
+            raise HTTPException(status_code=409, detail="记录仍在发送或与本次核对结论冲突")
         if payload.confirmed_delivered:
             state = "delivered"
             delivered_at = now
