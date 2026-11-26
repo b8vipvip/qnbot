@@ -158,7 +158,7 @@ class _V2CasFakeControlPlane:
 def _load_v2_cas_module(tmp_path):
     core = types.ModuleType("bot_web_console")
     core._web_client = lambda request=None: {"id": 1}
-    core._runtime_client = lambda request=None: {"id": 1}
+    core._runtime_client = lambda request=None: {"id": int(getattr(request, "client_id", 1))}
     sys.modules["bot_web_console"] = core
 
     name = "knowledge_v2_sync_revision_cas_under_test"
@@ -172,7 +172,18 @@ def _load_v2_cas_module(tmp_path):
     module.bot_web_console = core
     with module._cp.db() as conn:
         conn.execute("CREATE TABLE client_tokens (id INTEGER PRIMARY KEY)")
-        conn.execute("INSERT INTO client_tokens(id) VALUES(1)")
+        conn.executemany("INSERT INTO client_tokens(id) VALUES(?)", [(1,), (2,), (3,)])
+        conn.execute(
+            """
+            CREATE TABLE bot_client_shop_binding(
+                client_id INTEGER PRIMARY KEY,
+                shop_key TEXT NOT NULL,
+                seller TEXT NOT NULL DEFAULT '',
+                bound_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE bot_commands(
@@ -417,3 +428,117 @@ def test_two_windows_syncing_from_the_same_revision_cannot_overwrite_the_winner(
     # Both clients must receive the single committed winner, never a stale local write.
     assert all(result["revision"] == 1 for result in results)
     assert all(result["records"][0]["Answer"] == state["records"][0]["Answer"] for result in results)
+
+
+def _bind_v2_client(module, client_id, shop_key):
+    with module._cp.db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO bot_client_shop_binding
+               (client_id,shop_key,seller,bound_at,updated_at)
+               VALUES(?,?, 'seller', '2026-11-26T00:00:00+00:00', '2026-11-26T00:00:00+00:00')""",
+            (client_id, shop_key),
+        )
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_two_distinct_client_tokens_bound_to_same_shop_share_v2_state(tmp_path):
+    module = _load_v2_cas_module(tmp_path)
+    shop = "qn_0123456789ab"
+    _bind_v2_client(module, 1, shop)
+    _bind_v2_client(module, 2, shop)
+
+    device_a = types.SimpleNamespace(client_id=1)
+    device_b = types.SimpleNamespace(client_id=2)
+    first_record = _v2_cas_record("device A fact")
+    second_record = _v2_cas_record("device B fact")
+    second_record["Id"] = "b"
+
+    first = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=0, records=[first_record]),
+        device_a,
+        x_shop_key=shop,
+    )
+    assert first["revision"] == 1
+    assert first["records"][0]["Answer"] == "device A fact"
+
+    # A second client token for the same ShopKey receives the shared baseline,
+    # rather than writing into a separate client_id-only cloud snapshot.
+    stale_second = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=0, records=[second_record]),
+        device_b,
+        x_shop_key=shop,
+    )
+    assert stale_second["revision"] == 1
+    assert [x["Id"] for x in stale_second["records"]] == ["a"]
+
+    # The Windows client merges its local-only record with the shared baseline,
+    # then submits the merged snapshot using the shared revision.
+    merged = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=1, records=[first_record, second_record]),
+        device_b,
+        x_shop_key=shop,
+    )
+    assert merged["revision"] == 2
+    assert {x["Answer"] for x in merged["records"]} == {"device A fact", "device B fact"}
+
+    # The first device's stale snapshot cannot overwrite the merged shop corpus.
+    stale_first = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=1, records=[first_record]),
+        device_a,
+        x_shop_key=shop,
+    )
+    assert stale_first["revision"] == 2
+    assert {x["Answer"] for x in stale_first["records"]} == {"device A fact", "device B fact"}
+
+    assert module.web_get(client={"id": 1})["revision"] == 2
+    assert module.web_get(client={"id": 2})["records"] == stale_first["records"]
+
+    third_record = _v2_cas_record("web-added fact")
+    third_record["Id"] = "c"
+    saved = module.web_put(
+        module.KnowledgeV2WebInput(
+            records=[first_record, second_record, third_record],
+            expected_revision=2,
+        ),
+        client={"id": 2},
+    )
+    assert saved["revision"] == 3
+    assert module.web_get(client={"id": 1})["revision"] == 3
+
+    # A different ShopKey remains isolated even when it has another client token.
+    _bind_v2_client(module, 3, "qn_abcdef012345")
+    other = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=0, records=[third_record]),
+        types.SimpleNamespace(client_id=3),
+        x_shop_key="qn_abcdef012345",
+    )
+    assert other["revision"] == 1
+    assert module.web_get(client={"id": 3})["records"][0]["Answer"] == "web-added fact"
+    assert len(module.web_get(client={"id": 1})["records"]) == 3
+
+
+@pytest.mark.skipif(importlib.util.find_spec("fastapi") is None, reason="server dependencies are not installed")
+def test_legacy_token_snapshots_migrate_to_a_new_shop_revision_above_all_devices(tmp_path):
+    module = _load_v2_cas_module(tmp_path)
+    shop = "qn_0123456789ab"
+    _bind_v2_client(module, 1, shop)
+    _bind_v2_client(module, 2, shop)
+
+    first_record = _v2_cas_record("older token snapshot")
+    second_record = _v2_cas_record("newer token snapshot")
+    second_record["Id"] = "b"
+    module._save(1, [first_record], "windows", expected_revision=0)
+    module._save(2, [second_record], "windows", expected_revision=0)
+
+    migrated = module._state_for_shop(shop, seed_client_id=1)
+    assert migrated["revision"] == 2
+    assert migrated["records"][0]["Answer"] in ("older token snapshot", "newer token snapshot")
+
+    # The other device's old revision is stale by construction and must receive
+    # the new shared baseline before it can publish a merged snapshot.
+    returned = module.runtime_sync(
+        module.KnowledgeV2SyncInput(revision=1, records=[second_record]),
+        types.SimpleNamespace(client_id=2),
+        x_shop_key=shop,
+    )
+    assert returned["revision"] == 2
