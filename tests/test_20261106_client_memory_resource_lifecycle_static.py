@@ -235,3 +235,11 @@ def test_auto_delivery_diagnostics_are_read_only_aggregate_and_privacy_minimized
     assert "ReadAllText" in script
     assert "WriteAllText" in script
     assert "Remove-Item" not in script
+
+def test_sampler_process_rows_use_system_schema_and_per_shop_sync_freshness():
+    collector = source("scripts/Collect-QnBotMemory.ps1")
+    assert "$csvColumns = @($systemRow.PSObject.Properties.Name)" in collector
+    assert "Select-Object -Property $csvColumns | Export-Csv" in collector
+    assert "$syncShop.LastSuccessUtc" in collector
+    assert "$successAge -ge -30 -and $successAge -le 180" in collector
+    assert "[string]$shopConverged" in collector
