@@ -278,3 +278,15 @@ def test_completed_legacy_report_without_shopkey_can_be_terminally_marked_withou
     assert "(report.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal" in marker
     assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;" in process
     assert "ResolveRuntimeBySellerNick(report.Seller)" not in process
+
+
+def test_structured_order_only_routes_order_dependent_questions_to_commerce_context():
+    authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    assert "IsOrderDependentQuestion(currentQuestion)" in authority
+    assert "当前问题不依赖订单状态，不注入订单证据" in authority
+    assert "当前问题明确涉及订单/支付/履约/售后" in authority
+    assert "public string CurrentQuestion { get; set; }" in state
+    assert "CurrentQuestion = (currentQuestion ?? string.Empty).Trim()" in state
+    assert "设备|电视|会员|充值" not in authority
+
