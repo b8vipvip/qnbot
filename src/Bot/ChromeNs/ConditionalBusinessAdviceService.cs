@@ -79,6 +79,14 @@ namespace Bot.ChromeNs
         }
     }
 
+    internal sealed class ConditionalBusinessAdviceReconciliationItem
+    {
+        public string Buyer { get; set; }
+        public string OrderId { get; set; }
+        public string AdviceKey { get; set; }
+        public DateTime UpdatedAt { get; set; }
+    }
+
     /// <summary>
     /// Conditional advice is a generic evidence policy, not an industry-specific image
     /// classifier. A record opts in by listing typed requirements in RequiredContext:
@@ -520,6 +528,107 @@ namespace Bot.ChromeNs
                     reason = "条件性建议幂等账本写入失败，已拒绝发送：" + loadError;
                     return false;
                 }
+                return true;
+            }
+        }
+
+        public static List<ConditionalBusinessAdviceReconciliationItem> GetPendingReconciliationRecords(
+            string shopKey, string seller, int maxCount = 100)
+        {
+            var result = new List<ConditionalBusinessAdviceReconciliationItem>();
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0) return result;
+            var path = GetLedgerPath();
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
+            lock (LedgerSync)
+            {
+                if (!lease.Acquired) throw new IOException("条件性建议账本锁不可用");
+                string error;
+                var state = LoadLedger(path, out error);
+                if (state == null) throw new IOException("条件性建议账本不可读取：" + error);
+                return (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
+                    .Where(x => x != null && x.DeliveryUncertain
+                        && x.DeliveredAt == DateTime.MinValue
+                        && string.Equals(x.ShopKey, shopKey, StringComparison.Ordinal)
+                        && string.Equals(x.Seller, seller, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(x => x.UpdatedAt)
+                    .Take(Math.Max(1, Math.Min(500, maxCount)))
+                    .Select(x => new ConditionalBusinessAdviceReconciliationItem
+                    {
+                        Buyer = x.Buyer,
+                        OrderId = x.OrderId,
+                        AdviceKey = x.AdviceKey,
+                        UpdatedAt = x.UpdatedAt
+                    })
+                    .ToList();
+            }
+        }
+
+        /// <summary>
+        /// Operator-only recovery after checking the actual Qianniu conversation.
+        /// "confirmedDelivered" permanently records the dedupe marker; false releases
+        /// the reservation so the next attempt must pass all current evidence gates again.
+        /// </summary>
+        public static bool ResolveUncertainDelivery(
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string adviceKey,
+            bool confirmedDelivered,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(shopKey) || string.IsNullOrWhiteSpace(seller)
+                || string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(orderId)
+                || string.IsNullOrWhiteSpace(adviceKey))
+            {
+                reason = "核对记录缺少完整作用域标识";
+                return false;
+            }
+            var path = GetLedgerPath();
+            using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
+            lock (LedgerSync)
+            {
+                if (!lease.Acquired)
+                {
+                    reason = "条件性建议账本锁不可用";
+                    return false;
+                }
+                string error;
+                var state = LoadLedger(path, out error);
+                if (state == null)
+                {
+                    reason = "条件性建议账本不可读取：" + error;
+                    return false;
+                }
+                var key = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
+                var record = (state.Records ?? new List<ConditionalBusinessAdviceLedgerRecord>())
+                    .FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                if (record == null || !record.DeliveryUncertain
+                    || record.DeliveredAt != DateTime.MinValue)
+                {
+                    reason = "记录不存在或已不需要人工核对，请先刷新列表";
+                    return false;
+                }
+
+                record.DeliveryUncertain = false;
+                record.ReservedUntil = DateTime.MinValue;
+                record.DeliveredAt = confirmedDelivered ? DateTime.Now : DateTime.MinValue;
+                record.UpdatedAt = DateTime.Now;
+                AppendDiagnosticEvent(state,
+                    confirmedDelivered ? "delivery_reconciled_delivered" : "delivery_reconciled_not_delivered",
+                    confirmedDelivered ? "operator_confirmed_delivered" : "operator_confirmed_not_delivered",
+                    shopKey, seller, buyer, orderId, string.Empty, string.Empty, adviceKey);
+                if (!SaveLedger(path, state, out error))
+                {
+                    reason = "人工核对结果写入失败：" + error;
+                    return false;
+                }
+                reason = confirmedDelivered
+                    ? "已记录为确认送达，后续不会重复建议"
+                    : "已解除不确定发送锁；后续重试仍必须重新通过订单和图片证据门禁";
                 return true;
             }
         }
