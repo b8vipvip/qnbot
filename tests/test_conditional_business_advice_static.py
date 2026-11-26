@@ -427,6 +427,8 @@ def test_reconciliation_ui_exposes_remote_sync_failure_and_record_source():
     assert "服务端跨设备同步正常" in service
     assert "当前列表仅包含本机记录，请勿据此判断其他设备没有待核对项" in service
     assert "SourceLabel" in service
+    assert "IsRemote = false" in service
+    assert "existing.IsRemote = true" in service
     assert 'Binding("SourceLabel")' in ui
     assert "out remoteStatus" in ui
     assert "task.Result.RemoteStatus" in ui
