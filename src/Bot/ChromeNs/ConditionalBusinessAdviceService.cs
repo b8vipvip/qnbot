@@ -152,12 +152,25 @@ namespace Bot.ChromeNs
             // a latest-order fallback, do not guess which order the image belongs to.
             var paidOpenOrders = latestOrders.Where(IsPaidAndOpen).ToList();
             var selectionReason = commerce.SelectionReason ?? string.Empty;
-            var hasCurrentUniqueOrderSignal =
-                selectionReason.IndexOf("current_order_id", StringComparison.OrdinalIgnoreCase) >= 0
-                || selectionReason.IndexOf("current_item_id", StringComparison.OrdinalIgnoreCase) >= 0
-                || selectionReason.IndexOf("current_sku_id", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (paidOpenOrders.Count > 1 && !hasCurrentUniqueOrderSignal)
-                return false;
+            var hasCurrentOrderId = selectionReason.IndexOf(
+                "current_order_id", StringComparison.OrdinalIgnoreCase) >= 0;
+            var hasCurrentItemId = selectionReason.IndexOf(
+                "current_item_id", StringComparison.OrdinalIgnoreCase) >= 0;
+            var hasCurrentSkuId = selectionReason.IndexOf(
+                "current_sku_id", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (paidOpenOrders.Count > 1 && !hasCurrentOrderId)
+            {
+                var selectedByCurrentItem = hasCurrentItemId && !string.IsNullOrWhiteSpace(commerce.ItemId)
+                    ? paidOpenOrders.Count(x => string.Equals(
+                        (x.ItemId ?? string.Empty).Trim(), commerce.ItemId.Trim(), StringComparison.Ordinal)) == 1
+                    : false;
+                var selectedByCurrentSku = hasCurrentSkuId && !string.IsNullOrWhiteSpace(commerce.SkuId)
+                    ? paidOpenOrders.Count(x => string.Equals(
+                        (x.SkuId ?? string.Empty).Trim(), commerce.SkuId.Trim(), StringComparison.Ordinal)) == 1
+                    : false;
+                if (!selectedByCurrentItem && !selectedByCurrentSku)
+                    return false;
+            }
 
             List<VisualKnowledgeObservationEntity> observations;
             try
