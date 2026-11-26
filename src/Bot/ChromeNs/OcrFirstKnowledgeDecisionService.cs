@@ -308,6 +308,20 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("OCR-first知识库检索失败，继续视觉模型链路: " + ex.Message, 20);
                 return BuildVisualFallback(visualMatch, ocr, "Knowledge V2检索异常", imageKnowledgeMatch);
             }
+            // A typed evidence requirement must be authorized by the dedicated evidence
+            // policy; the fact that OCR or image knowledge matched is not sufficient by itself.
+            if (conditionalAdviceEvidence == null
+                && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
+            {
+                if (decision != null)
+                {
+                    decision.CanDirectReply = false;
+                    decision.Answer = string.Empty;
+                }
+                Log.Info("OCR图片知识命中需要外部证据的Knowledge V2记录，但本轮未通过证据门禁，禁止本地直答: buyer="
+                    + task.BuyerNick);
+            }
+
             // A saved image knowledge description is an operator-confirmed image-class
             // hint. It may authorize only an already-approved Knowledge V2 answer; the
             // description itself is never sent as a reply.
