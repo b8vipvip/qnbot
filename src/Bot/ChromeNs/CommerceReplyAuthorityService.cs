@@ -28,9 +28,10 @@ namespace Bot.ChromeNs
         public static CommerceReplyAuthorityDecision Evaluate(
             string seller,
             string buyer,
-            string question)
+            string question,
+            string shopKey = null)
         {
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
             var state = ConversationStateService.Build(seller, buyer, question, turns);
             return Evaluate(state);
         }
