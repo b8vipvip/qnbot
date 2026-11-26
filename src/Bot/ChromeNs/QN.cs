@@ -677,7 +677,9 @@ namespace Bot.ChromeNs
 
             var client = CDP;
             var shopKey = client == null ? string.Empty : (client.ShopKey ?? string.Empty).Trim();
-            if (shopKey.Length == 0) return;
+            var scopedShop = ShopSettingsScope.Current;
+            if (shopKey.Length == 0 || client.IsInvalidated || client.IsShopIdentityRetired
+                || (scopedShop != null && !string.Equals(scopedShop.ShopKey, shopKey, StringComparison.Ordinal))) return;
             var now = DateTime.Now;
             lock (_sellerEchoLock)
             {

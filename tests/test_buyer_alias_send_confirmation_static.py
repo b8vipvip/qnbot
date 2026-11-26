@@ -45,7 +45,7 @@ def test_seller_echo_accepts_only_known_equivalent_buyer_aliases():
     source = read("src/Bot/ChromeNs/QN.cs")
 
     start = source.index("public bool HasRecentSellerEcho")
-    block = source[start: start + 1200]
+    block = source[start: source.index("internal DateTime LastSellerEchoTimeForShop", start)]
 
     assert "BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick)" in block
     assert "echo.Text == text" in block
@@ -74,6 +74,8 @@ def test_recent_seller_echo_history_is_bounded_and_does_not_lose_other_buyer_con
     assert "_recentSellerEchoes.Dequeue()" in record
     assert "_recentSellerEchoes.Enqueue" in record
     assert "ShopKey = shopKey" in record
+    assert "scopedShop.ShopKey, shopKey" in record
+    assert "client.IsShopIdentityRetired" in record
     assert "_recentSellerEchoes.Any" in lookup
     assert "echo.ReceivedAt >= cutoff" in lookup
     assert "scopedShop.ShopKey, shopKey" in lookup
