@@ -447,6 +447,9 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // A passing last-mile guard means the transport may enter a send attempt.
+            // If a later retry is cancelled, an earlier attempt may still have reached the buyer.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
@@ -472,6 +475,8 @@ namespace Bot.ChromeNs
                 if (!shouldSend)
                     Log.Info("Knowledge Engine V2等待发送资源期间会话已变化，阻止迟到直答: buyer="
                         + burst.BuyerNick + ", reason=" + latestRelevanceReason);
+                if (shouldSend && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
                 return shouldSend;
             };
 
@@ -486,7 +491,7 @@ namespace Bot.ChromeNs
                 if (conditionalAdviceReserved)
                     ConditionalBusinessAdviceService.CompleteDelivery(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
-                        decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey, false, true);
+                        decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效", burst.ShopKey);
@@ -502,7 +507,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
-                    sendOk, sendCancelled);
+                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
