@@ -83,7 +83,7 @@ namespace Bot.ChromeNs
             "退款|退货|关闭|已关闭|已取消|取消|已发货|卖家已发货|等待买家收货|待收货|已签收|确认收货|买家已收货|交易完成|交易成功|已完成|waitbuyerconfirmgoods|trade[_ ]?closed|trade[_ ]?finished|trade[_ ]?success|refund|cancel|shipped|delivered|completed",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex PaidRegex = new Regex(
-            "已付款|付款成功|支付成功|waitsellersendgoods|tradepaid",
+            "已付款|付款成功|支付成功|waitsellersendgoods|trade[_ ]?paid",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex UnsafeRefundActionRegex = new Regex(
             "已经退款|已退款|退款成功|退款已完成|已为您退款|帮您退款|替您退款|自动退款|直接退款|立即退款|马上退款|确认退款|执行退款|退款处理中|已提交退款",
