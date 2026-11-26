@@ -72,6 +72,9 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     ]
 
     assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject, false)" in resolve
+    assert "ResolveWithCuratedImageKnowledgeEvidence" in resolve
+    assert "【已命中本店人工维护的图片知识】" in resolve
+    assert "hasCuratedImageKnowledge" in resolve
     assert "if (message.Length == 0 && !hasEvidence)" in internal
     assert "if (IsMediaPlaceholder(message)) message = string.Empty;" in internal
     assert "if (message.Length > 0)" in internal
