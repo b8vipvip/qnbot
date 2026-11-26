@@ -566,16 +566,19 @@ def test_runtime_retention_never_evicts_uncertain_delivery_or_pending_rollback_s
     write = runtime.split("private static void WriteDocument", 1)[1].split(
         "private static T Mutate", 1
     )[0]
+    pending_rollback = runtime.split("private static bool IsPendingRollback(", 1)[1].split(
+        "private static string Digest", 1
+    )[0]
     assert "IsProtectedRecord" in write
     assert 'item["pending_source_key"]' in write
     assert 'item.Value<bool?>("delivery_uncertain") == true' in write
     assert "protectedRecords.Concat(recentRecords)" in write
     assert "Math.Max(0, MaxRuntimeRecords - protectedRecords.Count)" in write
-    assert "IsPendingRollback" in write
-    assert 'item.Value<bool?>("quarantined") == true' in write
-    assert 'item.Value<bool?>("rollback_pending") != false' in write
-    assert 'item.Value<bool?>("rollback_completed") != true' in write
-    assert 'item.Value<bool?>("rollback_superseded") != true' in write
+    assert ".Where(IsPendingRollback)" in write
+    assert 'item.Value<bool?>("quarantined") == true' in pending_rollback
+    assert 'item.Value<bool?>("rollback_pending") != false' in pending_rollback
+    assert 'item.Value<bool?>("rollback_completed") != true' in pending_rollback
+    assert 'item.Value<bool?>("rollback_superseded") != true' in pending_rollback
     assert "pendingRollbacks.Concat(recentFaults)" in write
     assert "Math.Max(0, MaxFaultRecords - pendingRollbacks.Count)" in write
 
