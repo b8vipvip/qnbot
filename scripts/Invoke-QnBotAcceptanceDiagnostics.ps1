@@ -13,7 +13,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = '',
-    [string]$RuntimeSnapshotPath = ''
+    [string]$RuntimeSnapshotPath = '',
+    [string]$ConditionalBusinessAdviceLedgerPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -523,7 +524,86 @@ foreach ($listener in $webSocketListeners) {
 $webSocketReachable = Test-LoopbackPort -Port 41010
 $botProcesses = @($cimProcesses | Where-Object { $_.Name -ieq 'Bot.exe' })
 $botPids = @($botProcesses | ForEach-Object { [int]$_.ProcessId })
+function Read-ConditionalBusinessAdviceLedger {
+    param([string]$Path)
+
+    $empty = [pscustomobject]@{
+        Status = 'not_found'
+        RecordCount = 0
+        DeliveredCount = 0
+        ReservedOrUncertainCount = 0
+        RecentEvents = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $empty
+    }
+
+    try {
+        $ledger = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($Path)) -ErrorAction Stop
+        if ($null -eq $ledger -or [int]$ledger.SchemaVersion -ne 1) {
+            $empty.Status = 'invalid_schema'
+            return $empty
+        }
+        $records = if ($null -eq $ledger.Records) { @() } else { @($ledger.Records) }
+        $events = if ($null -eq $ledger.Events) { @() } else { @($ledger.Events) }
+        $deliveredCount = @($records | Where-Object {
+            try { ([DateTime]::Parse([string]$_.DeliveredAt)).Year -gt 1 } catch { $false }
+        }).Count
+        $reservedOrUncertainCount = @($records | Where-Object { $_.DeliveryUncertain -eq $true }).Count
+        $safeEvents = @()
+        foreach ($event in ($events | Sort-Object -Property { [DateTime]$_.AtUtc } -Descending | Select-Object -First 30)) {
+            $atUtc = 'unknown'
+            try { $atUtc = ([DateTime]::Parse([string]$event.AtUtc)).ToUniversalTime().ToString('o') } catch {}
+            $refs = @{}
+            foreach ($field in @('ShopRef', 'BuyerRef', 'OrderRef', 'ImageRef', 'ImageKnowledgeRef', 'AdviceRef')) {
+                $value = [string]$event.$field
+                if ($value -match '^[a-z][a-z0-9-]*#(?:[0-9a-f]{16}|none)$') {
+                    $refs[$field] = $value
+                } else {
+                    $refs[$field] = 'invalid'
+                }
+            }
+            $outcome = [string]$event.Outcome
+            $reason = [string]$event.Reason
+            if ($outcome -notmatch '^[a-z0-9_]{1,80}$') { $outcome = 'unknown' }
+            if ($reason -notmatch '^[a-z0-9_]{1,180}$') { $reason = 'unknown' }
+            $safeEvents += [pscustomobject]@{
+                AtUtc = $atUtc
+                Outcome = $outcome
+                Reason = $reason
+                ShopRef = $refs.ShopRef
+                BuyerRef = $refs.BuyerRef
+                OrderRef = $refs.OrderRef
+                ImageRef = $refs.ImageRef
+                ImageKnowledgeRef = $refs.ImageKnowledgeRef
+                AdviceRef = $refs.AdviceRef
+            }
+        }
+        return [pscustomobject]@{
+            Status = 'ok'
+            RecordCount = $records.Count
+            DeliveredCount = $deliveredCount
+            ReservedOrUncertainCount = $reservedOrUncertainCount
+            RecentEvents = $safeEvents
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Status = 'invalid_or_unreadable'
+            RecordCount = 0
+            DeliveredCount = 0
+            ReservedOrUncertainCount = 0
+            RecentEvents = @()
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ConditionalBusinessAdviceLedgerPath)) {
+    $ConditionalBusinessAdviceLedgerPath = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\data\conditional-business-advice-ledger.json'
+}
+$conditionalBusinessAdvice = Read-ConditionalBusinessAdviceLedger -Path $ConditionalBusinessAdviceLedgerPath
 $runtimeSnapshot = Read-RuntimeAcceptanceSnapshot -Path $RuntimeSnapshotPath -BotProcesses $botProcesses
+
 $webSocketOwnedByBot = @($webSocketListeners | Where-Object {
     $botPids -contains [int]$_.OwningProcess
 }).Count -gt 0
@@ -697,6 +777,7 @@ $report = [ordered]@{
         [pscustomobject]@{ Name = 'Active shop focus proof'; Status = $activeFocusCheckStatus }
     )
     RuntimeShopSessions = $runtimeSnapshot
+    ConditionalBusinessAdvice = $conditionalBusinessAdvice
     Privacy = [ordered]@{
         CustomerMessagesIncluded = $false
         CredentialsIncluded = $false
@@ -708,12 +789,13 @@ $report = [ordered]@{
         RawLogsIncluded = $false
         ScreenshotsIncluded = $false
         Uploaded = $false
-        Note = '只保存进程资源计数、端口状态、CDP目标数量、IMSDK属性类型/布尔值，以及进程生命周期内HMAC化的ShopKey/会话引用和状态计数；不保存聊天正文、账号昵称、原始ShopKey、原始会话ID、目标URL、命令行、Cookie、令牌、原始日志或截图。'
+        Note = '只保存进程资源计数、端口状态、CDP目标数量、IMSDK属性类型/布尔值、进程生命周期内HMAC化的ShopKey/会话引用，以及条件性业务建议的HMAC引用和结果代码；不保存聊天正文、账号昵称、原始ShopKey、原始会话ID、订单号、图片消息ID、目标URL、命令行、Cookie、令牌、原始日志或截图。'
     }
     Limitations = @(
         '此报告只做本机只读探测，不会发送测试消息，也不能证明真实买家消息已经送达。',
         'CDP仅在定位到bench_im渲染进程及其本机调试端口时探测；目标不唯一时会跳过，不猜测页面身份。未识别bench_im时只列出千牛进程拥有的loopback监听候选端口，不连接探测。',
-        '需要真实千牛会话的切店、重连、消息投递、知识学习和人工接管仍需单独验收。'
+        '条件性业务建议事件记录本机门禁与发送调用结果，不等同于买家界面已收到；四种业务场景仍需在真实千牛会话中逐项触发并检查买家端。',
+        '条件性建议幂等账本按本机Windows用户配置文件跨进程协调；跨设备全局Exactly-once不由本地账本单独保证。'
     )
 }
 
@@ -743,9 +825,23 @@ $markdown = @(
     ('- WebSocket 127.0.0.1:41010 reachable: ' + $webSocketReachable),
     ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
     ('- CDP endpoints inspected: ' + $cdpEndpoints.Count),
+    ('- Conditional advice ledger: ' + $conditionalBusinessAdvice.Status),
+    ('- Conditional advice records: ' + $conditionalBusinessAdvice.RecordCount),
+    ('- Conditional advice delivered: ' + $conditionalBusinessAdvice.DeliveredCount),
+    ('- Conditional advice reserved or uncertain: ' + $conditionalBusinessAdvice.ReservedOrUncertainCount),
     '',
-    '## CDP / IMSDK'
+    '## Conditional business advice events'
 )
+if ($conditionalBusinessAdvice.RecentEvents.Count -eq 0) {
+    $markdown += '- No conditional business advice events recorded yet.'
+} else {
+    foreach ($event in $conditionalBusinessAdvice.RecentEvents) {
+        $markdown += ('- {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8}' -f
+            $event.AtUtc, $event.Outcome, $event.Reason, $event.ShopRef, $event.BuyerRef,
+            $event.OrderRef, $event.ImageRef, $event.ImageKnowledgeRef, $event.AdviceRef)
+    }
+}
+$markdown += @('', '## CDP / IMSDK')
 if ($cdpEndpoints.Count -eq 0) {
     $markdown += '- No unambiguous local CDP debug endpoint was detected.'
     foreach ($candidate in $qianniuLoopbackListenerCandidates) {

@@ -241,6 +241,13 @@ namespace Bot.Knowledge
         public long RankMs { get; set; }
         public long DecisionMs { get; set; }
         public long TotalMs { get; set; }
+        public string ConditionalAdviceKey { get; set; }
+        public string ConditionalAdviceOrderId { get; set; }
+        public string ConditionalAdviceItemId { get; set; }
+        public string ConditionalAdviceItemTitle { get; set; }
+        public string ConditionalAdviceSkuText { get; set; }
+        public string ConditionalAdviceImageMessageKey { get; set; }
+        public string ConditionalAdviceImageKnowledgeId { get; set; }
 
         public KnowledgeV2Decision()
         {

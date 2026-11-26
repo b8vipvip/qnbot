@@ -188,15 +188,22 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion);
-            if (!commerceAuthority.AllowLocalTerminalReply)
+            var conditionalOnly = !commerceAuthority.AllowLocalTerminalReply;
+            ConditionalBusinessAdviceEvidence conditionalAdviceEvidence = null;
+            if (conditionalOnly
+                && !ConditionalBusinessAdviceService.TryBuild(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    commerceAuthority.CommerceContext, string.Empty, string.Empty,
+                    out conditionalAdviceEvidence))
             {
-                var commerce = commerceAuthority.CommerceContext;
-                Log.Info("Knowledge Engine V2已让出终态直答权，交给Commerce Smart Reply: buyer="
+                var commercePrompt = CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                Log.Info("Knowledge Engine V2已让出终态直答权（普通订单直答权已移交Commerce上下文）；未取得可用于条件性售后建议的通用图片/订单证据: buyer="
                     + burst.BuyerNick
-                    + ", phase=" + (commerce == null ? string.Empty : commerce.PurchasePhase)
-                    + ", structured=" + (commerce != null && commerce.HasStructuredOrder)
+                    + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
-                return KnowledgeV2RuntimeResult.Continue();
+                if (string.IsNullOrWhiteSpace(commercePrompt))
+                    return KnowledgeV2RuntimeResult.Continue();
+                return KnowledgeV2RuntimeResult.Continue(commercePrompt);
             }
 
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
@@ -204,13 +211,40 @@ namespace Bot.ChromeNs
                 QueueWarm(burst.ShopKey, burst.SellerNick);
                 Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
                     + burst.BuyerNick);
-                return KnowledgeV2RuntimeResult.Continue();
+                var warmContext = conditionalOnly
+                    ? ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext)
+                    : string.Empty;
+                return KnowledgeV2RuntimeResult.Continue(warmContext);
             }
 
             KnowledgeV2Decision decision;
             try
             {
-                decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                if (conditionalOnly)
+                {
+                    var imageEvidenceText = ConditionalBusinessAdviceService.BuildImageEvidenceText(conditionalAdviceEvidence);
+                    decision = KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
+                        burst.SellerNick,
+                        burst.BuyerNick,
+                        burst.CombinedQuestion,
+                        imageEvidenceText,
+                        conditionalAdviceEvidence.ImageDescription);
+                    string conditionalReason;
+                    if (!ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
+                        decision, conditionalAdviceEvidence, out conditionalReason))
+                    {
+                        var conditionalPrompt = ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                            + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                        Log.Info("Knowledge Engine V2条件性售后建议未通过业务证据门禁，交给上下文AI处理: buyer="
+                            + burst.BuyerNick + ", reason=" + conditionalReason);
+                        return KnowledgeV2RuntimeResult.Continue(conditionalPrompt);
+                    }
+                }
+                else
+                {
+                    decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                }
             }
             catch (Exception ex)
             {
@@ -219,9 +253,20 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.Continue();
             }
 
+            if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
+            {
+                decision.CanDirectReply = false;
+                decision.Answer = string.Empty;
+                Log.Info("Knowledge Engine V2命中需要外部证据的知识记录，但本轮未进入对应证据门禁，禁止本地直答: buyer="
+                    + burst.BuyerNick);
+            }
+
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);
+                if (conditionalOnly)
+                    contextPromptAddon += ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
                 Log.Info("Knowledge Engine V2未直答: buyer=" + burst.BuyerNick
                     + ", totalMs=" + (decision == null ? 0 : decision.TotalMs)
                     + ", candidates=" + (decision == null ? 0 : decision.CandidateCount)
@@ -273,6 +318,14 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
             answer = dedup.Answer;
+            if (!string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey)
+                && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：条件性售后建议最终话术未通过安全复核");
+                lease.MarkCompleted("conditional_advice_final_text_unsafe");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
                 || !lease.MarkReady("knowledge_v2_answer_materialized"))
             {
@@ -391,9 +444,44 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
 
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    decision.ConditionalAdviceOrderId, decision.ConditionalAdviceItemId,
+                    decision.ConditionalAdviceItemTitle, decision.ConditionalAdviceSkuText, decision.ConditionalAdviceKey,
+                    decision.ConditionalAdviceImageMessageKey, decision.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    Log.Info("条件性售后建议被幂等/证据门禁阻止: buyer=" + burst.BuyerNick
+                        + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", decision.ConditionalAdviceOrderId)
+                        + ", reason=" + reserveReason);
+                    return KnowledgeV2RuntimeResult.HandledResult();
+                }
+            }
+
+            // A passing last-mile guard means the transport may enter a send attempt.
+            // If a later retry is cancelled, an earlier attempt may still have reached the buyer.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> preSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        decision.ConditionalAdviceOrderId,
+                        decision.ConditionalAdviceItemId,
+                        decision.ConditionalAdviceItemTitle,
+                        decision.ConditionalAdviceSkuText,
+                        decision.ConditionalAdviceImageMessageKey,
+                        decision.ConditionalAdviceImageKnowledgeId))
                     return false;
                 if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                 {
@@ -408,6 +496,8 @@ namespace Bot.ChromeNs
                 if (!shouldSend)
                     Log.Info("Knowledge Engine V2等待发送资源期间会话已变化，阻止迟到直答: buyer="
                         + burst.BuyerNick + ", reason=" + latestRelevanceReason);
+                if (shouldSend && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
                 return shouldSend;
             };
 
@@ -419,6 +509,10 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
                 if (ctl != null) ctl.SetSendResult(false, "未发送：generation在等待发送资源/会话确认期间已失效");
                 ResponseProgressTracker.Cancel(
                     burst.SellerNick, burst.BuyerNick, "Knowledge V2发送期间generation已失效", burst.ShopKey);
@@ -430,6 +524,11 @@ namespace Bot.ChromeNs
             var failureReason = sendOk || sendCancelled || qn.Rpa == null
                 ? string.Empty
                 : qn.Rpa.GetSendFailureReason();
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(
                     burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);

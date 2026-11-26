@@ -35,6 +35,18 @@ namespace Bot.ChromeNs
             return Evaluate(state);
         }
 
+        private static readonly System.Text.RegularExpressions.Regex OrderDependentQuestionRegex =
+            new System.Text.RegularExpressions.Regex(
+                "订单|订单号|订单状态|我的订单|这笔订单|这单|交易状态|交易号|下单后|已下单|刚买|买的东西|支付|付款|付钱|实付款|付款金额|未付款|已付款|支付成功|发货|物流|快递|运单|收货|签收|退款|退货|售后|退换|退吗|能退|可以退|退钱|退费|换货|换货申请|取消订单|关闭订单|\\border\\b|order status|payment|paid|unpaid|shipping|delivery|tracking|refund|return",
+                System.Text.RegularExpressions.RegexOptions.Compiled
+                    | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        internal static bool IsOrderDependentQuestion(string question)
+        {
+            return !string.IsNullOrWhiteSpace(question)
+                && OrderDependentQuestionRegex.IsMatch(question);
+        }
+
         public static CommerceReplyAuthorityDecision Evaluate(ConversationStateSnapshot state)
         {
             var commerce = state == null ? null : state.CommerceContext;
@@ -51,25 +63,36 @@ namespace Bot.ChromeNs
                 return decision;
             }
 
-            if (commerce.HasStructuredOrder)
+            var currentQuestion = string.Join(" ", new[]
+            {
+                state.CurrentQuestion ?? string.Empty,
+                state.CurrentTopic ?? string.Empty,
+                state.BuyerGoal ?? string.Empty,
+                state.PendingQuestion ?? string.Empty
+            });
+            var orderDependent = IsOrderDependentQuestion(currentQuestion);
+            if (orderDependent && commerce.HasStructuredOrder)
             {
                 decision.RequiresContextualAgent = true;
-                decision.Reason = "存在结构化订单事实，回复必须结合当前订单阶段/商品/SKU/履约状态";
+                decision.Reason = "当前问题明确涉及订单/支付/履约/售后，需按知识规则核验对应订单证据";
                 return decision;
             }
 
-            if (string.Equals(
-                commerce.PurchasePhase,
-                "post_order_unverified",
-                StringComparison.OrdinalIgnoreCase))
+            if (orderDependent
+                && string.Equals(
+                    commerce.PurchasePhase,
+                    "post_order_unverified",
+                    StringComparison.OrdinalIgnoreCase))
             {
                 decision.RequiresContextualAgent = true;
-                decision.Reason = "会话强烈指向下单后但缺少结构化订单，禁止固定FAQ直接结束回复";
+                decision.Reason = "当前问题涉及下单后事项，但没有可核验的结构化订单";
                 return decision;
             }
 
             decision.RequiresContextualAgent = false;
-            decision.Reason = "未进入订单相关阶段，可继续普通售前知识路由";
+            decision.Reason = commerce.HasStructuredOrder
+                ? "当前问题不依赖订单状态，不注入订单证据，沿用普通知识路由"
+                : "当前问题不需要订单证据，可继续普通知识路由";
             return decision;
         }
     }

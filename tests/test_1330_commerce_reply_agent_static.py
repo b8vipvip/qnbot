@@ -79,7 +79,8 @@ def test_single_commerce_reply_authority_owns_terminal_vs_contextual_decision():
     authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
     assert "internal static class CommerceReplyAuthorityService" in authority
     assert "commerce.HasStructuredOrder" in authority
-    assert 'commerce.PurchasePhase,\n                "post_order_unverified"' in authority
+    assert "commerce.PurchasePhase" in authority
+    assert '"post_order_unverified"' in authority
     assert "RequiresContextualAgent = true" in authority
     assert "SendTextWithRetryAsync" not in authority
     assert "KnowledgeEngineV2Service.Resolve" not in authority
@@ -278,3 +279,24 @@ def test_completed_legacy_report_without_shopkey_can_be_terminally_marked_withou
     assert "(report.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal" in marker
     assert "if (string.IsNullOrWhiteSpace(report.ShopKey)) return true;" in process
     assert "ResolveRuntimeBySellerNick(report.Seller)" not in process
+
+
+def test_structured_order_only_routes_order_dependent_questions_to_commerce_context():
+    authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    commerce = read("src/Bot/ChromeNs/CommerceContextService.cs")
+    assert "IsOrderDependentQuestion(currentQuestion)" in authority
+    assert "当前问题不依赖订单状态，不注入订单证据" in authority
+    assert "当前问题明确涉及订单/支付/履约/售后" in authority
+    assert "public string CurrentQuestion { get; set; }" in state
+    assert "CurrentQuestion = (currentQuestion ?? string.Empty).Trim()" in state
+    enrich = commerce[
+        commerce.index("public static void EnrichState"):
+        commerce.index("public static string BuildPromptAddon")
+    ]
+    assert "IsOrderDependentQuestion(routingQuestion)" in enrich
+    assert enrich.index("IsOrderDependentQuestion(routingQuestion)") < enrich.index("var commerce = Build(")
+    assert 'Source = "not_required"' in enrich
+    assert 'context.Source, "not_required"' in commerce
+    assert "设备|电视|会员|充值" not in authority
+

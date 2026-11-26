@@ -270,7 +270,15 @@ namespace Bot.ChromeNs
                 return;
             }
             if (workflowDecision != null && workflowDecision.RequiresSend)
+            {
+                // A published workflow owns this reply; do not carry an unrelated
+                // conditional-advice idempotency key onto its different response text.
+                result.ConditionalAdviceKey = string.Empty;
+                result.ConditionalAdviceOrderId = string.Empty;
+                result.ConditionalAdviceImageMessageKey = string.Empty;
+                result.ConditionalAdviceImageKnowledgeId = string.Empty;
                 result.Answer = workflowDecision.ReplyText;
+            }
 
             // OCR-first direct knowledge has already passed Knowledge Engine V2's production
             // authority gate. Running the generic dedupe/validator without preserveTrustedAnswer
@@ -428,9 +436,54 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey)
+                && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：条件性售后建议最终话术未通过安全复核");
+                lifecycleLease.MarkCompleted("conditional_advice_final_text_unsafe");
+                ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return;
+            }
+
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceItemId,
+                    result.ConditionalAdviceItemTitle, result.ConditionalAdviceSkuText, result.ConditionalAdviceKey,
+                    result.ConditionalAdviceImageMessageKey, result.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lifecycleLease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    Log.Info("视觉条件性售后建议被幂等/证据门禁阻止: buyer=" + burst.BuyerNick
+                        + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", result.ConditionalAdviceOrderId)
+                        + ", reason=" + reserveReason);
+                    return;
+                }
+            }
+
+            // Once any attempt passes the final guard, a later cancellation cannot
+            // prove that an earlier attempt was not delivered.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> preSendGuard = () =>
             {
                 if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId,
+                        result.ConditionalAdviceItemId,
+                        result.ConditionalAdviceItemTitle,
+                        result.ConditionalAdviceSkuText,
+                        result.ConditionalAdviceImageMessageKey,
+                        result.ConditionalAdviceImageKnowledgeId))
                     return false;
                 var latestWithdrawn = VisionImageCacheService.IsWithdrawn(
                     burst.SellerNick, burst.BuyerNick,
@@ -450,8 +503,11 @@ namespace Bot.ChromeNs
                         + latestRelevanceReason);
                     return false;
                 }
-                return workflowDecision == null || !workflowDecision.RequiresSend
+                var workflowCurrent = workflowDecision == null || !workflowDecision.RequiresSend
                     || ReceptionWorkflowRuntimeService.IsDecisionCurrent(workflowDecision);
+                if (workflowCurrent && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
+                return workflowCurrent;
             };
 
             bool sendOk;
@@ -462,6 +518,10 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
                 ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
@@ -470,6 +530,11 @@ namespace Bot.ChromeNs
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
             if (sendCancelled)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                        false, !conditionalAdviceSendMayHaveStarted);
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (lifecycleLease.IsCurrent)
                     lifecycleLease.MarkCompleted("vision_send_cancelled");
@@ -479,6 +544,11 @@ namespace Bot.ChromeNs
                     burst.SellerNick, burst.BuyerNick, "视觉回复发送前会话门禁取消", burst.ShopKey);
                 return;
             }
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {

@@ -9,6 +9,7 @@ namespace Bot.ChromeNs
 {
     internal sealed class ConversationStateSnapshot
     {
+        public string CurrentQuestion { get; set; }
         public string CurrentTopic { get; set; }
         public string CurrentEntity { get; set; }
         public string BuyerGoal { get; set; }
@@ -71,7 +72,10 @@ namespace Bot.ChromeNs
             string currentQuestion,
             IList<ConversationContextTurn> turns)
         {
-            var state = new ConversationStateSnapshot();
+            var state = new ConversationStateSnapshot
+            {
+                CurrentQuestion = (currentQuestion ?? string.Empty).Trim()
+            };
             var ordered = (turns ?? new List<ConversationContextTurn>())
                 .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
                 .OrderBy(x => x.Timestamp)

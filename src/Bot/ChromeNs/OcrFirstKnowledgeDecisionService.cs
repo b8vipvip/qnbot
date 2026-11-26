@@ -195,6 +195,8 @@ namespace Bot.ChromeNs
             }
 
             KnowledgeV2Decision decision;
+            CommerceReplyAuthorityDecision commerceAuthority = null;
+            ConditionalBusinessAdviceEvidence conditionalAdviceEvidence = null;
             try
             {
                 // Message display nicknames can be aliases. Knowledge V2 must use the seller
@@ -202,6 +204,8 @@ namespace Bot.ChromeNs
                 using (ShopSettingsScope.Enter(shop, false))
                 {
                     var question = (task.CombinedQuestion ?? string.Empty).Trim();
+                    commerceAuthority = CommerceReplyAuthorityService.Evaluate(
+                        knowledgeSeller, task.BuyerNick, question);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
@@ -258,6 +262,41 @@ namespace Bot.ChromeNs
                             question,
                             evidenceText,
                             evidenceSubject);
+
+                    // Structured orders always require the shared commerce authority.
+                    // The only local exception is a knowledge record that explicitly opts
+                    // into generic image+order evidence requirements and safe refund advice.
+                    if (commerceAuthority != null && !commerceAuthority.AllowLocalTerminalReply)
+                    {
+                        if (imageKnowledgeMatch != null)
+                            ConditionalBusinessAdviceService.TryBuild(
+                                task.ShopKey, knowledgeSeller, task.BuyerNick,
+                                commerceAuthority.CommerceContext, task.MessageKey,
+                                imageKnowledgeMatch.KnowledgeId, out conditionalAdviceEvidence);
+
+                        string conditionalReason = "缺少同店同买家有效图片/已付款订单证据";
+                        if (conditionalAdviceEvidence == null
+                            || !ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
+                                decision, conditionalAdviceEvidence, out conditionalReason))
+                        {
+                            if (decision != null)
+                            {
+                                decision.CanDirectReply = false;
+                                decision.Answer = string.Empty;
+                            }
+                            Log.Info("OCR图片命中后仍需Commerce上下文处理；条件性售后证据未通过，禁止V2提前直答: buyer="
+                                + task.BuyerNick + ", reason="
+                                + (conditionalAdviceEvidence == null
+                                    ? "缺少同店同买家有效图片/已付款订单证据"
+                                    : conditionalReason));
+                        }
+                        else
+                        {
+                            Log.Info("OCR图片命中并通过条件性售后建议门禁: buyer=" + task.BuyerNick
+                                + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", conditionalAdviceEvidence.OrderId)
+                                + ", adviceKey=" + decision.ConditionalAdviceKey);
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -269,6 +308,20 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("OCR-first知识库检索失败，继续视觉模型链路: " + ex.Message, 20);
                 return BuildVisualFallback(visualMatch, ocr, "Knowledge V2检索异常", imageKnowledgeMatch);
             }
+            // A typed evidence requirement must be authorized by the dedicated evidence
+            // policy; the fact that OCR or image knowledge matched is not sufficient by itself.
+            if (conditionalAdviceEvidence == null
+                && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
+            {
+                if (decision != null)
+                {
+                    decision.CanDirectReply = false;
+                    decision.Answer = string.Empty;
+                }
+                Log.Info("OCR图片知识命中需要外部证据的Knowledge V2记录，但本轮未通过证据门禁，禁止本地直答: buyer="
+                    + task.BuyerNick);
+            }
+
             // A saved image knowledge description is an operator-confirmed image-class
             // hint. It may authorize only an already-approved Knowledge V2 answer; the
             // description itself is never sent as a reply.
@@ -278,7 +331,10 @@ namespace Bot.ChromeNs
                 var contextAddon = CombineContext(
                     imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.ContextText,
                     visualMatch == null ? string.Empty : visualMatch.ContextText,
-                    KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision));
+                    KnowledgeEngineV2RuntimeBridge.BuildContextPromptAddon(decision),
+                    commerceAuthority == null ? string.Empty
+                        : CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext),
+                    ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false));
                 Log.Info((visualMatch == null && imageKnowledgeMatch == null
                     ? "OCR未命中图片知识/视觉预设，Knowledge V2仅作为检索证据，禁止提前直答"
                     : "图片知识/视觉理解已命中，但Knowledge V2未达到安全直答条件")
@@ -352,7 +408,14 @@ namespace Bot.ChromeNs
                 LocalOcrConfidence = ocr.Confidence,
                 LocalOcrLatencyMs = ocr.ElapsedMs,
                 LocalOcrCacheHit = ocr.CacheHit,
-                LocalOcrEngine = ocr.Engine
+                LocalOcrEngine = ocr.Engine,
+                ConditionalAdviceKey = decision.ConditionalAdviceKey,
+                ConditionalAdviceOrderId = decision.ConditionalAdviceOrderId,
+                ConditionalAdviceItemId = decision.ConditionalAdviceItemId,
+                ConditionalAdviceItemTitle = decision.ConditionalAdviceItemTitle,
+                ConditionalAdviceSkuText = decision.ConditionalAdviceSkuText,
+                ConditionalAdviceImageMessageKey = decision.ConditionalAdviceImageMessageKey,
+                ConditionalAdviceImageKnowledgeId = decision.ConditionalAdviceImageKnowledgeId
             };
         }
 

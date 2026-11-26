@@ -1201,9 +1201,10 @@ namespace Bot.ChromeNs
                     || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     return false;
                 string latestReason;
-                return ParallelReplyRelevanceGate.ShouldSend(
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
+                return shouldSend;
             };
             var sendOk = await SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
@@ -1352,19 +1353,80 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey)
+                && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：条件性售后建议最终话术未通过安全复核");
+                lease.MarkCompleted("conditional_advice_final_text_unsafe");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return;
+            }
+
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceItemId,
+                    result.ConditionalAdviceItemTitle, result.ConditionalAdviceSkuText, result.ConditionalAdviceKey,
+                    result.ConditionalAdviceImageMessageKey, result.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    return;
+                }
+            }
+
+            // A later cancellation may follow an earlier transport attempt; do not
+            // release the idempotency key unless no attempt ever passed this guard.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> visionPreSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
                     || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId,
+                        result.ConditionalAdviceItemId,
+                        result.ConditionalAdviceItemTitle,
+                        result.ConditionalAdviceSkuText,
+                        result.ConditionalAdviceImageMessageKey,
+                        result.ConditionalAdviceImageKnowledgeId))
+                    return false;
                 string latestReason;
-                return ParallelReplyRelevanceGate.ShouldSend(
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
+                if (shouldSend && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
+                return shouldSend;
             };
-            var sendOk = await SendTextWithRetryAsync(
-                burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard);
+            bool sendOk;
+            try
+            {
+                sendOk = await SendTextWithRetryAsync(
+                    burst.BuyerNick, answer, 1, lease.CancellationToken, visionPreSendGuard);
+            }
+            catch (OperationCanceledException)
+            {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
+                throw;
+            }
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    sendOk, !conditionalAdviceSendMayHaveStarted);
             if (sendOk) lease.MarkCompleted("vision_send_completed");
             else if (sendCancelled) lease.MarkCompleted("vision_send_cancelled");
             else lease.MarkFailed("vision_send_failed");

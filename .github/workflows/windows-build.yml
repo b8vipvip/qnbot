@@ -58,6 +58,14 @@ jobs:
       - name: Run ShopKey and conversation-learning regression tests
         shell: pwsh
         run: python -m pytest -q tests/test_session_auto_learning_static.py tests/test_session_auto_learning_full_corpus_static.py
+      - name: Run generic image evidence and conditional advice regressions
+        shell: pwsh
+        run: python -m pytest -q tests/test_conditional_business_advice_static.py tests/test_visual_image_knowledge_library_static.py tests/test_knowledge_retrieval_quality_regressions.py
+      - name: Validate read-only Windows acceptance diagnostics syntax
+        shell: pwsh
+        run: |
+          $scriptText = Get-Content -LiteralPath 'scripts/Invoke-QnBotAcceptanceDiagnostics.ps1' -Raw
+          [void][scriptblock]::Create($scriptText)
       - name: Run Windows-specific lifecycle tests
         shell: pwsh
         run: python -m unittest discover -s tools/qn_discovery_lab/tests
@@ -119,17 +127,19 @@ jobs:
       - name: Assemble complete runtime package
         shell: pwsh
         run: |
-          $packageRoot = Join-Path $PWD 'package'; $packageBin = Join-Path $packageRoot 'Bin'; $packageData = Join-Path $packageRoot 'data'; $releaseBin = Join-Path $PWD 'src\Bot\bin\x64\Release'; $baselineBin = Join-Path $PWD 'src\Bin'; $sourceData = Join-Path $PWD 'src\data'
+          $packageRoot = Join-Path $PWD 'package'; $packageBin = Join-Path $packageRoot 'Bin'; $packageData = Join-Path $packageRoot 'data'; $packageDiagnostics = Join-Path $packageRoot 'diagnostics'; $packageDocs = Join-Path $packageRoot 'docs'; $releaseBin = Join-Path $PWD 'src\Bot\bin\x64\Release'; $baselineBin = Join-Path $PWD 'src\Bin'; $sourceData = Join-Path $PWD 'src\data'
           Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $packageBin -Force | Out-Null; New-Item -ItemType Directory -Path $packageData -Force | Out-Null
+          New-Item -ItemType Directory -Path $packageBin -Force | Out-Null; New-Item -ItemType Directory -Path $packageData -Force | Out-Null; New-Item -ItemType Directory -Path $packageDiagnostics -Force | Out-Null; New-Item -ItemType Directory -Path $packageDocs -Force | Out-Null
           Copy-Item -Path (Join-Path $baselineBin '*') -Destination $packageBin -Recurse -Force
           Copy-Item -Path (Join-Path $releaseBin '*') -Destination $packageBin -Recurse -Force
           if (Test-Path -LiteralPath $sourceData -PathType Container) { Get-ChildItem -LiteralPath $sourceData -Force | Where-Object { $_.Name -ne 'params.db' } | Copy-Item -Destination $packageData -Recurse -Force }
+          Copy-Item -LiteralPath 'scripts\Invoke-QnBotAcceptanceDiagnostics.ps1' -Destination (Join-Path $packageDiagnostics 'Invoke-QnBotAcceptanceDiagnostics.ps1') -Force
+          Copy-Item -LiteralPath 'docs\CONDITIONAL_BUSINESS_ADVICE.md' -Destination (Join-Path $packageDocs 'CONDITIONAL_BUSINESS_ADVICE.md') -Force
           @('This package preserves the established Bin + data directory layout.','','params.db is intentionally excluded because it contains local user configuration and runtime state.','','OCR inference is provided by the authenticated server control plane.','No LocalOcrWorker executable or OCR model files are required on Windows.','','Back up your existing data directory before testing.','Copy only your own params.db into this package data directory.','Do not commit or upload params.db.') | Set-Content -LiteralPath (Join-Path $packageData 'README-PARAMS.txt') -Encoding UTF8
       - name: Verify complete Bot package
         shell: pwsh
         run: |
-          $required = @('package\Bin\Bot.exe','package\Bin\Bot.exe.config','package\Bin\BotLib.dll','package\Bin\DbEntity.dll','package\Bin\FlaUI.Core.dll','package\Bin\FlaUI.UIA3.dll','package\data\README-PARAMS.txt')
+          $required = @('package\Bin\Bot.exe','package\Bin\Bot.exe.config','package\Bin\BotLib.dll','package\Bin\DbEntity.dll','package\Bin\FlaUI.Core.dll','package\Bin\FlaUI.UIA3.dll','package\data\README-PARAMS.txt','package\diagnostics\Invoke-QnBotAcceptanceDiagnostics.ps1','package\docs\CONDITIONAL_BUSINESS_ADVICE.md')
           foreach ($path in $required) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required package file not found: $path" } }
           if (Test-Path -LiteralPath 'package\Bin\local-ocr') { throw 'Local OCR runtime must not be bundled after server OCR migration.' }
           if (Test-Path -LiteralPath 'package\data\params.db') { throw 'params.db must not be present in the GitHub artifact.' }

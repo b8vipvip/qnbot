@@ -27,7 +27,8 @@ def test_v2_is_in_the_only_text_reply_path_before_ai_generation():
     assert entry.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)") < entry.index(
         'lease.MarkGenerating("streaming_answer_started")'
     ) < entry.index("StreamingBuyerAnswerService.GetAnswerAsync(")
-    assert "KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion)" in method
+    assert "KnowledgeEngineV2Service.Resolve(" in method
+    assert "KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(" in method
     assert "decision == null || !decision.CanDirectReply" in method
     assert "KnowledgeV2RuntimeResult.Continue(contextPromptAddon)" in method
     assert "KnowledgeV2RuntimeResult.HandledResult()" in method
