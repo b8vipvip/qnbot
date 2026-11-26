@@ -210,14 +210,42 @@ namespace Bot.ChromeNs
             return SendTextWithRetryAsync(buyer, text, retryCount, CancellationToken.None);
         }
 
-        public async Task<bool> SendTextWithRetryAsync(
+        public Task<bool> SendTextWithRetryAsync(
             string buyer,
             string text,
             int retryCount,
             CancellationToken cancellationToken,
             Func<bool> preSendGuard = null)
         {
+            return SendTextWithRetryAsyncCore(
+                buyer, text, retryCount, cancellationToken, preSendGuard, 0);
+        }
+
+        private async Task<bool> SendTextWithRetryAsyncCore(
+            string buyer,
+            string text,
+            int retryCount,
+            CancellationToken cancellationToken,
+            Func<bool> preSendGuard,
+            int shopOwnerHandoffDepth)
+        {
             cancellationToken.ThrowIfCancellationRequested();
+            var scopedShop = ShopSettingsScope.Current;
+            var expectedShopKey = scopedShop == null
+                ? string.Empty
+                : (scopedShop.ShopKey ?? string.Empty).Trim();
+            if (expectedShopKey.Length > 0 && shopOwnerHandoffDepth < 1)
+            {
+                var initialOwner = FindAuthoritativeShopSendOwner(expectedShopKey);
+                if (initialOwner != null && !ReferenceEquals(initialOwner, this))
+                {
+                    var initialHandoff = await TryHandoffToAuthoritativeShopQnAsync(
+                        initialOwner, expectedShopKey, buyer, text, retryCount,
+                        cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
+                    if (initialHandoff.HasValue) return initialHandoff.Value;
+                }
+            }
+
             const string segmentToken = "{分段符}";
             if (!string.IsNullOrEmpty(text) && text.IndexOf(segmentToken, StringComparison.Ordinal) >= 0)
             {
@@ -229,7 +257,9 @@ namespace Bot.ChromeNs
                 {
                     var segment = segments[segmentIndex];
                     Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
-                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken, preSendGuard)) return false;
+                    if (!await SendTextWithRetryAsyncCore(
+                        buyer, segment, retryCount, cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false))
+                        return false;
                     if (segmentIndex + 1 < segments.Count) await Task.Delay(220, cancellationToken);
                 }
                 return true;
@@ -242,6 +272,8 @@ namespace Bot.ChromeNs
             var sendGateWaitAt = DateTime.UtcNow;
             await _sendGate.WaitAsync(cancellationToken);
             var sendGateAcquiredAt = DateTime.UtcNow;
+            var sendGateHeld = true;
+            long sendGateHeldMs = 0;
             Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, sendGateAcquiredAt.Ticks);
             var sendGateWaitMs = (long)(sendGateAcquiredAt - sendGateWaitAt).TotalMilliseconds;
             if (sendGateWaitMs >= 2000)
@@ -253,17 +285,62 @@ namespace Bot.ChromeNs
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // A long wait behind another buyer's native send can outlive the CDP wrapper
+                // that originally received this message. Re-resolve only the exact ShopKey
+                // after the gate is acquired; never borrow the globally active QN.
+                if (expectedShopKey.Length > 0 && shopOwnerHandoffDepth < 1)
+                {
+                    var currentOwner = FindAuthoritativeShopSendOwner(expectedShopKey);
+                    if (currentOwner != null && !ReferenceEquals(currentOwner, this))
+                    {
+                        ReleaseSendGate(ref sendGateHeld, sendGateAcquiredAt, ref sendGateHeldMs);
+                        var handoff = await TryHandoffToAuthoritativeShopQnAsync(
+                            currentOwner, expectedShopKey, buyer, text, retryCount,
+                            cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
+                        if (handoff.HasValue) return handoff.Value;
+                        rpa.SetSendFailure("同ShopKey权威会话转交", "转交期间本店权威会话再次变化，已停止发送");
+                        return false;
+                    }
+                }
+
                 rpa.ResetSendFailure();
                 string shopScopeReason;
                 shopScopeReason = await WaitForCurrentShopAuthorityAsync(
                     cancellationToken, 5000, "发送").ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(shopScopeReason))
                 {
+                    var replacement = expectedShopKey.Length == 0 || shopOwnerHandoffDepth >= 1
+                        ? null
+                        : FindAuthoritativeShopSendOwner(expectedShopKey);
+                    if (replacement != null && !ReferenceEquals(replacement, this))
+                    {
+                        ReleaseSendGate(ref sendGateHeld, sendGateAcquiredAt, ref sendGateHeldMs);
+                        var handoff = await TryHandoffToAuthoritativeShopQnAsync(
+                            replacement, expectedShopKey, buyer, text, retryCount,
+                            cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
+                        if (handoff.HasValue) return handoff.Value;
+                        rpa.SetSendFailure("同ShopKey权威会话转交", "转交期间本店权威会话再次变化，已停止发送");
+                        return false;
+                    }
                     rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
                     return false;
                 }
                 if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
                 {
+                    var replacement = expectedShopKey.Length == 0 || shopOwnerHandoffDepth >= 1
+                        ? null
+                        : FindAuthoritativeShopSendOwner(expectedShopKey);
+                    if (replacement != null && !ReferenceEquals(replacement, this))
+                    {
+                        ReleaseSendGate(ref sendGateHeld, sendGateAcquiredAt, ref sendGateHeldMs);
+                        var handoff = await TryHandoffToAuthoritativeShopQnAsync(
+                            replacement, expectedShopKey, buyer, text, retryCount,
+                            cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
+                        if (handoff.HasValue) return handoff.Value;
+                        rpa.SetSendFailure("同ShopKey权威会话转交", "转交期间本店权威会话再次变化，已停止发送");
+                        return false;
+                    }
                     rpa.SetSendFailure("发送ShopKey作用域确认", shopScopeReason);
                     return false;
                 }
@@ -276,6 +353,19 @@ namespace Bot.ChromeNs
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsCurrentShopScopeValidForSend(out shopScopeReason))
                 {
+                    var replacement = expectedShopKey.Length == 0 || shopOwnerHandoffDepth >= 1
+                        ? null
+                        : FindAuthoritativeShopSendOwner(expectedShopKey);
+                    if (replacement != null && !ReferenceEquals(replacement, this))
+                    {
+                        ReleaseSendGate(ref sendGateHeld, sendGateAcquiredAt, ref sendGateHeldMs);
+                        var handoff = await TryHandoffToAuthoritativeShopQnAsync(
+                            replacement, expectedShopKey, buyer, text, retryCount,
+                            cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false);
+                        if (handoff.HasValue) return handoff.Value;
+                        rpa.SetSendFailure("同ShopKey权威会话转交", "转交期间本店权威会话再次变化，已停止发送");
+                        return false;
+                    }
                     rpa.SetSendFailure("发送ShopKey作用域复核", shopScopeReason);
                     return false;
                 }
@@ -377,18 +467,95 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, 0);
-                _sendGate.Release();
-                var heldMs = (long)(DateTime.UtcNow - sendGateAcquiredAt).TotalMilliseconds;
-                if (heldMs >= 5000)
+                ReleaseSendGate(ref sendGateHeld, sendGateAcquiredAt, ref sendGateHeldMs);
+                if (sendGateHeldMs >= 5000)
                 {
                     Log.Info("可靠发送锁已释放: buyerRef="
                         + MyWebSocketServer.DiagnosticRef("buyer", buyer)
-                        + ", heldMs=" + heldMs
+                        + ", heldMs=" + sendGateHeldMs
                         + ", cancelled=" + rpa.LastSendWasCancelled
                         + ", reason=" + rpa.GetSendFailureReason());
                 }
             }
+        }
+
+        private QN FindAuthoritativeShopSendOwner(string expectedShopKey)
+        {
+            expectedShopKey = (expectedShopKey ?? string.Empty).Trim();
+            var scope = ShopSettingsScope.Current;
+            if (expectedShopKey.Length == 0 || scope == null
+                || !string.Equals((scope.ShopKey ?? string.Empty).Trim(),
+                    expectedShopKey, StringComparison.Ordinal))
+                return null;
+
+            try
+            {
+                var qn = ShopContextLocator.FindConnectedQnByShopKey(expectedShopKey);
+                var client = qn == null ? null : qn.CDP;
+                var server = MyWebSocketServer.WSocketSvrInst;
+                if (qn == null || qn.Seller == null || client == null
+                    || client.IsInvalidated || client.IsShopIdentityRetired
+                    || !string.Equals((client.ShopKey ?? string.Empty).Trim(),
+                        expectedShopKey, StringComparison.Ordinal)
+                    || server == null
+                    || !server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId))
+                    return null;
+                return qn;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("解析本店当前权威发送QN失败，保持fail-closed: shopRef="
+                    + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                    + ", errorType=" + ex.GetType().Name);
+                return null;
+            }
+        }
+
+        private async Task<bool?> TryHandoffToAuthoritativeShopQnAsync(
+            QN owner,
+            string expectedShopKey,
+            string buyer,
+            string text,
+            int retryCount,
+            CancellationToken cancellationToken,
+            Func<bool> preSendGuard,
+            int handoffDepth)
+        {
+            if (owner == null || ReferenceEquals(owner, this) || handoffDepth >= 1)
+                return null;
+
+            var currentOwner = FindAuthoritativeShopSendOwner(expectedShopKey);
+            if (currentOwner == null || !ReferenceEquals(currentOwner, owner))
+                return null;
+
+            var fromClient = CDP;
+            var toClient = owner.CDP;
+            Log.Info("自动回复发送已转交同ShopKey当前权威QN实例: shopRef="
+                + MyWebSocketServer.DiagnosticRef("shop", expectedShopKey)
+                + ", fromSessionRef=" + MyWebSocketServer.DiagnosticRef("session", fromClient == null ? string.Empty : fromClient.SessionId)
+                + ", toSessionRef=" + MyWebSocketServer.DiagnosticRef("session", toClient == null ? string.Empty : toClient.SessionId)
+                + ", buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", buyer));
+
+            var ok = await owner.SendTextWithRetryAsyncCore(
+                buyer, text, retryCount, cancellationToken, preSendGuard, handoffDepth + 1).ConfigureAwait(false);
+            if (!ok && rpa != null && owner.rpa != null)
+            {
+                var reason = owner.rpa.GetSendFailureReason();
+                if (owner.rpa.LastSendWasCancelled)
+                    rpa.SetSendCancellation("同ShopKey权威会话转交", reason);
+                else
+                    rpa.SetSendFailure("同ShopKey权威会话转交", reason);
+            }
+            return ok;
+        }
+
+        private void ReleaseSendGate(ref bool sendGateHeld, DateTime sendGateAcquiredAt, ref long sendGateHeldMs)
+        {
+            if (!sendGateHeld) return;
+            sendGateHeldMs = (long)(DateTime.UtcNow - sendGateAcquiredAt).TotalMilliseconds;
+            sendGateHeld = false;
+            Interlocked.Exchange(ref _sendGateHeldSinceUtcTicks, 0);
+            _sendGate.Release();
         }
 
         private bool IsPreSendGuardSatisfied(Func<bool> preSendGuard, string stage)
