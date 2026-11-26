@@ -160,8 +160,8 @@ namespace Bot.ChromeNs
                             }
                             catch
                             {
-                                if (notifyAttempted) try { qn.EvMessageNotity -= OnMessageNotify; } catch { }
-                                if (receiveAttempted) try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { }
+                                if (notifyAttempted) { try { qn.EvMessageNotity -= OnMessageNotify; } catch { } }
+                                if (receiveAttempted) { try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { } }
                                 throw;
                             }
                         }

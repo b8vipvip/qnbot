@@ -95,7 +95,7 @@ namespace Bot.ChromeNs
                                 }
                                 catch
                                 {
-                                    if (subscriptionAttempted) try { qn.EvRecieveNewMessage -= Qn_EvRecieveNewMessage; } catch { }
+                                    if (subscriptionAttempted) { try { qn.EvRecieveNewMessage -= Qn_EvRecieveNewMessage; } catch { } }
                                     throw;
                                 }
                             }

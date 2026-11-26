@@ -97,7 +97,7 @@ namespace Bot.ShopScope
                         }
                         catch
                         {
-                            if (subscriptionAttempted) try { qn.EvBuyerSwitched -= Qn_EvBuyerSwitched; } catch { }
+                            if (subscriptionAttempted) { try { qn.EvBuyerSwitched -= Qn_EvBuyerSwitched; } catch { } }
                             throw;
                         }
                     }

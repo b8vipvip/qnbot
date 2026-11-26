@@ -86,7 +86,7 @@ namespace Bot.ChromeNs
                             }
                             catch
                             {
-                                if (subscriptionAttempted) try { qn.EvMessageNotity -= OnMessageNotify; } catch { }
+                                if (subscriptionAttempted) { try { qn.EvMessageNotity -= OnMessageNotify; } catch { } }
                                 throw;
                             }
                         }

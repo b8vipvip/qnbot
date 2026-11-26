@@ -56,9 +56,9 @@ namespace Bot.ChromeNs
                             }
                             catch
                             {
-                                if (sellerSwitchAttempted) try { qn.EvSellerSwitched -= OnSellerSwitched; } catch { }
-                                if (buyerSwitchAttempted) try { qn.EvBuyerSwitched -= OnBuyerSwitched; } catch { }
-                                if (messageAttempted) try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { }
+                                if (sellerSwitchAttempted) { try { qn.EvSellerSwitched -= OnSellerSwitched; } catch { } }
+                                if (buyerSwitchAttempted) { try { qn.EvBuyerSwitched -= OnBuyerSwitched; } catch { } }
+                                if (messageAttempted) { try { qn.EvRecieveNewMessage -= OnReceiveNewMessage; } catch { } }
                                 throw;
                             }
                         }
