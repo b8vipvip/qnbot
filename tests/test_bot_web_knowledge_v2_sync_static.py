@@ -274,6 +274,8 @@ def test_stale_windows_v2_sync_returns_newer_web_revision_without_overwrite(tmp_
         ("Confidence", float("-inf")),
         ("Authority", 1.01),
         ("Confidence", -0.01),
+        ("Authority", 10**400),
+        ("Confidence", -(10**400)),
     ],
 )
 def test_v2_record_numeric_metadata_must_be_finite_and_bounded(tmp_path, field, value):

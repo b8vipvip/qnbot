@@ -236,7 +236,7 @@ def test_cloud_revision_reset_backs_up_local_corpus_and_restarts_safe_reconcilia
     ]
     rollback = sync[
         sync.index("if(cloudRevision<state.Revision)"):
-        sync.index("if(cloudRevision>state.Revision)")
+        sync.index("if(cloudRevision>state.Revision && !snapshotAcknowledged)")
     ]
 
     assert "Backup(shop,local,cloudRevision)" in rollback
@@ -302,3 +302,31 @@ def test_acceptance_uses_same_process_local_hmac_shop_alias_and_current_sample()
     assert "latest system sample has no fresh" in script
     assert "CSV" in script and "Get-FileHash" in script
     assert "Device A last sync succeeded" in script
+
+
+def test_own_upload_ack_preserves_edits_and_deletes_made_during_http_request():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    sync = service[service.index("private static async Task SyncOnce"):service.index("private static State LoadState")]
+    assert "snapshotAcknowledged=string.Equals(cloudFingerprint,localFingerprint,StringComparison.Ordinal)" in sync
+    assert "if(cloudRevision>state.Revision && !snapshotAcknowledged)" in sync
+    assert sync.index("if(cloudRevision>state.Revision && !snapshotAcknowledged)") < sync.index("MergeCloudAndLocal(records,latestLocal")
+    ack = sync[sync.index("// Same-revision responses"):]
+    assert "if(!snapshotAcknowledged)" in ack
+    assert ack.index("throw new InvalidOperationException") < ack.index("PersistState(shop,state,cloudRevision,localFingerprint)")
+    assert "KnowledgeEngineV2Repository.LoadAll(shop.DisplayName)" in ack
+    assert "afterRequestFingerprint,localFingerprint" in ack
+    assert "TryReplaceAllIfUnchanged" not in ack
+    assert "revisionToken.Type!=JTokenType.Integer" in sync
+    assert 'root["records"] as JArray' in sync
+    assert "records.Any(x=>x==null)" in sync
+
+
+def test_cloud_fingerprint_covers_all_persisted_record_fields():
+    repository = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    fingerprint = repository.split("internal static string ComputeCloudSyncFingerprint", 1)[1].split("internal static bool TryReplaceAllIfUnchanged", 1)[0]
+    for field in ("Id", "Type", "Title", "Intent", "Subject", "Predicate", "Entities", "Aliases", "Answer",
+                  "ShortAnswer", "Conditions", "Exclusions", "RequiredContext", "ProductIds", "RiskLevel",
+                  "SourceType", "SourceId", "Authority", "Confidence", "UseCount", "AcceptedCount",
+                  "CorrectionCount", "WithdrawCount", "Enabled", "Status", "CreatedAt", "UpdatedAt", "LastVerifiedAt"):
+        assert f"x.{field}" in fingerprint
+    assert ".OrderBy(x=>x.Id,StringComparer.Ordinal)" in fingerprint

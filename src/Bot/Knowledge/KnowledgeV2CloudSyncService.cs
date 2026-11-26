@@ -150,8 +150,18 @@ namespace Bot.Knowledge
                         var body=await response.Content.ReadAsStringAsync();
                         if(!response.IsSuccessStatusCode) throw new Exception("HTTP "+(int)response.StatusCode+" "+Safe(body,200));
                         var root=JObject.Parse(body);
-                        var cloudRevision=root.Value<int?>("revision")??state.Revision;
-                        var records=root["records"]==null?null:root["records"].ToObject<List<KnowledgeV2Record>>();
+                        var revisionToken=root["revision"];
+                        var recordsToken=root["records"] as JArray;
+                        if(revisionToken==null || revisionToken.Type!=JTokenType.Integer || recordsToken==null)
+                            throw new InvalidOperationException("Knowledge V2 云端响应缺少有效 revision/records，已保留同步检查点。");
+                        var cloudRevision=revisionToken.Value<int>();
+                        if(cloudRevision<0)
+                            throw new InvalidOperationException("Knowledge V2 云端 revision 无效。");
+                        var records=recordsToken.ToObject<List<KnowledgeV2Record>>();
+                        if(records==null || records.Any(x=>x==null))
+                            throw new InvalidOperationException("Knowledge V2 云端 records 无效。");
+                        var cloudFingerprint=Fingerprint(records);
+                        var snapshotAcknowledged=string.Equals(cloudFingerprint,localFingerprint,StringComparison.Ordinal);
 
                         if(cloudRevision<state.Revision)
                         {
@@ -177,11 +187,11 @@ namespace Bot.Knowledge
                                 +", backup="+Path.GetFileName(rollbackBackup));
                             return;
                         }
-                        if(cloudRevision>state.Revision)
+                        // A higher revision can be the acknowledgement of our own upload, not
+                        // a competing cloud edit. Do not merge the acknowledged old snapshot
+                        // over edits/deletes made locally while the HTTP request was in flight.
+                        if(cloudRevision>state.Revision && !snapshotAcknowledged)
                         {
-                            if(records==null)
-                                throw new InvalidOperationException("Knowledge V2 云端版本已更新但未返回 records，已保留本地数据并等待重试。");
-                            var cloudFingerprint=Fingerprint(records);
                             lock(state.SyncRoot)
                             {
                                 state.LastCloudRecordCount=records.Count;
@@ -239,6 +249,10 @@ namespace Bot.Knowledge
                             return;
                         }
 
+                        // Same-revision responses must not silently acknowledge data the
+                        // server did not return. Preserve the old checkpoint on mismatch.
+                        if(!snapshotAcknowledged)
+                            throw new InvalidOperationException("Knowledge V2 同版本云端内容与请求快照不一致，已保留检查点等待重试。");
                         PersistState(shop,state,cloudRevision,localFingerprint);
                         var afterRequestLocal=KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
                         var afterRequestFingerprint=Fingerprint(afterRequestLocal);

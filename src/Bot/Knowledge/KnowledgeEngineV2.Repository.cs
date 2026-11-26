@@ -1258,11 +1258,33 @@ namespace Bot.Knowledge
                 .Select(x=>new
                 {
                     Id=x.Id??string.Empty,
-                    UpdatedAt=x.UpdatedAt,
-                    Enabled=x.Enabled,
-                    Status=x.Status??string.Empty,
+                    Type=x.Type??string.Empty,
                     Title=x.Title??string.Empty,
-                    Answer=x.Answer??string.Empty
+                    Intent=x.Intent??string.Empty,
+                    Subject=x.Subject??string.Empty,
+                    Predicate=x.Predicate??string.Empty,
+                    Entities=x.Entities??new List<string>(),
+                    Aliases=x.Aliases??new List<string>(),
+                    Answer=x.Answer??string.Empty,
+                    ShortAnswer=x.ShortAnswer??string.Empty,
+                    Conditions=x.Conditions??new List<string>(),
+                    Exclusions=x.Exclusions??new List<string>(),
+                    RequiredContext=x.RequiredContext??new List<string>(),
+                    ProductIds=x.ProductIds??new List<string>(),
+                    RiskLevel=x.RiskLevel??string.Empty,
+                    SourceType=x.SourceType??string.Empty,
+                    SourceId=x.SourceId??string.Empty,
+                    x.Authority,
+                    x.Confidence,
+                    x.UseCount,
+                    x.AcceptedCount,
+                    x.CorrectionCount,
+                    x.WithdrawCount,
+                    x.Enabled,
+                    Status=x.Status??string.Empty,
+                    CreatedAtTicks=x.CreatedAt.Ticks,
+                    UpdatedAtTicks=x.UpdatedAt.Ticks,
+                    LastVerifiedAtTicks=x.LastVerifiedAt.Ticks
                 })
                 .OrderBy(x=>x.Id,StringComparer.Ordinal);
             return KnowledgeAiService.ContentHash(JsonConvert.SerializeObject(projection),string.Empty);

@@ -101,6 +101,10 @@ def _validate_records(records):
                 continue
             if isinstance(value,bool) or not isinstance(value,(int,float)):
                 raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是 0 到 1 之间的有限数值")
+            # Range-check integers before float conversion: a legal JSON integer
+            # with hundreds of digits otherwise raises OverflowError (HTTP 500).
+            if value<0 or value>1:
+                raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是 0 到 1 之间的有限数值")
             number=float(value)
             if not math.isfinite(number) or number<0 or number>1:
                 raise HTTPException(status_code=400,detail=f"Knowledge V2 {field} 必须是 0 到 1 之间的有限数值")
