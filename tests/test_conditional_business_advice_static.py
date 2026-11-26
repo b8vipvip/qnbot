@@ -61,7 +61,7 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "MatchedImageKnowledgeId" in build
     assert "order.PaidAt" in build
     assert "imageObservedAt < orderEvidenceTime" in build
-    assert "VisualImageKnowledgeService.Load(shopKey, seller)" in build
+    assert "IsImageKnowledgeMatchStillValid(shopKey, seller, image)" in build
     assert "IsImageKnowledgeMatchStillValid(shopKey, seller, image)" in build
     assert "paidOpenOrders.Count > 1" in build
     assert ".GroupBy(x => x.OrderId.Trim(), StringComparer.Ordinal)" in build
