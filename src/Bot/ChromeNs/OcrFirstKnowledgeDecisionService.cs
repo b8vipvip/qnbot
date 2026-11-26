@@ -396,6 +396,7 @@ namespace Bot.ChromeNs
                 LocalOcrEngine = ocr.Engine,
                 ConditionalAdviceKey = decision.ConditionalAdviceKey,
                 ConditionalAdviceOrderId = decision.ConditionalAdviceOrderId,
+                ConditionalAdviceItemId = decision.ConditionalAdviceItemId,
                 ConditionalAdviceImageMessageKey = decision.ConditionalAdviceImageMessageKey,
                 ConditionalAdviceImageKnowledgeId = decision.ConditionalAdviceImageKnowledgeId
             };
