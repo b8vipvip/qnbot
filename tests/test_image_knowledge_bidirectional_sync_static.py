@@ -439,3 +439,12 @@ def test_remote_image_delete_uses_cloud_revision_not_cross_device_wall_clock():
     assert "old != null && old.SyncDirty && old.CloudRevision >= revision" in delete
     assert "old.UpdatedAtTicks > deletedAt" not in delete
     assert "monotonic server revision" in delete
+
+
+def test_image_sync_revision_rejects_boolean_and_fractional_json_numbers():
+    api = read("services/api-control-plane/bot_web_conversation_knowledge.py")
+    revision = api.split("def _sync_revision", 1)[1].split("def _sync_timestamp", 1)[0]
+    assert "isinstance(value, bool)" in revision
+    assert "not isinstance(value, int)" in revision
+    assert "revision = int(" not in revision
+    assert "必须是整数" in revision
