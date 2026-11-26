@@ -149,7 +149,6 @@ namespace Bot.ChromeNs
                             {
                                 Log.ErrorWithMaxCount("视觉AI路径图片OCR关联持久化失败；不阻断本轮视觉分析: " + ex.Message, 10);
                             }
-                        {
                             Log.Info("视觉请求附加本地OCR证据: seller=" + task.SellerNick
                                 + ", buyer=" + task.BuyerNick
                                 + ", chars=" + (localOcr.Text == null ? 0 : localOcr.Text.Length)

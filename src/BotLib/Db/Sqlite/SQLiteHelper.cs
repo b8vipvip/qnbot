@@ -179,12 +179,12 @@ namespace BotLib.Db.Sqlite
         /// The callback may call this helper's Execute/Select methods; Monitor is re-entrant on
         /// the calling thread and they reuse the same connection until the transaction commits.
         /// </summary>
-        public void RunInTransaction(Action action)
+        public void RunInTransaction(Action<SQLiteConnection> action)
         {
             if (action == null) throw new ArgumentNullException(nameof(action));
             using (var conn = GetConnection())
             {
-                conn.RunInTransaction(action);
+                conn.RunInTransaction(() => action(conn));
             }
         }
 

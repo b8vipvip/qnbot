@@ -438,17 +438,17 @@ namespace Bot.ChromeNs
                 // owned by the row until the canonical row has been saved successfully.
                 // If the following file write or cloud apply fails, the re-keyed row still
                 // contains the complete local image and can be retried with the new ID.
-                DbHelper.Db.RunInTransaction(() =>
+                DbHelper.Db.RunInTransaction(conn =>
                 {
-                    var changed = DbHelper.Db.Execute(
+                    var changed = conn.Execute(
                         "update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         cloudId, revision, localId, shop.ShopKey, seller);
                     if (changed != 1)
                         throw new InvalidOperationException("图片知识冲突ID原子迁移未更新唯一记录；已回滚本次迁移。");
-                    DbHelper.Db.Execute(
+                    conn.Execute(
                         "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
                         localId, shop.ShopKey, seller);
-                    DbHelper.Db.Execute(
+                    conn.Execute(
                         "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
                         cloudId, shop.ShopKey, seller);
                 });
