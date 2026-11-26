@@ -72,6 +72,7 @@ def test_refund_suggestion_never_claims_or_executes_a_refund():
     source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
     assert "SafeRefundSuggestionRegex" in source
     assert "record.Authority < 0.90d" in source
+    assert "IsSafeRefundSuggestionText" in source
     assert "UnsafeRefundActionRegex" in source
     assert "已退款|退款成功|退款已完成" in source
     assert "自动退款|直接退款|立即退款" in source
@@ -147,6 +148,7 @@ def test_text_and_image_reply_paths_share_conditional_advice_guard():
     assert "TryAuthorizeRefundSuggestion" in runtime
     assert "TryReserveDelivery" in runtime
     assert "CompleteDelivery" in runtime
+    assert "IsSafeRefundSuggestionText(answer)" in runtime
     assert "CommerceReplyAuthorityService.Evaluate" in ocr
     assert "TryBuild(" in ocr
     assert "imageKnowledgeMatch.KnowledgeId, out conditionalAdviceEvidence" in ocr
@@ -154,6 +156,7 @@ def test_text_and_image_reply_paths_share_conditional_advice_guard():
     assert "ConditionalAdviceKey = decision.ConditionalAdviceKey" in ocr
     assert "TryReserveDelivery" in vision
     assert "CompleteDelivery" in vision
+    assert "IsSafeRefundSuggestionText(answer)" in vision
     assert "TryReserveDelivery" in legacy_vision
     assert "CompleteDelivery" in legacy_vision
 
