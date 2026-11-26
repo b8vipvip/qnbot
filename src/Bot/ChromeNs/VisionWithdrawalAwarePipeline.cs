@@ -485,6 +485,16 @@ namespace Bot.ChromeNs
                         result.ConditionalAdviceImageMessageKey,
                         result.ConditionalAdviceImageKnowledgeId))
                     return false;
+                string globalLeaseReason;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.RenewDistributedDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                        out globalLeaseReason))
+                {
+                    Log.Info("图片回复发送前全局幂等租约已失效，阻止发送: " + globalLeaseReason);
+                    return false;
+                }
                 var latestWithdrawn = VisionImageCacheService.IsWithdrawn(
                     burst.SellerNick, burst.BuyerNick,
                     visionItem.MessageKey, visionItem.Message, burst.ShopKey);
