@@ -122,13 +122,16 @@ def test_sync_preserves_local_edits_and_deletes_that_race_with_cloud_responses()
     )[0]
     assert "local.SyncDirty" in upsert
     assert "local.UpdatedAtTicks > cloudUpdatedAt || localContentChanged" in upsert
-    assert "localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt" in upsert
+    assert "localDelete != null && localDelete.SyncDirty" in upsert
+    assert "localDelete.DeletedAtTicks > cloudUpdatedAt" not in upsert
     assert "Save(shop.ShopKey, seller, entry, temp)" in upsert
     assert upsert.index("lock (Sync)") < upsert.index("Save(shop.ShopKey, seller, entry, temp)")
     assert "set Enabled=?,SyncDirty=0,CloudRevision=?" in upsert
     assert "cloudEnabled ? 1 : 0" in upsert
-    assert "old.SyncDirty && old.UpdatedAtTicks > deletedAt" in delete
-    assert "localDelete.SyncDirty && localDelete.DeletedAtTicks > deletedAt" in delete
+    assert "old.SyncDirty && old.CloudRevision >= revision" in delete
+    assert "old.UpdatedAtTicks > deletedAt" not in delete
+    assert "localDelete != null && localDelete.SyncDirty" in delete
+    assert "localDelete.DeletedAtTicks > deletedAt" not in delete
     assert "CloudRevision=?" in delete
 
 
@@ -298,10 +301,11 @@ def test_image_delete_tombstone_is_atomic_and_survives_duplicate_id_cloud_restor
     assert "item.ImageSha256" in delete
     assert "delete from VisualImageKnowledgeEntry" in delete
     assert "where ShopKey=? and Seller=? and ImageSha256=?" in reconcile
-    assert "latest.DeletedAtTicks <= cloudUpdatedAt" in reconcile
+    assert "pendingTombstones = tombstones.Where(x => x.SyncDirty).ToList()" in reconcile
+    assert "if (pendingTombstones.Count == 0)" in reconcile
     assert "set EntityId=?,SyncDirty=1,CloudRevision=?,ImageSha256=?" in reconcile
     assert "delete from VisualImageKnowledgeEntry" in reconcile
-    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision, cloudUpdatedAt)" in service
+    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision)" in service
     assert "add column ImageSha256 text not null default ''" in service
 
 
@@ -402,3 +406,36 @@ def test_image_sync_rejects_invalid_revision_timestamp_and_enabled_metadata():
     assert "if not isinstance(enabled_value, bool)" in sync
     assert "1 if enabled_value else 0" in sync
     assert "max(0, int(item.get(\"base_revision\") or 0))" not in sync
+
+
+def test_pending_image_delete_wins_without_comparing_unsynchronized_device_clocks():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    reconcile = service.split("private static bool ReconcileDeletedImageByHash", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    upsert = service.split("private static void ApplyCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudDelete", 1
+    )[0]
+    delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "pendingTombstones = tombstones.Where(x => x.SyncDirty).ToList()" in reconcile
+    assert "if (pendingTombstones.Count == 0)" in reconcile
+    assert "mergedDeletedAt = pendingTombstones.Max" in reconcile
+    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision)" in upsert
+    assert "localDelete != null && localDelete.SyncDirty" in upsert
+    assert "localDelete.DeletedAtTicks > cloudUpdatedAt" not in upsert
+    assert "localDelete != null && localDelete.SyncDirty" in delete
+    assert "localDelete.DeletedAtTicks > deletedAt" not in delete
+    assert "Wall clocks on two Windows devices are not a safe conflict-ordering" in reconcile
+    assert "unacknowledged local tombstone is a delete-wins barrier" in reconcile
+
+
+def test_remote_image_delete_uses_cloud_revision_not_cross_device_wall_clock():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "old != null && old.SyncDirty && old.CloudRevision >= revision" in delete
+    assert "old.UpdatedAtTicks > deletedAt" not in delete
+    assert "monotonic server revision" in delete
