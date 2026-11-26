@@ -52,15 +52,30 @@ namespace Bot.ChromeNs
         public DateTime UpdatedAt { get; set; }
     }
 
+    internal sealed class ConditionalBusinessAdviceDiagnosticEvent
+    {
+        public DateTime AtUtc { get; set; }
+        public string Outcome { get; set; }
+        public string Reason { get; set; }
+        public string ShopRef { get; set; }
+        public string BuyerRef { get; set; }
+        public string OrderRef { get; set; }
+        public string ImageRef { get; set; }
+        public string ImageKnowledgeRef { get; set; }
+        public string AdviceRef { get; set; }
+    }
+
     internal sealed class ConditionalBusinessAdviceLedgerState
     {
         public int SchemaVersion { get; set; }
         public List<ConditionalBusinessAdviceLedgerRecord> Records { get; set; }
+        public List<ConditionalBusinessAdviceDiagnosticEvent> Events { get; set; }
 
         public ConditionalBusinessAdviceLedgerState()
         {
             SchemaVersion = 1;
             Records = new List<ConditionalBusinessAdviceLedgerRecord>();
+            Events = new List<ConditionalBusinessAdviceDiagnosticEvent>();
         }
     }
 
@@ -635,6 +650,7 @@ namespace Bot.ChromeNs
                     error = "账本结构或版本无效";
                     return null;
                 }
+                if (state.Events == null) state.Events = new List<ConditionalBusinessAdviceDiagnosticEvent>();
                 return state;
             }
             catch (Exception ex)
@@ -651,6 +667,73 @@ namespace Bot.ChromeNs
             state.Records.RemoveAll(x => x == null || (!x.DeliveryUncertain && x.UpdatedAt < cutoff));
             if (state.Records.Count > 10000)
                 state.Records = state.Records.OrderByDescending(x => x.UpdatedAt).Take(10000).ToList();
+            if (state.Events == null) state.Events = new List<ConditionalBusinessAdviceDiagnosticEvent>();
+            state.Events.RemoveAll(x => x == null || x.AtUtc < DateTime.UtcNow.AddDays(-30));
+            if (state.Events.Count > 500)
+                state.Events = state.Events.OrderByDescending(x => x.AtUtc).Take(500).ToList();
+        }
+
+        private static void AppendDiagnosticEvent(
+            ConditionalBusinessAdviceLedgerState state,
+            string outcome,
+            string reason,
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string imageMessageKey,
+            string imageKnowledgeId,
+            string adviceKey)
+        {
+            if (state == null) return;
+            if (state.Events == null) state.Events = new List<ConditionalBusinessAdviceDiagnosticEvent>();
+            state.Events.Add(new ConditionalBusinessAdviceDiagnosticEvent
+            {
+                AtUtc = DateTime.UtcNow,
+                Outcome = Safe(outcome, 80),
+                Reason = Safe(reason, 180),
+                ShopRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("shop", shopKey),
+                BuyerRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("buyer", buyer),
+                OrderRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("order", orderId),
+                ImageRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("image", imageMessageKey),
+                ImageKnowledgeRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("image-knowledge", imageKnowledgeId),
+                AdviceRef = MyWebSocketServer.RuntimeAcceptanceDiagnosticRef("advice", adviceKey)
+            });
+            if (state.Events.Count > 500)
+                state.Events = state.Events.OrderByDescending(x => x.AtUtc).Take(500).ToList();
+        }
+
+        private static void RecordDiagnosticEvent(
+            string outcome,
+            string reason,
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string imageMessageKey,
+            string imageKnowledgeId,
+            string adviceKey)
+        {
+            try
+            {
+                var path = GetLedgerPath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
+                lock (LedgerSync)
+                {
+                    if (!lease.Acquired) return;
+                    string error;
+                    var state = LoadLedger(path, out error);
+                    if (state == null) return;
+                    CleanupLedger(state);
+                    AppendDiagnosticEvent(state, outcome, reason, shopKey, seller, buyer,
+                        orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                    SaveLedger(path, state, out error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("条件性业务建议诊断事件写入失败：" + ex.Message, 5);
+            }
         }
 
         private static bool SaveLedger(string path, ConditionalBusinessAdviceLedgerState state, out string error)
