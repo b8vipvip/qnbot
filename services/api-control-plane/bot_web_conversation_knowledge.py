@@ -256,13 +256,16 @@ def _safe_text(value: Any, limit: int) -> str:
 
 
 def _sync_revision(value: Any, field: str) -> int:
-    try:
-        revision = int(value if value is not None else 0)
-    except (TypeError, ValueError, OverflowError):
-        raise HTTPException(status_code=400, detail=f"图片知识{field}无效")
-    if revision < 0:
+    # base_revision is a JSON integer on the Windows wire contract. Python's int()
+    # silently truncates floats and accepts bool (a subclass of int), which can turn
+    # malformed input into a valid CAS revision and overwrite a newer cloud row.
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(status_code=400, detail=f"图片知识{field}必须是整数")
+    if value < 0:
         raise HTTPException(status_code=400, detail=f"图片知识{field}不能为负数")
-    return revision
+    return value
 
 
 def _sync_timestamp(value: Any, field: str, fallback: str) -> str:
