@@ -279,3 +279,5 @@ Historical pre-merge implementation snapshot. Its former branch status is supers
 - Cloud-sync and full-corpus-learning diagnostics now share the runtime snapshot's process-local HMAC ShopRef format. Older 10-hex-digit sync aliases are not accepted by the comparator; collect new samples after updating.
 - The comparator evaluates the newest system row rather than an earlier successful row, rejects identical CSV content, requires 16-digit fingerprint prefixes and successful last sync status. The sampler treats individual shops with no successful sync in the past 180 seconds as not converged, even when another shop keeps the snapshot file fresh.
 - Matching fingerprints are evidence of convergence for the operator-selected shops, not independent proof that the two files originate from different physical devices or that the shops are the same. Use independent captures from the intended shops.
+
+- Auto-delivery diagnostics now require a durable `ResolvedAt` timestamp: `intent_persisted` and `migrated_pending_intent` are unresolved even if the task is absent from the queue. Regression covers this ledger-only recovery state.
