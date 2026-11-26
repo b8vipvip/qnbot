@@ -2,6 +2,7 @@
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
@@ -490,12 +491,14 @@ namespace Bot.ShopScope
                         return;
                     }
 
-                    ClearDuplicateLocalTokenCopies(shop, token);
+                    var localCleanupComplete = ClearDuplicateLocalTokenCopies(shop, token);
                     MessageBox.Show(
-                        "令牌已重新绑定到当前店铺。旧店铺的本机重复令牌已清除；当前店铺会继续连接服务端。",
-                        "Bot 令牌绑定完成",
+                        localCleanupComplete
+                            ? "令牌已重新绑定到当前店铺。旧店铺的本机重复令牌已清除；当前店铺会继续连接服务端。"
+                            : "令牌已在服务端重新绑定到当前店铺，但本机旧店铺重复令牌清理未完全完成。当前店铺可以继续连接；请检查其他店铺的本机令牌设置。",
+                        localCleanupComplete ? "Bot 令牌绑定完成" : "Bot 令牌已绑定，需检查本机清理",
                         MessageBoxButton.OK,
-                        MessageBoxImage.Information);
+                        localCleanupComplete ? MessageBoxImage.Information : MessageBoxImage.Warning);
                 }
                 catch (Exception ex)
                 {
@@ -514,18 +517,43 @@ namespace Bot.ShopScope
             }));
         }
 
-        internal static void ClearDuplicateLocalTokenCopies(ShopContext currentShop, string token)
+        internal static bool ClearDuplicateLocalTokenCopies(ShopContext currentShop, string token)
         {
-            foreach (var profile in Profiles.GetAll().Where(x => x != null))
+            if (currentShop == null || string.IsNullOrWhiteSpace(currentShop.ShopKey)
+                || string.IsNullOrWhiteSpace(token)) return false;
+
+            IList<ShopProfile> profiles;
+            try
             {
-                if (string.Equals(profile.ShopKey, currentShop.ShopKey, StringComparison.Ordinal)) continue;
+                profiles = Profiles.GetAll();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("服务端令牌已完成重新绑定，但读取本机店铺注册表失败，无法确认旧令牌清理：" + Safe(ex.Message, 160), 10);
+                return false;
+            }
+
+            var cleanupComplete = true;
+            foreach (var profile in profiles ?? new List<ShopProfile>())
+            {
+                if (profile == null
+                    || string.Equals(profile.ShopKey, currentShop.ShopKey, StringComparison.Ordinal)) continue;
                 try
                 {
                     var other = new ShopControlPlaneConnectionStore(profile.ToContext(), Paths);
                     string otherToken;
                     string error;
-                    if (other.TryGetToken(out otherToken, out error)
-                        && string.Equals((otherToken ?? string.Empty).Trim(), token.Trim(), StringComparison.Ordinal))
+                    if (!other.TryGetToken(out otherToken, out error))
+                    {
+                        if (!string.IsNullOrWhiteSpace(error))
+                        {
+                            cleanupComplete = false;
+                            Log.Info("读取旧店铺令牌失败，未能确认是否存在重复令牌: shop=" + profile.ShopKey
+                                + ", error=" + Safe(error, 160));
+                        }
+                        continue;
+                    }
+                    if (string.Equals((otherToken ?? string.Empty).Trim(), token.Trim(), StringComparison.Ordinal))
                     {
                         other.ClearToken();
                         Log.Info("已清除旧店铺重复Bot令牌: shop=" + profile.ShopKey);
@@ -533,9 +561,11 @@ namespace Bot.ShopScope
                 }
                 catch (Exception ex)
                 {
+                    cleanupComplete = false;
                     Log.Info("清理旧店铺重复Bot令牌失败: shop=" + profile.ShopKey + ", error=" + Safe(ex.Message, 160));
                 }
             }
+            return cleanupComplete;
         }
 
         private static string ExtractBoundShopKey(string body)

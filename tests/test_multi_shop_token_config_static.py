@@ -285,10 +285,12 @@ def test_rejected_shop_token_cannot_replace_previous_saved_credentials():
     # Save must validate before touching DPAPI storage; an explicit HTTP response is
     # authoritative even if network-unreachable settings may still be staged offline.
     assert source.index("ValidateTokenBinding(candidate);") < source.index("_connection.SaveToken(candidate);")
-    start = source.index("private void ValidateTokenBinding(string candidate)")
-    end = source.index("private void ", start + 15)
+    start = source.index("private bool ValidateTokenBinding(string candidate)")
+    end = source.index("public void RestoreDefault()", start)
     validation = source[start:end]
-    assert "if (result.Success) return;" in validation
+    assert "if (result.Success) return true;" in validation
+    assert "return ShopTokenBindingService.ClearDuplicateLocalTokenCopies(_shop, candidate);" in validation
+    assert "return true; // Preserve the existing offline-staging behavior" in validation
     assert "if (result.Conflict)" in validation
     assert 'throw new InvalidOperationException(\n                    "服务端拒绝本店令牌，未保存新令牌：" + result.Error)' in validation
     assert "catch (InvalidOperationException)" in validation

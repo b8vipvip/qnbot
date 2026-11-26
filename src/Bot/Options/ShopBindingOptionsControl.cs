@@ -121,7 +121,7 @@ namespace Bot.Options
             }
         }
 
-        private void ValidateTokenBinding(string candidate)
+        private bool ValidateTokenBinding(string candidate)
         {
             try
             {
@@ -129,7 +129,7 @@ namespace Bot.Options
                     .ClaimAsync(_shop, candidate, false)
                     .GetAwaiter()
                     .GetResult();
-                if (result.Success) return;
+                if (result.Success) return true;
 
                 if (result.Conflict)
                 {
@@ -157,8 +157,7 @@ namespace Bot.Options
                     if (!forced.Success)
                         throw new InvalidOperationException("令牌重新绑定失败：" + forced.Error);
 
-                    ShopTokenBindingService.ClearDuplicateLocalTokenCopies(_shop, candidate);
-                    return;
+                    return ShopTokenBindingService.ClearDuplicateLocalTokenCopies(_shop, candidate);
                 }
 
                 // A definitive HTTP rejection (especially 401 for a disabled token) is not
@@ -175,6 +174,7 @@ namespace Bot.Options
             {
                 _status.Text = "暂时无法连接服务端验证令牌：" + ex.Message + "。令牌会先保存在本机，联网后自动再次校验。";
                 _status.Foreground = Brushes.DarkOrange;
+                return true; // Preserve the existing offline-staging behavior; no duplicate cleanup was attempted.
             }
         }
 
@@ -646,7 +646,7 @@ namespace Bot.Options
             try
             {
                 // Validate/claim the replacement token before any destructive local action.
-                ValidateTokenBinding(candidate);
+                var localDuplicateCleanupComplete = ValidateTokenBinding(candidate);
                 if (!keepLocalConfiguration)
                     rollbackPath = ClientDataCloudBackupService.ResetLocalConfiguration(_shop);
 
@@ -658,18 +658,30 @@ namespace Bot.Options
                 if (!keepLocalConfiguration)
                 {
                     _knowledgeCloudSync.IsChecked = false;
-                    _status.Text = "新令牌已保存；本店原配置和知识库已重置。回滚包：" + rollbackPath;
-                    _status.Foreground = Brushes.DarkOrange;
+                    var cleanupWarning = localDuplicateCleanupComplete
+                        ? string.Empty
+                        : "\n\n注意：服务端已完成重新绑定，但本机旧店铺重复令牌清理未完全完成。";
+                    _status.Text = "新令牌已保存；本店原配置和知识库已重置。回滚包：" + rollbackPath + cleanupWarning;
+                    _status.Foreground = localDuplicateCleanupComplete ? Brushes.DarkOrange : Brushes.IndianRed;
                     MessageBox.Show(
                         "本店令牌已更新，本地配置和知识库已重置。\n"
-                            + "加密回滚包：" + rollbackPath + "\n\n客户端现在将自动重启。",
+                            + "加密回滚包：" + rollbackPath + cleanupWarning + "\n\n客户端现在将自动重启。",
                         "令牌更新完成", MessageBoxButton.OK, MessageBoxImage.Information);
                     ClientDataCloudBackupService.RestartApplication();
                     return;
                 }
 
-                _status.Text = "本店令牌已更新；原有本地配置、知识库、规则和策略均已完整保留。";
-                _status.Foreground = Brushes.SeaGreen;
+                _status.Text = localDuplicateCleanupComplete
+                    ? "本店令牌已更新；原有本地配置、知识库、规则和策略均已完整保留。"
+                    : "服务端已完成令牌重新绑定；但本机旧店铺重复令牌清理未完全完成，请检查其他店铺的令牌设置。";
+                _status.Foreground = localDuplicateCleanupComplete ? Brushes.SeaGreen : Brushes.DarkOrange;
+                if (!localDuplicateCleanupComplete)
+                    MessageBox.Show(
+                        "服务端已完成令牌重新绑定，当前店铺可以继续连接。\n"
+                            + "但本机旧店铺重复令牌清理未完全完成，请逐个检查其他店铺的令牌设置。",
+                        "令牌已绑定，需检查本机清理",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
             }
             catch (Exception ex)
             {

@@ -66,9 +66,23 @@ namespace Bot.ShopScope
 
         private static void RefreshForegroundSubscriptions()
         {
+            List<QN> sessions;
             try
             {
-                foreach (var qn in QN.GetRuntimeSafetySnapshot().Where(x => x != null))
+                sessions = QN.GetRuntimeSafetySnapshot();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取多客服会话快照失败：" + ex.Message, 10);
+                sessions = new List<QN>();
+            }
+
+            // A single disposed/partially initialized QN wrapper must not prevent later
+            // shops from receiving their authoritative conversation-change subscription.
+            foreach (var qn in sessions ?? new List<QN>())
+            {
+                if (qn == null) continue;
+                try
                 {
                     lock (ForegroundSubscriptionSync)
                     {
@@ -78,12 +92,21 @@ namespace Bot.ShopScope
                         ForegroundSubscribed.Add(qn, new object());
                     }
                 }
-                RefreshProfileCacheIfNeeded();
-                EnsureShopLogWriters();
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("跳过异常千牛会话的活动店铺事件订阅并继续：" + ex.Message, 10);
+                }
             }
+
+            try { RefreshProfileCacheIfNeeded(); }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("刷新多客服权威会话订阅失败: " + ex.Message, 10);
+                Log.ErrorWithMaxCount("刷新多客服店铺身份缓存失败：" + ex.Message, 10);
+            }
+            try { EnsureShopLogWriters(); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("初始化多店铺运行日志失败：" + ex.Message, 10);
             }
         }
 
@@ -166,12 +189,30 @@ namespace Bot.ShopScope
 
         private static void EnsureShopLogWriters()
         {
-            foreach (var shop in ShopByKey.Values.Where(x => x != null && !string.IsNullOrWhiteSpace(x.ShopKey)))
+            foreach (var shop in ShopByKey.Values.Where(x => x != null && !string.IsNullOrWhiteSpace(x.ShopKey)).ToList())
             {
-                var writer = GetOrCreateWriter(shop);
-                if (LogReadyMarkers.TryAdd(shop.ShopKey, 0))
+                try
                 {
-                    writer.Write("[shop=" + shop.ShopKey + "] 店铺独立运行日志已就绪；只接收本 ShopKey 可归属的业务日志。", "Info");
+                    var writer = GetOrCreateWriter(shop);
+                    if (LogReadyMarkers.TryAdd(shop.ShopKey, 0))
+                    {
+                        try
+                        {
+                            writer.Write("[shop=" + shop.ShopKey + "] 店铺独立运行日志已就绪；只接收本 ShopKey 可归属的业务日志。", "Info");
+                        }
+                        catch
+                        {
+                            // Do not permanently mark a failed writer as initialized. The next
+                            // timer pass must retry after a transient path/IO failure.
+                            byte ignored;
+                            LogReadyMarkers.TryRemove(shop.ShopKey, out ignored);
+                            throw;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("单店运行日志初始化失败，继续处理其他店铺：" + ex.Message, 10);
                 }
             }
         }
@@ -250,8 +291,10 @@ namespace Bot.ShopScope
                         var shop = profile.ToContext();
                         if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
                         nextByKey[shop.ShopKey] = shop;
-                        var sellerRef = StableSellerRef(profile.DisplayName);
-                        AddSellerRefAlias(sellerRef, shop);
+                        // Keep both the authenticated seller nick and the UI display alias.
+                        // DisplayName can be a shortened label and is not always the login nick.
+                        AddSellerRefAlias(StableSellerRef(profile.SellerNick), shop);
+                        AddSellerRefAlias(StableSellerRef(profile.DisplayName), shop);
                     }
                     catch (Exception ex)
                     {
@@ -265,11 +308,9 @@ namespace Bot.ShopScope
 
                 // Profile display names can be shorter than the authenticated Qianniu login
                 // identity (for example "客服名" vs "主账号:客服名"). Add live seller aliases.
-                var runtimeSnapshotSucceeded = false;
                 try
                 {
                     var runtimeSellers = QN.GetRuntimeSafetySnapshot();
-                    runtimeSnapshotSucceeded = runtimeSellers != null;
                     foreach (var qn in (runtimeSellers ?? new System.Collections.Generic.List<QN>()).Where(x => x != null && x.Seller != null))
                     {
                         var seller = (qn.Seller.Nick ?? string.Empty).Trim();
@@ -309,14 +350,14 @@ namespace Bot.ShopScope
                         && ShopBySellerRef.TryGetValue(failedRef, out previous))
                         nextBySellerRef[failedRef] = previous;
                 }
-                if (!runtimeSnapshotSucceeded)
-                {
-                    foreach (var pair in ShopBySellerRef)
-                        if (!ambiguousSellerRefs.Contains(pair.Key)
-                            && nextByKey.ContainsKey(pair.Value.ShopKey)
-                            && !nextBySellerRef.ContainsKey(pair.Key))
-                            nextBySellerRef[pair.Key] = pair.Value;
-                }
+                // Keep last-known seller aliases for shops that remain registered even
+                // while their QN wrapper is temporarily offline or absent from the runtime
+                // snapshot. Current collisions above still remove and suppress ambiguous refs.
+                foreach (var pair in ShopBySellerRef)
+                    if (!ambiguousSellerRefs.Contains(pair.Key)
+                        && nextByKey.ContainsKey(pair.Value.ShopKey)
+                        && !nextBySellerRef.ContainsKey(pair.Key))
+                        nextBySellerRef[pair.Key] = pair.Value;
 
                 // Apply the completed snapshot incrementally instead of clearing both shared
                 // dictionaries before profile conversion has succeeded.
