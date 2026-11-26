@@ -226,6 +226,23 @@ namespace Bot.ShopScope
                 var nextBySellerRef = new Dictionary<string, ShopContext>(StringComparer.Ordinal);
                 var failedShopKeys = new HashSet<string>(StringComparer.Ordinal);
                 var failedSellerRefs = new HashSet<string>(StringComparer.Ordinal);
+                var ambiguousSellerRefs = new HashSet<string>(StringComparer.Ordinal);
+                void AddSellerRefAlias(string sellerRef, ShopContext shop)
+                {
+                    if (string.IsNullOrWhiteSpace(sellerRef) || shop == null
+                        || ambiguousSellerRefs.Contains(sellerRef)) return;
+                    ShopContext existing;
+                    if (nextBySellerRef.TryGetValue(sellerRef, out existing)
+                        && !string.Equals(existing.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                    {
+                        // A nickname/display name is not a ShopKey. Never route a log by a
+                        // sellerRef that resolves to more than one shop.
+                        nextBySellerRef.Remove(sellerRef);
+                        ambiguousSellerRefs.Add(sellerRef);
+                        return;
+                    }
+                    nextBySellerRef[sellerRef] = shop;
+                }
                 foreach (var profile in profiles.Where(x => x != null))
                 {
                     try
@@ -234,7 +251,7 @@ namespace Bot.ShopScope
                         if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
                         nextByKey[shop.ShopKey] = shop;
                         var sellerRef = StableSellerRef(profile.DisplayName);
-                        if (sellerRef.Length > 0) nextBySellerRef[sellerRef] = shop;
+                        AddSellerRefAlias(sellerRef, shop);
                     }
                     catch (Exception ex)
                     {
@@ -263,7 +280,7 @@ namespace Bot.ShopScope
                             var shop = ShopIdentityResolver.Resolve(qn.Seller);
                             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
                             nextByKey[shop.ShopKey] = shop;
-                            if (sellerRef.Length > 0) nextBySellerRef[sellerRef] = shop;
+                            AddSellerRefAlias(sellerRef, shop);
                         }
                         catch (Exception ex)
                         {
@@ -287,14 +304,16 @@ namespace Bot.ShopScope
                 foreach (var failedRef in failedSellerRefs)
                 {
                     ShopContext previous;
-                    if (!nextBySellerRef.ContainsKey(failedRef)
+                    if (!ambiguousSellerRefs.Contains(failedRef)
+                        && !nextBySellerRef.ContainsKey(failedRef)
                         && ShopBySellerRef.TryGetValue(failedRef, out previous))
                         nextBySellerRef[failedRef] = previous;
                 }
                 if (!runtimeSnapshotSucceeded)
                 {
                     foreach (var pair in ShopBySellerRef)
-                        if (nextByKey.ContainsKey(pair.Value.ShopKey)
+                        if (!ambiguousSellerRefs.Contains(pair.Key)
+                            && nextByKey.ContainsKey(pair.Value.ShopKey)
                             && !nextBySellerRef.ContainsKey(pair.Key))
                             nextBySellerRef[pair.Key] = pair.Value;
                 }
