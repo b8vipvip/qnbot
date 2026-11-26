@@ -650,6 +650,11 @@ namespace Bot.ChromeNs
                 .ToList();
         }
 
+        public static bool IsSafeRefundSuggestionText(string answer)
+        {
+            return HasSafeRefundSuggestion(answer);
+        }
+
         private static bool HasSafeRefundSuggestion(string answer)
         {
             answer = (answer ?? string.Empty).Trim();
