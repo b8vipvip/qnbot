@@ -271,7 +271,8 @@ namespace Bot.ChromeNs
                         if (imageKnowledgeMatch != null)
                             ConditionalBusinessAdviceService.TryBuild(
                                 task.ShopKey, knowledgeSeller, task.BuyerNick,
-                                commerceAuthority.CommerceContext, out conditionalAdviceEvidence);
+                                commerceAuthority.CommerceContext, task.MessageKey,
+                                imageKnowledgeMatch.KnowledgeId, out conditionalAdviceEvidence);
 
                         string conditionalReason;
                         if (conditionalAdviceEvidence == null
