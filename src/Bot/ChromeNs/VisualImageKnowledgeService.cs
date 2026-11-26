@@ -729,10 +729,11 @@ namespace Bot.ChromeNs
                 var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
 
-                if (old != null && old.SyncDirty && old.UpdatedAtTicks > deletedAt)
+                if (old != null && old.SyncDirty && old.CloudRevision >= revision)
                 {
-                    // A local edit newer than the remote delete is a deliberate restore/update.
-                    // Advance its base revision but keep it dirty for the next upload.
+                    // This delete is older than the cloud revision the local edit already
+                    // acknowledged. Use the monotonic server revision, not cross-device wall
+                    // clocks, to recognize a genuinely stale delete event.
                     DbHelper.Db.Execute(
                         "update VisualImageKnowledgeEntry set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         revision, id, shop.ShopKey, seller);

@@ -424,3 +424,13 @@ def test_pending_image_delete_wins_without_comparing_unsynchronized_device_clock
     assert "localDelete != null && localDelete.SyncDirty" in delete
     assert "localDelete.DeletedAtTicks > deletedAt" not in delete
     assert "regardless of device clock skew" in reconcile
+
+
+def test_remote_image_delete_uses_cloud_revision_not_cross_device_wall_clock():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "old != null && old.SyncDirty && old.CloudRevision >= revision" in delete
+    assert "old.UpdatedAtTicks > deletedAt" not in delete
+    assert "monotonic server revision" in delete
