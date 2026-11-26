@@ -113,7 +113,8 @@ def test_newer_unmatched_or_withdrawn_image_supersedes_an_older_match():
         recent.index("public static bool TryGetRecentAccountEvidence")
     ]
     assert "LoadRecent(" in method
-    assert "OcrImageSha256" in method
+    assert "MessageKey" in method
+    assert "OcrImageSha256" not in method
     assert "FirstOrDefault()" in method
     assert "IsWithdrawnObservation" in method
     assert "return latest;" in method
