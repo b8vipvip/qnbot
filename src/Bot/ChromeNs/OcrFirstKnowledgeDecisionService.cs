@@ -274,7 +274,7 @@ namespace Bot.ChromeNs
                                 commerceAuthority.CommerceContext, task.MessageKey,
                                 imageKnowledgeMatch.KnowledgeId, out conditionalAdviceEvidence);
 
-                        string conditionalReason;
+                        string conditionalReason = "缺少同店同买家有效图片/已付款订单证据";
                         if (conditionalAdviceEvidence == null
                             || !ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
                                 decision, conditionalAdviceEvidence, out conditionalReason))
