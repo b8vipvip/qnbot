@@ -1,10 +1,31 @@
 import importlib
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture()
+def control_plane(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("APP_SECRET", "test-secret-for-conditional-advice")
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", "iV7XoPa3z4i44n5gP5gsLt5mFMQbdbGICxVMJ4K7VQk=")
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    monkeypatch.setenv("DISABLE_SCHEDULER", "true")
+    service_dir = Path(__file__).resolve().parents[1]
+    if str(service_dir) not in sys.path:
+        sys.path.insert(0, str(service_dir))
+    sys.modules.pop("app", None)
+    module = importlib.import_module("app")
+    module.init_db()
+    yield module
+    sys.modules.pop("app", None)
+    if str(service_dir) in sys.path:
+        sys.path.remove(str(service_dir))
 
 
 @pytest.fixture()
@@ -129,17 +150,6 @@ def test_same_request_id_replays_the_original_lease_token(advice_api):
 def test_cancelled_before_send_releases_only_the_owned_lease(advice_api):
     shop = "qn_0123456789ab"
     first = claim(advice_api, 11, shop)
-    wrong = advice_api.runtime_complete(
-        advice_api.ConditionalAdviceCompleteInput(
-            buyer="buyer-1",
-            order_id="order-1",
-            advice_key="knowledge-1",
-            lease_token="not-the-lease-token",
-            outcome="cancelled_before_send",
-        ),
-        request_for(11),
-        x_shop_key=shop,
-    ) if False else None
     released = advice_api.runtime_complete(
         advice_api.ConditionalAdviceCompleteInput(
             buyer="buyer-1",
