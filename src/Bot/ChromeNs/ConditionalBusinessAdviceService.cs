@@ -131,14 +131,18 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (!string.IsNullOrWhiteSpace(expectedImageKnowledgeId)
                 && string.IsNullOrWhiteSpace(expectedImageMessageKey))
-                return false;
+                return RejectBuild("current_image_missing_message_identity", shopKey, seller, buyer,
+                    commerce == null ? string.Empty : commerce.OrderId, expectedImageMessageKey,
+                    expectedImageKnowledgeId, out evidence);
             if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0
                 || commerce == null || !commerce.HasStructuredOrder
                 || commerce.IsPaid != true
                 || !string.Equals(commerce.PurchasePhase, "paid", StringComparison.OrdinalIgnoreCase)
                 || string.IsNullOrWhiteSpace(commerce.OrderId)
                 || commerce.EvidenceTime == DateTime.MinValue)
-                return false;
+                return RejectBuild("order_unverified_or_not_paid", shopKey, seller, buyer,
+                    commerce == null ? string.Empty : commerce.OrderId, expectedImageMessageKey,
+                    expectedImageKnowledgeId, out evidence);
 
             List<OrderSnapshot> orders;
             try
@@ -148,7 +152,8 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("条件性业务建议无法读取权威订单账本，拒绝本地直答：" + ex.Message, 10);
-                return false;
+                return RejectBuild("order_ledger_unavailable", shopKey, seller, buyer,
+                    commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
             }
 
             // The order ledger may retain multiple events for one order. Collapse to
@@ -166,7 +171,9 @@ namespace Bot.ChromeNs
                     && string.Equals((x.Buyer ?? string.Empty).Trim(), buyer, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             var order = matchingOrders.FirstOrDefault();
-            if (!IsPaidAndOpen(order)) return false;
+            if (!IsPaidAndOpen(order))
+                return RejectBuild("order_not_paid_or_terminal", shopKey, seller, buyer,
+                    commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
 
             // If multiple paid orders exist and the conversation selector had to choose
             // a latest-order fallback, do not guess which order the image belongs to.
@@ -189,7 +196,8 @@ namespace Bot.ChromeNs
                         (x.SkuId ?? string.Empty).Trim(), commerce.SkuId.Trim(), StringComparison.Ordinal)) == 1
                     : false;
                 if (!selectedByCurrentItem && !selectedByCurrentSku)
-                    return false;
+                    return RejectBuild("ambiguous_paid_orders", shopKey, seller, buyer,
+                        commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
             }
 
             VisualKnowledgeObservationEntity image;
@@ -202,26 +210,32 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("条件性业务建议无法读取图片证据，拒绝本地直答：" + ex.Message, 10);
-                return false;
+                return RejectBuild("image_evidence_unavailable", shopKey, seller, buyer,
+                    commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
             }
             if (image == null || string.IsNullOrWhiteSpace(image.MatchedImageKnowledgeId))
-                return false;
+                return RejectBuild("image_unmatched_or_missing", shopKey, seller, buyer,
+                    commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
             if (!string.IsNullOrWhiteSpace(expectedImageMessageKey)
                 && !string.Equals(image.MessageKey, expectedImageMessageKey, StringComparison.Ordinal))
-                return false;
+                return RejectBuild("image_superseded_or_wrong_message", shopKey, seller, buyer,
+                    commerce.OrderId, expectedImageMessageKey, expectedImageKnowledgeId, out evidence);
             if (!string.IsNullOrWhiteSpace(expectedImageKnowledgeId)
                 && !string.Equals(image.MatchedImageKnowledgeId, expectedImageKnowledgeId, StringComparison.Ordinal))
-                return false;
+                return RejectBuild("image_knowledge_id_mismatch", shopKey, seller, buyer,
+                    commerce.OrderId, image.MessageKey, expectedImageKnowledgeId, out evidence);
 
             var imageObservedAt = SafeTime(image.ObservedAtTicks);
             var orderEvidenceTime = order.PaidAt
                 ?? (order.EventType == OrderEventType.Paid ? order.EventTime : commerce.EvidenceTime);
             if (imageObservedAt == DateTime.MinValue || orderEvidenceTime == DateTime.MinValue
                 || imageObservedAt < orderEvidenceTime)
-                return false;
+                return RejectBuild("image_predates_payment", shopKey, seller, buyer,
+                    commerce.OrderId, image.MessageKey, image.MatchedImageKnowledgeId, out evidence);
 
             if (!IsImageKnowledgeMatchStillValid(shopKey, seller, image))
-                return false;
+                return RejectBuild("image_rule_changed_or_disabled", shopKey, seller, buyer,
+                    commerce.OrderId, image.MessageKey, image.MatchedImageKnowledgeId, out evidence);
 
             evidence = new ConditionalBusinessAdviceEvidence
             {
@@ -245,6 +259,8 @@ namespace Bot.ChromeNs
                 ImageOcrText = image.OcrText,
                 ImageObservedAt = imageObservedAt
             };
+            RecordDiagnosticEvent("evidence_ready", "same_shop_buyer_paid_order_and_current_image_verified",
+                shopKey, seller, buyer, commerce.OrderId, image.MessageKey, image.MatchedImageKnowledgeId, string.Empty);
             return true;
         }
 
@@ -515,6 +531,22 @@ namespace Bot.ChromeNs
                 record.UpdatedAt = DateTime.Now;
                 SaveLedger(path, state, out error);
             }
+        }
+
+        private static bool RejectBuild(
+            string reason,
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string imageMessageKey,
+            string imageKnowledgeId,
+            out ConditionalBusinessAdviceEvidence evidence)
+        {
+            evidence = null;
+            RecordDiagnosticEvent("evidence_rejected", reason, shopKey, seller, buyer,
+                orderId, imageMessageKey, imageKnowledgeId, string.Empty);
+            return false;
         }
 
         private static bool IsImageKnowledgeMatchStillValid(
