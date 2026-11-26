@@ -1,4 +1,5 @@
 using System;
+using Bot.ShopScope;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -119,6 +120,9 @@ namespace Bot.Knowledge
                 var undo = Btn("回滚Bot人工纠错", 138);
                 undo.Click += delegate { RollbackLastBotCorrection(); };
                 toolbar.Children.Add(undo);
+                var reconcile = Btn("条件性建议发送核对", 156);
+                reconcile.Click += delegate { OpenConditionalAdviceReconciliation(); };
+                toolbar.Children.Add(reconcile);
             }
             if (_mode == KnowledgeV2RecordsPageMode.Learning)
             {
@@ -174,6 +178,19 @@ namespace Bot.Knowledge
             Grid.SetRow(_count, 2);
             root.Children.Add(_count);
             Content = root;
+        }
+
+        private void OpenConditionalAdviceReconciliation()
+        {
+            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+            {
+                MessageBox.Show(_owner, "无法解析当前店铺的ShopKey，已取消打开发送核对页面。", "条件性建议发送核对",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var window = new ConditionalBusinessAdviceReconciliationWindow(_owner, shop.ShopKey, _seller);
+            window.ShowDialog();
         }
 
         private UIElement BuildEditor()
@@ -458,6 +475,139 @@ namespace Bot.Knowledge
         private static DataGridTextColumn Col(string header, string path, double width)
         {
             return new DataGridTextColumn { Header = header, Binding = new Binding(path), Width = width };
+        }
+    }
+
+    internal sealed class ConditionalBusinessAdviceReconciliationWindow : Window
+    {
+        private readonly string _shopKey;
+        private readonly string _seller;
+        private readonly ObservableCollection<ConditionalBusinessAdviceReconciliationItem> _items =
+            new ObservableCollection<ConditionalBusinessAdviceReconciliationItem>();
+        private DataGrid _grid;
+        private TextBlock _status;
+
+        public ConditionalBusinessAdviceReconciliationWindow(Window owner, string shopKey, string seller)
+        {
+            _shopKey = (shopKey ?? string.Empty).Trim();
+            _seller = (seller ?? string.Empty).Trim();
+            Title = "条件性建议发送状态核对";
+            Width = 860;
+            Height = 520;
+            MinWidth = 700;
+            MinHeight = 420;
+            WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            if (owner != null) Owner = owner;
+
+            var root = new DockPanel { Margin = new Thickness(14) };
+            var header = new StackPanel { Orientation = Orientation.Vertical };
+            header.Children.Add(new TextBlock
+            {
+                Text = "以下记录表示发送结果不确定。请先核对千牛中该买家的真实聊天记录，再选择确认已发送或确认未发送。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            header.Children.Add(new TextBlock
+            {
+                Text = "注意：此账本属于当前Windows用户配置文件；同一店铺若在多台电脑同时运行，仍需要单一发送主实例或云端共享幂等服务。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DarkRed,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+            DockPanel.SetDock(header, Dock.Top);
+            root.Children.Add(header);
+
+            _grid = new DataGrid
+            {
+                AutoGenerateColumns = false,
+                IsReadOnly = true,
+                CanUserAddRows = false,
+                SelectionMode = DataGridSelectionMode.Single,
+                ItemsSource = _items
+            };
+            _grid.Columns.Add(new DataGridTextColumn { Header = "买家", Binding = new Binding("Buyer"), Width = 150 });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "订单号", Binding = new Binding("OrderId"), Width = 170 });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "知识记录", Binding = new Binding("AdviceKey"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "状态更新时间", Binding = new Binding("UpdatedAt"), Width = 160 });
+            root.Children.Add(_grid);
+
+            var footer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+            _status = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.DimGray };
+            footer.Children.Add(_status);
+            var buttons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+            var refresh = new Button { Content = "刷新", Width = 70, Height = 30, Margin = new Thickness(6, 0, 0, 0) };
+            refresh.Click += delegate { RefreshItems(); };
+            var delivered = new Button { Content = "确认已发送", Width = 100, Height = 30, Margin = new Thickness(6, 0, 0, 0) };
+            delivered.Click += delegate { ResolveSelected(true); };
+            var notDelivered = new Button { Content = "确认未发送并允许重试", Width = 160, Height = 30, Margin = new Thickness(6, 0, 0, 0) };
+            notDelivered.Click += delegate { ResolveSelected(false); };
+            var close = new Button { Content = "关闭", Width = 70, Height = 30, Margin = new Thickness(6, 0, 0, 0) };
+            close.Click += delegate { Close(); };
+            buttons.Children.Add(refresh);
+            buttons.Children.Add(delivered);
+            buttons.Children.Add(notDelivered);
+            buttons.Children.Add(close);
+            DockPanel.SetDock(buttons, Dock.Right);
+            footer.Children.Add(buttons);
+            DockPanel.SetDock(footer, Dock.Bottom);
+            root.Children.Add(footer);
+            Content = root;
+            Loaded += delegate { RefreshItems(); };
+        }
+
+        private void RefreshItems()
+        {
+            _status.Text = "正在读取待核对记录…";
+            Task.Run(() => ConditionalBusinessAdviceService.GetPendingReconciliationRecords(_shopKey, _seller))
+                .ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (task.IsFaulted)
+                    {
+                        _status.Text = "读取失败：" + task.Exception.GetBaseException().Message;
+                        return;
+                    }
+                    _items.Clear();
+                    foreach (var item in task.Result ?? new List<ConditionalBusinessAdviceReconciliationItem>())
+                        _items.Add(item);
+                    _status.Text = "待核对记录：" + _items.Count;
+                })));
+        }
+
+        private void ResolveSelected(bool confirmedDelivered)
+        {
+            var item = _grid.SelectedItem as ConditionalBusinessAdviceReconciliationItem;
+            if (item == null)
+            {
+                MessageBox.Show(this, "请先选择一条待核对记录。", "条件性建议发送核对",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var prompt = confirmedDelivered
+                ? "请确认你已在千牛聊天记录中看到这条建议确实发送给该买家。确认后将永久保留防重复发送标记。"
+                : "请确认你已在千牛聊天记录中核实这条建议没有发送给该买家。确认后会解除幂等锁，但下一次发送仍必须重新通过图片、商品和订单证据校验。";
+            if (MessageBox.Show(this, prompt, "请核对真实聊天记录",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+
+            _status.Text = "正在保存人工核对结果…";
+            Task.Run(() =>
+            {
+                string reason;
+                var ok = ConditionalBusinessAdviceService.ResolveUncertainDelivery(
+                    _shopKey, _seller, item.Buyer, item.OrderId, item.AdviceKey,
+                    confirmedDelivered, out reason);
+                return new { Ok = ok, Reason = reason };
+            }).ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (task.IsFaulted)
+                {
+                    _status.Text = "核对失败：" + task.Exception.GetBaseException().Message;
+                    return;
+                }
+                _status.Text = task.Result.Reason;
+                if (task.Result.Ok) RefreshItems();
+            })));
         }
     }
 }
