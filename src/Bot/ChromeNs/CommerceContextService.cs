@@ -215,6 +215,25 @@ namespace Bot.ChromeNs
             IList<ConversationContextTurn> turns)
         {
             if (state == null) return;
+            var routingQuestion = string.Join(" ", new[]
+            {
+                currentQuestion ?? string.Empty,
+                state.CurrentTopic ?? string.Empty,
+                state.BuyerGoal ?? string.Empty,
+                state.PendingQuestion ?? string.Empty
+            });
+            if (!CommerceReplyAuthorityService.IsOrderDependentQuestion(routingQuestion))
+            {
+                // Do not touch the order ledger for unrelated questions. A structured
+                // order is not a global prerequisite for image or product knowledge.
+                state.CommerceContext = new CommerceContextSnapshot
+                {
+                    Seller = Clean(seller, 120),
+                    Buyer = Clean(buyer, 120),
+                    Source = "not_required"
+                };
+                return;
+            }
             var commerce = Build(seller, buyer, currentQuestion, turns, state);
             state.CommerceContext = commerce;
 
