@@ -290,3 +290,11 @@ def test_knowledge_v2_typed_evidence_requirements_cannot_bypass_the_authorizatio
     assert "RequiresEvidenceGate(decision)" in ocr
     assert "禁止本地直答" in runtime
     assert "禁止本地直答" in ocr
+
+
+def test_typed_business_evidence_cannot_be_silently_ignored_by_other_knowledge_types():
+    semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
+    assert "var evidenceRequirements = allRequired" in semantics
+    assert "var isConditionalAfterSale" in semantics
+    assert "evidenceRequirements.Count > 0 && !isConditionalAfterSale" in semantics
+    assert "当前知识类型不支持专用业务证据条件" in semantics
