@@ -67,13 +67,14 @@ def test_recent_account_evidence_is_derived_from_shop_configured_app_and_generic
     assert "酷狗" not in visual and "Kugou" not in visual
 
 
-def test_vision_prompt_uses_generic_configured_app_identity_without_login_requirement():
+def test_vision_prompt_is_domain_neutral_and_uses_configured_image_rules():
     vision = text("src/Bot/ChromeNs/VisionRequestService.cs")
-    assert "品牌官方APP/官方电视版" in vision
-    assert "电视系统自带、第三方聚合或仿版" in vision
-    assert "视觉理解" in vision and "配置的应用名称" in vision
-    assert "不得猜测品牌或官方身份" in vision
-    assert "不要求买家必须已经登录账号" in vision
+    assert "所有行业与店铺类型" in vision
+    assert "不得预设图片一定属于设备、电视、账号、会员、充值" in vision
+    assert "图片知识、OCR命中规则和视觉理解规则" in vision
+    assert "规则是检索证据，不是自动结论" in vision
+    assert "只记录实际出现的内容" in vision
+    assert "品牌官方APP/官方电视版" not in vision
     assert "酷狗" not in vision
 
 
