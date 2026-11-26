@@ -1201,9 +1201,12 @@ namespace Bot.ChromeNs
                     || !Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                     return false;
                 string latestReason;
-                return ParallelReplyRelevanceGate.ShouldSend(
+                var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
+                if (shouldSend && conditionalAdviceReserved)
+                    conditionalAdviceSendMayHaveStarted = true;
+                return shouldSend;
             };
             var sendOk = await SendTextWithRetryAsync(
                 burst.BuyerNick, answer, 1, lease.CancellationToken, preSendGuard);
@@ -1370,6 +1373,9 @@ namespace Bot.ChromeNs
                 }
             }
 
+            // A later cancellation may follow an earlier transport attempt; do not
+            // release the idempotency key unless no attempt ever passed this guard.
+            var conditionalAdviceSendMayHaveStarted = false;
             Func<bool> visionPreSendGuard = () =>
             {
                 if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
@@ -1399,7 +1405,7 @@ namespace Bot.ChromeNs
                 if (conditionalAdviceReserved)
                     ConditionalBusinessAdviceService.CompleteDelivery(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
-                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, !conditionalAdviceSendMayHaveStarted);
                 throw;
             }
             var sendCancelled = !sendOk && rpa != null && rpa.LastSendWasCancelled;
@@ -1407,7 +1413,7 @@ namespace Bot.ChromeNs
                 ConditionalBusinessAdviceService.CompleteDelivery(
                     burst.ShopKey, burst.SellerNick, burst.BuyerNick,
                     result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
-                    sendOk, sendCancelled);
+                    sendOk, sendCancelled && !conditionalAdviceSendMayHaveStarted);
             if (sendOk) lease.MarkCompleted("vision_send_completed");
             else if (sendCancelled) lease.MarkCompleted("vision_send_cancelled");
             else lease.MarkFailed("vision_send_failed");
