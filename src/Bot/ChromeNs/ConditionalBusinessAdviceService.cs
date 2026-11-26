@@ -421,8 +421,10 @@ namespace Bot.ChromeNs
                     };
                     state.Records.Add(record);
                 }
-                record.ReservedUntil = DateTime.Now.AddDays(30);
-                record.DeliveryUncertain = false;
+                // Reserve before entering the send call. If the process crashes before
+                // it can record the outcome, remain fail-closed until manual reconciliation.
+                record.ReservedUntil = DateTime.MaxValue;
+                record.DeliveryUncertain = true;
                 record.UpdatedAt = DateTime.Now;
                 if (!SaveLedger(path, state, out loadError))
                 {
@@ -469,7 +471,7 @@ namespace Bot.ChromeNs
                     // A failed send after entering the delivery call is ambiguous. Hold the
                     // advice key until manual reconciliation instead of risking a duplicate.
                     record.DeliveryUncertain = true;
-                    record.ReservedUntil = DateTime.Now.AddDays(30);
+                    record.ReservedUntil = DateTime.MaxValue;
                 }
                 record.UpdatedAt = DateTime.Now;
                 SaveLedger(path, state, out error);
@@ -604,7 +606,7 @@ namespace Bot.ChromeNs
         {
             if (state == null || state.Records == null) return;
             var cutoff = DateTime.Now.AddDays(-90);
-            state.Records.RemoveAll(x => x == null || x.UpdatedAt < cutoff);
+            state.Records.RemoveAll(x => x == null || (!x.DeliveryUncertain && x.UpdatedAt < cutoff));
             if (state.Records.Count > 10000)
                 state.Records = state.Records.OrderByDescending(x => x.UpdatedAt).Take(10000).ToList();
         }
