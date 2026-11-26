@@ -59,6 +59,7 @@ def test_conditional_refund_advice_requires_paid_open_order_and_current_image():
     assert "GetLatestImageObservation(shopKey, seller, buyer)" in build
     assert "expectedImageMessageKey" in build
     assert "expectedImageKnowledgeId" in build
+    assert "expectedImageKnowledgeId" in build and "expectedImageMessageKey" in build
     assert "MatchedImageKnowledgeId" in build
     assert "order.PaidAt" in build
     assert "imageObservedAt < orderEvidenceTime" in build
