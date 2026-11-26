@@ -254,7 +254,10 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 var state = SelectSyncState(shop.ShopKey, seller);
-                var pendingItems = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc limit 50",
+                // Do not limit the metadata scan to the oldest 50 rows: permanently
+                // missing/corrupt files at the head would starve every healthy later row.
+                // The outgoing payload is still bounded by count and byte limits below.
+                var pendingItems = Select("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by UpdatedAtTicks asc, EntityId asc",
                     shop.ShopKey, seller);
                 var tombstones = SelectTombstones("where ShopKey = ? and Seller = ? and SyncDirty = 1 order by DeletedAtTicks asc limit 50",
                     shop.ShopKey, seller);
@@ -262,6 +265,7 @@ namespace Bot.ChromeNs
                 long pendingImageBytes = 0;
                 foreach (var pending in pendingItems)
                 {
+                    if (upserts.Count >= 5 || pendingImageBytes >= 8L * 1024L * 1024L) break;
                     try
                     {
                         if (!IsManagedImagePath(pending.ImagePath, GetImageDirectory(shop)) || !File.Exists(pending.ImagePath))
@@ -281,7 +285,6 @@ namespace Bot.ChromeNs
                             Log.ErrorWithMaxCount("图片知识原图哈希不匹配，拒绝同步损坏数据: " + pending.EntityId, 5);
                             continue;
                         }
-                        if (upserts.Count >= 5) break;
                         if (upserts.Count > 0 && pendingImageBytes + bytes.Length > 8L * 1024L * 1024L)
                             continue;
                         upserts.Add(new JObject

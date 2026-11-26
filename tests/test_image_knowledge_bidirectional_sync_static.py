@@ -243,3 +243,13 @@ def test_windows_buyer_image_import_menu_does_not_match_image_mentions_in_plain_
     assert 'string.Equals(normalizedQuestion, "图片消息"' in menu
     assert 'question.IndexOf("[图片]"' not in menu
     assert 'question.IndexOf("图片消息"' not in menu
+
+
+def test_missing_image_queue_head_cannot_starve_later_valid_records():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    request = service.split("public static JObject BuildCloudSyncRequest", 1)[1].split("public static void ApplyCloudSyncResponse", 1)[0]
+    assert "order by UpdatedAtTicks asc, EntityId asc" in request
+    assert "order by UpdatedAtTicks asc limit 50" not in request
+    assert "if (upserts.Count >= 5 || pendingImageBytes >= 8L * 1024L * 1024L) break;" in request
+    assert "pendingImageBytes + bytes.Length > 8L * 1024L * 1024L" in request
+    assert request.index("if (upserts.Count >= 5") < request.index("File.ReadAllBytes")
