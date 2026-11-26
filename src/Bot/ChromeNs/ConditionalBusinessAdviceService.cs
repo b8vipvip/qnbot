@@ -738,10 +738,16 @@ namespace Bot.ChromeNs
         private static void CleanupLedger(ConditionalBusinessAdviceLedgerState state)
         {
             if (state == null || state.Records == null) return;
-            var cutoff = DateTime.Now.AddDays(-90);
-            state.Records.RemoveAll(x => x == null || (!x.DeliveryUncertain && x.UpdatedAt < cutoff));
-            if (state.Records.Count > 10000)
-                state.Records = state.Records.OrderByDescending(x => x.UpdatedAt).Take(10000).ToList();
+            var now = DateTime.Now;
+            var cutoff = now.AddDays(-90);
+            // Never trim a live reservation, a delivered dedupe marker, or an
+            // uncertain outcome just to satisfy a record-count cap. Losing one of
+            // those entries could permit a duplicate buyer-facing recommendation.
+            state.Records.RemoveAll(x => x == null
+                || (!x.DeliveryUncertain
+                    && x.ReservedUntil <= now
+                    && x.DeliveredAt == DateTime.MinValue
+                    && x.UpdatedAt < cutoff));
             if (state.Events == null) state.Events = new List<ConditionalBusinessAdviceDiagnosticEvent>();
             state.Events.RemoveAll(x => x == null || x.AtUtc < DateTime.UtcNow.AddDays(-30));
             if (state.Events.Count > 500)
