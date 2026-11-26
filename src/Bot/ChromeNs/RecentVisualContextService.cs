@@ -147,6 +147,29 @@ namespace Bot.ChromeNs
                 .ToList();
         }
 
+        // Return the newest image observation even when it is unmatched or withdrawn.
+        // Callers must not fall back to an older matched image when a newer image supersedes it.
+        internal static VisualKnowledgeObservationEntity GetLatestImageObservation(
+            string shopKey, string seller, string buyer)
+        {
+            shopKey = (shopKey ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0)
+                return null;
+            var latest = LoadRecent(
+                    shopKey, seller, buyer,
+                    DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 30)
+                .Where(x => x != null
+                    && !string.IsNullOrWhiteSpace(x.MessageKey)
+                    && !string.IsNullOrWhiteSpace(x.OcrImageSha256))
+                .OrderByDescending(x => x.ObservedAtTicks)
+                .FirstOrDefault();
+            if (latest == null || IsWithdrawnObservation(shopKey, seller, buyer, latest))
+                return null;
+            return latest;
+        }
+
         public static bool TryGetRecentAccountEvidence(
             string seller,
             string buyer,
