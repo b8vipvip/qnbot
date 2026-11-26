@@ -1308,8 +1308,7 @@ namespace Bot.ChromeNs
                                 return;
                             }
 
-                            ReceptionWorkflowCatalogService.RollbackToPreviousPublished(
-                                seller, shopKey, revision);
+                            ReceptionWorkflowCatalogService.RollbackToPreviousPublished(seller, shopKey, revision);
                             InvalidateShop(shopKey);
                             UpdateRollbackRetryState(shop, flowId, revision, false, true, false, 0, string.Empty);
                             Log.ErrorWithMaxCount("Reception Agent持久化回滚重试成功：flow="
