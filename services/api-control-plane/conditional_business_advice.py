@@ -347,7 +347,7 @@ def runtime_renew(
 def runtime_complete(
     payload: ConditionalAdviceCompleteInput,
     request: Request,
-    x_shop_key: str = "",
+    x_shop_key: str = Header(default=""),
 ) -> dict[str, Any]:
     client_id, shop_key = _runtime_scope(request, x_shop_key)
     scope_hash, _, _, _ = _scope_for_payload(shop_key, payload.buyer, payload.order_id, payload.advice_key)
@@ -409,7 +409,7 @@ def runtime_complete(
 
 
 @router.get("/api/runtime/v1/bot-web/conditional-business-advice/pending")
-def runtime_pending(request: Request, x_shop_key: str = "") -> dict[str, Any]:
+def runtime_pending(request: Request, x_shop_key: str = Header(default="")) -> dict[str, Any]:
     client_id, shop_key = _runtime_scope(request, x_shop_key)
     now_dt = _utc_now()
     now = _iso(now_dt)
@@ -439,7 +439,7 @@ def runtime_pending(request: Request, x_shop_key: str = "") -> dict[str, Any]:
 def runtime_resolve(
     payload: ConditionalAdviceResolveInput,
     request: Request,
-    x_shop_key: str = "",
+    x_shop_key: str = Header(default=""),
 ) -> dict[str, Any]:
     client_id, shop_key = _runtime_scope(request, x_shop_key)
     scope_hash = _clean(payload.scope_hash, "scope_hash", 64).lower()
