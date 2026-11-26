@@ -533,7 +533,8 @@ namespace Bot.ChromeNs
                 if (conditionalAdviceReserved)
                     ConditionalBusinessAdviceService.CompleteDelivery(
                         burst.ShopKey, burst.SellerNick, burst.BuyerNick,
-                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                        false, !conditionalAdviceSendMayHaveStarted);
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (lifecycleLease.IsCurrent)
                     lifecycleLease.MarkCompleted("vision_send_cancelled");
