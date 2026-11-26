@@ -205,7 +205,7 @@ namespace Bot.ChromeNs
                 {
                     var question = (task.CombinedQuestion ?? string.Empty).Trim();
                     commerceAuthority = CommerceReplyAuthorityService.Evaluate(
-                        knowledgeSeller, task.BuyerNick, question);
+                        knowledgeSeller, task.BuyerNick, question, task.ShopKey);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
