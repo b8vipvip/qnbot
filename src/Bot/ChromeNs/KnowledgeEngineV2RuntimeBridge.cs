@@ -483,6 +483,16 @@ namespace Bot.ChromeNs
                         decision.ConditionalAdviceImageMessageKey,
                         decision.ConditionalAdviceImageKnowledgeId))
                     return false;
+                string globalLeaseReason;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.RenewDistributedDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        decision.ConditionalAdviceOrderId, decision.ConditionalAdviceKey,
+                        out globalLeaseReason))
+                {
+                    Log.Info("Knowledge Engine V2发送前全局幂等租约已失效，阻止发送: " + globalLeaseReason);
+                    return false;
+                }
                 if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
                 {
                     Log.Info("Knowledge Engine V2实际发送前检测到Bot开关关闭，取消旧直答: buyer="
