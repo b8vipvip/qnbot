@@ -155,14 +155,45 @@ namespace Bot.ChromeNs
             var records = document["records"] as JArray ?? new JArray();
             var faults = document["faults"] as JArray ?? new JArray();
             var cutoff = DateTime.UtcNow.AddDays(-30).Ticks;
-            document["records"] = new JArray(records.OfType<JObject>()
-                .Where(x => (x.Value<long?>("updated_utc_ticks") ?? 0) >= cutoff)
+            // Pending sends and uncertain deliveries are at-most-once safety barriers.
+            // Never age them out or evict them merely because another 5,000 buyers became
+            // active; otherwise a late duplicate event could send the same workflow reply again.
+            bool IsProtectedRecord(JObject item)
+            {
+                return !string.IsNullOrWhiteSpace(Convert.ToString(item["pending_source_key"]))
+                    || item.Value<bool?>("delivery_uncertain") == true;
+            }
+            var protectedRecords = records.OfType<JObject>().Where(IsProtectedRecord).ToList();
+            var recentRecords = records.OfType<JObject>()
+                .Where(x => !IsProtectedRecord(x)
+                    && (x.Value<long?>("updated_utc_ticks") ?? 0) >= cutoff)
                 .OrderByDescending(x => x.Value<long?>("updated_utc_ticks") ?? 0)
-                .Take(MaxRuntimeRecords));
-            document["faults"] = new JArray(faults.OfType<JObject>()
-                .Where(x => (x.Value<long?>("last_failure_utc_ticks") ?? 0) >= cutoff)
+                .Take(Math.Max(0, MaxRuntimeRecords - protectedRecords.Count));
+            if (protectedRecords.Count > MaxRuntimeRecords)
+                Log.ErrorWithMaxCount("Reception Agent未决发送安全屏障超过常规记录容量；保留全部屏障，不驱逐任何未决状态。", 10);
+            document["records"] = new JArray(protectedRecords.Concat(recentRecords)
+                .OrderByDescending(x => x.Value<long?>("updated_utc_ticks") ?? 0));
+
+            // A quarantined flow with rollback_pending (including legacy quarantined rows
+            // where the field is absent) must survive arbitrarily long outages and retries.
+            // Only completed/superseded rollback records may age out with ordinary diagnostics.
+            bool IsPendingRollback(JObject item)
+            {
+                return item.Value<bool?>("quarantined") == true
+                    && item.Value<bool?>("rollback_pending") != false
+                    && item.Value<bool?>("rollback_completed") != true
+                    && item.Value<bool?>("rollback_superseded") != true;
+            }
+            var pendingRollbacks = faults.OfType<JObject>().Where(IsPendingRollback).ToList();
+            var recentFaults = faults.OfType<JObject>()
+                .Where(x => !IsPendingRollback(x)
+                    && (x.Value<long?>("last_failure_utc_ticks") ?? 0) >= cutoff)
                 .OrderByDescending(x => x.Value<long?>("last_failure_utc_ticks") ?? 0)
-                .Take(MaxFaultRecords));
+                .Take(Math.Max(0, MaxFaultRecords - pendingRollbacks.Count));
+            if (pendingRollbacks.Count > MaxFaultRecords)
+                Log.ErrorWithMaxCount("Reception Agent待回滚隔离记录超过常规故障记录容量；保留全部待回滚记录。", 10);
+            document["faults"] = new JArray(pendingRollbacks.Concat(recentFaults)
+                .OrderByDescending(x => x.Value<long?>("last_failure_utc_ticks") ?? 0));
             string error;
             if (!CrossProcessAtomicStateFile.WriteAllTextAtomic(
                 path, document.ToString(), 3, 50, out error))
