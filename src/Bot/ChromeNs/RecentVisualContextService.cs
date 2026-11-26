@@ -160,9 +160,7 @@ namespace Bot.ChromeNs
             var latest = LoadRecent(
                     shopKey, seller, buyer,
                     DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 30)
-                .Where(x => x != null
-                    && !string.IsNullOrWhiteSpace(x.MessageKey)
-                    && !string.IsNullOrWhiteSpace(x.OcrImageSha256))
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.MessageKey))
                 .OrderByDescending(x => x.ObservedAtTicks)
                 .FirstOrDefault();
             if (latest == null || IsWithdrawnObservation(shopKey, seller, buyer, latest))
