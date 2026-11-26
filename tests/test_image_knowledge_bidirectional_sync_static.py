@@ -382,3 +382,23 @@ def test_invalid_old_image_tombstone_cannot_starve_later_valid_deletes():
     assert "if (deletes.Count >= 50) break;" in build
     assert "ToUtcIso(tombstone.DeletedAtTicks)" in build
     assert "保留该记录并继续处理后续删除" in build
+
+
+def test_image_sync_rejects_invalid_revision_timestamp_and_enabled_metadata():
+    api = read("services/api-control-plane/bot_web_conversation_knowledge.py")
+    revision = api.split("def _sync_revision", 1)[1].split("def _sync_timestamp", 1)[0]
+    timestamp = api.split("def _sync_timestamp", 1)[1].split("def _normalize_item", 1)[0]
+    sync = api.split("def runtime_image_knowledge_sync", 1)[1].split(
+        "def web_image_knowledge_list", 1
+    )[0]
+    assert "revision < 0" in revision
+    assert "HTTPException(status_code=400" in revision
+    assert "datetime.fromisoformat(normalized)" in timestamp
+    assert "parsed.tzinfo is None" in timestamp
+    assert "astimezone(timezone.utc)" in timestamp
+    assert 'updated_at = _sync_timestamp(item.get("updated_at"), "updated_at", now)' in sync
+    assert 'deleted_at = _sync_timestamp(item.get("deleted_at"), "deleted_at", _now())' in sync
+    assert 'base_revision = _sync_revision(item.get("base_revision"), "base_revision")' in sync
+    assert "if not isinstance(enabled_value, bool)" in sync
+    assert "1 if enabled_value else 0" in sync
+    assert "max(0, int(item.get(\"base_revision\") or 0))" not in sync
