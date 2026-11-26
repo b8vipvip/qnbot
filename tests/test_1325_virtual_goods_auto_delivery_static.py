@@ -864,3 +864,16 @@ def test_unresolved_confirmation_intents_never_expire_from_the_at_most_once_ledg
     )[0]
     assert 'Resolution = "migrated_pending_intent"' in migration
     assert "ResolvedAt = null" in migration
+
+
+def test_manual_review_required_confirmation_barriers_do_not_expire():
+    ledger = read("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    cleanup = ledger.split("private static void CleanupLocked", 1)[1].split(
+        "private static bool IsAtCapacityLocked", 1
+    )[0]
+    assert "x.ResolvedAt.HasValue" in cleanup
+    assert '!string.Equals(x.Resolution ?? string.Empty, "manual_review_required", StringComparison.OrdinalIgnoreCase)' in cleanup
+    assert "x.KeepUntil <= now" in cleanup
+    assert 'TryResolveConfirmationIntent(record, "manual_review_required")' in read(
+        "src/Bot/ChromeNs/VirtualGoodsAutoDelivery.cs"
+    )
