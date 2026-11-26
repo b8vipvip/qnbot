@@ -59,6 +59,7 @@ def init_db() -> None:
                 image_sha256 TEXT NOT NULL,
                 image_bytes BLOB NOT NULL,
                 ocr_text TEXT NOT NULL DEFAULT '',
+                hit_info TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 revision INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +115,7 @@ def init_db() -> None:
             ("seller", "TEXT NOT NULL DEFAULT ''"),
             ("revision", "INTEGER NOT NULL DEFAULT 0"),
             ("updated_by", "TEXT NOT NULL DEFAULT ''"),
+            ("hit_info", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE bot_web_image_knowledge ADD COLUMN {name} {declaration}")
@@ -137,6 +139,7 @@ def init_db() -> None:
                     image_sha256 TEXT NOT NULL,
                     image_bytes BLOB NOT NULL,
                     ocr_text TEXT NOT NULL DEFAULT '',
+                    hit_info TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
                     revision INTEGER NOT NULL DEFAULT 0,
@@ -149,9 +152,9 @@ def init_db() -> None:
             )
             conn.execute(
                 """INSERT INTO bot_web_image_knowledge
-                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,hit_info,
                     description,enabled,revision,updated_by,created_at,updated_at)
-                   SELECT id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,
+                   SELECT id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,hit_info,
                           description,enabled,revision,updated_by,created_at,updated_at
                    FROM bot_web_image_knowledge_legacy_unique"""
             )
@@ -396,6 +399,7 @@ class ImageKnowledgeSaveInput(BaseModel):
     image_sha256: str = Field(min_length=64, max_length=64)
     image_base64: str = Field(min_length=16, max_length=12 * 1024 * 1024)
     ocr_text: str = Field(default="", max_length=12000)
+    hit_info: str = Field(default="", max_length=2400)
     description: str = Field(min_length=1, max_length=1200)
     enabled: bool = True
 
@@ -524,6 +528,7 @@ def _image_row_payload(row, include_bytes: bool = True) -> Dict[str, Any]:
         "mime_type": row["mime_type"],
         "image_sha256": row["image_sha256"],
         "ocr_text": row["ocr_text"] or "",
+        "hit_info": row["hit_info"] or "",
         "description": row["description"] or "",
         "enabled": bool(row["enabled"]),
         "revision": int(row["revision"] or 0),
@@ -575,7 +580,7 @@ def web_image_knowledge_list(
     canonical = _require_image_shop_scope(client_id, shop_key, seller)
     with core._cp.db() as conn:
         rows = conn.execute(
-            """SELECT id,shop_key,seller,image_name,mime_type,image_sha256,ocr_text,description,
+            """SELECT id,shop_key,seller,image_name,mime_type,image_sha256,ocr_text,hit_info,description,
                       enabled,revision,created_at,updated_at
                FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND seller=?
                ORDER BY updated_at DESC LIMIT 500""",
@@ -618,6 +623,7 @@ def web_image_knowledge_save(data: ImageKnowledgeSaveInput, client: Dict[str, An
     canonical = _require_image_shop_scope(client_id, data.shop_key, data.seller)
     raw, digest, mime = _decode_image_payload(data.image_base64, data.mime_type, data.image_sha256)
     name = _safe_text(data.image_name, 180) or "图片-" + digest[:12] + (mimetypes.guess_extension(mime) or ".img")
+    hit_info = _safe_text(data.hit_info, 2400)
     description = _safe_text(data.description, 1200)
     if not description:
         raise HTTPException(status_code=400, detail="图片说明不能为空")
@@ -646,18 +652,18 @@ def web_image_knowledge_save(data: ImageKnowledgeSaveInput, client: Dict[str, An
         revision = _next_image_revision(conn, client_id, data.shop_key)
         conn.execute(
             """INSERT INTO bot_web_image_knowledge
-               (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,
+               (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,hit_info,description,
                 enabled,revision,updated_by,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  shop_key=excluded.shop_key,seller=excluded.seller,image_name=excluded.image_name,
                  mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,image_bytes=excluded.image_bytes,
-                 ocr_text=excluded.ocr_text,description=excluded.description,enabled=excluded.enabled,
+                 ocr_text=excluded.ocr_text,hit_info=excluded.hit_info,description=excluded.description,enabled=excluded.enabled,
                  revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at
                WHERE bot_web_image_knowledge.client_id=excluded.client_id
                  AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
             (image_id, client_id, data.shop_key, canonical, name, mime, digest, raw, data.ocr_text.strip(),
-             description, 1 if data.enabled else 0, revision, "web", now, now),
+             hit_info, description, 1 if data.enabled else 0, revision, "web", now, now),
         )
         conn.execute(
             "DELETE FROM bot_web_image_knowledge_tombstones WHERE client_id=? AND shop_key=? AND id=?",
@@ -822,23 +828,24 @@ def runtime_image_knowledge_sync(
             if not isinstance(enabled_value, bool):
                 raise HTTPException(status_code=400, detail="图片知识enabled必须是布尔值")
             image_name = _safe_text(item.get("image_name"), 180) or "图片-" + digest[:12]
+            hit_info = _safe_text(item.get("hit_info"), 2400)
             description = _safe_text(item.get("description"), 1200)
             if not description:
                 raise HTTPException(status_code=400, detail="图片说明不能为空")
             conn.execute(
                 """INSERT INTO bot_web_image_knowledge
-                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,description,
+                   (id,client_id,shop_key,seller,image_name,mime_type,image_sha256,image_bytes,ocr_text,hit_info,description,
                     enabled,revision,updated_by,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      image_name=excluded.image_name,mime_type=excluded.mime_type,image_sha256=excluded.image_sha256,
-                     image_bytes=excluded.image_bytes,ocr_text=excluded.ocr_text,description=excluded.description,
+                     image_bytes=excluded.image_bytes,ocr_text=excluded.ocr_text,hit_info=excluded.hit_info,description=excluded.description,
                      enabled=excluded.enabled,revision=excluded.revision,updated_by=excluded.updated_by,
                      updated_at=excluded.updated_at
                    WHERE bot_web_image_knowledge.client_id=excluded.client_id
                      AND bot_web_image_knowledge.shop_key=excluded.shop_key""",
                 (image_id, client_id, data.shop_key, canonical, image_name, mime, digest, raw,
-                 _safe_text(item.get("ocr_text"), 12000), description, 1 if enabled_value else 0,
+                 _safe_text(item.get("ocr_text"), 12000), hit_info, description, 1 if enabled_value else 0,
                  revision, "windows", now, updated_at),
             )
             conn.execute(

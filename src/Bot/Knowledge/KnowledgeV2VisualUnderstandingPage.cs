@@ -26,6 +26,7 @@ namespace Bot.Knowledge
         private DataGrid _grid;
         private Image _preview;
         private TextBox _ocrText;
+        private TextBox _hitInfo;
         private TextBox _description;
         private TextBox _imageName;
         private TextBlock _status;
@@ -116,6 +117,12 @@ namespace Bot.Knowledge
             });
             _grid.Columns.Add(new DataGridTextColumn
             {
+                Header = "命中信息",
+                Binding = new System.Windows.Data.Binding("HitInfo"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _grid.Columns.Add(new DataGridTextColumn
+            {
                 Header = "OCR 内容预览",
                 Binding = new System.Windows.Data.Binding("OcrText"),
                 Width = new DataGridLength(1, DataGridLengthUnitType.Star)
@@ -158,6 +165,11 @@ namespace Bot.Knowledge
             editor.Children.Add(Label("OCR 识别结果（可编辑、可删除文字）"));
             _ocrText = Multi(220);
             editor.Children.Add(_ocrText);
+
+            editor.Children.Add(Label("命中信息（每行一条规则；必须包含 / 任一 / 排除）"));
+            _hitInfo = Multi(112);
+            _hitInfo.ToolTip = "必须包含：每一组都要命中；任一：至少命中一组；排除：命中任一组即拒绝。可用 | 分隔同义词。";
+            editor.Children.Add(_hitInfo);
 
             editor.Children.Add(Label("图片说明（用于后续图片匹配和上下文理解）"));
             _description = Multi(88);
@@ -222,6 +234,7 @@ namespace Bot.Knowledge
                 _currentImageSha256 = string.Empty;
                 _ocrRecognized = false;
                 _ocrText.Clear();
+                _hitInfo.Clear();
                 _description.Clear();
                 LoadPreview(_currentImagePath);
                 _status.Text = "图片已上传，正在自动调用服务端 OCR…";
@@ -299,6 +312,7 @@ namespace Bot.Knowledge
                 ImageSha256 = _currentImageSha256,
                 ImageName = _imageName == null ? string.Empty : _imageName.Text,
                 OcrText = _ocrText.Text,
+                HitInfo = _hitInfo.Text,
                 Description = _description.Text
             };
             _saveButton.IsEnabled = false;
@@ -312,7 +326,7 @@ namespace Bot.Knowledge
                 _currentImageSha256 = saved.ImageSha256;
                 _ocrRecognized = true;
                 RefreshView();
-                _status.Text = "图片知识已保存，后续买家发送相似图片时会结合当前对话和知识库进行判断。";
+                _status.Text = "图片知识已保存，后续买家图片会先按命中信息匹配，再结合当前对话和知识库判断。";
             }
             catch (Exception ex)
             {
@@ -376,6 +390,7 @@ namespace Bot.Knowledge
                 _ocrRecognized = false;
                 _imageName.Text = Path.GetFileName(path);
                 _ocrText.Clear();
+                _hitInfo.Clear();
                 _description.Clear();
                 LoadPreview(path);
                 _status.Text = "已从买家消息导入图片，正在自动执行服务端 OCR…";
@@ -394,14 +409,15 @@ namespace Bot.Knowledge
             _currentImageSha256 = item == null ? string.Empty : item.ImageSha256 ?? string.Empty;
             _ocrRecognized = item != null;
             _ocrText.Text = item == null ? string.Empty : item.OcrText ?? string.Empty;
+            _hitInfo.Text = item == null ? string.Empty : item.HitInfo ?? string.Empty;
             _description.Text = item == null ? string.Empty : item.Description ?? string.Empty;
             _imageName.Text = item == null ? string.Empty
                 : (!string.IsNullOrWhiteSpace(item.ImageName) ? item.ImageName : Path.GetFileName(item.ImagePath ?? string.Empty));
             LoadPreview(_currentImagePath);
             _deleteButton.IsEnabled = item != null;
             _status.Text = item == null
-                ? "上传图片后自动执行服务端 OCR，编辑识别结果并填写图片说明。"
-                : "已载入图片知识。可修改 OCR 文字或图片说明后保存。";
+                ? "上传图片后自动执行服务端 OCR，编辑识别结果、配置命中信息并填写图片说明。"
+                : "已载入图片知识。可修改 OCR 文字、命中信息或图片说明后保存。";
         }
 
         private void LoadPreview(string path)

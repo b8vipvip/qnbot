@@ -12,7 +12,7 @@ def test_image_knowledge_is_persisted_with_shop_scope_and_managed_image_files():
     service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
     targets = read("src/Directory.Build.targets")
 
-    for field in ("ShopKey", "Seller", "ImageSha256", "ImagePath", "ImageName", "OcrText", "Description"):
+    for field in ("ShopKey", "Seller", "ImageSha256", "ImagePath", "ImageName", "OcrText", "HitInfo", "Description"):
         assert field in service
     assert "ResolveRuntimeByShopKey(shopKey)" in service
     assert "string.Equals(shop.ShopKey, shopKey" in service
@@ -72,6 +72,34 @@ def test_image_knowledge_editor_uploads_then_automatically_runs_server_ocr_and_s
     for legacy_field in ("规则名称", "应用名称", "页面名称", "必需 OCR 关键词",
                          "可选关键词", "排除关键词", "字段提取规则", "启用此规则"):
         assert legacy_field not in page
+
+
+
+def test_image_hit_info_rules_are_persisted_synced_and_authoritative():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    page = read("src/Bot/Knowledge/KnowledgeV2VisualUnderstandingPage.cs")
+    api = read("services/api-control-plane/bot_web_conversation_knowledge.py")
+    web_html = read("services/api-control-plane/static/bot-web.html")
+    web_js = read("services/api-control-plane/static/bot-web-v2.js")
+
+    assert "TryParseHitInfoRules" in service
+    assert "TryMatchHitInfo" in service
+    assert "rules.Required" in service and "rules.Any" in service and "rules.Excluded" in service
+    assert "An explicitly configured hit rule is authoritative" in service
+    assert '["hit_info"] = pending.HitInfo' in service
+    assert 'data["hit_info"]' in service
+    assert "HitInfo = cloudHitInfo" in service
+    assert "add column HitInfo text not null default ''" in service
+    assert 'Header = "命中信息"' in page
+    assert 'HitInfo = _hitInfo.Text' in page
+    assert "_hitInfo.Text = item == null ? string.Empty : item.HitInfo ?? string.Empty" in page
+    assert 'hit_info TEXT NOT NULL DEFAULT' in api
+    assert 'hit_info: str = Field(default="", max_length=2400)' in api
+    assert '"hit_info": row["hit_info"] or ""' in api
+    assert 'id="imageKnowledgeHitInfo"' in web_html
+    assert 'hit_info:$("imageKnowledgeHitInfo").value' in web_js
+    assert '$("imageKnowledgeHitInfo").value=item.hit_info||""' in web_js
+
 
 
 def test_buyer_image_message_menu_imports_exact_shop_scoped_cached_original():
