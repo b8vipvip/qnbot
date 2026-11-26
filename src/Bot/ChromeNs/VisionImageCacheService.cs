@@ -482,10 +482,11 @@ namespace Bot.ChromeNs
             // The durable observation tombstone is the source of truth for replayed messages.
             // Keep the message-key guard so a withdrawn earlier image cannot suppress a
             // different later image in the same conversation.
-            return (record != null && record.Withdrawn)
-                || (!string.IsNullOrWhiteSpace(messageKey)
-                    && VisualKnowledgeLearningService.IsObservationWithdrawn(
-                        shop.ShopKey, seller, buyer, messageKey));
+            if (!string.IsNullOrWhiteSpace(messageKey)
+                && VisualKnowledgeLearningService.IsObservationWithdrawn(
+                    shop.ShopKey, seller, buyer, messageKey))
+                return true;
+            return record != null && record.Withdrawn;
         }
 
         internal static bool IsMessageKeyWithdrawn(
