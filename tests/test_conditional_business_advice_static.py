@@ -447,7 +447,7 @@ def test_order_evidence_is_loaded_lazily_only_after_a_knowledge_record_requires_
     assert "GetRecentOrderSnapshots(seller, buyer, 12, shopKey)" in select
 
     ocr_gate = ocr[
-        ocr.index("if (commerceAuthority != null && commerceAuthority.AllowLocalTerminalReply"):
+        ocr.index("// Image-only follow-ups often contain no order words"):
         ocr.index("catch (OperationCanceledException)")
     ]
     assert "ConditionalBusinessAdviceService.RequiresEvidenceGate(decision)" in ocr_gate
