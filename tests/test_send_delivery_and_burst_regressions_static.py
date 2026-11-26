@@ -263,7 +263,8 @@ def test_manual_takeover_marks_pending_delivery_and_suppresses_only_unsubmitted_
     assert "public int SupersededByManual;" in watchdog
     assert "Interlocked.Exchange(ref pending.SupersededByManual, 1);" in method
     suppressed = activation.index("submissionTicks <= 0")
-    assert "pending.SupersededByManual" in activation[suppressed:suppressed + 500]
+    assert "supersededByManual = Interlocked.CompareExchange(ref pending.SupersededByManual, 0, 0) != 0;" in activation
+    assert "&& supersededByManual)" in activation[suppressed:suppressed + 500]
     assert suppressed < activation.index("if (!delivered)")
     assert "if (delivered || submissionTicks > 0)" not in activation
 
