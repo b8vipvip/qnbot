@@ -247,10 +247,14 @@ namespace Bot.ChromeNs
             {
                 var record = match.Record;
                 if (!KnowledgeV2AuthorityPolicy.IsProductionApproved(record)) continue;
+                var afterSaleQuestion = string.Equals(record.Intent, "after_sale", StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(record.Predicate, "refund_policy", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));
+                var compatibilityQuestion = string.Equals(record.Intent, "capability", StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(record.Predicate, "device_support", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));
                 if (!string.Equals(record.Type, "after_sale", StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(record.Intent, "after_sale", StringComparison.OrdinalIgnoreCase)
-                    || !(string.Equals(record.Predicate, "refund_policy", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase))
+                    || !(afterSaleQuestion || compatibilityQuestion)
                     || !string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
                     continue;
 
@@ -265,9 +269,15 @@ namespace Bot.ChromeNs
                     || !required.Contains(OrderProductMatches))
                     continue;
 
-                if (match.Score < 0.82d || match.AliasScore < 0.94d
-                    || match.PredicateScore < 0.99d || match.IntentScore < 0.99d
-                    || match.ConfidenceScore < 0.94d)
+                var exactAlias = decision.Query != null
+                    && (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
+                        .Any(alias => string.Equals(
+                            KnowledgeV2Semantics.Compact(alias),
+                            decision.Query.Normalized,
+                            StringComparison.Ordinal));
+                if (match.Score < 0.82d || match.ConfidenceScore < 0.94d
+                    || (!exactAlias && (match.AliasScore < 0.94d
+                        || match.PredicateScore < 0.99d || match.IntentScore < 0.99d)))
                     continue;
                 if (!MatchesImage(record, evidence) || !MatchesOrderProduct(record, evidence))
                     continue;
