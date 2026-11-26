@@ -1320,8 +1320,29 @@ namespace Bot.ChromeNs
 
                 if (_webSocketServer != null)
                 {
-                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；释放失效会话并重建服务实例。");
+                    Log.Error("Bot WebSocket服务对象仍有引用但41010已不再监听；停止并释放失效服务实例后重建。");
+                    var staleServer = _webSocketServer;
+                    try
+                    {
+                        // Clearing the field alone leaves SuperSocket's listener and its
+                        // internal worker resources undisposed if the listener disappeared
+                        // without a normal SessionClosed/Stop path.
+                        staleServer.Stop();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("停止失效Bot WebSocket服务实例失败，继续清理会话并重建：" + ex.Message, 10);
+                    }
                     ReleaseStaleSessions("Bot WebSocket listener disappeared");
+                    try
+                    {
+                        var disposableServer = staleServer as IDisposable;
+                        if (disposableServer != null) disposableServer.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("释放失效Bot WebSocket服务资源失败：" + ex.Message, 10);
+                    }
                     _webSocketServer = null;
                 }
                 else if (IsLoopbackListenerActive())

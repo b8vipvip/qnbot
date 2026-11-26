@@ -190,3 +190,19 @@ def test_listener_restart_releases_both_session_generation_dictionaries():
     assert "NextShopIdentityProbeGenerationLocked(sessionId);" in release
     assert "_shopIdentityProbeGenerations.TryRemove(sessionId, out ignoredIdentityProbeGeneration);" in release
     assert "ReleaseClosedSession(sessionId, reason, removed);" in release
+
+
+def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_before_rebuild():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    start = server.split("public void Start()", 1)[1].split(
+        "private bool IsLoopbackListenerActive", 1
+    )[0]
+    stale = start.split("if (_webSocketServer != null)", 1)[1].split(
+        "else if (IsLoopbackListenerActive())", 1
+    )[0]
+    assert "var staleServer = _webSocketServer;" in stale
+    assert "staleServer.Stop();" in stale
+    assert "ReleaseStaleSessions(" in stale
+    assert "staleServer as IDisposable" in stale
+    assert stale.index("staleServer.Stop();") < stale.index("ReleaseStaleSessions(")
+    assert stale.index("ReleaseStaleSessions(") < stale.index("_webSocketServer = null;")
