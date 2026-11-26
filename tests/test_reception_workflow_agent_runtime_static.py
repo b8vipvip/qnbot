@@ -542,7 +542,7 @@ def test_image_message_evidence_keeps_native_key_for_withdrawal_recheck_even_whe
 
 
 def test_quarantined_reception_flow_retries_failed_rollback_after_restart_or_transient_lock_error():
-    runtime = text("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
     evaluate = runtime.split("if (quarantinedFault != null)", 1)[1].split(
         "var deliveryUncertain", 1
     )[0]

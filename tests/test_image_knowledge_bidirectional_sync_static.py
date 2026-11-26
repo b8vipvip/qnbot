@@ -275,7 +275,7 @@ def test_duplicate_image_conflict_rekeys_atomically_without_deleting_local_file(
     assert "DbHelper.Db.RunInTransaction" in rekey
     assert "update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=?" in rekey
     assert "delete from VisualImageKnowledgeSyncTombstone" in rekey
-    assert "local.ImagePath" in rekey
+    assert '"update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=?' in rekey
     assert "TryDeleteManagedImage" not in rekey
     assert "public void RunInTransaction(Action<SQLiteConnection> action)" in helper
     assert "conn.RunInTransaction(() => action(conn))" in helper

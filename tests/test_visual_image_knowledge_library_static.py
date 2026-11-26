@@ -108,7 +108,7 @@ def test_ocr_result_and_curated_image_knowledge_are_persisted_against_exact_buye
     assert "RecordOcrEvidence(" in learning
     assert 'where ShopKey=? and Seller=? and Buyer=? and MessageKey=?' in learning
     assert "VisualKnowledgeLearningService.RecordOcrEvidence(" in ocr_first
-    assert "VisualKnowledgeService.TryMatch(" in ocr_first
+    assert "VisualImageKnowledgeService.TryMatch(" in ocr_first
     assert "VisualKnowledgeLearningService.RecordOcrEvidence(" in vision
     assert "alter table VisualKnowledgeObservationEntity add column OcrText text" in learning
     assert 'Status = withdrawn ? "图片已撤回" : "仅OCR证据"' in learning
