@@ -183,7 +183,17 @@ namespace Bot.Knowledge
 
         private void OpenConditionalAdviceReconciliation()
         {
-            var shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+            ShopContext shop = null;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySellerNick(_seller);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(_owner, "当前店铺身份存在歧义，已取消打开发送核对页面：" + ex.Message, "条件性建议发送核对",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
             {
                 MessageBox.Show(_owner, "无法解析当前店铺的ShopKey，已取消打开发送核对页面。", "条件性建议发送核对",
