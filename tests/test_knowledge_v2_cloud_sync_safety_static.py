@@ -365,3 +365,16 @@ def test_concurrent_delete_wins_across_different_ids_for_same_verified_human_evi
     assert "recordsByHumanEvidence[evidenceId] = tombstone;" in evidence
     assert "IsDeleteTombstone(evidenceRecord) && !IsDeleteTombstone(local)" in evidence
     assert "AddCandidate(merged, mergedIds, local, local.Id);" in evidence
+
+
+def test_knowledge_v2_sync_isolates_profile_failures_per_shop():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    queue_all = service.split("private static void QueueAll()", 1)[1].split(
+        "private static void Queue(ShopContext shop)", 1
+    )[0]
+    assert "foreach (var profile in profiles ?? new List<ShopProfile>())" in queue_all
+    assert "try" in queue_all
+    assert "Queue(profile.ToContext());" in queue_all
+    assert "catch (Exception ex)" in queue_all
+    assert "跳过异常店铺并继续处理其他店铺" in queue_all
+    assert "Profiles.GetAll()" in queue_all

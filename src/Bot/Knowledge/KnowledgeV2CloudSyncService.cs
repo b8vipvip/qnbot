@@ -66,8 +66,29 @@ namespace Bot.Knowledge
 
         private static void QueueAll()
         {
-            IList<ShopProfile> profiles; try { profiles=Profiles.GetAll(); } catch { return; }
-            foreach(var p in profiles) if(p!=null) Queue(p.ToContext());
+            IList<ShopProfile> profiles;
+            try { profiles = Profiles.GetAll(); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Knowledge V2 云同步读取店铺列表失败：" + ex.Message, 10);
+                return;
+            }
+
+            // A damaged/removed profile or one shop's bad local settings must not abort
+            // the timer pass and starve every later ShopKey in the same process.
+            foreach (var profile in profiles ?? new List<ShopProfile>())
+            {
+                if (profile == null) continue;
+                try
+                {
+                    Queue(profile.ToContext());
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("Knowledge V2 云同步跳过异常店铺并继续处理其他店铺："
+                        + ex.Message, 10);
+                }
+            }
         }
         private static void Queue(ShopContext shop)
         {
