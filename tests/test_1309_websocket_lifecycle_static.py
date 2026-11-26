@@ -201,10 +201,9 @@ def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_befo
         "else if (IsLoopbackListenerActive())", 1
     )[0]
     assert "var staleServer = _webSocketServer;" in stale
-    assert "staleServer.Stop();" in stale
+    assert 'StopAndDisposeWebSocketServer(staleServer, "listener disappeared");' in stale
     assert "ReleaseStaleSessions(" in stale
-    assert "staleServer as IDisposable" in stale
-    assert stale.index("staleServer.Stop();") < stale.index("ReleaseStaleSessions(")
+    assert stale.index("StopAndDisposeWebSocketServer(staleServer,") < stale.index("ReleaseStaleSessions(")
     assert stale.index("ReleaseStaleSessions(") < stale.index("_webSocketServer = null;")
 
 
