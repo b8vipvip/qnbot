@@ -344,3 +344,24 @@ def test_concurrent_explicit_delete_wins_without_resurrecting_cloud_or_local_ans
     assert "merged[index] = tombstone;" in merge
     assert "AddCandidate(merged, mergedIds, cloud, id);" in merge
     assert "AddCandidate(merged, mergedIds, local, id);" in merge
+
+
+def test_concurrent_delete_wins_across_different_ids_for_same_verified_human_evidence():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service[
+        service.index("private static List<KnowledgeV2Record> MergeCloudAndLocal"):
+        service.index("private static bool IsDeleteTombstone")
+    ]
+    evidence = merge.split(
+        "if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))",
+        1
+    )[1].split("if (preserveLocalOnly)", 1)[0]
+    assert "IsDeleteTombstone(local) && !IsDeleteTombstone(evidenceRecord)" in evidence
+    assert "AddCandidate(merged, mergedIds, evidenceRecord, evidenceRecord.Id);" in evidence
+    assert "var tombstone = CloneRecord(local);" in evidence
+    assert "mergedIds.Remove((evidenceRecord.Id ?? string.Empty).Trim());" in evidence
+    assert "merged[evidenceIndex] = tombstone;" in evidence
+    assert "cloudById.Remove((evidenceRecord.Id ?? string.Empty).Trim());" in evidence
+    assert "recordsByHumanEvidence[evidenceId] = tombstone;" in evidence
+    assert "IsDeleteTombstone(evidenceRecord) && !IsDeleteTombstone(local)" in evidence
+    assert "AddCandidate(merged, mergedIds, local, local.Id);" in evidence

@@ -405,10 +405,44 @@ namespace Bot.Knowledge
                 KnowledgeV2Record evidenceRecord;
                 if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))
                 {
-                    if (SameRecordContent(evidenceRecord, local))
-                        MergeRecordMetadata(evidenceRecord, local);
-                    else
+                    if (IsDeleteTombstone(local) && !IsDeleteTombstone(evidenceRecord))
+                    {
+                        // Devices can independently create different random IDs for the
+                        // same verified human evidence. A delete on one device must also
+                        // win that evidence-key conflict; otherwise the other device's
+                        // active ID survives and resurrects the deleted answer.
+                        AddCandidate(merged, mergedIds, evidenceRecord, evidenceRecord.Id);
+                        var tombstone = CloneRecord(local);
+                        var evidenceIndex = merged.IndexOf(evidenceRecord);
+                        if (evidenceIndex >= 0)
+                        {
+                            mergedIds.Remove((evidenceRecord.Id ?? string.Empty).Trim());
+                            var tombstoneId = (tombstone.Id ?? string.Empty).Trim();
+                            if (tombstoneId.Length > 0) mergedIds.Add(tombstoneId);
+                            merged[evidenceIndex] = tombstone;
+                        }
+                        else
+                        {
+                            AddUnique(merged, mergedIds, tombstone);
+                        }
+                        cloudById.Remove((evidenceRecord.Id ?? string.Empty).Trim());
+                        var deletedId = (tombstone.Id ?? string.Empty).Trim();
+                        if (deletedId.Length > 0) cloudById[deletedId] = tombstone;
+                        recordsByHumanEvidence[evidenceId] = tombstone;
+                    }
+                    else if (IsDeleteTombstone(evidenceRecord) && !IsDeleteTombstone(local))
+                    {
+                        // The cloud tombstone wins across independently generated IDs too.
                         AddCandidate(merged, mergedIds, local, local.Id);
+                    }
+                    else if (SameRecordContent(evidenceRecord, local))
+                    {
+                        MergeRecordMetadata(evidenceRecord, local);
+                    }
+                    else
+                    {
+                        AddCandidate(merged, mergedIds, local, local.Id);
+                    }
                     continue;
                 }
 
