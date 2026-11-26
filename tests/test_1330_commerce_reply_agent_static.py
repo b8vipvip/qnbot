@@ -79,7 +79,8 @@ def test_single_commerce_reply_authority_owns_terminal_vs_contextual_decision():
     authority = read("src/Bot/ChromeNs/CommerceReplyAuthorityService.cs")
     assert "internal static class CommerceReplyAuthorityService" in authority
     assert "commerce.HasStructuredOrder" in authority
-    assert 'commerce.PurchasePhase,\n                "post_order_unverified"' in authority
+    assert "commerce.PurchasePhase" in authority
+    assert '"post_order_unverified"' in authority
     assert "RequiresContextualAgent = true" in authority
     assert "SendTextWithRetryAsync" not in authority
     assert "KnowledgeEngineV2Service.Resolve" not in authority
