@@ -395,7 +395,7 @@ def test_image_sync_rejects_invalid_revision_timestamp_and_enabled_metadata():
     sync = api.split("def runtime_image_knowledge_sync", 1)[1].split(
         "def web_image_knowledge_list", 1
     )[0]
-    assert "revision < 0" in revision
+    assert "value < 0" in revision
     assert "HTTPException(status_code=400" in revision
     assert "datetime.fromisoformat(normalized)" in timestamp
     assert "parsed.tzinfo is None" in timestamp
