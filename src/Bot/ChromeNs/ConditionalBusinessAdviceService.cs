@@ -716,6 +716,48 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            ConditionalBusinessAdviceDistributedLease distributedLease;
+            if (!TryClaimDistributedDelivery(shopKey, buyer, orderId, adviceKey,
+                out distributedLease, out reason))
+            {
+                RecordDiagnosticEvent("delivery_blocked_global", "global_lease_unavailable_or_held",
+                    shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                return false;
+            }
+
+            if (!TryReserveLocalDelivery(shopKey, seller, buyer, orderId, adviceKey,
+                imageMessageKey, imageKnowledgeId, out reason))
+            {
+                CompleteDistributedDelivery(shopKey, buyer, orderId, adviceKey,
+                    distributedLease, "cancelled_before_send");
+                return false;
+            }
+
+            var localKey = BuildLedgerKey(shopKey, seller, buyer, orderId, adviceKey);
+            if (!DistributedLeases.TryAdd(localKey, distributedLease))
+            {
+                // The local ledger should already have rejected this race. If the
+                // in-memory owner map disagrees, do not send and retain a safe barrier.
+                CompleteDistributedDelivery(shopKey, buyer, orderId, adviceKey,
+                    distributedLease, "uncertain");
+                reason = "本机条件性建议租约所有者状态不一致，已阻止发送";
+                Log.ErrorWithMaxCount(reason, 10);
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryReserveLocalDelivery(
+            string shopKey,
+            string seller,
+            string buyer,
+            string orderId,
+            string adviceKey,
+            string imageMessageKey,
+            string imageKnowledgeId,
+            out string reason)
+        {
+            reason = string.Empty;
             var path = GetLedgerPath();
             using (var lease = CrossProcessAtomicStateFile.Acquire(path, "conditional-business-advice", 5000))
             lock (LedgerSync)
@@ -743,15 +785,34 @@ namespace Bot.ChromeNs
                     SaveLedger(path, state, out loadError);
                     return false;
                 }
-                if (record != null && record.ReservedUntil > DateTime.Now)
+                if (record != null && record.DeliveryUncertain)
                 {
-                    reason = record.DeliveryUncertain
-                        ? "该订单的售后建议已被保留或发送状态不确定，禁止重复发送；如长时间未完成需人工核实"
-                        : "该订单的售后建议正在发送，禁止并发重复发送";
-                    AppendDiagnosticEvent(state, "delivery_blocked_reserved_or_uncertain",
-                        record.DeliveryUncertain ? "delivery_reserved_or_uncertain" : "delivery_in_progress",
+                    reason = "该订单的售后建议发送结果不确定，必须先人工核对";
+                    AppendDiagnosticEvent(state, "delivery_blocked_uncertain", "manual_review_required",
                         shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
                     SaveLedger(path, state, out loadError);
+                    return false;
+                }
+                if (record != null && record.ReservedUntil > DateTime.Now)
+                {
+                    reason = "该订单的售后建议正在本机发送，禁止并发重复发送";
+                    AppendDiagnosticEvent(state, "delivery_blocked_reserved", "delivery_in_progress",
+                        shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                    SaveLedger(path, state, out loadError);
+                    return false;
+                }
+                if (record != null && record.ReservedUntil != DateTime.MinValue
+                    && record.ReservedUntil <= DateTime.Now)
+                {
+                    // An expired local lease may have crashed after the send call.
+                    // It is never automatically reclaimed.
+                    record.DeliveryUncertain = true;
+                    record.ReservedUntil = DateTime.MaxValue;
+                    record.UpdatedAt = DateTime.Now;
+                    AppendDiagnosticEvent(state, "delivery_local_lease_expired", "manual_review_required",
+                        shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                    SaveLedger(path, state, out loadError);
+                    reason = "本机发送租约已过期，结果无法证明，必须先人工核对";
                     return false;
                 }
                 if (record == null)
@@ -767,10 +828,10 @@ namespace Bot.ChromeNs
                     };
                     state.Records.Add(record);
                 }
-                // Reserve before entering the send call. If the process crashes before
-                // it can record the outcome, remain fail-closed until manual reconciliation.
-                record.ReservedUntil = DateTime.MaxValue;
-                record.DeliveryUncertain = true;
+                // Active reservations are distinct from uncertain outcomes. If the
+                // process dies, expiry converts the reservation to manual review.
+                record.ReservedUntil = DateTime.Now.AddSeconds(DistributedLeaseSeconds + 30);
+                record.DeliveryUncertain = false;
                 record.UpdatedAt = DateTime.Now;
                 AppendDiagnosticEvent(state, "delivery_reserved", "reserved_before_send",
                     shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
