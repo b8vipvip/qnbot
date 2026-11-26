@@ -111,5 +111,7 @@ def test_ocr_result_and_curated_image_knowledge_are_persisted_against_exact_buye
     assert "VisualImageKnowledgeService.TryMatch(" in ocr_first
     assert "VisualKnowledgeLearningService.RecordOcrEvidence(" in vision
     assert "alter table VisualKnowledgeObservationEntity add column OcrText text" in learning
+    assert "if (!string.IsNullOrWhiteSpace(matchedImageKnowledgeId))" in learning
+    assert "Empty input must not erase the already persisted message-to-image" in learning
     assert 'Status = withdrawn ? "图片已撤回" : "仅OCR证据"' in learning
     assert 'old.Status = "等待人工接待结束"' in learning
