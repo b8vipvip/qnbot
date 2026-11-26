@@ -324,7 +324,8 @@ namespace Bot.ChromeNs
                         || string.Equals(record.Predicate, "refund_advice", StringComparison.OrdinalIgnoreCase));
                 if (!string.Equals(record.Type, "after_sale", StringComparison.OrdinalIgnoreCase)
                     || !(afterSaleQuestion || compatibilityQuestion)
-                    || !string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase))
+                    || !string.Equals(record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase)
+                    || record.Authority < 0.90d)
                     continue;
 
                 var required = new HashSet<string>(
