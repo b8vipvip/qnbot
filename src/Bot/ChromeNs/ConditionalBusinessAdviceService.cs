@@ -1,10 +1,17 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
@@ -85,6 +92,14 @@ namespace Bot.ChromeNs
         public string OrderId { get; set; }
         public string AdviceKey { get; set; }
         public DateTime UpdatedAt { get; set; }
+        public string ScopeHash { get; set; }
+        public bool IsRemote { get; set; }
+    }
+
+    internal sealed class ConditionalBusinessAdviceDistributedLease
+    {
+        public string ScopeHash { get; set; }
+        public string LeaseToken { get; set; }
     }
 
     /// <summary>
@@ -102,6 +117,9 @@ namespace Bot.ChromeNs
         private const string OrderOpen = "evidence:order.open";
         private const string OrderProductMatches = "evidence:order.product_matches_record";
         private static readonly object LedgerSync = new object();
+        private const int DistributedLeaseSeconds = 180;
+        private static readonly ConcurrentDictionary<string, ConditionalBusinessAdviceDistributedLease> DistributedLeases =
+            new ConcurrentDictionary<string, ConditionalBusinessAdviceDistributedLease>(StringComparer.Ordinal);
         private static readonly Regex ClosedOrFulfilledRegex = new Regex(
             "已退款|退款成功|退款已完成|退款完成|退款中|退款申请|已申请退款|退货退款|已退货|退货完成|关闭|已关闭|已取消|订单取消|取消订单|取消交易|已发货|卖家已发货|等待买家收货|待收货|已签收|确认收货|买家已收货|交易完成|交易成功|已完成|waitbuyerconfirmgoods|trade[_ ]?buyer[_ ]?signed|buyersigned|trade[_ ]?closed|trade[_ ]?finished|trade[_ ]?success|refunded|refund[_ ]?(success|closed|finished|completed|requested|processing)|cancel|shipped|delivered|completed",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
