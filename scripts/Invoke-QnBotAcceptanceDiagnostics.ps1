@@ -531,7 +531,7 @@ function Read-ConditionalBusinessAdviceLedger {
         Status = 'not_found'
         RecordCount = 0
         DeliveredCount = 0
-        UncertainCount = 0
+        ReservedOrUncertainCount = 0
         RecentEvents = @()
     }
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -782,7 +782,7 @@ $markdown = @(
     ('- Conditional advice ledger: ' + $conditionalBusinessAdvice.Status),
     ('- Conditional advice records: ' + $conditionalBusinessAdvice.RecordCount),
     ('- Conditional advice delivered: ' + $conditionalBusinessAdvice.DeliveredCount),
-    ('- Conditional advice uncertain: ' + $conditionalBusinessAdvice.UncertainCount),
+    ('- Conditional advice reserved or uncertain: ' + $conditionalBusinessAdvice.ReservedOrUncertainCount),
     '',
     '## Conditional business advice events'
 )
@@ -1412,7 +1412,7 @@ Write-Host ('Bot=' + $botCount + '; Qianniu=' + $workbenchCount + '; bench_im=' 
             Status = 'ok'
             RecordCount = $records.Count
             DeliveredCount = $deliveredCount
-            UncertainCount = $uncertainCount
+            ReservedOrUncertainCount = $uncertainCount
             RecentEvents = $safeEvents
         }
     }
@@ -1421,7 +1421,7 @@ Write-Host ('Bot=' + $botCount + '; Qianniu=' + $workbenchCount + '; bench_im=' 
             Status = 'invalid_or_unreadable'
             RecordCount = 0
             DeliveredCount = 0
-            UncertainCount = 0
+            ReservedOrUncertainCount = 0
             RecentEvents = @()
         }
     }
