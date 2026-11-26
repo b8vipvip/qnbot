@@ -23,6 +23,7 @@ namespace Bot.ChromeNs
         public event EventHandler<ShopRobotReceriveNewMessageEventArgs> EvShopRobotReceriveNewMessage;
         public static HashSet<QN> QNSet { get; set; }
         private static readonly object QNSetLock = new object();
+        private static readonly AsyncLocal<int> ShopOwnerSendHandoffDepth = new AsyncLocal<int>();
         public string QnVersion { get; set; }
 
         private CDPClient cdp;
@@ -210,26 +211,15 @@ namespace Bot.ChromeNs
             return SendTextWithRetryAsync(buyer, text, retryCount, CancellationToken.None);
         }
 
-        public Task<bool> SendTextWithRetryAsync(
+        public async Task<bool> SendTextWithRetryAsync(
             string buyer,
             string text,
             int retryCount,
             CancellationToken cancellationToken,
             Func<bool> preSendGuard = null)
         {
-            return SendTextWithRetryAsyncCore(
-                buyer, text, retryCount, cancellationToken, preSendGuard, 0);
-        }
-
-        private async Task<bool> SendTextWithRetryAsyncCore(
-            string buyer,
-            string text,
-            int retryCount,
-            CancellationToken cancellationToken,
-            Func<bool> preSendGuard,
-            int shopOwnerHandoffDepth)
-        {
             cancellationToken.ThrowIfCancellationRequested();
+            var shopOwnerHandoffDepth = ShopOwnerSendHandoffDepth.Value;
             var scopedShop = ShopSettingsScope.Current;
             var expectedShopKey = scopedShop == null
                 ? string.Empty
@@ -257,8 +247,8 @@ namespace Bot.ChromeNs
                 {
                     var segment = segments[segmentIndex];
                     Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
-                    if (!await SendTextWithRetryAsyncCore(
-                        buyer, segment, retryCount, cancellationToken, preSendGuard, shopOwnerHandoffDepth).ConfigureAwait(false))
+                    if (!await SendTextWithRetryAsync(
+                        buyer, segment, retryCount, cancellationToken, preSendGuard).ConfigureAwait(false))
                         return false;
                     if (segmentIndex + 1 < segments.Count) await Task.Delay(220, cancellationToken);
                 }
@@ -536,17 +526,26 @@ namespace Bot.ChromeNs
                 + ", toSessionRef=" + MyWebSocketServer.DiagnosticRef("session", toClient == null ? string.Empty : toClient.SessionId)
                 + ", buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", buyer));
 
-            var ok = await owner.SendTextWithRetryAsyncCore(
-                buyer, text, retryCount, cancellationToken, preSendGuard, handoffDepth + 1).ConfigureAwait(false);
-            if (!ok && rpa != null && owner.rpa != null)
+            var previousDepth = ShopOwnerSendHandoffDepth.Value;
+            ShopOwnerSendHandoffDepth.Value = handoffDepth + 1;
+            try
             {
-                var reason = owner.rpa.GetSendFailureReason();
-                if (owner.rpa.LastSendWasCancelled)
-                    rpa.SetSendCancellation("同ShopKey权威会话转交", reason);
-                else
-                    rpa.SetSendFailure("同ShopKey权威会话转交", reason);
+                var ok = await owner.SendTextWithRetryAsync(
+                    buyer, text, retryCount, cancellationToken, preSendGuard).ConfigureAwait(false);
+                if (!ok && rpa != null && owner.rpa != null)
+                {
+                    var reason = owner.rpa.GetSendFailureReason();
+                    if (owner.rpa.LastSendWasCancelled)
+                        rpa.SetSendCancellation("同ShopKey权威会话转交", reason);
+                    else
+                        rpa.SetSendFailure("同ShopKey权威会话转交", reason);
+                }
+                return ok;
             }
-            return ok;
+            finally
+            {
+                ShopOwnerSendHandoffDepth.Value = previousDepth;
+            }
         }
 
         private void ReleaseSendGate(ref bool sendGateHeld, DateTime sendGateAcquiredAt, ref long sendGateHeldMs)
