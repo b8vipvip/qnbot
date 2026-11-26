@@ -70,6 +70,13 @@ powershell.exe -NoProfile -File scripts\\Invoke-QnBotAcceptanceDiagnostics.ps1
 
 The report now includes the conditional-advice ledger summary and recent gate/delivery outcomes. It exposes only HMAC-pseudonymized Shop/Buyer/Order/Image/Knowledge/Advice references and fixed reason codes; it does not export raw buyer names, order IDs, image message IDs, chat text, or logs. `delivery_sent` means the client send call was confirmed by the local sender, not that a human buyer has visually acknowledged receipt.
 
+Expected outcome codes:
+- Positive: `evidence_ready` → `advice_authorized` → `delivery_reserved` → `delivery_sent`.
+- Unpaid/unverified: `evidence_rejected / order_unverified_or_not_paid`.
+- Closed/refunded/shipped/delivered: `evidence_rejected / order_not_paid_or_terminal`.
+- Image/product mismatch: `evidence_rejected` or `advice_rejected / knowledge_record_or_image_order_match_failed`.
+- Replay after successful send: `delivery_blocked_duplicate / already_delivered`.
+
 ## Windows package
 
 The branch is based on current `master`, which already contains #504 deterministic HitInfo matching and #505 curated-image short follow-up handling. The Windows release workflow builds the complete `Bin + data` package and intentionally excludes local `params.db`.
