@@ -350,7 +350,8 @@ namespace Bot.ChromeNs
                             KnowledgeV2Semantics.Compact(alias),
                             decision.Query.Normalized,
                             StringComparison.Ordinal));
-                if (match.Score < 0.82d || match.ConfidenceScore < 0.94d
+                var minimumScore = exactAlias ? 0.72d : 0.82d;
+                if (match.Score < minimumScore || match.ConfidenceScore < 0.94d
                     || (!exactAlias && (match.AliasScore < 0.94d
                         || match.PredicateScore < 0.99d || match.IntentScore < 0.99d)))
                     continue;
