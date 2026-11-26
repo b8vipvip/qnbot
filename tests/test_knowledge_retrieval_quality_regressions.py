@@ -71,7 +71,10 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
         service.index("private static bool IsEligibleProductionMatch")
     ]
 
-    assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject)" in resolve
+    assert "ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject, false)" in resolve
+    assert "ResolveWithCuratedImageKnowledgeEvidence" in resolve
+    assert "【已命中本店人工维护的图片知识】" in resolve
+    assert "hasCuratedImageKnowledge" in resolve
     assert "if (message.Length == 0 && !hasEvidence)" in internal
     assert "if (IsMediaPlaceholder(message)) message = string.Empty;" in internal
     assert "if (message.Length > 0)" in internal
@@ -88,8 +91,16 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "query.Entities = (query.Entities ?? new List<string>())" in internal
     assert "query.Subject = string.IsNullOrWhiteSpace(query.Subject)" in internal
     assert "decision.Query = query;" in internal
+    assert "curatedImageEvidence && IsSafeCuratedImageFollowUp(query, message)" in internal
+    assert "private static bool IsSafeCuratedImageFollowUp" in service
+    assert "query.ContextDependent" in service
+    assert "KnowledgeEngineV2Semantics.IsHighRisk(message)" in service
+    assert "你" in service and "看看" in service
 
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
+    assert "KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(" in ocr
+    assert "imageKnowledgeMatch.Description" in ocr
+    assert "var evidenceSubject = imageKnowledgeMatch != null" in ocr
     assert "task.CombinedQuestion" in ocr
     assert "var evidenceText = ocr.Text;" in ocr
     assert "if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))" in ocr

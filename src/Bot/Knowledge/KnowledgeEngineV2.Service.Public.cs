@@ -75,7 +75,7 @@ namespace Bot.Knowledge
 
         public static KnowledgeV2Decision Resolve(string seller, string buyer, string message)
         {
-            return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty);
+            return ResolveInternal(seller, buyer, message, false, string.Empty, string.Empty, false);
         }
 
         // Visual/OCR evidence enriches entity recall without becoming the buyer's question.
@@ -88,7 +88,23 @@ namespace Bot.Knowledge
             string evidenceText,
             string evidenceSubject)
         {
-            return ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject);
+            return ResolveInternal(seller, buyer, message, false, evidenceText, evidenceSubject, false);
+        }
+
+        // A ShopKey-scoped, operator-curated image match may complete a short visual
+        // follow-up such as "你看看". It still requires an approved, normal-risk V2
+        // answer and the existing score/conflict checks; OCR alone never enables this path.
+        public static KnowledgeV2Decision ResolveWithCuratedImageKnowledgeEvidence(
+            string seller,
+            string buyer,
+            string message,
+            string evidenceText,
+            string evidenceSubject)
+        {
+            var hasCuratedImageKnowledge = !string.IsNullOrWhiteSpace(evidenceText)
+                && evidenceText.IndexOf("【已命中本店人工维护的图片知识】", StringComparison.Ordinal) >= 0;
+            return ResolveInternal(
+                seller, buyer, message, false, evidenceText, evidenceSubject, hasCuratedImageKnowledge);
         }
 
         // Simulator-specific safety evaluation: retain every knowledge, conflict,
@@ -96,7 +112,7 @@ namespace Bot.Knowledge
         // Never modify settings or authorize an outbound buyer message here.
         internal static KnowledgeV2Decision ResolveSandbox(string seller, string buyer, string message)
         {
-            return ResolveInternal(seller, buyer, message, true, string.Empty, string.Empty);
+            return ResolveInternal(seller, buyer, message, true, string.Empty, string.Empty, false);
         }
 
         private static KnowledgeV2Decision ResolveInternal(
@@ -105,7 +121,8 @@ namespace Bot.Knowledge
             string message,
             bool sandbox,
             string evidenceText,
-            string evidenceSubject)
+            string evidenceSubject,
+            bool curatedImageEvidence)
         {
             var total = Stopwatch.StartNew();
             var settings = GetSettings(seller);
@@ -261,7 +278,8 @@ namespace Bot.Knowledge
             var sameFactSecond = second != null && string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record), KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal);
             var safeConsensus = HasSafeDirectConsensus(best, productionMatches, query, threshold, minConfidence, highRisk);
             var effectiveMargin = (sameFactSecond && AnswersEquivalent(best.Record.Answer, second.Record.Answer)) || safeConsensus ? Math.Max(margin, 0.12) : margin;
-            var standaloneSafe = IsSafeStandaloneLocalDirect(query, message);
+            var standaloneSafe = IsSafeStandaloneLocalDirect(query, message)
+                || (curatedImageEvidence && IsSafeCuratedImageFollowUp(query, message));
 
             var approvedExact = manualExact != null && object.ReferenceEquals(best, manualExact);
             var approvedSimilar = manualSimilar != null && object.ReferenceEquals(best, manualSimilar);
@@ -365,6 +383,23 @@ namespace Bot.Knowledge
             if (Regex.IsMatch(compact, @"^[?？!！.。]+$")) return false;
             if (Regex.IsMatch(compact, @"(人工|客服|转人工|投诉|不满意|有病|垃圾|骗子|差评|举报|生气|退款|退货|充没|充上没|到账没|付款没|发货没)")) return false;
             return true;
+        }
+
+        private static bool IsSafeCuratedImageFollowUp(KnowledgeV2Query query, string message)
+        {
+            if (query == null || !query.ContextDependent) return false;
+            var compact = KnowledgeEngineV2Semantics.Compact(message);
+            if (compact.Length == 0 || compact.Length > 16
+                || KnowledgeEngineV2Semantics.IsHighRisk(message))
+                return false;
+            if (Regex.IsMatch(compact,
+                @"(人工|客服|转人工|投诉|不满意|有病|垃圾|骗子|差评|举报|生气|退款|退货|充没|充上没|到账没|付款没|发货没)"))
+                return false;
+
+            // Only short image-follow-up utterances are allowed to reuse the current
+            // curated image as evidence. Arbitrary context-dependent text remains fail-closed.
+            return Regex.IsMatch(compact,
+                @"^(?:图片)?(?:你)?(?:看看|看下|看一下|看一看|帮我看看|帮看看|你帮我看看|这个|这种|这类|这张|这页|这个支持吗|这种支持吗|这类能用吗|这个能用吗|支持吗|能用吗|可以吗|对吗)$");
         }
 
         private static bool HasSafeDirectConsensus(KnowledgeV2Match best, List<KnowledgeV2Match> productionMatches, KnowledgeV2Query query, double threshold, double minConfidence, bool highRisk)
