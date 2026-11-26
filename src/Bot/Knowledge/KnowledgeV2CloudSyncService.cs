@@ -365,6 +365,43 @@ namespace Bot.Knowledge
             {
                 if (local == null) continue;
                 var evidenceId = AutoPublishedEvidenceKey(local);
+                var id = (local.Id ?? string.Empty).Trim();
+                KnowledgeV2Record cloud;
+                if (id.Length > 0 && cloudById.TryGetValue(id, out cloud))
+                {
+                    var localDeleted = IsDeleteTombstone(local);
+                    var cloudDeleted = IsDeleteTombstone(cloud);
+                    if (localDeleted && !cloudDeleted)
+                    {
+                        // Explicit user deletion is a delete-wins tombstone. Preserve a
+                        // concurrent remote edit as a disabled review candidate, but never
+                        // leave it active or resurrect it on the deleting device.
+                        AddCandidate(merged, mergedIds, cloud, id);
+                        var tombstone = CloneRecord(local);
+                        var index = merged.IndexOf(cloud);
+                        if (index >= 0) merged[index] = tombstone;
+                        cloudById[id] = tombstone;
+                        var cloudEvidenceId = AutoPublishedEvidenceKey(cloud);
+                        if (cloudEvidenceId.Length > 0) recordsByHumanEvidence[cloudEvidenceId] = tombstone;
+                        if (evidenceId.Length > 0) recordsByHumanEvidence[evidenceId] = tombstone;
+                        continue;
+                    }
+                    if (cloudDeleted && !localDeleted)
+                    {
+                        // A cloud delete is also authoritative. Keep the stale local
+                        // version only as a disabled candidate, never as a live answer.
+                        AddCandidate(merged, mergedIds, local, id);
+                        continue;
+                    }
+                    if (SameRecordContent(cloud, local))
+                    {
+                        MergeRecordMetadata(cloud, local);
+                        continue;
+                    }
+                    AddCandidate(merged, mergedIds, local, id);
+                    continue;
+                }
+
                 KnowledgeV2Record evidenceRecord;
                 if (evidenceId.Length > 0 && recordsByHumanEvidence.TryGetValue(evidenceId, out evidenceRecord))
                 {
@@ -372,19 +409,6 @@ namespace Bot.Knowledge
                         MergeRecordMetadata(evidenceRecord, local);
                     else
                         AddCandidate(merged, mergedIds, local, local.Id);
-                    continue;
-                }
-
-                KnowledgeV2Record cloud;
-                var id = (local.Id ?? string.Empty).Trim();
-                if (id.Length > 0 && cloudById.TryGetValue(id, out cloud))
-                {
-                    if (SameRecordContent(cloud, local))
-                    {
-                        MergeRecordMetadata(cloud, local);
-                        continue;
-                    }
-                    AddCandidate(merged, mergedIds, local, id);
                     continue;
                 }
 
@@ -400,6 +424,12 @@ namespace Bot.Knowledge
                 }
             }
             return merged;
+        }
+
+        private static bool IsDeleteTombstone(KnowledgeV2Record record)
+        {
+            return record != null && !record.Enabled
+                && string.Equals(record.Status ?? string.Empty, "deleted", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string AutoPublishedEvidenceKey(KnowledgeV2Record record)

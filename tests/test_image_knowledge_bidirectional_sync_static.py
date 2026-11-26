@@ -253,3 +253,29 @@ def test_missing_image_queue_head_cannot_starve_later_valid_records():
     assert "if (upserts.Count >= 5 || pendingImageBytes >= 8L * 1024L * 1024L) break;" in request
     assert "pendingImageBytes + bytes.Length > 8L * 1024L * 1024L" in request
     assert request.index("if (upserts.Count >= 5") < request.index("File.ReadAllBytes")
+
+
+def test_duplicate_image_conflict_rekeys_atomically_without_deleting_local_file():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    helper = read("src/BotLib/Db/Sqlite/SQLiteHelper.cs")
+    apply = service.split("public static void ApplyCloudSyncResponse", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    rekey = service.split("private static void RekeyLocalDuplicateForCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudUpsert", 1
+    )[0]
+    upsert = service.split("private static void ApplyCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudDelete", 1
+    )[0]
+    assert "RemoveLocalDuplicate" not in service
+    assert "ApplyCloudUpsert(shop, seller, data, duplicateLocalId)" in apply
+    assert "RekeyLocalDuplicateForCloudUpsert(" in upsert
+    assert upsert.index("ComputeSha256(bytes)") < upsert.index("RekeyLocalDuplicateForCloudUpsert(")
+    assert upsert.index("VisionImageResolver.DetectMime(bytes)") < upsert.index("RekeyLocalDuplicateForCloudUpsert(")
+    assert "DbHelper.Db.RunInTransaction" in rekey
+    assert "update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=?" in rekey
+    assert "delete from VisualImageKnowledgeSyncTombstone" in rekey
+    assert "local.ImagePath" in rekey
+    assert "TryDeleteManagedImage" not in rekey
+    assert "public void RunInTransaction(Action action)" in helper
+    assert "conn.RunInTransaction(action)" in helper

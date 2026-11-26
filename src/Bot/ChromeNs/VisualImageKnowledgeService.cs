@@ -390,8 +390,12 @@ namespace Bot.ChromeNs
                 var cloudId = Clean((string)data["id"], 80);
                 if (duplicateLocalId.Length > 0 && cloudId.Length > 0
                     && !string.Equals(duplicateLocalId, cloudId, StringComparison.Ordinal))
-                    RemoveLocalDuplicate(shop, seller, duplicateLocalId);
-                if (string.Equals(kind, "delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.Equals(kind, "upsert", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("图片知识重复ID冲突只能由有效云端upsert收敛。");
+                    ApplyCloudUpsert(shop, seller, data, duplicateLocalId);
+                }
+                else if (string.Equals(kind, "delete", StringComparison.OrdinalIgnoreCase))
                     ApplyCloudDelete(shop, seller, data);
                 else
                     ApplyCloudUpsert(shop, seller, data);
@@ -408,21 +412,50 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void RemoveLocalDuplicate(ShopContext shop, string seller, string id)
+        private static void RekeyLocalDuplicateForCloudUpsert(
+            ShopContext shop, string seller, string localId, string cloudId, string imageSha256, long revision)
         {
+            if (string.IsNullOrWhiteSpace(localId) || string.IsNullOrWhiteSpace(cloudId)
+                || string.Equals(localId, cloudId, StringComparison.Ordinal)) return;
             lock (Sync)
             {
                 var local = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
-                    id, shop.ShopKey, seller).FirstOrDefault();
+                    localId, shop.ShopKey, seller).FirstOrDefault();
                 if (local == null) return;
-                DbHelper.Db.Execute(
-                    "delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
-                    id, shop.ShopKey, seller);
-                TryDeleteManagedImage(local.ImagePath, GetImageDirectory(shop));
+                if (!string.Equals(local.ImageSha256, imageSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("图片知识冲突ID的本地图片哈希与云端规范记录不一致；保留本地文件和记录，等待人工复核。");
+
+                var globalCloudId = Select("where EntityId=? limit 1", cloudId).FirstOrDefault();
+                if (globalCloudId != null)
+                {
+                    if (!string.Equals(globalCloudId.ShopKey, shop.ShopKey, StringComparison.Ordinal)
+                        || !string.Equals(globalCloudId.Seller, seller, StringComparison.Ordinal))
+                        throw new InvalidOperationException("云端规范图片知识ID已被其他店铺或卖家占用，拒绝覆盖。");
+                    throw new InvalidOperationException("本地同时存在冲突ID和云端规范ID；为避免覆盖任一图片知识，已停止自动合并。");
+                }
+
+                // Keep the existing ImagePath and SyncDirty metadata. The old file remains
+                // owned by the row until the canonical row has been saved successfully.
+                // If the following file write or cloud apply fails, the re-keyed row still
+                // contains the complete local image and can be retried with the new ID.
+                DbHelper.Db.RunInTransaction(() =>
+                {
+                    var changed = DbHelper.Db.Execute(
+                        "update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
+                        cloudId, revision, localId, shop.ShopKey, seller);
+                    if (changed != 1)
+                        throw new InvalidOperationException("图片知识冲突ID原子迁移未更新唯一记录；已回滚本次迁移。");
+                    DbHelper.Db.Execute(
+                        "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
+                        localId, shop.ShopKey, seller);
+                    DbHelper.Db.Execute(
+                        "delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
+                        cloudId, shop.ShopKey, seller);
+                });
             }
         }
 
-        private static void ApplyCloudUpsert(ShopContext shop, string seller, JObject data)
+        private static void ApplyCloudUpsert(ShopContext shop, string seller, JObject data, string duplicateLocalId = null)
         {
             var id = Clean((string)data["id"], 80);
             var base64 = (string)data["image_base64"] ?? string.Empty;
@@ -446,6 +479,11 @@ namespace Bot.ChromeNs
             var cloudOcrText = Clean((string)data["ocr_text"], MaxOcrChars);
             var cloudDescription = Clean((string)data["description"], MaxDescriptionChars);
             var cloudEnabled = data.Value<bool?>("enabled") ?? true;
+            // Validate the entire cloud payload (base64, byte limit, SHA-256 and MIME)
+            // before touching the local identity. A malformed response must never delete
+            // or re-key the only durable copy of a local image.
+            RekeyLocalDuplicateForCloudUpsert(
+                shop, seller, Clean(duplicateLocalId, 80), id, sha, revision);
             var root = GetImageDirectory(shop);
             Directory.CreateDirectory(root);
             var temp = Path.Combine(root, ".sync-" + Guid.NewGuid().ToString("N") + ExtensionForMime(mime));

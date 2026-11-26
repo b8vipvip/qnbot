@@ -410,7 +410,8 @@ namespace Bot.ChromeNs
         {
             if (_state == null) _state = new LedgerState();
             if (_state.Records == null) _state.Records = new List<ConfirmationRecord>();
-            _state.Records.RemoveAll(x => x == null || x.KeepUntil <= now);
+            _state.Records.RemoveAll(x => x == null
+                || (x.ResolvedAt.HasValue && x.KeepUntil <= now));
         }
 
         private static bool IsAtCapacityLocked()
