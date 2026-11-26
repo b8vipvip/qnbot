@@ -24,6 +24,8 @@ def test_reply_send_waits_for_same_shop_authoritative_cdp_rebind():
     assert "client.ShopKey" in helper
     assert "server.IsAuthoritativeShopSession(expectedShopKey, client.SessionId)" in helper
     assert "Task.Delay(Math.Min(150, remainingMs), cancellationToken)" in helper
+    assert "FindAuthoritativeShopSendOwner(expectedShopKey)" in helper
+    assert "已阻止跨店发送并等待同店权威会话接管" in helper
     assert "QN.CurQN" not in helper
     assert "已阻止跨店发送" in helper
 
