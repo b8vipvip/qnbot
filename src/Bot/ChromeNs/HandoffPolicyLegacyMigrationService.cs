@@ -38,9 +38,16 @@ namespace Bot.ChromeNs
             catch { return; }
             foreach (var profile in profiles.Where(x => x != null))
             {
-                var shop = profile.ToContext();
-                if (File.Exists(GetMarkerPath(shop))) continue;
-                await TryMigrateAsync(shop);
+                try
+                {
+                    var shop = profile.ToContext();
+                    if (shop == null || File.Exists(GetMarkerPath(shop))) continue;
+                    await TryMigrateAsync(shop);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("旧版转人工策略迁移跳过异常店铺并继续：" + ex.Message, 10);
+                }
             }
         }
 
