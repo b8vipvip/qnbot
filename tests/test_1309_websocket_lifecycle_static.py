@@ -206,3 +206,19 @@ def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_befo
     assert "staleServer as IDisposable" in stale
     assert stale.index("staleServer.Stop();") < stale.index("ReleaseStaleSessions(")
     assert stale.index("ReleaseStaleSessions(") < stale.index("_webSocketServer = null;")
+
+
+def test_failed_websocket_setup_and_start_dispose_unpublished_server_instances():
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    start = server.split("public void Start()", 1)[1].split(
+        "private async Task RefreshRpaAfterAuthoritativeSessionAsync", 1
+    )[0]
+    helper = server.split("private static void StopAndDisposeWebSocketServer", 1)[1].split(
+        "public void Start()", 1
+    )[0]
+    assert "server.Stop();" in helper
+    assert "server as IDisposable" in helper
+    assert "StopAndDisposeWebSocketServer(webSocket, \"setup failed\")" in start
+    assert "StopAndDisposeWebSocketServer(webSocket, \"start failed\")" in start
+    assert "StopAndDisposeWebSocketServer(webSocket, \"startup exception\")" in start
+    assert "WebSocketServer webSocket = null;" in start
