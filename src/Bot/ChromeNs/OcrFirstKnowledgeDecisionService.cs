@@ -242,19 +242,22 @@ namespace Bot.ChromeNs
                         evidenceText += Environment.NewLine + imageKnowledgeMatch.ContextText;
                     if (visualMatch != null && !string.IsNullOrWhiteSpace(visualMatch.ContextText))
                         evidenceText += Environment.NewLine + visualMatch.ContextText;
+                    var evidenceSubject = imageKnowledgeMatch != null
+                        ? imageKnowledgeMatch.Description
+                        : (visualMatch == null ? string.Empty : visualMatch.AppName);
                     decision = imageKnowledgeMatch == null
                         ? KnowledgeEngineV2Service.ResolveWithEvidence(
                             knowledgeSeller,
                             task.BuyerNick,
                             question,
                             evidenceText,
-                            visualMatch == null ? string.Empty : visualMatch.AppName)
+                            evidenceSubject)
                         : KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
                             knowledgeSeller,
                             task.BuyerNick,
                             question,
                             evidenceText,
-                            visualMatch == null ? string.Empty : visualMatch.AppName);
+                            evidenceSubject);
                 }
             }
             catch (OperationCanceledException)
