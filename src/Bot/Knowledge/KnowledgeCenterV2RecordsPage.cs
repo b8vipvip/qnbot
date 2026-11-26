@@ -1,4 +1,5 @@
 using System;
+using Bot.ChromeNs;
 using Bot.ShopScope;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
