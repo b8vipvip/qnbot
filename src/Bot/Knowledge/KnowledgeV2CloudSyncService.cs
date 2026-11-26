@@ -183,6 +183,55 @@ namespace Bot.Knowledge
                             throw new InvalidOperationException("Knowledge V2 云端 records 无效。");
                         var cloudFingerprint=Fingerprint(records);
                         var snapshotAcknowledged=string.Equals(cloudFingerprint,localFingerprint,StringComparison.Ordinal);
+                        var syncWarning = root["sync_warning"] as JObject;
+                        var missingTombstones = syncWarning != null
+                            && string.Equals((string)syncWarning["code"], "missing_tombstones", StringComparison.Ordinal);
+
+                        if(missingTombstones && cloudRevision == state.Revision)
+                        {
+                            // The server refused a Windows full-snapshot replacement because
+                            // one or more previously-clouded IDs disappeared without a delete
+                            // tombstone. Reconcile from the authoritative cloud snapshot and
+                            // preserve local-only facts as disabled candidates. Never retry the
+                            // incomplete snapshot as a destructive overwrite.
+                            var latestLocal = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                            var latestFingerprint = Fingerprint(latestLocal);
+                            var merged = MergeCloudAndLocal(records, latestLocal, preserveLocalOnly: true);
+                            var mergedFingerprint = Fingerprint(merged);
+                            if(!string.Equals(mergedFingerprint, latestFingerprint, StringComparison.Ordinal))
+                            {
+                                var backup = Backup(shop, latestLocal, cloudRevision);
+                                if(!KnowledgeEngineV2Repository.TryReplaceAllIfUnchanged(
+                                    shop.DisplayName, latestFingerprint, merged))
+                                {
+                                    lock(state.SyncRoot) state.LastStatus = "local_changed_during_tombstone_recovery";
+                                    Log.Info("Knowledge V2检测到本地快照缺少云端记录且本地同时变化，本轮不覆盖并等待重试: shopRef="
+                                        + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey));
+                                    return;
+                                }
+                                Log.Info("Knowledge V2已拒绝无墓碑删除并从云端恢复缺失记录: shopRef="
+                                    + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
+                                    + ", missing_count=" + (int?)syncWarning["missing_count"]
+                                    + ", cloud_records=" + records.Count
+                                    + ", merged_records=" + merged.Count
+                                    + ", backup=" + Path.GetFileName(backup));
+                            }
+
+                            PersistState(shop, state, cloudRevision, cloudFingerprint);
+                            var recoveredLocal = KnowledgeEngineV2Repository.LoadAll(shop.DisplayName);
+                            var recoveredFingerprint = Fingerprint(recoveredLocal);
+                            lock(state.SyncRoot)
+                            {
+                                state.LastLocalRecordCount = recoveredLocal.Count;
+                                state.LastCloudRecordCount = records.Count;
+                                state.LastLocalFingerprintPrefix = FingerprintPrefix(recoveredFingerprint);
+                                state.LastCloudFingerprintPrefix = FingerprintPrefix(cloudFingerprint);
+                                state.LastConverged = string.Equals(recoveredFingerprint, cloudFingerprint, StringComparison.Ordinal);
+                                state.LastSuccessUtc = DateTime.UtcNow;
+                                state.LastStatus = state.LastConverged ? "synced" : "merge_pending_push";
+                            }
+                            return;
+                        }
 
                         if(cloudRevision<state.Revision)
                         {
