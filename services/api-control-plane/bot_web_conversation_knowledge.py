@@ -769,6 +769,17 @@ def runtime_image_knowledge_sync(
                     conflicts.append({"kind":"upsert","item":_image_row_payload(current, True)})
                 elif tombstone:
                     conflicts.append({"kind":"delete","item":_image_tombstone_payload(tombstone)})
+                else:
+                    # The client may have an older non-zero base revision even though
+                    # its local ID no longer exists in this restored cloud database.
+                    # Return the duplicate's canonical ID mapping so the Windows client
+                    # can re-key by content hash instead of hitting its unique index.
+                    duplicate = conn.execute(
+                        "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND image_sha256=? AND id<>?",
+                        (client_id, data.shop_key, digest, image_id),
+                    ).fetchone()
+                    if duplicate:
+                        conflicts.append({"kind":"upsert","local_id":image_id,"item":_image_row_payload(duplicate, True)})
                 continue
             duplicate = conn.execute(
                 "SELECT * FROM bot_web_image_knowledge WHERE client_id=? AND shop_key=? AND image_sha256=? AND id<>?",
