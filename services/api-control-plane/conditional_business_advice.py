@@ -38,6 +38,14 @@ class ConditionalAdviceCompleteInput(BaseModel):
     outcome: str
 
 
+class ConditionalAdviceRenewInput(BaseModel):
+    buyer: str
+    order_id: str
+    advice_key: str
+    lease_token: str
+    lease_seconds: int = 180
+
+
 class ConditionalAdviceResolveInput(BaseModel):
     scope_hash: str
     confirmed_delivered: bool
@@ -291,6 +299,50 @@ def runtime_claim(
         }
 
 
+@router.post("/api/runtime/v1/bot-web/conditional-business-advice/renew")
+def runtime_renew(
+    payload: ConditionalAdviceRenewInput,
+    request: Request,
+    x_shop_key: str = Header(default=""),
+) -> dict[str, Any]:
+    client_id, shop_key = _runtime_scope(request, x_shop_key)
+    scope_hash, _, _, _ = _scope_for_payload(shop_key, payload.buyer, payload.order_id, payload.advice_key)
+    lease_token = _clean(payload.lease_token, "lease_token", 256)
+    lease_seconds = int(payload.lease_seconds)
+    if lease_seconds < 30 or lease_seconds > 600:
+        raise HTTPException(status_code=400, detail="lease_seconds 必须在 30 到 600 秒之间")
+    token_hash = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+    now_dt = _utc_now()
+    now = _iso(now_dt)
+    expires = _iso(now_dt + timedelta(seconds=lease_seconds))
+    with _cp.db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _mark_expired_reservations_uncertain(conn, shop_key, now_dt, client_id)
+        row = conn.execute(
+            """SELECT state,lease_token_hash,reason_code
+               FROM bot_conditional_business_advice WHERE shop_key=? AND scope_hash=?""",
+            (shop_key, scope_hash),
+        ).fetchone()
+        if row is None:
+            return {"ok": True, "renewed": False, "reason": "lease_not_found"}
+        stored_hash = str(row["lease_token_hash"] or "")
+        if not stored_hash or not hmac.compare_digest(stored_hash, token_hash):
+            return {"ok": True, "renewed": False, "reason": "lease_not_owned"}
+        state = str(row["state"] or "")
+        if state == "uncertain" and str(row["reason_code"] or "") == "lease_expired":
+            state = "reserved"
+        elif state != "reserved":
+            return {"ok": True, "renewed": False, "reason": "lease_not_active"}
+        conn.execute(
+            """UPDATE bot_conditional_business_advice
+               SET state='reserved',lease_expires_at=?,updated_at=?,reason_code=''
+               WHERE shop_key=? AND scope_hash=?""",
+            (expires, now, shop_key, scope_hash),
+        )
+        _append_event(conn, shop_key, scope_hash, client_id, "lease_renewed", "reserved", now)
+        return {"ok": True, "renewed": True, "state": "reserved", "lease_expires_at": expires}
+
+
 @router.post("/api/runtime/v1/bot-web/conditional-business-advice/complete")
 def runtime_complete(
     payload: ConditionalAdviceCompleteInput,
@@ -399,12 +451,16 @@ def runtime_resolve(
         conn.execute("BEGIN IMMEDIATE")
         _mark_expired_reservations_uncertain(conn, shop_key, now_dt, client_id)
         row = conn.execute(
-            "SELECT state FROM bot_conditional_business_advice WHERE shop_key=? AND scope_hash=?",
+            "SELECT state,reason_code,updated_at FROM bot_conditional_business_advice WHERE shop_key=? AND scope_hash=?",
             (shop_key, scope_hash),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="条件性建议核对记录不存在")
         current_state = str(row["state"] or "")
+        if str(row["reason_code"] or "") == "lease_expired":
+            expired_at = _parse_iso(str(row["updated_at"] or ""))
+            if expired_at is not None and now_dt - expired_at < timedelta(minutes=2):
+                raise HTTPException(status_code=409, detail="发送租约刚过期，仍在安全冷却期，请稍后再核对")
         if current_state == "delivered" and payload.confirmed_delivered:
             return {"ok": True, "state": "delivered", "reason": "operator_confirmed_delivered", "replayed": True}
         if current_state == "released" and not payload.confirmed_delivered:
