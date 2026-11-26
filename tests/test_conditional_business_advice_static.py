@@ -239,3 +239,36 @@ def test_cancelled_retry_does_not_release_a_key_after_an_earlier_send_may_have_s
         assert "CompleteDelivery(" in source
         assert "!conditionalAdviceSendMayHaveStarted" in source
         assert "!conditionalAdviceSendMayHaveStarted" in source
+
+
+def test_uncertain_delivery_has_an_explicit_operator_reconciliation_path():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs")
+    pending = source[
+        source.index("public static List<ConditionalBusinessAdviceReconciliationItem> GetPendingReconciliationRecords"):
+        source.index("public static bool ResolveUncertainDelivery")
+    ]
+    resolve = source[
+        source.index("public static bool ResolveUncertainDelivery"):
+        source.index("public static void CompleteDelivery")
+    ]
+    assert "x.DeliveryUncertain" in pending
+    assert "x.DeliveredAt == DateTime.MinValue" in pending
+    assert "confirmedDelivered" in resolve
+    assert "delivery_reconciled_delivered" in source
+    assert "delivery_reconciled_not_delivered" in source
+    assert "条件性建议发送核对" in ui
+    assert "确认已发送" in ui
+    assert "确认未发送并允许重试" in ui
+    assert "请先核对千牛中该买家的真实聊天记录" in ui
+
+
+def test_ledger_cleanup_never_drops_uncertain_or_delivered_dedupe_markers():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    cleanup = source[
+        source.index("private static void CleanupLedger"):
+        source.index("private static void AppendDiagnosticEvent")
+    ]
+    assert "x.DeliveryUncertain" in cleanup
+    assert "x.DeliveredAt == DateTime.MinValue" in cleanup
+    assert "Take(10000)" not in cleanup
