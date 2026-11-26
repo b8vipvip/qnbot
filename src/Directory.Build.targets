@@ -55,6 +55,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\CommerceReplyAuthorityService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\CommerceReplyAuthorityService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConditionalBusinessAdviceService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConditionalBusinessAdviceService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\CommerceKnowledgeLearningBridge.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\CommerceKnowledgeLearningBridge.cs" />
   </ItemGroup>
