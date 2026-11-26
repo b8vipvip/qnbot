@@ -301,3 +301,25 @@ def test_image_delete_tombstone_is_atomic_and_survives_duplicate_id_cloud_restor
     assert "delete from VisualImageKnowledgeEntry" in reconcile
     assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision, cloudUpdatedAt)" in service
     assert "add column ImageSha256 text not null default ''" in service
+
+
+def test_image_save_and_remote_delete_commit_row_and_tombstone_as_single_sqlite_transactions():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    save = service.split("public static VisualImageKnowledgeEntry Save", 1)[1].split(
+        "public static bool Delete", 1
+    )[0]
+    delete = service.split("public static bool Delete", 1)[1].split(
+        "public static JObject BuildCloudSyncRequest", 1
+    )[0]
+    remote_delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "DbHelper.Db.RunInTransaction(conn =>" in save
+    assert "conn.InsertOrReplace(entry)" in save
+    assert "delete from VisualImageKnowledgeSyncTombstone" in save
+    assert "DbHelper.Db.RunInTransaction(conn =>" in delete
+    assert "insert or replace into VisualImageKnowledgeSyncTombstone" in delete
+    assert "delete from VisualImageKnowledgeEntry" in delete
+    assert "DbHelper.Db.RunInTransaction(conn =>" in remote_delete
+    assert "ImageSha256" in remote_delete
+    assert "TryDeleteManagedImage(old.ImagePath" in remote_delete
