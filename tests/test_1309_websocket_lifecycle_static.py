@@ -193,7 +193,7 @@ def test_listener_restart_releases_both_session_generation_dictionaries():
 
 
 def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_before_rebuild():
-    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
     start = server.split("public void Start()", 1)[1].split(
         "private bool IsLoopbackListenerActive", 1
     )[0]
@@ -209,7 +209,7 @@ def test_listener_disappearance_stops_and_disposes_old_supersocket_instance_befo
 
 
 def test_failed_websocket_setup_and_start_dispose_unpublished_server_instances():
-    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    server = text("src/Bot/ChromeNs/MyWebSocketServer.cs")
     start = server.split("public void Start()", 1)[1].split(
         "private async Task RefreshRpaAfterAuthoritativeSessionAsync", 1
     )[0]
