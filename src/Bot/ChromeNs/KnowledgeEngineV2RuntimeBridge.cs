@@ -310,6 +310,14 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.HandledResult();
             }
             answer = dedup.Answer;
+            if (!string.IsNullOrWhiteSpace(decision.ConditionalAdviceKey)
+                && !ConditionalBusinessAdviceService.IsSafeRefundSuggestionText(answer))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：条件性售后建议最终话术未通过安全复核");
+                lease.MarkCompleted("conditional_advice_final_text_unsafe");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                return KnowledgeV2RuntimeResult.HandledResult();
+            }
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
                 || !lease.MarkReady("knowledge_v2_answer_materialized"))
             {
