@@ -727,7 +727,7 @@ namespace Bot.ChromeNs
             }
 
             if (!TryReserveLocalDelivery(shopKey, seller, buyer, orderId, adviceKey,
-                imageMessageKey, imageKnowledgeId, out reason))
+                imageMessageKey, imageKnowledgeId, distributedLease.ScopeHash, out reason))
             {
                 CompleteDistributedDelivery(shopKey, buyer, orderId, adviceKey,
                     distributedLease, "cancelled_before_send");
@@ -756,6 +756,7 @@ namespace Bot.ChromeNs
             string adviceKey,
             string imageMessageKey,
             string imageKnowledgeId,
+            string distributedScopeHash,
             out string reason)
         {
             reason = string.Empty;
@@ -832,6 +833,7 @@ namespace Bot.ChromeNs
                 }
                 // Active reservations are distinct from uncertain outcomes. If the
                 // process dies, expiry converts the reservation to manual review.
+                record.DistributedScopeHash = distributedScopeHash ?? string.Empty;
                 record.ReservedUntil = DateTime.Now.AddSeconds(DistributedLeaseSeconds + 30);
                 record.DeliveryUncertain = false;
                 record.UpdatedAt = DateTime.Now;
