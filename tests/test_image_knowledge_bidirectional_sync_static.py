@@ -402,3 +402,25 @@ def test_image_sync_rejects_invalid_revision_timestamp_and_enabled_metadata():
     assert "if not isinstance(enabled_value, bool)" in sync
     assert "1 if enabled_value else 0" in sync
     assert "max(0, int(item.get(\"base_revision\") or 0))" not in sync
+
+
+def test_pending_image_delete_wins_without_comparing_unsynchronized_device_clocks():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    reconcile = service.split("private static bool ReconcileDeletedImageByHash", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    upsert = service.split("private static void ApplyCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudDelete", 1
+    )[0]
+    delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "pendingTombstones = tombstones.Where(x => x.SyncDirty).ToList()" in reconcile
+    assert "if (pendingTombstones.Count == 0)" in reconcile
+    assert "mergedDeletedAt = pendingTombstones.Max" in reconcile
+    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision)" in upsert
+    assert "localDelete != null && localDelete.SyncDirty" in upsert
+    assert "localDelete.DeletedAtTicks > cloudUpdatedAt" not in upsert
+    assert "localDelete != null && localDelete.SyncDirty" in delete
+    assert "localDelete.DeletedAtTicks > deletedAt" not in delete
+    assert "regardless of device clock skew" in reconcile

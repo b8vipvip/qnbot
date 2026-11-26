@@ -477,7 +477,7 @@ namespace Bot.ChromeNs
 
         private static bool ReconcileDeletedImageByHash(
             ShopContext shop, string seller, string cloudId, string imageSha256,
-            long revision, long cloudUpdatedAt)
+            long revision)
         {
             lock (Sync)
             {
@@ -485,8 +485,12 @@ namespace Bot.ChromeNs
                     "where ShopKey=? and Seller=? and ImageSha256=? order by DeletedAtTicks desc",
                     shop.ShopKey, seller, imageSha256).Where(x => x != null).ToList();
                 if (tombstones.Count == 0) return false;
-                var latest = tombstones.OrderByDescending(x => x.DeletedAtTicks).First();
-                if (latest.DeletedAtTicks <= cloudUpdatedAt)
+                // Wall clocks on two Windows devices are not a safe conflict-ordering
+                // primitive. An unacknowledged local tombstone is a delete-wins barrier;
+                // only an already-acknowledged tombstone may be superseded by a later
+                // cloud upsert (an explicit restore).
+                var pendingTombstones = tombstones.Where(x => x.SyncDirty).ToList();
+                if (pendingTombstones.Count == 0)
                 {
                     DbHelper.Db.RunInTransaction(conn =>
                     {
@@ -496,6 +500,7 @@ namespace Bot.ChromeNs
                     });
                     return false;
                 }
+                var latest = pendingTombstones.OrderByDescending(x => x.DeletedAtTicks).First();
 
                 var globalCloudId = Select("where EntityId=? limit 1", cloudId).FirstOrDefault();
                 if (globalCloudId != null
@@ -521,7 +526,7 @@ namespace Bot.ChromeNs
                 }
                 var canonicalTombstone = tombstones.FirstOrDefault(x =>
                     string.Equals(x.EntityId, cloudId, StringComparison.Ordinal));
-                var mergedDeletedAt = tombstones.Max(x => x.DeletedAtTicks);
+                var mergedDeletedAt = pendingTombstones.Max(x => x.DeletedAtTicks);
                 var imageRoot = GetImageDirectory(shop);
                 DbHelper.Db.RunInTransaction(conn =>
                 {
@@ -639,7 +644,7 @@ namespace Bot.ChromeNs
             // Validate the entire cloud payload (base64, byte limit, SHA-256 and MIME)
             // before touching the local identity. A malformed response must never delete
             // or re-key the only durable copy of a local image.
-            if (ReconcileDeletedImageByHash(shop, seller, id, sha, revision, cloudUpdatedAt))
+            if (ReconcileDeletedImageByHash(shop, seller, id, sha, revision))
                 return;
             RekeyLocalDuplicateForCloudUpsert(
                 shop, seller, Clean(duplicateLocalId, 80), id, sha, revision);
@@ -669,9 +674,9 @@ namespace Bot.ChromeNs
                 }
                 var localDelete = SelectTombstones("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     id, shop.ShopKey, seller).FirstOrDefault();
-                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > cloudUpdatedAt)
+                if (localDelete != null && localDelete.SyncDirty)
                 {
-                    // A delete performed during the upload wins over the older in-flight upsert.
+                    // An unacknowledged delete wins regardless of device clock skew.
                     DbHelper.Db.Execute(
                         "update VisualImageKnowledgeSyncTombstone set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         revision, id, shop.ShopKey, seller);
@@ -733,9 +738,9 @@ namespace Bot.ChromeNs
                         revision, id, shop.ShopKey, seller);
                     return;
                 }
-                if (localDelete != null && localDelete.SyncDirty && localDelete.DeletedAtTicks > deletedAt)
+                if (localDelete != null && localDelete.SyncDirty)
                 {
-                    // Preserve a newer local delete; its next upload will acknowledge this base revision.
+                    // Preserve an unacknowledged local delete regardless of device clock skew.
                     DbHelper.Db.Execute(
                         "update VisualImageKnowledgeSyncTombstone set CloudRevision=? where EntityId=? and ShopKey=? and Seller=?",
                         revision, id, shop.ShopKey, seller);
