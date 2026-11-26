@@ -115,3 +115,23 @@ def test_ocr_result_and_curated_image_knowledge_are_persisted_against_exact_buye
     assert "Empty input must not erase the already persisted message-to-image" in learning
     assert 'Status = withdrawn ? "图片已撤回" : "仅OCR证据"' in learning
     assert 'old.Status = "等待人工接待结束"' in learning
+
+
+def test_visual_learning_restart_recovers_all_pending_observations_within_retention():
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    init = learning.split("private static void EnsureInitialized()", 1)[1].split(
+        "private static void Schedule", 1
+    )[0]
+    resume = learning.split("private static bool ResumePending()", 1)[1].split(
+        "private static void EnsureSchema", 1
+    )[0]
+    assert "InitSync" in init
+    assert "Volatile.Read(ref _initialized)" in init
+    assert "if (!ResumePending()) return;" in init
+    assert "Volatile.Write(ref _initialized, 1)" in init
+    assert "Cleanup();" in resume
+    assert "DateTime.Now.AddDays(-ObservationRetentionDays).Ticks" in resume
+    assert "limit \" + MaxObservations" in resume
+    assert "ObservedAtTicks >= ?" not in resume
+    assert "AddDays(-1)" not in resume
+    assert "观察时间无效，需人工复核" in resume

@@ -73,6 +73,7 @@ namespace Bot.ChromeNs
         public const double MatchThreshold = 0.74;
 
         private static readonly object DbSync = new object();
+        private static readonly object InitSync = new object();
         private static readonly ConcurrentDictionary<string, Timer> Timers =
             new ConcurrentDictionary<string, Timer>(StringComparer.Ordinal);
         private static int _initialized;
@@ -428,9 +429,17 @@ namespace Bot.ChromeNs
 
         private static void EnsureInitialized()
         {
-            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EnsureSchema();
-            ResumePending();
+            if (Volatile.Read(ref _initialized) != 0) return;
+            lock (InitSync)
+            {
+                if (Volatile.Read(ref _initialized) != 0) return;
+                // Do not publish the initialized flag until schema creation and pending
+                // recovery both complete. A transient SQLite failure must be retryable
+                // on the next image/learning event rather than disabling recovery forever.
+                EnsureSchema();
+                if (!ResumePending()) return;
+                Volatile.Write(ref _initialized, 1);
+            }
         }
 
         private static void Schedule(string id, TimeSpan due)
@@ -628,15 +637,20 @@ namespace Bot.ChromeNs
                 .OfType<VisualKnowledgeEntryEntity>().ToList();
         }
 
-        private static void ResumePending()
+        private static bool ResumePending()
         {
             try
             {
+                // Cleanup uses the same 30-day retention as the observation store. Then
+                // recover every still-retained pending item: limiting this to the last
+                // 24 hours or 200 rows stranded candidates after a long outage or a busy shop.
+                Cleanup();
                 List<VisualKnowledgeObservationEntity> pending;
                 lock (DbSync)
                 {
-                    pending = SelectObservations("where Status = ? and ObservedAtTicks >= ? order by UpdatedAtTicks desc limit 200",
-                        "等待人工接待结束", DateTime.Now.AddDays(-1).Ticks);
+                    pending = SelectObservations(
+                        "where Status = ? and UpdatedAtTicks >= ? order by UpdatedAtTicks desc limit " + MaxObservations,
+                        "等待人工接待结束", DateTime.Now.AddDays(-ObservationRetentionDays).Ticks);
                 }
                 foreach (var item in pending)
                 {
@@ -653,11 +667,24 @@ namespace Bot.ChromeNs
                         catch { continue; }
                     }
                     BackfillLegacyShopRows(item.ShopKey, item.Seller);
-                    var due = TimeSpan.FromMinutes(BuyerQuietMinutes) - (DateTime.Now - FromTicks(item.ObservedAtTicks));
+                    var observedAt = FromTicks(item.ObservedAtTicks);
+                    if (observedAt == DateTime.MinValue)
+                    {
+                        // Never learn from an observation whose source timestamp is corrupt:
+                        // doing so could associate an unrelated recent human reply with it.
+                        UpdateObservationStatus(item, "观察时间无效，需人工复核", string.Empty);
+                        continue;
+                    }
+                    var due = TimeSpan.FromMinutes(BuyerQuietMinutes) - (DateTime.Now - observedAt);
                     Schedule(item.EntityId, due > TimeSpan.Zero ? due : TimeSpan.FromSeconds(5));
                 }
+                return true;
             }
-            catch (Exception ex) { Log.ErrorWithMaxCount("恢复视觉知识学习任务失败：" + ex.Message, 10); }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("恢复视觉知识学习任务失败，初始化将保留为可重试状态：" + ex.Message, 10);
+                return false;
+            }
         }
 
         private static void EnsureSchema()
