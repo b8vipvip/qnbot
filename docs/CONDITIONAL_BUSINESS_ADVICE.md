@@ -53,9 +53,11 @@ No local conditional refund suggestion is sent when:
 
 The current image must be the newest same-shop/same-buyer image observation and must still match the active image-knowledge rule; a newer unmatched or withdrawn image invalidates an older match. The image message must also be the exact current OCR message when the decision is made in the image path.
 
-A separate cross-process delivery ledger reserves the advice key by ShopKey + seller + buyer + order ID + knowledge record ID. Confirmed delivery is recorded; uncertain delivery (including a process crash after reservation) is held for manual reconciliation instead of being sent again. The Knowledge V2 records page exposes **条件性建议发送核对** for an operator to inspect the actual Qianniu conversation and explicitly mark the record delivered or not delivered. Releasing a not-delivered reservation does not bypass any evidence check on the next attempt.
+A two-layer delivery ledger protects the advice key by ShopKey + buyer + order ID + knowledge record ID. The Windows ledger coordinates local processes; the control plane stores a second atomic lease keyed by ShopKey plus a server-HMAC of the buyer/order/advice scope. The API uses SQLite `BEGIN IMMEDIATE`, encrypts display identifiers at rest, and allows different Bot client tokens bound to the same ShopKey to share the same barrier.
 
-This ledger coordinates processes under the same Windows user profile; cross-device exactly-once delivery still depends on a single authoritative shop runtime and is not claimed as globally synchronized. The reconciliation window displays this limitation explicitly.
+A device must acquire the server lease before sending and renew it at the final pre-send guard. A delivered result becomes a permanent dedupe marker; a confirmed pre-send cancellation releases the lease; an ambiguous result or an expired process lease becomes an indefinite manual-review barrier. An expired lease receives a two-minute safety grace period before an operator may resolve it. The Knowledge V2 records page merges local and server pending records and exposes **条件性建议发送核对**. Releasing a not-delivered reservation does not bypass any evidence check on the next attempt.
+
+Cross-device coordination requires every device to use the same control-plane endpoint and its shared persistent database. If the control plane is unavailable or the distributed lease cannot be acquired/renewed, the conditional recommendation is fail-closed and is not sent. This is an at-most-once barrier, not proof that the buyer saw the message; real Qianniu acceptance is still required.
 
 ## Four Windows / Qianniu acceptance scenarios
 
