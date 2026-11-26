@@ -28,11 +28,34 @@ namespace Bot.ChromeNs
         public static CommerceReplyAuthorityDecision Evaluate(
             string seller,
             string buyer,
-            string question)
+            string question,
+            string shopKey = null)
         {
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
             var state = ConversationStateService.Build(seller, buyer, question, turns);
             return Evaluate(state);
+        }
+
+        /// <summary>
+        /// Load structured commerce evidence only after Knowledge V2 selects a record
+        /// with typed evidence requirements. This keeps ordinary image/product knowledge
+        /// independent of order state while allowing image-only follow-ups to authorize
+        /// an explicitly order-dependent rule.
+        /// </summary>
+        public static CommerceContextSnapshot LoadForTypedEvidence(
+            string shopKey,
+            string seller,
+            string buyer,
+            string question,
+            CommerceReplyAuthorityDecision authority)
+        {
+            var state = authority == null ? null : authority.ConversationState;
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16, shopKey);
+            var commerce = CommerceContextService.Build(
+                seller, buyer, question, turns, state, shopKey);
+            if (authority != null) authority.CommerceContext = commerce;
+            if (state != null) state.CommerceContext = commerce;
+            return commerce;
         }
 
         private static readonly System.Text.RegularExpressions.Regex OrderDependentQuestionRegex =

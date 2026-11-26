@@ -205,7 +205,7 @@ namespace Bot.ChromeNs
                 {
                     var question = (task.CombinedQuestion ?? string.Empty).Trim();
                     commerceAuthority = CommerceReplyAuthorityService.Evaluate(
-                        knowledgeSeller, task.BuyerNick, question);
+                        knowledgeSeller, task.BuyerNick, question, task.ShopKey);
                     if (!KnowledgeEngineV2Service.IsEnabled(knowledgeSeller))
                     {
                         Log.Info("OCR已完成，但本店Knowledge V2未启用，继续视觉/文字兜底: shopRef="
@@ -293,6 +293,47 @@ namespace Bot.ChromeNs
                         else
                         {
                             Log.Info("OCR图片命中并通过条件性售后建议门禁: buyer=" + task.BuyerNick
+                                + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", conditionalAdviceEvidence.OrderId)
+                                + ", adviceKey=" + decision.ConditionalAdviceKey);
+                        }
+                    }
+
+                    // Image-only follow-ups often contain no order words (for example,
+                    // "这张图支持吗？"). Do not load commerce context for every image.
+                    // Load it lazily only when the selected Knowledge V2 record explicitly
+                    // declares typed evidence requirements.
+                    if (commerceAuthority != null
+                        && commerceAuthority.AllowLocalTerminalReply
+                        && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
+                    {
+                        var typedCommerce = CommerceReplyAuthorityService.LoadForTypedEvidence(
+                            task.ShopKey, knowledgeSeller, task.BuyerNick, question, commerceAuthority);
+                        string typedReason = "当前图片未命中本店图片知识";
+                        if (imageKnowledgeMatch != null)
+                            ConditionalBusinessAdviceService.TryBuild(
+                                task.ShopKey, knowledgeSeller, task.BuyerNick,
+                                typedCommerce, task.MessageKey, imageKnowledgeMatch.KnowledgeId,
+                                out conditionalAdviceEvidence);
+
+                        if (conditionalAdviceEvidence == null
+                            || !ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
+                                decision, conditionalAdviceEvidence, out typedReason))
+                        {
+                            if (decision != null)
+                            {
+                                decision.CanDirectReply = false;
+                                decision.Answer = string.Empty;
+                            }
+                            Log.Info("Knowledge V2选中需要订单证据的知识，已按需读取同店订单上下文；证据未通过，禁止本地直答: buyer="
+                                + task.BuyerNick + ", reason="
+                                + (conditionalAdviceEvidence == null
+                                    ? "缺少匹配的图片/订单证据"
+                                    : typedReason));
+                        }
+                        else
+                        {
+                            Log.Info("Knowledge V2按知识记录的类型化证据要求加载订单并授权条件性建议: buyer="
+                                + task.BuyerNick
                                 + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", conditionalAdviceEvidence.OrderId)
                                 + ", adviceKey=" + decision.ConditionalAdviceKey);
                         }

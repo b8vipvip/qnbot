@@ -81,7 +81,7 @@ def test_commerce_context_does_not_masquerade_as_empty_order_history_when_ledger
 
     assert "try" in select and "catch (Exception ex)" in select
     assert "order_ledger_unavailable" in select
-    assert "GetRecentOrderSnapshots(seller, buyer, 12)" in select
+    assert "GetRecentOrderSnapshots(seller, buyer, 12, shopKey)" in select
     assert "return null;" in select
 
 

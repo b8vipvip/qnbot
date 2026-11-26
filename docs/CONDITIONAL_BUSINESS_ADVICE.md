@@ -13,7 +13,7 @@ Knowledge V2 supplies the business meaning and the reply. Typed evidence require
 
 ## Reply routing and order-evidence boundaries
 
-The commerce authority is question-aware. It loads the structured order ledger only when the current question or its active conversation topic indicates an order-dependent request (order, payment, shipping, delivery, refund, return, etc.). For unrelated questions it marks commerce context as `not_required`, does not read the order ledger, and does not inject order fields into the model prompt.
+The commerce authority is question-aware. It loads the structured order ledger when the current question or active conversation topic indicates an order-dependent request (order, payment, shipping, delivery, refund, return, etc.). For unrelated questions it initially marks commerce context as `not_required` and does not read the order ledger. If Knowledge V2 later selects a record with typed `evidence:*` requirements, the runtime lazily loads the exact ShopKey-scoped order context and evaluates the dedicated evidence policy. This allows image-only follow-ups such as "这张图支持吗？" to use order evidence without making every image or every store depend on device/order classification.
 
 A Knowledge V2 record containing any supported `evidence:*` requirement cannot become a local direct reply unless the dedicated evidence policy authorizes that selected record. An OCR match alone, a visual description alone, or a high model confidence score is not authorization. The current local allow-list is deliberately narrow: the four image + paid/open order requirements below can authorize only a safe refund recommendation.
 
