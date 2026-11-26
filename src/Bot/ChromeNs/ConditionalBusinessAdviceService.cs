@@ -958,7 +958,9 @@ namespace Bot.ChromeNs
                         OrderId = x.OrderId,
                         AdviceKey = x.AdviceKey,
                         ScopeHash = x.DistributedScopeHash ?? string.Empty,
-                        IsRemote = !string.IsNullOrWhiteSpace(x.DistributedScopeHash),
+                        // A local ledger row remains a local source until the server
+                        // actually returns the matching pending record in this refresh.
+                        IsRemote = false,
                         UpdatedAt = x.UpdatedAt
                     })
                     .ToList();
