@@ -468,6 +468,225 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static JObject SendDistributedAdviceRequest(
+            ShopContext shop,
+            HttpMethod method,
+            string route,
+            JObject payload)
+        {
+            if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey))
+                throw new InvalidOperationException("无法解析条件性建议对应的精确ShopKey。");
+            if (!ShopTokenBindingService.ShouldAttemptSync(shop))
+                throw new InvalidOperationException("本店控制面令牌处于安全退避期，已阻止条件性建议发送。");
+
+            var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
+            string token, tokenError;
+            var url = connection.GetServerUrl();
+            if (!connection.TryGetToken(out token, out tokenError)
+                || string.IsNullOrWhiteSpace(token)
+                || string.IsNullOrWhiteSpace(url))
+                throw new InvalidOperationException("本店缺少可用的控制面地址或令牌：" + Safe(tokenError, 160));
+
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+            Exception lastError = null;
+            // The claim request carries a stable request_id. A retry after a lost HTTP
+            // response therefore retrieves the original lease rather than creating a
+            // second independent reservation.
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+                    using (var http = new HttpClient(handler))
+                    {
+                        http.Timeout = TimeSpan.FromSeconds(15);
+                        using (var response = ShopRuntimeCredentialAuthority.SendWithUnauthorizedRecoveryAsync(
+                            shop,
+                            token,
+                            async requestToken =>
+                            {
+                                using (var request = new HttpRequestMessage(method, url.TrimEnd('/') + route))
+                                {
+                                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", requestToken);
+                                    request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
+                                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-conditional-advice/1.0");
+                                    if (payload != null)
+                                        request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                                    return await http.SendAsync(request).ConfigureAwait(false);
+                                }
+                            }).GetAwaiter().GetResult())
+                        {
+                            var body = response.Content == null
+                                ? string.Empty
+                                : response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                            if (!response.IsSuccessStatusCode)
+                                throw new InvalidOperationException("控制面条件性建议接口 HTTP "
+                                    + (int)response.StatusCode + "：" + Safe(body, 220));
+                            return JObject.Parse(body);
+                        }
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    lastError = ex;
+                    if (attempt == 0) continue;
+                    throw;
+                }
+                catch (TaskCanceledException ex)
+                {
+                    lastError = ex;
+                    if (attempt == 0) continue;
+                    throw;
+                }
+            }
+            throw new InvalidOperationException("控制面条件性建议请求失败：" + Safe(lastError == null ? string.Empty : lastError.Message, 180));
+        }
+
+        private static bool TryClaimDistributedDelivery(
+            string shopKey,
+            string buyer,
+            string orderId,
+            string adviceKey,
+            out ConditionalBusinessAdviceDistributedLease lease,
+            out string reason)
+        {
+            lease = null;
+            reason = string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var payload = new JObject
+                {
+                    ["buyer"] = buyer,
+                    ["order_id"] = orderId,
+                    ["advice_key"] = adviceKey,
+                    ["request_id"] = Guid.NewGuid().ToString("N"),
+                    ["lease_seconds"] = DistributedLeaseSeconds
+                };
+                var root = SendDistributedAdviceRequest(
+                    shop, HttpMethod.Post,
+                    "/api/runtime/v1/bot-web/conditional-business-advice/claim", payload);
+                if (root["claimed"] == null || root["claimed"].Type != JTokenType.Boolean)
+                    throw new InvalidOperationException("控制面没有返回有效的全局幂等租约结果。");
+                if (!root["claimed"].Value<bool>())
+                {
+                    var state = (string)root["state"] ?? "unknown";
+                    reason = state == "delivered"
+                        ? "该店铺/买家/订单/知识建议已在其他设备发送"
+                        : (state == "uncertain"
+                            ? "该建议在其他设备的发送结果不确定，必须先人工核对"
+                            : "该建议正在其他设备发送，已阻止并发重复发送");
+                    return false;
+                }
+
+                var scopeHash = ((string)root["scope_hash"] ?? string.Empty).Trim();
+                var leaseToken = ((string)root["lease_token"] ?? string.Empty).Trim();
+                if (!Regex.IsMatch(scopeHash, "^[a-f0-9]{64}$", RegexOptions.IgnoreCase)
+                    || leaseToken.Length < 32)
+                    throw new InvalidOperationException("控制面返回的全局幂等租约不完整，已阻止发送。");
+                lease = new ConditionalBusinessAdviceDistributedLease
+                {
+                    ScopeHash = scopeHash,
+                    LeaseToken = leaseToken
+                };
+                return true;
+            }
+            catch (Exception ex)
+            {
+                reason = "全局条件性建议幂等服务不可用，已拒绝发送：" + Safe(ex.Message, 200);
+                Log.ErrorWithMaxCount(reason, 10);
+                return false;
+            }
+        }
+
+        private static void CompleteDistributedDelivery(
+            string shopKey,
+            string buyer,
+            string orderId,
+            string adviceKey,
+            ConditionalBusinessAdviceDistributedLease lease,
+            string outcome)
+        {
+            if (lease == null || string.IsNullOrWhiteSpace(lease.LeaseToken)) return;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var payload = new JObject
+                {
+                    ["buyer"] = buyer,
+                    ["order_id"] = orderId,
+                    ["advice_key"] = adviceKey,
+                    ["lease_token"] = lease.LeaseToken,
+                    ["outcome"] = outcome
+                };
+                SendDistributedAdviceRequest(
+                    shop, HttpMethod.Post,
+                    "/api/runtime/v1/bot-web/conditional-business-advice/complete", payload);
+            }
+            catch (Exception ex)
+            {
+                // The server's lease expiry transitions to an indefinite uncertain
+                // barrier. A failed completion can never silently release the key.
+                Log.ErrorWithMaxCount("全局条件性建议发送结果回写失败，服务端将保持不确定状态：" + Safe(ex.Message, 200), 10);
+            }
+        }
+
+        private static List<ConditionalBusinessAdviceReconciliationItem> GetRemotePendingReconciliationRecords(
+            string shopKey,
+            int maxCount)
+        {
+            var result = new List<ConditionalBusinessAdviceReconciliationItem>();
+            var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+            var root = SendDistributedAdviceRequest(
+                shop, HttpMethod.Get,
+                "/api/runtime/v1/bot-web/conditional-business-advice/pending", null);
+            var items = root["items"] as JArray;
+            if (items == null) throw new InvalidOperationException("控制面待核对列表格式无效。");
+            foreach (var item in items.OfType<JObject>().Take(Math.Max(1, Math.Min(500, maxCount))))
+            {
+                result.Add(new ConditionalBusinessAdviceReconciliationItem
+                {
+                    Buyer = (string)item["buyer"] ?? string.Empty,
+                    OrderId = (string)item["order_id"] ?? string.Empty,
+                    AdviceKey = (string)item["advice_key"] ?? string.Empty,
+                    ScopeHash = (string)item["scope_hash"] ?? string.Empty,
+                    IsRemote = true,
+                    UpdatedAt = DateTime.TryParse((string)item["updated_at"], out var updated)
+                        ? updated.ToLocalTime()
+                        : DateTime.Now
+                });
+            }
+            return result;
+        }
+
+        private static bool TryResolveRemoteUncertainDelivery(
+            string shopKey,
+            string scopeHash,
+            bool confirmedDelivered,
+            out string reason)
+        {
+            reason = string.Empty;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                var payload = new JObject
+                {
+                    ["scope_hash"] = scopeHash,
+                    ["confirmed_delivered"] = confirmedDelivered
+                };
+                var root = SendDistributedAdviceRequest(
+                    shop, HttpMethod.Post,
+                    "/api/runtime/v1/bot-web/conditional-business-advice/resolve", payload);
+                reason = (string)root["reason"] ?? "已保存服务端人工核对结果";
+                return root["ok"] == null || root["ok"].Value<bool>();
+            }
+            catch (Exception ex)
+            {
+                reason = "服务端全局幂等记录核对失败：" + Safe(ex.Message, 200);
+                return false;
+            }
+        }
+
         public static bool TryReserveDelivery(
             string shopKey,
             string seller,
