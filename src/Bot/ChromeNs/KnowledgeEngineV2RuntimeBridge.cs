@@ -187,8 +187,10 @@ namespace Bot.ChromeNs
             var commerceAuthority = CommerceReplyAuthorityService.Evaluate(
                 burst.SellerNick,
                 burst.BuyerNick,
-                burst.CombinedQuestion);
+                burst.CombinedQuestion,
+                burst.ShopKey);
             var conditionalOnly = !commerceAuthority.AllowLocalTerminalReply;
+            var typedEvidenceGateAttempted = false;
             ConditionalBusinessAdviceEvidence conditionalAdviceEvidence = null;
             if (conditionalOnly
                 && !ConditionalBusinessAdviceService.TryBuild(
@@ -255,16 +257,49 @@ namespace Bot.ChromeNs
 
             if (!conditionalOnly && ConditionalBusinessAdviceService.RequiresEvidenceGate(decision))
             {
-                decision.CanDirectReply = false;
-                decision.Answer = string.Empty;
-                Log.Info("Knowledge Engine V2命中需要外部证据的知识记录，但本轮未进入对应证据门禁，禁止本地直答: buyer="
-                    + burst.BuyerNick);
+                typedEvidenceGateAttempted = true;
+                try
+                {
+                    // The buyer may answer a previous request by sending only an image,
+                    // without saying "order", "payment" or "refund". Only after V2 selects
+                    // a record with typed evidence requirements do we load the exact
+                    // ShopKey's order context and attempt the generic image+order policy.
+                    var typedCommerce = CommerceReplyAuthorityService.LoadForTypedEvidence(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        burst.CombinedQuestion, commerceAuthority);
+                    string typedReason = "缺少同店同买家有效图片/已付款订单证据";
+                    if (ConditionalBusinessAdviceService.TryBuild(
+                            burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                            typedCommerce, string.Empty, string.Empty,
+                            out conditionalAdviceEvidence)
+                        && ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
+                            decision, conditionalAdviceEvidence, out typedReason))
+                    {
+                        Log.Info("Knowledge Engine V2按知识记录的类型化证据要求按需加载订单并授权条件性建议: buyer="
+                            + burst.BuyerNick
+                            + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", conditionalAdviceEvidence.OrderId)
+                            + ", adviceKey=" + decision.ConditionalAdviceKey);
+                    }
+                    else
+                    {
+                        decision.CanDirectReply = false;
+                        decision.Answer = string.Empty;
+                        Log.Info("Knowledge Engine V2命中类型化证据知识但未通过同店图片/订单门禁，禁止本地直答: buyer="
+                            + burst.BuyerNick + ", reason=" + typedReason);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    decision.CanDirectReply = false;
+                    decision.Answer = string.Empty;
+                    Log.ErrorWithMaxCount("Knowledge Engine V2类型化证据按需加载失败，已拒绝本地直答: " + ex.Message, 10);
+                }
             }
 
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);
-                if (conditionalOnly)
+                if (conditionalOnly || typedEvidenceGateAttempted)
                     contextPromptAddon += ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
                         + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
                 Log.Info("Knowledge Engine V2未直答: buyer=" + burst.BuyerNick
