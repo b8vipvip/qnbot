@@ -183,13 +183,15 @@
     <label>图片名称<input id="imageKnowledgeName" maxlength="180" placeholder="留空时自动使用上传文件名"></label>
     <img id="imageKnowledgePreview" alt="图片预览" style="display:block;max-width:100%;max-height:260px;object-fit:contain;margin:8px auto">
     <label>OCR 识别结果（可编辑）<textarea id="imageKnowledgeOcr" rows="8" maxlength="12000"></textarea></label>
+    <label>命中信息（每行一条规则）<textarea id="imageKnowledgeHitInfo" rows="6" maxlength="2400" placeholder="必须包含：账号管理\n必须包含：NewTV ID\n任一：修改手机号\n任一：消费记录\n排除：酷狗音乐"></textarea></label>
+    <p class="hint">必须包含：每组都要命中；任一：至少命中一组；排除：命中任一组即拒绝。可用 | 分隔同义词。配置命中信息后，未命中时不会再退回宽松 OCR 相似度匹配。</p>
     <label>图片说明（用于后续图片匹配和上下文理解）<textarea id="imageKnowledgeDescription" rows="4" maxlength="1200" required></textarea></label>
     <div id="imageKnowledgeHint" class="hint"></div>
     <div class="dialog-actions"><button id="deleteImageKnowledgeBtn" type="button" class="danger hidden">删除</button><span></span><button value="cancel" class="secondary">取消</button><button id="saveImageKnowledgeBtn" type="button" class="primary" disabled>保存</button></div>
   </form>
 </dialog>
 <div id="toast" class="toast hidden"></div>
-<script src="/static/bot-web-v2.js?v=11"></script>
+<script src="/static/bot-web-v2.js?v=12"></script>
 <script src="/static/bot-web-bot-enabled.js?v=5"></script>
 </body>
 </html>
