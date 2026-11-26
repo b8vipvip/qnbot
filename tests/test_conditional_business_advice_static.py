@@ -177,3 +177,32 @@ def test_windows_acceptance_diagnostics_reports_only_pseudonymized_conditional_a
     assert "DeliveryUncertain" in script
     assert "OrderId" not in script
     assert "BuyerNick" not in script
+
+
+def test_conditional_advice_diagnostics_store_only_hmac_refs_and_fixed_outcomes():
+    source = read("src/Bot/ChromeNs/ConditionalBusinessAdviceService.cs")
+    append = source[
+        source.index("private static void AppendDiagnosticEvent"):
+        source.index("private static void RecordDiagnosticEvent")
+    ]
+    assert "RuntimeAcceptanceDiagnosticRef" in append
+    for field in ("ShopRef", "BuyerRef", "OrderRef", "ImageRef", "ImageKnowledgeRef", "AdviceRef"):
+        assert field in append
+    assert "AtUtc = DateTime.UtcNow" in append
+    assert "Safe(reason, 180)" in append
+    assert "state.Events.Count > 500" in append
+    assert "evidence_rejected" in source
+    assert "advice_authorized" in source
+    assert "delivery_blocked_duplicate" in source
+    assert "delivery_sent" in source
+    assert "delivery_uncertain" in source
+
+
+def test_acceptance_script_never_exports_raw_order_or_buyer_identifiers():
+    script = read("scripts/Invoke-QnBotAcceptanceDiagnostics.ps1")
+    assert "ConditionalBusinessAdviceLedgerPath" in script
+    assert "ConditionalBusinessAdvice = $conditionalBusinessAdvice" in script
+    assert "OrderId" not in script
+    assert "BuyerNick" not in script
+    assert "HMAC" in script
+    assert "RecentEvents" in script
