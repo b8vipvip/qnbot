@@ -35,6 +35,28 @@ namespace Bot.ChromeNs
             return Evaluate(state);
         }
 
+        /// <summary>
+        /// Load structured commerce evidence only after Knowledge V2 selects a record
+        /// with typed evidence requirements. This keeps ordinary image/product knowledge
+        /// independent of order state while allowing image-only follow-ups to authorize
+        /// an explicitly order-dependent rule.
+        /// </summary>
+        public static CommerceContextSnapshot LoadForTypedEvidence(
+            string shopKey,
+            string seller,
+            string buyer,
+            string question,
+            CommerceReplyAuthorityDecision authority)
+        {
+            var state = authority == null ? null : authority.ConversationState;
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            var commerce = CommerceContextService.Build(
+                seller, buyer, question, turns, state, shopKey);
+            if (authority != null) authority.CommerceContext = commerce;
+            if (state != null) state.CommerceContext = commerce;
+            return commerce;
+        }
+
         private static readonly System.Text.RegularExpressions.Regex OrderDependentQuestionRegex =
             new System.Text.RegularExpressions.Regex(
                 "订单|订单号|订单状态|我的订单|这笔订单|这单|交易状态|交易号|下单后|已下单|刚买|买的东西|支付|付款|付钱|实付款|付款金额|未付款|已付款|支付成功|发货|物流|快递|运单|收货|签收|退款|退货|售后|退换|退吗|能退|可以退|退钱|退费|换货|换货申请|取消订单|关闭订单|\\border\\b|order status|payment|paid|unpaid|shipping|delivery|tracking|refund|return",
