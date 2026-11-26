@@ -779,9 +779,23 @@ $markdown = @(
     ('- WebSocket 127.0.0.1:41010 reachable: ' + $webSocketReachable),
     ('- WebSocket listener owned by Bot: ' + $webSocketOwnedByBot),
     ('- CDP endpoints inspected: ' + $cdpEndpoints.Count),
+    ('- Conditional advice ledger: ' + $conditionalBusinessAdvice.Status),
+    ('- Conditional advice records: ' + $conditionalBusinessAdvice.RecordCount),
+    ('- Conditional advice delivered: ' + $conditionalBusinessAdvice.DeliveredCount),
+    ('- Conditional advice uncertain: ' + $conditionalBusinessAdvice.UncertainCount),
     '',
-    '## CDP / IMSDK'
+    '## Conditional business advice events'
 )
+if ($conditionalBusinessAdvice.RecentEvents.Count -eq 0) {
+    $markdown += '- No conditional business advice events recorded yet.'
+} else {
+    foreach ($event in $conditionalBusinessAdvice.RecentEvents) {
+        $markdown += ('- ' + $event.AtUtc + ' | ' + $event.Outcome + ' | ' + $event.Reason
+            + ' | ' + $event.ShopRef + ' | ' + $event.BuyerRef + ' | ' + $event.OrderRef
+            + ' | ' + $event.ImageRef + ' | ' + $event.ImageKnowledgeRef + ' | ' + $event.AdviceRef)
+    }
+}
+$markdown += @('', '## CDP / IMSDK')
 if ($cdpEndpoints.Count -eq 0) {
     $markdown += '- No unambiguous local CDP debug endpoint was detected.'
     foreach ($candidate in $qianniuLoopbackListenerCandidates) {
