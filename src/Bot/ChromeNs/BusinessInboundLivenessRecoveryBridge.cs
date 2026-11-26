@@ -65,42 +65,54 @@ namespace Bot.ChromeNs
                 var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
-                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired || qn.Seller == null
-                        || string.IsNullOrWhiteSpace(qn.Seller.Nick))
-                        continue;
-
-                    var now = DateTime.UtcNow;
-                    DateTime nextHistory;
-                    DateTime nextHook;
-                    var historyDue = !NextHistoryProbeAt.TryGetValue(qn, out nextHistory) || nextHistory <= now;
-                    var hookDue = !NextHookRepairAt.TryGetValue(qn, out nextHook) || nextHook <= now;
-                    if (!historyDue && !hookDue) continue;
-                    if (!Running.TryAdd(qn, 0)) continue;
-
-                    if (historyDue) NextHistoryProbeAt[qn] = now.Add(HistoryProbeInterval);
-                    if (hookDue) NextHookRepairAt[qn] = now.Add(HookRepairInterval);
-
-                    Task.Run(async () =>
+                    if (qn == null) continue;
+                    try
                     {
-                        try
+                        if (qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired || qn.Seller == null
+                            || string.IsNullOrWhiteSpace(qn.Seller.Nick))
+                            continue;
+
+                        var now = DateTime.UtcNow;
+                        DateTime nextHistory;
+                        DateTime nextHook;
+                        var historyDue = !NextHistoryProbeAt.TryGetValue(qn, out nextHistory) || nextHistory <= now;
+                        var hookDue = !NextHookRepairAt.TryGetValue(qn, out nextHook) || nextHook <= now;
+                        if (!historyDue && !hookDue) continue;
+                        if (!Running.TryAdd(qn, 0)) continue;
+
+                        if (historyDue) NextHistoryProbeAt[qn] = now.Add(HistoryProbeInterval);
+                        if (hookDue) NextHookRepairAt[qn] = now.Add(HookRepairInterval);
+
+                        Task.Run(async () =>
                         {
-                            if (hookDue)
-                                await qn.RepairBusinessInboundHookAsync().ConfigureAwait(false);
-                            if (historyDue)
-                                await qn.ProbeActiveConversationForMissedInboundAsync().ConfigureAwait(false);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.ErrorWithMaxCount("业务入站存活恢复异常: " + ex.Message, 50);
-                        }
-                        finally
-                        {
-                            byte ignored;
-                            Running.TryRemove(qn, out ignored);
-                        }
-                    });
+                            try
+                            {
+                                if (hookDue)
+                                    await qn.RepairBusinessInboundHookAsync().ConfigureAwait(false);
+                                if (historyDue)
+                                    await qn.ProbeActiveConversationForMissedInboundAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.ErrorWithMaxCount("业务入站存活恢复异常: " + ex.Message, 50);
+                            }
+                            finally
+                            {
+                                byte ignored;
+                                Running.TryRemove(qn, out ignored);
+                            }
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的业务入站恢复调度并继续：" + ex.Message, 20);
+                    }
                 }
-                CleanupRetiredQnState(sessions);
+                try { CleanupRetiredQnState(sessions); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("清理已退役千牛入站恢复状态失败：" + ex.Message, 10);
+                }
             }
             catch (Exception ex)
             {

@@ -76,21 +76,37 @@ namespace Bot.ChromeNs
                 var sessions = QN.GetRuntimeSafetySnapshot();
                 foreach (var qn in sessions)
                 {
-                    if (qn == null || qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired) continue;
-                    NormalizeUnknownVersion(qn);
-                    lock (QnMarkerSync)
+                    if (qn == null) continue;
+                    try
                     {
-                        object marker;
-                        if (!Subscribed.TryGetValue(qn, out marker))
+                        if (qn.CDP == null || qn.CDP.IsInvalidated || qn.CDP.IsShopIdentityRetired) continue;
+                        NormalizeUnknownVersion(qn);
+                        lock (QnMarkerSync)
                         {
-                            qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
-                            Subscribed.Add(qn, new object());
+                            object marker;
+                            if (!Subscribed.TryGetValue(qn, out marker))
+                            {
+                                qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
+                                Subscribed.Add(qn, new object());
+                            }
                         }
+                        ScheduleConversationProbe(qn);
                     }
-                    ScheduleConversationProbe(qn);
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的安全监控并继续处理其他店铺：" + ex.Message, 10);
+                    }
                 }
-                CleanupRetiredQnState(sessions);
-                WriteHeartbeatIfDue();
+                try { CleanupRetiredQnState(sessions); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("清理已退役千牛安全监控状态失败：" + ex.Message, 10);
+                }
+                try { WriteHeartbeatIfDue(); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("写入千牛运行时安全心跳失败：" + ex.Message, 10);
+                }
             }
             catch (Exception ex)
             {

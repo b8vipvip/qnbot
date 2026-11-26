@@ -44,12 +44,19 @@ namespace Bot.ChromeNs
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    lock (QnAttachSync)
+                    try
                     {
-                        object marker;
-                        if (Qns.TryGetValue(qn, out marker)) continue;
-                        qn.EvRecieveNewMessage += OnMessage;
-                        Qns.Add(qn, new object());
+                        lock (QnAttachSync)
+                        {
+                            object marker;
+                            if (Qns.TryGetValue(qn, out marker)) continue;
+                            qn.EvRecieveNewMessage += OnMessage;
+                            Qns.Add(qn, new object());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的回访首答订阅并继续：" + ex.Message, 10);
                     }
                 }
                 var cutoff = DateTime.Now.AddMinutes(-ReturningBuyerIdleMinutes);

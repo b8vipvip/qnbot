@@ -91,19 +91,30 @@ namespace Bot.ChromeNs
         {
             try
             {
-                Cleanup();
+                try { Cleanup(); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("清理充值结果查询残留任务失败，继续绑定会话：" + Safe(ex.Message), 10);
+                }
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    lock (AttachSync)
+                    try
                     {
-                        object marker;
-                        if (Attached.TryGetValue(qn, out marker)) continue;
-                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                        Attached.Add(qn, new object());
+                        lock (AttachSync)
+                        {
+                            object marker;
+                            if (Attached.TryGetValue(qn, out marker)) continue;
+                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                            Attached.Add(qn, new object());
+                        }
+                        Log.Info("充值结果自动查询已绑定: seller="
+                            + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                     }
-                    Log.Info("充值结果自动查询已绑定: seller="
-                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的充值查询订阅并继续：" + Safe(ex.Message), 10);
+                    }
                 }
             }
             catch (Exception ex)
