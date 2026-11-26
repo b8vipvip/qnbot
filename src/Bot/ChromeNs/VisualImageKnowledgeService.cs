@@ -449,7 +449,19 @@ namespace Bot.ChromeNs
                 var canonicalEntry = Select("where EntityId=? and ShopKey=? and Seller=? limit 1",
                     cloudId, shop.ShopKey, seller).FirstOrDefault();
                 if (canonicalEntry != null && canonicalEntry.SyncDirty
-                    && canonicalEntry.UpdatedAtTicks > latest.DeletedAtTicks) return false;
+                    && canonicalEntry.UpdatedAtTicks > latest.DeletedAtTicks)
+                {
+                    // A deliberate local restore/edit happened after the delete. Remove
+                    // the obsolete marker so the next request cannot send an upsert and
+                    // delete for the same identity in one batch.
+                    DbHelper.Db.RunInTransaction(conn =>
+                    {
+                        foreach (var stale in tombstones)
+                            conn.Execute("delete from VisualImageKnowledgeSyncTombstone where EntityId=? and ShopKey=? and Seller=?",
+                                stale.EntityId, shop.ShopKey, seller);
+                    });
+                    return false;
+                }
                 var canonicalTombstone = tombstones.FirstOrDefault(x =>
                     string.Equals(x.EntityId, cloudId, StringComparison.Ordinal));
                 var mergedDeletedAt = tombstones.Max(x => x.DeletedAtTicks);
