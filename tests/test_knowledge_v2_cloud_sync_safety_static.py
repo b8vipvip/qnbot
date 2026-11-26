@@ -330,3 +330,17 @@ def test_cloud_fingerprint_covers_all_persisted_record_fields():
                   "CorrectionCount", "WithdrawCount", "Enabled", "Status", "CreatedAt", "UpdatedAt", "LastVerifiedAt"):
         assert f"x.{field}" in fingerprint
     assert ".OrderBy(x=>x.Id,StringComparer.Ordinal)" in fingerprint
+
+
+def test_concurrent_explicit_delete_wins_without_resurrecting_cloud_or_local_answer():
+    service = read("src/Bot/Knowledge/KnowledgeV2CloudSyncService.cs")
+    merge = service.split("private static List<KnowledgeV2Record> MergeCloudAndLocal", 1)[1].split(
+        "private static bool IsDeleteTombstone", 1
+    )[0]
+    assert "IsDeleteTombstone(local)" in merge
+    assert "IsDeleteTombstone(cloud)" in merge
+    assert "var tombstone = CloneRecord(local);" in merge
+    assert "var index = merged.IndexOf(cloud);" in merge
+    assert "merged[index] = tombstone;" in merge
+    assert "AddCandidate(merged, mergedIds, cloud, id);" in merge
+    assert "AddCandidate(merged, mergedIds, local, id);" in merge

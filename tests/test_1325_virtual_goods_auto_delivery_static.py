@@ -845,3 +845,22 @@ def test_auto_delivery_cursor_tracks_same_tick_event_keys_and_fails_closed_on_hu
     assert "catch (FileNotFoundException)" in loader
     assert "catch (DirectoryNotFoundException)" in loader
     assert "按不可读处理并暂停游标推进" in loader
+
+
+def test_unresolved_confirmation_intents_never_expire_from_the_at_most_once_ledger():
+    ledger = text("src/Bot/ChromeNs/AutoDeliveryConfirmationLedger.cs")
+    cleanup = ledger.split("private static void CleanupLocked", 1)[1].split(
+        "private static bool IsAtCapacityLocked", 1
+    )[0]
+    assert "x.ResolvedAt.HasValue && x.KeepUntil <= now" in cleanup
+    assert "x == null" in cleanup
+    mark = ledger.split("public static bool MarkResolved", 1)[1].split(
+        "private static bool MigratePendingConfirmationIntentsLocked", 1
+    )[0]
+    assert "record.ResolvedAt = DateTime.Now;" in mark
+    assert "record.KeepUntil = keepUntil;" in mark
+    migration = ledger.split("private static bool MigratePendingConfirmationIntentsLocked", 1)[1].split(
+        "private static LedgerState LoadState", 1
+    )[0]
+    assert 'Resolution = "migrated_pending_intent"' in migration
+    assert "ResolvedAt = null" in migration

@@ -539,3 +539,23 @@ def test_image_message_evidence_keeps_native_key_for_withdrawal_recheck_even_whe
     assert "hasImage ? messageKey : string.Empty" in decision
     assert "VisionImageCacheService.IsMessageKeyWithdrawn(" in current
     assert "VisualKnowledgeLearningService.IsObservationWithdrawn(" in current
+
+
+def test_quarantined_reception_flow_retries_failed_rollback_after_restart_or_transient_lock_error():
+    runtime = read("src/Bot/ChromeNs/ReceptionWorkflowRuntimeService.cs")
+    evaluate = runtime.split("if (quarantinedFault != null)", 1)[1].split(
+        "var deliveryUncertain", 1
+    )[0]
+    register = runtime.split("private static bool RegisterFailure", 1)[1].split(
+        "private static string RollbackRetryKey", 1
+    )[0]
+    worker = runtime.split("private static void EnsureRollbackRetryScheduled", 1)[1]
+    assert "EnsureRollbackRetryScheduled(seller, shopKey, flowId, catalog.Revision)" in evaluate
+    assert 'fault["rollback_pending"] = true' in register
+    assert "UpdateRollbackRetryState(shop, flowId, revision, true, false, false" in register
+    assert "RollbackRetryWorkers.TryAdd" in worker
+    assert "TryReadRollbackRetryState" in worker
+    assert "rollback_retry_after_utc_ticks" in runtime
+    assert "currentRevision != revision" in worker
+    assert "RollbackToPreviousPublished(seller, shopKey, revision)" in worker
+    assert "rollback_superseded" in runtime

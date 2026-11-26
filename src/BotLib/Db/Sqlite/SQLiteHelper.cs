@@ -175,6 +175,20 @@ namespace BotLib.Db.Sqlite
         }
 
         /// <summary>
+        /// Runs multiple SQL mutations as one transaction on the helper's serialized connection.
+        /// The callback may call this helper's Execute/Select methods; Monitor is re-entrant on
+        /// the calling thread and they reuse the same connection until the transaction commits.
+        /// </summary>
+        public void RunInTransaction(Action<SQLiteConnection> action)
+        {
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            using (var conn = GetConnection())
+            {
+                conn.RunInTransaction(() => action(conn));
+            }
+        }
+
+        /// <summary>
         /// Executes a scalar query while preserving the helper's serialized connection access.
         /// This is primarily used by startup recovery to run SQLite integrity checks before the
         /// application starts reading cached entities.

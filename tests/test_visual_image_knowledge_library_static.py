@@ -96,3 +96,22 @@ def test_recent_visual_account_evidence_requires_real_image_flag_or_exact_placeh
     assert 'string.Equals(text, "图片消息"' in method
     assert 'text.Contains("[图片]")' not in method
     assert 'text.Contains("【图片】")' not in method
+
+
+def test_ocr_result_and_curated_image_knowledge_are_persisted_against_exact_buyer_message():
+    learning = read("src/Bot/ChromeNs/VisualKnowledgeLearningService.cs")
+    ocr_first = read("src/Bot/ChromeNs/OcrFirstKnowledgeDecisionService.cs")
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
+    for field in ("OcrImageSha256", "OcrText", "OcrConfidence", "OcrEngine",
+                  "MatchedImageKnowledgeId", "ImageKnowledgeScore"):
+        assert f"public {'double' if field in ('OcrConfidence', 'ImageKnowledgeScore') else 'string'} {field}" in learning
+    assert "RecordOcrEvidence(" in learning
+    assert 'where ShopKey=? and Seller=? and Buyer=? and MessageKey=?' in learning
+    assert "VisualKnowledgeLearningService.RecordOcrEvidence(" in ocr_first
+    assert "VisualImageKnowledgeService.TryMatch(" in ocr_first
+    assert "VisualKnowledgeLearningService.RecordOcrEvidence(" in vision
+    assert "alter table VisualKnowledgeObservationEntity add column OcrText text" in learning
+    assert "if (!string.IsNullOrWhiteSpace(matchedImageKnowledgeId))" in learning
+    assert "Empty input must not erase the already persisted message-to-image" in learning
+    assert 'Status = withdrawn ? "图片已撤回" : "仅OCR证据"' in learning
+    assert 'old.Status = "等待人工接待结束"' in learning

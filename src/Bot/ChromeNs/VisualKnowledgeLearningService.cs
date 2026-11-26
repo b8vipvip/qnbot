@@ -25,7 +25,13 @@ namespace Bot.ChromeNs
         public string VisualSummary { get; set; }
         public string VisualTags { get; set; }
         public string GeneratedAnswer { get; set; }
-        public string Status { get; set; }
+        public string OcrImageSha256 { get; set; }
+        public string OcrText { get; set; }
+        public double OcrConfidence { get; set; }
+        public string OcrEngine { get; set; }
+        public string MatchedImageKnowledgeId { get; set; }
+        public double ImageKnowledgeScore { get; set; }
+        public string Status { get; set;}
         public string LearnedKnowledgeId { get; set; }
         public long ObservedAtTicks { get; set; }
         public long UpdatedAtTicks { get; set; }
@@ -71,6 +77,67 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, Timer>(StringComparer.Ordinal);
         private static int _initialized;
         private static int _schemaReady;
+
+        internal static void RecordOcrEvidence(
+            string shopKey, string seller, string buyer, QNChatMessage message, string messageKey,
+            LocalOcrResult ocr, string matchedImageKnowledgeId, double imageKnowledgeScore,
+            string matchedImageDescription)
+        {
+            shopKey = Clean(shopKey, 200);
+            seller = Clean(seller, 160);
+            buyer = Clean(buyer, 160);
+            messageKey = Clean(messageKey, 500);
+            if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0
+                || messageKey.Length == 0 || ocr == null || !ocr.Success) return;
+            EnsureInitialized();
+            BackfillLegacyShopRows(shopKey, seller);
+            var observedAt = GetMessageTime(message);
+            if (observedAt == DateTime.MinValue || observedAt > DateTime.Now.AddMinutes(2))
+                observedAt = DateTime.Now;
+            var withdrawn = VisionImageCacheService.IsMessageKeyWithdrawn(seller, buyer, messageKey, shopKey);
+            lock (DbSync)
+            {
+                var entity = SelectObservations(
+                    "where ShopKey=? and Seller=? and Buyer=? and MessageKey=? order by UpdatedAtTicks desc limit 1",
+                    shopKey, seller, buyer, messageKey).FirstOrDefault();
+                if (entity == null)
+                {
+                    entity = new VisualKnowledgeObservationEntity
+                    {
+                        EntityId = Guid.NewGuid().ToString("N"),
+                        ShopKey = shopKey,
+                        Seller = seller,
+                        Buyer = buyer,
+                        MessageKey = messageKey,
+                        ObservedAtTicks = observedAt.Ticks,
+                        Status = withdrawn ? "图片已撤回" : "仅OCR证据",
+                        LearnedKnowledgeId = string.Empty
+                    };
+                }
+                entity.OcrImageSha256 = Clean(ocr.ImageSha256, 64);
+                entity.OcrText = Clean(ocr.Text, 12000);
+                entity.OcrConfidence = Math.Max(0d, Math.Min(1d, ocr.Confidence));
+                entity.OcrEngine = Clean(ocr.Engine, 80);
+                // A later multimodal OCR pass may not carry the earlier OCR-first match
+                // object. Empty input must not erase the already persisted message-to-image
+                // knowledge link.
+                if (!string.IsNullOrWhiteSpace(matchedImageKnowledgeId))
+                {
+                    entity.MatchedImageKnowledgeId = Clean(matchedImageKnowledgeId, 80);
+                    entity.ImageKnowledgeScore = double.IsNaN(imageKnowledgeScore) || double.IsInfinity(imageKnowledgeScore)
+                        ? 0d : Math.Max(0d, Math.Min(1d, imageKnowledgeScore));
+                }
+                if (string.IsNullOrWhiteSpace(entity.VisualSummary)
+                    && !string.IsNullOrWhiteSpace(matchedImageDescription))
+                    entity.VisualSummary = Redact(Clean(matchedImageDescription, 1600));
+                if (!string.IsNullOrWhiteSpace(matchedImageKnowledgeId)
+                    && (entity.VisualTags ?? string.Empty).IndexOf("image-knowledge", StringComparison.OrdinalIgnoreCase) < 0)
+                    entity.VisualTags = NormalizeTags((entity.VisualTags ?? string.Empty) + ",image-knowledge");
+                if (withdrawn) entity.Status = "图片已撤回";
+                entity.UpdatedAtTicks = DateTime.Now.Ticks;
+                DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
+            }
+        }
 
         public static void RecordVisionAnalysis(
             string shopKey,
@@ -128,6 +195,8 @@ namespace Bot.ChromeNs
                         old.VisualTags = entity.VisualTags;
                         old.GeneratedAnswer = entity.GeneratedAnswer;
                         if (withdrawn) old.Status = "图片已撤回";
+                        else if (string.Equals(old.Status, "仅OCR证据", StringComparison.Ordinal))
+                            old.Status = "等待人工接待结束";
                         old.UpdatedAtTicks = DateTime.Now.Ticks;
                         entity = old;
                     }
@@ -597,8 +666,14 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,GeneratedAnswer text,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualKnowledgeObservationEntity (EntityId text primary key not null,ShopKey text,Seller text,Buyer text,MessageKey text,VisualQuestion text,VisualSummary text,VisualTags text,GeneratedAnswer text,OcrImageSha256 text,OcrText text,OcrConfidence real not null default 0,OcrEngine text,MatchedImageKnowledgeId text,ImageKnowledgeScore real not null default 0,Status text,LearnedKnowledgeId text,ObservedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column ShopKey text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column OcrImageSha256 text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column OcrText text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column OcrConfidence real not null default 0"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column OcrEngine text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column MatchedImageKnowledgeId text"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualKnowledgeObservationEntity add column ImageKnowledgeScore real not null default 0"); } catch { }
                 DbHelper.Db.Execute("create index if not exists IX_VisualKnowledgeObservation_ShopSellerBuyer on VisualKnowledgeObservationEntity(ShopKey,Seller,Buyer,ObservedAtTicks)");
                 DbHelper.Db.Execute("create table if not exists VisualKnowledgeEntryEntity (EntityId text primary key not null,ShopKey text,Seller text,VisualQuestion text,VisualSummary text,VisualTags text,Answer text,SourceType text,Confirmations integer not null default 0,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualKnowledgeEntryEntity add column ShopKey text"); } catch { }

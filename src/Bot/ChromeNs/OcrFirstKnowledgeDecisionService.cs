@@ -145,6 +145,20 @@ namespace Bot.ChromeNs
                 Log.ErrorWithMaxCount("本店图片知识匹配失败，仍继续OCR证据检索和视觉AI兜底: " + ex.Message, 10);
             }
 
+            try
+            {
+                VisualKnowledgeLearningService.RecordOcrEvidence(
+                    task.ShopKey, knowledgeSeller, task.BuyerNick, task.Message, task.MessageKey,
+                    ocr,
+                    imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.KnowledgeId,
+                    imageKnowledgeMatch == null ? 0d : imageKnowledgeMatch.Score,
+                    imageKnowledgeMatch == null ? string.Empty : imageKnowledgeMatch.Description);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("图片OCR与买家消息/图片知识关联持久化失败；本轮仍继续安全检索: " + ex.Message, 10);
+            }
+
             if (!IsHighConfidenceUsefulText(ocr))
             {
                 Log.Info("OCR-first未满足本地知识直答阈值: seller=" + task.SellerNick

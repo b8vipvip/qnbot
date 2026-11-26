@@ -22,7 +22,8 @@ def test_windows_image_knowledge_has_per_shop_delta_state_and_conflict_safe_appl
     assert "since_revision" in service
     assert "base_revision" in service
     assert "pendingImageBytes" in service
-    assert "actions.OrderBy(x => x.Item1)" in service
+    assert ".OrderBy(x => x.Item1)" in service
+    assert '.ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1)' in service
     assert "SyncImageKnowledgeAsync" in sync
     assert '"/api/runtime/v1/bot-web/image-knowledge/sync"' in sync
     assert '"X-Shop-Key"' in sync
@@ -201,7 +202,8 @@ def test_windows_sqlite_enforces_shopkey_image_knowledge_id_and_hash_boundaries(
     final_write = save.split("            try\n            {", 1)[1].split("            catch", 1)[0]
     assert "currentGlobalId" in final_write
     assert "currentDuplicate" in final_write
-    assert final_write.index("currentDuplicate") < final_write.index("SaveRecordsInTransaction")
+    assert final_write.index("currentDuplicate") < final_write.index("RunInTransaction")
+    assert "conn.InsertOrReplace(entry)" in final_write
 
 
 def test_captioned_buyer_images_keep_their_question_and_offer_import_action():
@@ -253,3 +255,83 @@ def test_missing_image_queue_head_cannot_starve_later_valid_records():
     assert "if (upserts.Count >= 5 || pendingImageBytes >= 8L * 1024L * 1024L) break;" in request
     assert "pendingImageBytes + bytes.Length > 8L * 1024L * 1024L" in request
     assert request.index("if (upserts.Count >= 5") < request.index("File.ReadAllBytes")
+
+
+def test_duplicate_image_conflict_rekeys_atomically_without_deleting_local_file():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    helper = read("src/BotLib/Db/Sqlite/SQLiteHelper.cs")
+    apply = service.split("public static void ApplyCloudSyncResponse", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    rekey = service.split("private static void RekeyLocalDuplicateForCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudUpsert", 1
+    )[0]
+    upsert = service.split("private static void ApplyCloudUpsert", 1)[1].split(
+        "private static void ApplyCloudDelete", 1
+    )[0]
+    assert "RemoveLocalDuplicate" not in service
+    assert "ApplyCloudUpsert(shop, seller, data, duplicateLocalId)" in apply
+    assert "RekeyLocalDuplicateForCloudUpsert(" in upsert
+    assert upsert.index("ComputeSha256(bytes)") < upsert.index("RekeyLocalDuplicateForCloudUpsert(")
+    assert upsert.index("VisionImageResolver.DetectMime(bytes)") < upsert.index("RekeyLocalDuplicateForCloudUpsert(")
+    assert "DbHelper.Db.RunInTransaction" in rekey
+    assert "update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=?" in rekey
+    assert "delete from VisualImageKnowledgeSyncTombstone" in rekey
+    assert '"update VisualImageKnowledgeEntry set EntityId=?,CloudRevision=?' in rekey
+    assert "TryDeleteManagedImage" not in rekey
+    assert "public void RunInTransaction(Action<SQLiteConnection> action)" in helper
+    assert "conn.RunInTransaction(() => action(conn))" in helper
+    assert "conn.Execute(" in rekey
+
+
+def test_image_delete_tombstone_is_atomic_and_survives_duplicate_id_cloud_restore():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    delete = service.split("public static bool Delete", 1)[1].split("public static JObject BuildCloudSyncRequest", 1)[0]
+    reconcile = service.split("private static bool ReconcileDeletedImageByHash", 1)[1].split(
+        "private static void RekeyLocalDuplicateForCloudUpsert", 1
+    )[0]
+    tombstone = service.split("internal sealed class VisualImageKnowledgeSyncTombstone", 1)[1].split(
+        "internal sealed class VisualImageKnowledgeSyncState", 1
+    )[0]
+    assert "ImageSha256" in tombstone
+    assert "DbHelper.Db.RunInTransaction(conn =>" in delete
+    assert "item.ImageSha256" in delete
+    assert "delete from VisualImageKnowledgeEntry" in delete
+    assert "where ShopKey=? and Seller=? and ImageSha256=?" in reconcile
+    assert "latest.DeletedAtTicks <= cloudUpdatedAt" in reconcile
+    assert "set EntityId=?,SyncDirty=1,CloudRevision=?,ImageSha256=?" in reconcile
+    assert "delete from VisualImageKnowledgeEntry" in reconcile
+    assert "ReconcileDeletedImageByHash(shop, seller, id, sha, revision, cloudUpdatedAt)" in service
+    assert "add column ImageSha256 text not null default ''" in service
+
+
+def test_image_save_and_remote_delete_commit_row_and_tombstone_as_single_sqlite_transactions():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    save = service.split("public static VisualImageKnowledgeEntry Save", 1)[1].split(
+        "public static bool Delete", 1
+    )[0]
+    delete = service.split("public static bool Delete", 1)[1].split(
+        "public static JObject BuildCloudSyncRequest", 1
+    )[0]
+    remote_delete = service.split("private static void ApplyCloudDelete", 1)[1].split(
+        "private static VisualImageKnowledgeSyncState SelectSyncState", 1
+    )[0]
+    assert "DbHelper.Db.RunInTransaction(conn =>" in save
+    assert "conn.InsertOrReplace(entry)" in save
+    assert "delete from VisualImageKnowledgeSyncTombstone" in save
+    assert "DbHelper.Db.RunInTransaction(conn =>" in delete
+    assert "insert or replace into VisualImageKnowledgeSyncTombstone" in delete
+    assert "delete from VisualImageKnowledgeEntry" in delete
+    assert "DbHelper.Db.RunInTransaction(conn =>" in remote_delete
+    assert "ImageSha256" in remote_delete
+    assert "TryDeleteManagedImage(old.ImagePath" in remote_delete
+
+
+def test_duplicate_id_conflict_mapping_is_applied_before_same_revision_cloud_delta_upsert():
+    service = read("src/Bot/ChromeNs/VisualImageKnowledgeService.cs")
+    apply = service.split("public static void ApplyCloudSyncResponse", 1)[1].split(
+        "private static bool ReconcileDeletedImageByHash", 1
+    )[0]
+    assert ".OrderBy(x => x.Item1)" in apply
+    assert '.ThenBy(x => Clean((string)x.Item4["local_id"], 80).Length > 0 ? 0 : 1)' in apply
+    assert "Re-key the local duplicate first" in apply
