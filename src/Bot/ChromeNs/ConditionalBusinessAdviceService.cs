@@ -131,20 +131,26 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var matchingOrders = (orders ?? new List<OrderSnapshot>())
-                .Where(x => x != null
-                    && string.Equals((x.OrderId ?? string.Empty).Trim(), commerce.OrderId.Trim(), StringComparison.Ordinal)
+            // The order ledger may retain multiple events for one order. Collapse to
+            // the latest event per order before checking terminal state or ambiguity.
+            var latestOrders = (orders ?? new List<OrderSnapshot>())
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.OrderId))
+                .GroupBy(x => x.OrderId.Trim(), StringComparer.Ordinal)
+                .Select(group => group.OrderByDescending(x => x.EventTime)
+                    .ThenByDescending(x => x.DetectedAt).First())
+                .ToList();
+            var matchingOrders = latestOrders
+                .Where(x => string.Equals((x.OrderId ?? string.Empty).Trim(), commerce.OrderId.Trim(), StringComparison.Ordinal)
                     && string.Equals((x.ShopKey ?? string.Empty).Trim(), shopKey, StringComparison.Ordinal)
                     && string.Equals((x.Seller ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase)
                     && string.Equals((x.Buyer ?? string.Empty).Trim(), buyer, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(x => x.EventTime)
                 .ToList();
             var order = matchingOrders.FirstOrDefault();
             if (!IsPaidAndOpen(order)) return false;
 
             // If multiple paid orders exist and the conversation selector had to choose
             // a latest-order fallback, do not guess which order the image belongs to.
-            var paidOpenOrders = (orders ?? new List<OrderSnapshot>()).Where(IsPaidAndOpen).ToList();
+            var paidOpenOrders = latestOrders.Where(IsPaidAndOpen).ToList();
             var selectionReason = commerce.SelectionReason ?? string.Empty;
             var hasCurrentUniqueOrderSignal =
                 selectionReason.IndexOf("current_order_id", StringComparison.OrdinalIgnoreCase) >= 0
