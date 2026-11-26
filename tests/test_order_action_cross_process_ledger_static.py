@@ -126,7 +126,7 @@ def test_live_inflight_order_reply_barrier_never_expires_while_owner_process_is_
         code.index("internal static void MarkDeliveryUncertain")
     ]
 
-    assert "(!x.InFlight && x.Until <= now)" in begin
+    assert "(!x.InFlight && !x.DeliveryUncertain && x.Until <= now)" in begin
     assert "if (priorAction != null && priorAction.InFlight)" in begin
     assert "if (IsActionOwnerProcessAlive(priorAction))" in begin
 
@@ -171,3 +171,16 @@ def test_order_reply_process_identity_uses_pid_and_start_time_to_avoid_pid_reuse
     assert "process.HasExited" in helper
     assert "record.ProcessStartTimeUtcTicks" in helper
     assert "TimeSpan.FromSeconds(2).Ticks" in helper
+
+
+def test_order_reply_delivery_uncertain_barriers_do_not_expire_after_review_window():
+    source = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    begin = source.split("internal static bool TryBeginExecution", 1)[1].split(
+        "internal static void MarkDeliveryUncertain", 1
+    )[0]
+    assert "ActiveActions.RemoveAll(x => x == null" in begin
+    assert "!x.InFlight && !x.DeliveryUncertain && x.Until <= now" in begin
+    assert "_actionState.Records.RemoveAll(x => x == null" in begin
+    assert "DeliveryUncertain && SameAction(x, plan)" in begin
+    assert 'reason = "action_delivery_uncertain"' in begin
+    assert "A 30-day review window is a notification/triage SLA" in begin

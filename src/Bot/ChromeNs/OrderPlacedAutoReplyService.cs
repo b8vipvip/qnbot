@@ -697,11 +697,14 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     var now = DateTime.Now;
-                    // An in-flight action must not expire while its owner process is alive.
-                    // Even after the nominal review window, the process identity is checked
-                    // before any at-most-once barrier can be discarded.
-                    ActiveActions.RemoveAll(x => x == null || (!x.InFlight && x.Until <= now));
-                    _actionState.Records.RemoveAll(x => x == null || (!x.InFlight && x.Until <= now));
+                    // In-flight actions and uncertain delivery outcomes are at-most-once
+                    // safety barriers. A 30-day review window is a notification/triage SLA,
+                    // not proof that the side effect was resolved; never expire an uncertain
+                    // order action into permission to send again.
+                    ActiveActions.RemoveAll(x => x == null
+                        || (!x.InFlight && !x.DeliveryUncertain && x.Until <= now));
+                    _actionState.Records.RemoveAll(x => x == null
+                        || (!x.InFlight && !x.DeliveryUncertain && x.Until <= now));
 
                     var canonical = FindCanonicalOrderIdLocked(plan.ShopKey, plan.Seller, plan.Buyer, plan.OrderId);
                     if (!string.IsNullOrWhiteSpace(canonical)
