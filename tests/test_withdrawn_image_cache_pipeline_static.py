@@ -281,3 +281,14 @@ def test_duplicate_withdrawal_notice_reuses_latest_existing_tombstone_instead_of
     assert 'x.Status, "图片已撤回"' not in lookup
     assert "SameBuyerForWithdrawal(seller, x.Buyer, buyer)" in lookup
     assert "order by ObservedAtTicks desc, UpdatedAtTicks desc" in lookup
+
+
+def test_duplicate_withdrawal_notice_does_not_skip_latest_in_memory_tombstone():
+    cache = read("src/Bot/ChromeNs/VisionImageCacheService.cs")
+    withdraw = cache.split("public static void MarkLatestBuyerImageWithdrawn", 1)[1].split(
+        "public static async Task<VisionImageResult> ResolveAsync", 1
+    )[0]
+    assert "Duplicate/replayed withdrawal notices" in withdraw
+    assert ".Where(x => !x.Withdrawn" not in withdraw
+    assert "OrderByDescending(x => x.ObservedAt)" in withdraw
+    assert "FindLatestObservationMessageKey(" in withdraw
