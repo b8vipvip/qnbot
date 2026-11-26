@@ -439,6 +439,8 @@ namespace Bot.ChromeNs
             if (!IsEvidenceStillValid(shopKey, seller, buyer, orderId, itemId, imageMessageKey, imageKnowledgeId))
             {
                 reason = "订单或图片证据已变化、失效或无法复核";
+                RecordDiagnosticEvent("delivery_blocked", "evidence_changed_before_send",
+                    shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
                 return false;
             }
 
@@ -464,6 +466,9 @@ namespace Bot.ChromeNs
                 if (record != null && record.DeliveredAt != DateTime.MinValue)
                 {
                     reason = "该订单的相同售后建议已经发送，不再重复发送";
+                    AppendDiagnosticEvent(state, "delivery_blocked_duplicate", "already_delivered",
+                        shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                    SaveLedger(path, state, out loadError);
                     return false;
                 }
                 if (record != null && record.ReservedUntil > DateTime.Now)
@@ -471,6 +476,10 @@ namespace Bot.ChromeNs
                     reason = record.DeliveryUncertain
                         ? "该订单的售后建议发送状态不确定，需要人工核实，禁止重复发送"
                         : "该订单的售后建议正在发送，禁止并发重复发送";
+                    AppendDiagnosticEvent(state, "delivery_blocked_reserved_or_uncertain",
+                        record.DeliveryUncertain ? "delivery_uncertain" : "delivery_in_progress",
+                        shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
+                    SaveLedger(path, state, out loadError);
                     return false;
                 }
                 if (record == null)
@@ -491,6 +500,8 @@ namespace Bot.ChromeNs
                 record.ReservedUntil = DateTime.MaxValue;
                 record.DeliveryUncertain = true;
                 record.UpdatedAt = DateTime.Now;
+                AppendDiagnosticEvent(state, "delivery_reserved", "reserved_before_send",
+                    shopKey, seller, buyer, orderId, imageMessageKey, imageKnowledgeId, adviceKey);
                 if (!SaveLedger(path, state, out loadError))
                 {
                     reason = "条件性建议幂等账本写入失败，已拒绝发送：" + loadError;
@@ -539,6 +550,10 @@ namespace Bot.ChromeNs
                     record.ReservedUntil = DateTime.MaxValue;
                 }
                 record.UpdatedAt = DateTime.Now;
+                AppendDiagnosticEvent(state,
+                    delivered ? "delivery_sent" : (cancelled ? "delivery_cancelled" : "delivery_uncertain"),
+                    delivered ? "send_confirmed" : (cancelled ? "send_cancelled_before_delivery" : "send_outcome_uncertain"),
+                    shopKey, seller, buyer, orderId, string.Empty, string.Empty, adviceKey);
                 SaveLedger(path, state, out error);
             }
         }
