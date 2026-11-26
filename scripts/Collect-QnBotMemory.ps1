@@ -264,8 +264,8 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncShops = @()
                 if ($null -ne $knowledgeSync.Shops) { $syncShops = @($knowledgeSync.Shops) }
                 $knowledgeSyncShopCount = $syncShops.Count
-                $knowledgeSyncConvergedShopCount = @($syncShops | Where-Object { $_.Converged -eq $true }).Count
-                $knowledgeSyncDivergentShopCount = @($syncShops | Where-Object { $_.Converged -eq $false }).Count
+                $knowledgeSyncConvergedShopCount = 0
+                $knowledgeSyncDivergentShopCount = 0
                 $knowledgeSyncSyncingShopCount = @($syncShops | Where-Object { $_.Syncing -eq $true }).Count
                 if ($syncShops.Count -gt 0) {
                     $knowledgeSyncLatestRevision = ($syncShops | Measure-Object -Property CloudRevision -Maximum).Maximum
@@ -274,7 +274,18 @@ for ($sample = 1; $sample -le $loops; $sample++) {
                 $syncStatuses = @()
                 foreach ($syncShop in $syncShops) {
                     if ($null -eq $syncShop) { continue }
-                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$syncShop.Converged + ':' + [string]$syncShop.Syncing)
+                    # Snapshot freshness is not per-shop freshness: another shop can refresh the file.
+                    $shopConverged = $false
+                    if ($syncShop.Converged -eq $true -and $syncShop.LastStatus -eq 'synced' -and
+                        -not [string]::IsNullOrWhiteSpace([string]$syncShop.LastSuccessUtc)) {
+                        $lastSuccess = [DateTimeOffset]::MinValue
+                        if ([DateTimeOffset]::TryParse([string]$syncShop.LastSuccessUtc, [ref]$lastSuccess)) {
+                            $successAge = ([DateTimeOffset]::UtcNow - $lastSuccess).TotalSeconds
+                            $shopConverged = $successAge -ge -30 -and $successAge -le 180
+                        }
+                    }
+                    if ($shopConverged) { $knowledgeSyncConvergedShopCount++ } else { $knowledgeSyncDivergentShopCount++ }
+                    $syncShopStates += ([string]$syncShop.ShopRef + '=' + [string]$syncShop.CloudRevision + ':' + [string]$syncShop.LocalFingerprintPrefix + '/' + [string]$syncShop.CloudFingerprintPrefix + ':' + [string]$syncShop.LastStatus + ':' + [string]$shopConverged + ':' + [string]$syncShop.Syncing)
                     if (-not [string]::IsNullOrWhiteSpace([string]$syncShop.LastStatus)) {
                         $syncStatuses += [string]$syncShop.LastStatus
                     }
