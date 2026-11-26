@@ -114,6 +114,9 @@ namespace Bot.ChromeNs
             shopKey = (shopKey ?? string.Empty).Trim();
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(expectedImageKnowledgeId)
+                && string.IsNullOrWhiteSpace(expectedImageMessageKey))
+                return false;
             if (shopKey.Length == 0 || seller.Length == 0 || buyer.Length == 0
                 || commerce == null || !commerce.HasStructuredOrder
                 || commerce.IsPaid != true
