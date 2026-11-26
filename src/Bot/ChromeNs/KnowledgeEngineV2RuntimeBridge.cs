@@ -188,15 +188,19 @@ namespace Bot.ChromeNs
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion);
-            if (!commerceAuthority.AllowLocalTerminalReply)
+            var conditionalOnly = !commerceAuthority.AllowLocalTerminalReply;
+            ConditionalBusinessAdviceEvidence conditionalAdviceEvidence = null;
+            if (conditionalOnly
+                && !ConditionalBusinessAdviceService.TryBuild(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    commerceAuthority.CommerceContext, out conditionalAdviceEvidence))
             {
-                var commerce = commerceAuthority.CommerceContext;
-                Log.Info("Knowledge Engine V2已让出终态直答权，交给Commerce Smart Reply: buyer="
+                var commercePrompt = CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                Log.Info("Knowledge Engine V2已让出普通订单直答权；未取得可用于条件性售后建议的通用图片/订单证据: buyer="
                     + burst.BuyerNick
-                    + ", phase=" + (commerce == null ? string.Empty : commerce.PurchasePhase)
-                    + ", structured=" + (commerce != null && commerce.HasStructuredOrder)
+                    + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
-                return KnowledgeV2RuntimeResult.Continue();
+                return KnowledgeV2RuntimeResult.Continue(commercePrompt);
             }
 
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
@@ -210,7 +214,31 @@ namespace Bot.ChromeNs
             KnowledgeV2Decision decision;
             try
             {
-                decision = KnowledgeEngineV2Service.Resolve(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                if (conditionalOnly)
+                {
+                    var imageEvidenceText = ConditionalBusinessAdviceService.BuildImageEvidenceText(conditionalAdviceEvidence);
+                    decision = KnowledgeEngineV2Service.ResolveWithCuratedImageKnowledgeEvidence(
+                        burst.SellerNick,
+                        burst.BuyerNick,
+                        burst.CombinedQuestion,
+                        imageEvidenceText,
+                        conditionalAdviceEvidence.ImageDescription);
+                    string conditionalReason;
+                    if (!ConditionalBusinessAdviceService.TryAuthorizeRefundSuggestion(
+                        decision, conditionalAdviceEvidence, out conditionalReason))
+                    {
+                        var conditionalPrompt = ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                            + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                        Log.Info("Knowledge Engine V2条件性售后建议未通过业务证据门禁，交给上下文AI处理: buyer="
+                            + burst.BuyerNick + ", reason=" + conditionalReason);
+                        return KnowledgeV2RuntimeResult.Continue(conditionalPrompt);
+                    }
+                }
+                else
+                {
+                    decision = KnowledgeEngineV2Service.Resolve(
+                        burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion);
+                }
             }
             catch (Exception ex)
             {
@@ -222,6 +250,9 @@ namespace Bot.ChromeNs
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
                 var contextPromptAddon = BuildContextPromptAddon(decision);
+                if (conditionalOnly)
+                    contextPromptAddon += ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
                 Log.Info("Knowledge Engine V2未直答: buyer=" + burst.BuyerNick
                     + ", totalMs=" + (decision == null ? 0 : decision.TotalMs)
                     + ", candidates=" + (decision == null ? 0 : decision.CandidateCount)
