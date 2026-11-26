@@ -195,9 +195,12 @@ namespace Bot.ChromeNs
                     if (currentDuplicate != null)
                         throw new InvalidOperationException("当前ShopKey已存在这张图片，请编辑已有图片知识。");
 
-                    DbHelper.Db.SaveRecordsInTransaction(new List<object> { entry });
-                    DbHelper.Db.Execute("delete from VisualImageKnowledgeSyncTombstone where EntityId = ? and ShopKey = ? and Seller = ?",
-                        entry.EntityId, shop.ShopKey, seller);
+                    DbHelper.Db.RunInTransaction(conn =>
+                    {
+                        conn.InsertOrReplace(entry);
+                        conn.Execute("delete from VisualImageKnowledgeSyncTombstone where EntityId = ? and ShopKey = ? and Seller = ?",
+                            entry.EntityId, shop.ShopKey, seller);
+                    });
                 }
             }
             catch
@@ -671,12 +674,6 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                if (old != null)
-                {
-                    DbHelper.Db.Execute("delete from VisualImageKnowledgeEntry where EntityId=? and ShopKey=? and Seller=?",
-                        id, shop.ShopKey, seller);
-                    TryDeleteManagedImage(old.ImagePath, GetImageDirectory(shop));
-                }
                 var deletedAtTicks = deletedAt > 0 ? deletedAt : DateTime.Now.Ticks;
                 var preservedSha = old != null ? old.ImageSha256
                     : localDelete == null ? string.Empty : localDelete.ImageSha256;
