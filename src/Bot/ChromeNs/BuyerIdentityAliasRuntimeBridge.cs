@@ -35,17 +35,24 @@ namespace Bot.ChromeNs
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    lock (Sync)
+                    try
                     {
-                        object marker;
-                        if (Attached.TryGetValue(qn, out marker)) continue;
-                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                        qn.EvBuyerSwitched += OnBuyerSwitched;
-                        qn.EvSellerSwitched += OnSellerSwitched;
-                        Attached.Add(qn, new object());
+                        lock (Sync)
+                        {
+                            object marker;
+                            if (Attached.TryGetValue(qn, out marker)) continue;
+                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                            qn.EvBuyerSwitched += OnBuyerSwitched;
+                            qn.EvSellerSwitched += OnSellerSwitched;
+                            Attached.Add(qn, new object());
+                        }
+                        Log.Info("买家昵称别名桥接已绑定客服实例: seller="
+                            + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                     }
-                    Log.Info("买家昵称别名桥接已绑定客服实例: seller="
-                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的买家昵称别名订阅并继续：" + ex.Message, 10);
+                    }
                 }
             }
             catch (Exception ex)

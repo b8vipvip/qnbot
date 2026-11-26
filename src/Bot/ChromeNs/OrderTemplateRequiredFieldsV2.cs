@@ -134,20 +134,31 @@ namespace Bot.ChromeNs
         {
             try
             {
-                CleanupInflight();
+                try { CleanupInflight(); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("清理订单模板字段 V2 残留任务失败，继续绑定会话：" + Safe(ex.Message, 300), 10);
+                }
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    lock (AttachSync)
+                    try
                     {
-                        object marker;
-                        if (Attached.TryGetValue(qn, out marker)) continue;
-                        qn.EvRecieveNewMessage += OnReceiveNewMessage;
-                        qn.EvMessageNotity += OnMessageNotify;
-                        Attached.Add(qn, new object());
+                        lock (AttachSync)
+                        {
+                            object marker;
+                            if (Attached.TryGetValue(qn, out marker)) continue;
+                            qn.EvRecieveNewMessage += OnReceiveNewMessage;
+                            qn.EvMessageNotity += OnMessageNotify;
+                            Attached.Add(qn, new object());
+                        }
+                        Log.Info("订单模板字段完整性 V2 已绑定: seller="
+                            + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                     }
-                    Log.Info("订单模板字段完整性 V2 已绑定: seller="
-                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的订单模板 V2 订阅并继续：" + Safe(ex.Message, 300), 10);
+                    }
                 }
             }
             catch (Exception ex)

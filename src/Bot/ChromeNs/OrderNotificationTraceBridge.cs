@@ -71,12 +71,19 @@ namespace Bot.ChromeNs
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    lock (AttachSync)
+                    try
                     {
-                        object marker;
-                        if (Attached.TryGetValue(qn, out marker)) continue;
-                        qn.EvMessageNotity += OnMessageNotify;
-                        Attached.Add(qn, new object());
+                        lock (AttachSync)
+                        {
+                            object marker;
+                            if (Attached.TryGetValue(qn, out marker)) continue;
+                            qn.EvMessageNotity += OnMessageNotify;
+                            Attached.Add(qn, new object());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的订单通知订阅并继续：" + ex.Message, 10);
                     }
                 }
             }

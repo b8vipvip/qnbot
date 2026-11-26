@@ -78,28 +78,43 @@ namespace Bot.ChromeNs
                 var snapshot = QN.GetRuntimeSafetySnapshot().Where(x => x != null).ToList();
                 foreach (var qn in snapshot)
                 {
-                    lock (SubscriptionSync)
+                    try
                     {
-                        object marker;
-                        if (!Subscribed.TryGetValue(qn, out marker))
+                        lock (SubscriptionSync)
                         {
-                            Subscribe(qn);
-                            Subscribed.Add(qn, new object());
+                            object marker;
+                            if (!Subscribed.TryGetValue(qn, out marker))
+                            {
+                                Subscribe(qn);
+                                Subscribed.Add(qn, new object());
+                            }
                         }
+                        var seller = Seller(qn);
+                        var shopKey = ShopKey(qn);
+                        var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
+                        if (qn.Rpa != null && ActiveShopSessionRegistry.IsActive(qn)
+                            && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)))
+                            qn.Rpa.EnsureSellerDeskBinding();
+                        SyncAttachedUi(qn);
                     }
-                    var seller = Seller(qn);
-                    var shopKey = ShopKey(qn);
-                    var desk = DeskSellerBindingRegistry.FindSellerDesk(seller, shopKey);
-                    if (qn.Rpa != null && ActiveShopSessionRegistry.IsActive(qn)
-                        && (desk == null || DeskSellerBindingRegistry.IsSellerForDesk(desk, seller, shopKey)))
-                        qn.Rpa.EnsureSellerDeskBinding();
-                    SyncAttachedUi(qn);
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("单个千牛会话多店铺协调失败，继续处理其他店铺：" + ex.Message, 10);
+                    }
                 }
 
                 // Legacy status/init code can still assign CurQN while refreshing a background
                 // seller. Reassert the independently arbitrated seller on every coordinator tick.
-                ActiveShopSessionRegistry.ReassertCurrent("runtime-refresh");
-                QueueActiveShopProbe(snapshot);
+                try { ActiveShopSessionRegistry.ReassertCurrent("runtime-refresh"); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("重新确认活动店铺失败：" + ex.Message, 10);
+                }
+                try { QueueActiveShopProbe(snapshot); }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("排队活动店铺探测失败：" + ex.Message, 10);
+                }
             }
             catch (Exception ex)
             {

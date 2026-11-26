@@ -43,7 +43,11 @@ namespace Bot.ChromeNs
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
-                    qn.EnsureRequiredOrderFieldsNotifyHandlerFirst();
+                    try { qn.EnsureRequiredOrderFieldsNotifyHandlerFirst(); }
+                    catch (Exception ex)
+                    {
+                        Log.ErrorWithMaxCount("跳过异常千牛会话的订单字段优先级调整并继续：" + ex.Message, 10);
+                    }
                 }
             }
             catch (Exception ex)
