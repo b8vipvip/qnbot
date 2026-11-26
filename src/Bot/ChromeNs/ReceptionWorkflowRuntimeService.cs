@@ -1252,7 +1252,8 @@ namespace Bot.ChromeNs
                 fault["rollback_completed"] = completed;
                 fault["rollback_superseded"] = superseded;
                 fault["rollback_retry_after_utc_ticks"] = retryAfterUtcTicks;
-                fault["last_rollback_error"] = SafeMetadata(error, 320);
+                var safeError = error ?? string.Empty;
+                fault["last_rollback_error"] = safeError.Length <= 320 ? safeError : safeError.Substring(0, 320);
                 if (completed) fault["rollback_completed_utc_ticks"] = DateTime.UtcNow.Ticks;
                 return true;
             });
