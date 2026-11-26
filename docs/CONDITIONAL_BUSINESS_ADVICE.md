@@ -94,3 +94,10 @@ Expected outcome codes:
 ## Windows package
 
 The branch is based on current `master`, which already contains #504 deterministic HitInfo matching and #505 curated-image short follow-up handling. The Windows release workflow builds the complete `Bin + data` package and intentionally excludes local `params.db`.
+
+
+## Knowledge V2 snapshot deletion safety
+
+The Windows runtime sync endpoint accepts full-corpus snapshots, but a previously synchronized record ID must not disappear silently. Deletion must retain the same record ID as a disabled `Status=deleted` tombstone. If a Windows snapshot omits one or more cloud IDs without tombstones, the control plane returns the current cloud snapshot with `sync_warning.code=missing_tombstones` and does not advance the cloud revision. Windows backs up its current local corpus, merges the cloud snapshot with local-only records as disabled conflict candidates, and retries the merged corpus on a later poll. This protects the cloud corpus when a local SQLite file is truncated, restored incompletely, or recreated empty.
+
+The conditional-advice reconciliation window now reports whether the server-side cross-device list was read successfully and labels each row as local or server-originated. If the control plane is unreachable, the window explicitly warns that it is showing only local records; an empty local list must not be interpreted as proof that other devices have no uncertain sends.
