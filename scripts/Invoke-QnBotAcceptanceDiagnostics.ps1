@@ -836,9 +836,9 @@ if ($conditionalBusinessAdvice.RecentEvents.Count -eq 0) {
     $markdown += '- No conditional business advice events recorded yet.'
 } else {
     foreach ($event in $conditionalBusinessAdvice.RecentEvents) {
-        $markdown += ('- ' + $event.AtUtc + ' | ' + $event.Outcome + ' | ' + $event.Reason
-            + ' | ' + $event.ShopRef + ' | ' + $event.BuyerRef + ' | ' + $event.OrderRef
-            + ' | ' + $event.ImageRef + ' | ' + $event.ImageKnowledgeRef + ' | ' + $event.AdviceRef)
+        $markdown += ('- {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8}' -f
+            $event.AtUtc, $event.Outcome, $event.Reason, $event.ShopRef, $event.BuyerRef,
+            $event.OrderRef, $event.ImageRef, $event.ImageKnowledgeRef, $event.AdviceRef)
     }
 }
 $markdown += @('', '## CDP / IMSDK')
