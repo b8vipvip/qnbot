@@ -1204,8 +1204,6 @@ namespace Bot.ChromeNs
                 var shouldSend = ParallelReplyRelevanceGate.ShouldSend(
                     burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt,
                     out latestReason, false, burst.ShopKey);
-                if (shouldSend && conditionalAdviceReserved)
-                    conditionalAdviceSendMayHaveStarted = true;
                 return shouldSend;
             };
             var sendOk = await SendTextWithRetryAsync(
