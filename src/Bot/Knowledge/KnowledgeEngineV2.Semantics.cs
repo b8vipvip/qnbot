@@ -321,7 +321,12 @@ namespace Bot.Knowledge
                 return false;
             }
 
-            var required = NormalizeScopeTerms(record.RequiredContext);
+            // Typed business-evidence requirements are evaluated by the dedicated
+            // conditional-advice gate, which has access to authoritative order and image
+            // ledgers. They must not be treated as buyer-authored text terms here.
+            var required = NormalizeScopeTerms(record.RequiredContext)
+                .Where(x => !ConditionalBusinessAdviceService.IsEvidenceRequirement(x))
+                .ToList();
             var missing = required.FirstOrDefault(x => !ScopeTermMatches(x, query));
             if (!string.IsNullOrWhiteSpace(missing))
             {
