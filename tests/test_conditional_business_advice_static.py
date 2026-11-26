@@ -233,5 +233,6 @@ def test_cancelled_retry_does_not_release_a_key_after_an_earlier_send_may_have_s
     ):
         source = read(path)
         assert "conditionalAdviceSendMayHaveStarted" in source
-        assert "sendCancelled && !conditionalAdviceSendMayHaveStarted" in source
+        assert "CompleteDelivery(" in source
+        assert "!conditionalAdviceSendMayHaveStarted" in source
         assert "!conditionalAdviceSendMayHaveStarted" in source
