@@ -94,7 +94,7 @@ def test_ocr_evidence_enriches_knowledge_recall_without_rewriting_buyer_query_or
     assert "curatedImageEvidence && IsSafeCuratedImageFollowUp(query, message)" in internal
     assert "private static bool IsSafeCuratedImageFollowUp" in service
     assert "query.ContextDependent" in service
-    assert "KnowledgeV2Semantics.IsHighRisk(message)" in service
+    assert "KnowledgeEngineV2Semantics.IsHighRisk(message)" in service
     assert "你" in service and "看看" in service
 
     assert "KnowledgeEngineV2Service.ResolveWithEvidence(" in ocr
