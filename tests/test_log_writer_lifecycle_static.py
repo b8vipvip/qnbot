@@ -29,7 +29,7 @@ def test_log_writer_close_is_idempotent_and_rejects_writes_after_close():
 def test_loop_save_file_stops_its_timer_and_serializes_final_flush():
     source = read("src/BotLib/LogWriter.cs")
     loop = source.split("private class LoopSaveFile", 1)[1]
-    close = loop.split("public void Close()", 1)[1].split("private void DeleteExpiredSegments", 1)[0]
+    close = loop.split("public void Close()", 1)[1].split("public void WriteLine(string text)", 1)[0]
     assert "private readonly object _writeSync = new object();" in loop
     assert "private int _closed;" in loop
     assert "if (Interlocked.Exchange(ref _closed, 1) != 0) return;" in close
