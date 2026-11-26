@@ -47,3 +47,19 @@ def test_successful_server_rebind_is_not_reported_as_failed_when_local_cleanup_i
     assert "return ShopTokenBindingService.ClearDuplicateLocalTokenCopies(_shop, candidate);" in ui
     assert "localDuplicateCleanupComplete = ValidateTokenBinding(candidate)" in ui
     assert "令牌已绑定，需检查本机清理" in ui
+
+
+def test_shop_identity_cache_keeps_last_known_aliases_for_offline_but_registered_shops():
+    bridge = read("src/Bot/ShopScope/ShopScopedRuntimeBridge.cs")
+    refresh = bridge.split("private static void RefreshProfileCacheIfNeeded()", 1)[1].split(
+        "private static string StableSellerRef", 1
+    )[0]
+    assert "AddSellerRefAlias(StableSellerRef(profile.SellerNick), shop);" in refresh
+    assert "AddSellerRefAlias(StableSellerRef(profile.DisplayName), shop);" in refresh
+    preserve = refresh.split("// Keep last-known seller aliases", 1)[1].split(
+        "// Apply the completed snapshot", 1
+    )[0]
+    assert "foreach (var pair in ShopBySellerRef)" in preserve
+    assert "nextByKey.ContainsKey(pair.Value.ShopKey)" in preserve
+    assert "!ambiguousSellerRefs.Contains(pair.Key)" in preserve
+    assert "runtimeSnapshotSucceeded" not in refresh

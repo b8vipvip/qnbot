@@ -291,8 +291,10 @@ namespace Bot.ShopScope
                         var shop = profile.ToContext();
                         if (shop == null || string.IsNullOrWhiteSpace(shop.ShopKey)) continue;
                         nextByKey[shop.ShopKey] = shop;
-                        var sellerRef = StableSellerRef(profile.DisplayName);
-                        AddSellerRefAlias(sellerRef, shop);
+                        // Keep both the authenticated seller nick and the UI display alias.
+                        // DisplayName can be a shortened label and is not always the login nick.
+                        AddSellerRefAlias(StableSellerRef(profile.SellerNick), shop);
+                        AddSellerRefAlias(StableSellerRef(profile.DisplayName), shop);
                     }
                     catch (Exception ex)
                     {
@@ -306,11 +308,9 @@ namespace Bot.ShopScope
 
                 // Profile display names can be shorter than the authenticated Qianniu login
                 // identity (for example "客服名" vs "主账号:客服名"). Add live seller aliases.
-                var runtimeSnapshotSucceeded = false;
                 try
                 {
                     var runtimeSellers = QN.GetRuntimeSafetySnapshot();
-                    runtimeSnapshotSucceeded = runtimeSellers != null;
                     foreach (var qn in (runtimeSellers ?? new System.Collections.Generic.List<QN>()).Where(x => x != null && x.Seller != null))
                     {
                         var seller = (qn.Seller.Nick ?? string.Empty).Trim();
@@ -350,14 +350,14 @@ namespace Bot.ShopScope
                         && ShopBySellerRef.TryGetValue(failedRef, out previous))
                         nextBySellerRef[failedRef] = previous;
                 }
-                if (!runtimeSnapshotSucceeded)
-                {
-                    foreach (var pair in ShopBySellerRef)
-                        if (!ambiguousSellerRefs.Contains(pair.Key)
-                            && nextByKey.ContainsKey(pair.Value.ShopKey)
-                            && !nextBySellerRef.ContainsKey(pair.Key))
-                            nextBySellerRef[pair.Key] = pair.Value;
-                }
+                // Keep last-known seller aliases for shops that remain registered even
+                // while their QN wrapper is temporarily offline or absent from the runtime
+                // snapshot. Current collisions above still remove and suppress ambiguous refs.
+                foreach (var pair in ShopBySellerRef)
+                    if (!ambiguousSellerRefs.Contains(pair.Key)
+                        && nextByKey.ContainsKey(pair.Value.ShopKey)
+                        && !nextBySellerRef.ContainsKey(pair.Key))
+                        nextBySellerRef[pair.Key] = pair.Value;
 
                 // Apply the completed snapshot incrementally instead of clearing both shared
                 // dictionaries before profile conversion has succeeded.
