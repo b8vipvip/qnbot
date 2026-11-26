@@ -20,6 +20,8 @@ namespace Bot.ChromeNs
         private sealed class PendingDelivery
         {
             public string Id;
+            public readonly object Sync = new object();
+            public int Terminal;
             public ShopContext Shop;
             public string Seller;
             public string Buyer;
@@ -64,9 +66,18 @@ namespace Bot.ChromeNs
             var existing = FindPending(shop, seller, buyer, answer);
             if (existing != null)
             {
-                existing.Question = question ?? existing.Question;
-                existing.Source = source ?? existing.Source;
-                return;
+                lock (existing.Sync)
+                {
+                    PendingDelivery current;
+                    if (existing.Terminal == 0
+                        && Pending.TryGetValue(existing.Id, out current)
+                        && ReferenceEquals(current, existing))
+                    {
+                        existing.Question = question ?? existing.Question;
+                        existing.Source = source ?? existing.Source;
+                        return;
+                    }
+                }
             }
 
             var readyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
@@ -158,19 +169,30 @@ namespace Bot.ChromeNs
             if (matches.Count == 0) return false;
 
             var now = DateTime.Now;
+            var acceptedCount = 0;
             foreach (var pending in matches)
             {
-                pending.SubmissionEvidence = evidence;
-                Interlocked.Exchange(ref pending.SubmissionAcceptedTicks, now.Ticks);
+                lock (pending.Sync)
+                {
+                    PendingDelivery current;
+                    if (pending.Terminal != 0
+                        || !Pending.TryGetValue(pending.Id, out current)
+                        || !ReferenceEquals(current, pending)) continue;
+                    pending.SubmissionEvidence = evidence;
+                    Interlocked.Exchange(ref pending.SubmissionAcceptedTicks, now.Ticks);
+                    acceptedCount++;
+                }
             }
+            if (acceptedCount == 0) return false;
 
-            // Mark the outbound body as Bot-owned immediately. A late seller echo/history recovery
-            // must not be mistaken for a human reply merely because its live echo event was missed.
+            // Submission proof and timeout terminalization share the same per-delivery lock.
+            // Whichever transition wins first defines the outcome; a late proof cannot mutate
+            // a watchdog that has already been terminalized as failed/cancelled.
             KnownBotAnswers[AnswerKey(seller, buyer, answer, shopKey)] = now.AddMinutes(2);
             CleanupKnownAnswers();
             Log.Info("发送回显监控已记录千牛提交证据，继续等待真实卖家回显但禁止据此判失败/重发: shop="
                 + shopKey + ", seller=" + seller + ", buyer=" + buyer
-                + ", matchedWatchdogs=" + matches.Count + ", evidence=" + evidence);
+                + ", matchedWatchdogs=" + acceptedCount + ", evidence=" + evidence);
             return true;
         }
 
@@ -190,8 +212,21 @@ namespace Bot.ChromeNs
             var removedCount = 0;
             foreach (var pair in matches)
             {
-                PendingDelivery removed;
-                if (Pending.TryRemove(pair.Key, out removed)) removedCount++;
+                var pending = pair.Value;
+                if (pending == null) continue;
+                lock (pending.Sync)
+                {
+                    PendingDelivery current;
+                    if (pending.Terminal != 0
+                        || !Pending.TryGetValue(pair.Key, out current)
+                        || !ReferenceEquals(current, pending)) continue;
+                    PendingDelivery removed;
+                    if (Pending.TryRemove(pair.Key, out removed) && ReferenceEquals(removed, pending))
+                    {
+                        pending.Terminal = 1;
+                        removedCount++;
+                    }
+                }
             }
             if (removedCount > 0)
             {
@@ -216,12 +251,23 @@ namespace Bot.ChromeNs
                     && string.Equals(x.Buyer, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)
                     && Normalize(x.Answer) == normalized)
                 .ToList();
+            var markedCount = 0;
             foreach (var pending in matches)
-                Interlocked.Exchange(ref pending.SupersededByManual, 1);
-            if (matches.Count > 0)
+            {
+                lock (pending.Sync)
+                {
+                    PendingDelivery current;
+                    if (pending.Terminal != 0
+                        || !Pending.TryGetValue(pending.Id, out current)
+                        || !ReferenceEquals(current, pending)) continue;
+                    Interlocked.Exchange(ref pending.SupersededByManual, 1);
+                    markedCount++;
+                }
+            }
+            if (markedCount > 0)
                 Log.Info("本店发送回显监控已标记人工接管；后续仅核验是否已有提交证据，不产生重复发送失败告警: shop="
-                    + shopKey + ", seller=" + seller + ", buyer=" + buyer + ", count=" + matches.Count);
-            return matches.Count;
+                    + shopKey + ", seller=" + seller + ", buyer=" + buyer + ", count=" + markedCount);
+            return markedCount;
         }
 
         public static int CancelConversation(string seller, string buyer, string reason, string shopKey = null)
@@ -237,8 +283,21 @@ namespace Bot.ChromeNs
             var removedCount = 0;
             foreach (var pair in matches)
             {
-                PendingDelivery removed;
-                if (Pending.TryRemove(pair.Key, out removed)) removedCount++;
+                var pending = pair.Value;
+                if (pending == null) continue;
+                lock (pending.Sync)
+                {
+                    PendingDelivery current;
+                    if (pending.Terminal != 0
+                        || !Pending.TryGetValue(pair.Key, out current)
+                        || !ReferenceEquals(current, pending)) continue;
+                    PendingDelivery removed;
+                    if (Pending.TryRemove(pair.Key, out removed) && ReferenceEquals(removed, pending))
+                    {
+                        pending.Terminal = 1;
+                        removedCount++;
+                    }
+                }
             }
             if (removedCount > 0)
             {
@@ -290,9 +349,19 @@ namespace Bot.ChromeNs
                     }
 
                     PendingDelivery removed;
-                    if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
-
-                    var submissionTicks = Interlocked.Read(ref pending.SubmissionAcceptedTicks);
+                    long submissionTicks;
+                    bool supersededByManual;
+                    lock (pending.Sync)
+                    {
+                        PendingDelivery currentPending;
+                        if (pending.Terminal != 0
+                            || !Pending.TryGetValue(pending.Id, out currentPending)
+                            || !ReferenceEquals(currentPending, pending)) return;
+                        if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
+                        pending.Terminal = 1;
+                        submissionTicks = Interlocked.Read(ref pending.SubmissionAcceptedTicks);
+                        supersededByManual = Interlocked.CompareExchange(ref pending.SupersededByManual, 0, 0) != 0;
+                    }
                     if (!delivered && submissionTicks > 0)
                     {
                         ReplyQualityMetricsService.RecordSendResult(
@@ -318,7 +387,7 @@ namespace Bot.ChromeNs
 
                     if (!delivered
                         && submissionTicks <= 0
-                        && Interlocked.CompareExchange(ref pending.SupersededByManual, 0, 0) != 0)
+                        && supersededByManual)
                     {
                         Log.Info("人工客服已接管当前会话；未观察到Bot提交证据，已抑制本次候选答案的发送失败告警: shop="
                             + pending.Shop.ShopKey + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
@@ -378,21 +447,26 @@ namespace Bot.ChromeNs
             var confirmed = false;
             foreach (var pair in matched)
             {
+                var pending = pair.Value;
+                if (pending == null) continue;
                 PendingDelivery removed;
-                if (Pending.TryRemove(pair.Key, out removed))
+                lock (pending.Sync)
                 {
-                    confirmed = true;
-                    if (removed != null)
-                    {
-                        ReplyQualityMetricsService.RecordSendResult(
-                            true,
-                            Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
-                        ResponseProgressTracker.MarkDeliveryConfirmed(
-                            removed.Seller, removed.Buyer, removed.Answer,
-                            "已通过卖家消息回显确认真实发送",
-                            removed.Shop == null ? null : removed.Shop.ShopKey);
-                    }
+                    PendingDelivery current;
+                    if (pending.Terminal != 0
+                        || !Pending.TryGetValue(pair.Key, out current)
+                        || !ReferenceEquals(current, pending)) continue;
+                    if (!Pending.TryRemove(pair.Key, out removed) || !ReferenceEquals(removed, pending)) continue;
+                    pending.Terminal = 1;
                 }
+                confirmed = true;
+                ReplyQualityMetricsService.RecordSendResult(
+                    true,
+                    Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
+                ResponseProgressTracker.MarkDeliveryConfirmed(
+                    removed.Seller, removed.Buyer, removed.Answer,
+                    "已通过卖家消息回显确认真实发送",
+                    removed.Shop == null ? null : removed.Shop.ShopKey);
             }
             if (confirmed)
             {
