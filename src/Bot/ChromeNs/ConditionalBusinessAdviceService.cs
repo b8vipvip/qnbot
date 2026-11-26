@@ -80,7 +80,7 @@ namespace Bot.ChromeNs
         private const string OrderProductMatches = "evidence:order.product_matches_record";
         private static readonly object LedgerSync = new object();
         private static readonly Regex ClosedOrFulfilledRegex = new Regex(
-            "退款|退货|关闭|已关闭|已取消|取消|已发货|卖家已发货|等待买家收货|已签收|确认收货|交易完成|tradeclosed|tradefinished|refund|cancel|shipped|delivered",
+            "退款|退货|关闭|已关闭|已取消|取消|已发货|卖家已发货|等待买家收货|待收货|已签收|确认收货|买家已收货|交易完成|交易成功|已完成|waitbuyerconfirmgoods|trade[_ ]?closed|trade[_ ]?finished|trade[_ ]?success|refund|cancel|shipped|delivered|completed",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex PaidRegex = new Regex(
             "已付款|付款成功|支付成功|waitsellersendgoods|tradepaid",
