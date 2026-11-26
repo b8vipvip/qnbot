@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
         public string ImagePath { get; set; }
         public string ImageName { get; set; }
         public string OcrText { get; set; }
+        public string HitInfo { get; set; }
         public string Description { get; set; }
         public bool Enabled { get; set; }
         public long CreatedAtTicks { get; set; }
@@ -54,6 +55,8 @@ namespace Bot.ChromeNs
         public string KnowledgeId { get; set; }
         public string Description { get; set; }
         public string OcrText { get; set; }
+        public string HitInfo { get; set; }
+        public string MatchedHitInfo { get; set; }
         public string ImageSha256 { get; set; }
         public double Score { get; set; }
         public string ContextText { get; set; }
@@ -69,6 +72,7 @@ namespace Bot.ChromeNs
         public const int MaxImageBytes = 8 * 1024 * 1024;
         public const int MaxOcrChars = 12000;
         public const int MaxDescriptionChars = 1200;
+        public const int MaxHitInfoChars = 2400;
         public const int MaxEntriesPerShop = 500;
         public const double MatchThreshold = 0.78d;
 
@@ -127,6 +131,10 @@ namespace Bot.ChromeNs
             entry.ImageName = Clean(entry.ImageName, 180);
             if (entry.ImageName.Length == 0) entry.ImageName = Path.GetFileName(sourceImagePath);
             entry.OcrText = Clean(entry.OcrText, MaxOcrChars);
+            entry.HitInfo = Clean(entry.HitInfo, MaxHitInfoChars);
+            HitInfoRuleSet configuredHitInfo;
+            if (entry.HitInfo.Length > 0 && !TryParseHitInfoRules(entry.HitInfo, out configuredHitInfo))
+                throw new InvalidOperationException("命中信息规则无效：请至少配置一条必须包含或任一命中规则。");
             entry.Description = Clean(entry.Description, MaxDescriptionChars);
             entry.Enabled = true;
             if (entry.Description.Length == 0)
@@ -337,6 +345,7 @@ namespace Bot.ChromeNs
                             ["image_sha256"] = digest,
                             ["image_base64"] = Convert.ToBase64String(bytes),
                             ["ocr_text"] = pending.OcrText ?? string.Empty,
+                            ["hit_info"] = pending.HitInfo ?? string.Empty,
                             ["description"] = pending.Description ?? string.Empty,
                             ["enabled"] = pending.Enabled,
                             ["updated_at"] = ToUtcIso(pending.UpdatedAtTicks)
@@ -639,6 +648,7 @@ namespace Bot.ChromeNs
             var imageName = Clean((string)data["image_name"], 180);
             if (imageName.Length == 0) imageName = "图片-" + sha.Substring(0, 12) + ExtensionForMime(mime);
             var cloudOcrText = Clean((string)data["ocr_text"], MaxOcrChars);
+            var cloudHitInfo = Clean((string)data["hit_info"], MaxHitInfoChars);
             var cloudDescription = Clean((string)data["description"], MaxDescriptionChars);
             var cloudEnabled = data.Value<bool?>("enabled") ?? true;
             // Validate the entire cloud payload (base64, byte limit, SHA-256 and MIME)
@@ -659,6 +669,7 @@ namespace Bot.ChromeNs
                     && (!string.Equals(local.ImageSha256, sha, StringComparison.OrdinalIgnoreCase)
                         || !string.Equals(local.ImageName ?? string.Empty, imageName, StringComparison.Ordinal)
                         || !string.Equals(local.OcrText ?? string.Empty, cloudOcrText, StringComparison.Ordinal)
+                        || !string.Equals(local.HitInfo ?? string.Empty, cloudHitInfo, StringComparison.Ordinal)
                         || !string.Equals(local.Description ?? string.Empty, cloudDescription, StringComparison.Ordinal)
                         || local.Enabled != cloudEnabled);
                 if (local != null && local.SyncDirty
@@ -694,6 +705,7 @@ namespace Bot.ChromeNs
                         ImageName = imageName,
                         ImageSha256 = sha,
                         OcrText = cloudOcrText,
+                        HitInfo = cloudHitInfo,
                         Description = cloudDescription,
                         Enabled = cloudEnabled
                     };
@@ -847,49 +859,167 @@ namespace Bot.ChromeNs
             var entries = Load(shop.ShopKey, seller).Where(x => x != null && x.Enabled).ToList();
             VisualImageKnowledgeEntry best = null;
             var bestScore = 0d;
+            var bestMatchedHitInfo = string.Empty;
+            var bestMatchMode = string.Empty;
             foreach (var item in entries)
             {
-                var score = !string.IsNullOrWhiteSpace(imageSha256)
-                    && string.Equals(item.ImageSha256, imageSha256, StringComparison.OrdinalIgnoreCase)
-                    ? 1d
-                    : TextSimilarity(ocrText, item.OcrText);
+                var exactImage = !string.IsNullOrWhiteSpace(imageSha256)
+                    && string.Equals(item.ImageSha256, imageSha256, StringComparison.OrdinalIgnoreCase);
+                double score;
+                string matchedHitInfo;
+                string matchMode;
+                if (exactImage)
+                {
+                    score = 1d;
+                    matchedHitInfo = "原图SHA-256精确匹配";
+                    matchMode = "image_sha256";
+                }
+                else if (!string.IsNullOrWhiteSpace(item.HitInfo))
+                {
+                    // An explicitly configured hit rule is authoritative. Do not fall back
+                    // to broad OCR similarity when its positive/exclusion conditions fail.
+                    if (ocrConfidence < 0.55d
+                        || !TryMatchHitInfo(ocrText, item.HitInfo, out score, out matchedHitInfo))
+                        continue;
+                    matchMode = "hit_info";
+                }
+                else
+                {
+                    score = TextSimilarity(ocrText, item.OcrText);
+                    matchedHitInfo = string.Empty;
+                    matchMode = "legacy_ocr_similarity";
+                }
+
                 if (score > bestScore)
                 {
                     best = item;
                     bestScore = score;
+                    bestMatchedHitInfo = matchedHitInfo;
+                    bestMatchMode = matchMode;
                 }
             }
 
             if (best == null || bestScore < MatchThreshold
-                || (ocrConfidence < 0.55d && bestScore < 0.98d))
+                || (ocrConfidence < 0.55d && bestMatchMode != "image_sha256" && bestScore < 0.98d))
                 return false;
 
             var description = Clean(best.Description, MaxDescriptionChars);
             var referenceOcr = Clean(best.OcrText, MaxOcrChars);
+            var hitInfo = Clean(best.HitInfo, MaxHitInfoChars);
             match = new VisualImageKnowledgeMatch
             {
                 KnowledgeId = best.EntityId,
                 Description = description,
                 OcrText = referenceOcr,
+                HitInfo = hitInfo,
+                MatchedHitInfo = bestMatchedHitInfo,
                 ImageSha256 = best.ImageSha256,
                 Score = bestScore,
-                ContextText = BuildContext(description, bestScore)
+                ContextText = BuildContext(description, hitInfo, bestMatchedHitInfo, bestScore)
             };
             Log.Info("买家图片命中本店图片知识: shopRef="
                 + MyWebSocketServer.DiagnosticRef("shop", shop.ShopKey)
                 + ", knowledgeId=" + best.EntityId
+                + ", matchMode=" + bestMatchMode
+                + ", matchedHitInfoCount=" + (string.IsNullOrWhiteSpace(bestMatchedHitInfo) ? 0 : bestMatchedHitInfo.Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries).Length)
                 + ", score=" + bestScore.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
             return true;
         }
 
-        private static string BuildContext(string description, double score)
+        private sealed class HitInfoRuleSet
+        {
+            public readonly List<List<string>> Required = new List<List<string>>();
+            public readonly List<List<string>> Any = new List<List<string>>();
+            public readonly List<List<string>> Excluded = new List<List<string>>();
+        }
+
+        private static bool TryParseHitInfoRules(string value, out HitInfoRuleSet rules)
+        {
+            rules = new HitInfoRuleSet();
+            foreach (var rawLine in (value ?? string.Empty).Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = (rawLine ?? string.Empty).Trim();
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                var separator = line.IndexOfAny(new[] { '：', ':' });
+                var prefix = separator > 0 ? line.Substring(0, separator).Trim().ToLowerInvariant() : string.Empty;
+                var body = separator > 0 ? line.Substring(separator + 1).Trim() : line;
+                var terms = body.Split(new[] { '|', '｜' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => Normalize(x))
+                    .Where(x => x.Length >= 2)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                if (terms.Count == 0) continue;
+
+                if (prefix == "必须包含" || prefix == "必含" || prefix == "required")
+                    rules.Required.Add(terms);
+                else if (prefix == "排除" || prefix == "不包含" || prefix == "exclude")
+                    rules.Excluded.Add(terms);
+                else
+                    rules.Any.Add(terms);
+            }
+            return rules.Required.Count + rules.Any.Count > 0;
+        }
+
+        private static bool TryMatchHitInfo(
+            string ocrText,
+            string hitInfo,
+            out double score,
+            out string matchedHitInfo)
+        {
+            score = 0d;
+            matchedHitInfo = string.Empty;
+            HitInfoRuleSet rules;
+            if (!TryParseHitInfoRules(hitInfo, out rules)) return false;
+            var normalizedOcr = Normalize(ocrText);
+            if (normalizedOcr.Length < 4) return false;
+
+            var matched = new List<string>();
+            foreach (var group in rules.Required)
+            {
+                var term = group.FirstOrDefault(x => normalizedOcr.Contains(x));
+                if (term == null) return false;
+                matched.Add(term);
+            }
+
+            foreach (var group in rules.Excluded)
+            {
+                if (group.Any(x => normalizedOcr.Contains(x))) return false;
+            }
+
+            if (rules.Any.Count > 0)
+            {
+                var anyMatched = false;
+                foreach (var group in rules.Any)
+                {
+                    var term = group.FirstOrDefault(x => normalizedOcr.Contains(x));
+                    if (term == null) continue;
+                    anyMatched = true;
+                    matched.Add(term);
+                }
+                if (!anyMatched) return false;
+            }
+
+            var positiveGroupCount = Math.Max(1, rules.Required.Count + rules.Any.Count);
+            var coverage = Math.Min(1d, (double)matched.Count / positiveGroupCount);
+            score = Math.Max(MatchThreshold, Math.Min(1d, 0.90d + coverage * 0.10d));
+            matchedHitInfo = string.Join("；", matched.Distinct(StringComparer.Ordinal));
+            return true;
+        }
+
+        private static string BuildContext(
+            string description,
+            string hitInfo,
+            string matchedHitInfo,
+            double score)
         {
             return "【已命中本店人工维护的图片知识】"
-                + "\n图片说明：" + description
-                + "\n匹配分：" + score.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
-                + "\n这条说明只用于识别图片所属的界面/设备/场景，不是客服回复，也不代表买家已完成此前要求、账号状态或业务结果。"
-                + "必须结合当前买家文字以及同一客服、同一买家的前序对话判断图片是否符合要求。"
-                + "如果此前客服要求的是某种设备或页面，而图片说明表明买家发来的是另一种设备或页面，应明确指出不一致并请买家重新发送正确界面；不要只复述图片说明。";
+                + "\\n图片说明：" + description
+                + (string.IsNullOrWhiteSpace(hitInfo) ? string.Empty : "\\n配置的命中信息：" + hitInfo)
+                + (string.IsNullOrWhiteSpace(matchedHitInfo) ? string.Empty : "\\n本次实际命中：" + matchedHitInfo)
+                + "\\n匹配分：" + score.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                + "\\n这条说明只用于识别图片所属的界面/设备/场景，不是客服回复，也不代表买家已完成此前要求、账号状态或业务结果。"
+                + "\\n必须结合当前买家文字以及同一客服、同一买家的前序对话判断图片是否符合要求。"
+                + "\\n如果此前客服要求的是某种设备或页面，而图片说明表明买家发来的是另一种设备或页面，应明确指出不一致并请买家重新发送正确界面。";
         }
 
         private static double TextSimilarity(string left, string right)
@@ -1023,8 +1153,9 @@ namespace Bot.ChromeNs
             lock (Sync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0,SyncDirty integer not null default 1,CloudRevision integer not null default 0)");
+                DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeEntry (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null,ImagePath text not null,ImageName text not null default '',OcrText text,HitInfo text not null default '',Description text not null,Enabled integer not null default 1,CreatedAtTicks integer not null default 0,UpdatedAtTicks integer not null default 0,SyncDirty integer not null default 1,CloudRevision integer not null default 0)");
                 try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column ImageName text not null default ''"); } catch { }
+                try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column HitInfo text not null default ''"); } catch { }
                 try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column SyncDirty integer not null default 1"); } catch { }
                 try { DbHelper.Db.Execute("alter table VisualImageKnowledgeEntry add column CloudRevision integer not null default 0"); } catch { }
                 DbHelper.Db.Execute("create table if not exists VisualImageKnowledgeSyncTombstone (EntityId text primary key not null,ShopKey text not null,Seller text not null,ImageSha256 text not null default '',DeletedAtTicks integer not null default 0,SyncDirty integer not null default 1,CloudRevision integer not null default 0)");
