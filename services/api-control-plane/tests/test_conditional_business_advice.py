@@ -279,3 +279,68 @@ def test_manual_resolution_waits_for_expired_lease_grace_period(advice_api, monk
         x_shop_key=shop,
     )
     assert resolved["state"] == "released"
+
+
+def test_http_routes_read_shop_key_from_header(control_plane, advice_api, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    shop = "qn_0123456789ab"
+    completed_lease = claim(
+        advice_api, 11, shop,
+        buyer="complete-buyer", order="complete-order", advice="complete-advice",
+    )
+
+    start = datetime(2026, 11, 26, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(advice_api, "_utc_now", lambda: start)
+    claim(
+        advice_api, 11, shop,
+        buyer="pending-buyer", order="pending-order", advice="pending-advice",
+        request_id="request-pending-000000",
+    )
+
+    # Exercise FastAPI's actual parameter extraction. Direct function calls pass
+    # x_shop_key explicitly and would not detect a missing Header(...) declaration.
+    monkeypatch.setattr(
+        advice_api.bot_web_console,
+        "_runtime_client",
+        staticmethod(lambda request: {"id": int(request.headers.get("x-test-client-id", "11"))}),
+    )
+    headers = {"X-Shop-Key": shop, "X-Test-Client-Id": "12"}
+    base = "/api/runtime/v1/bot-web/conditional-business-advice"
+
+    with TestClient(control_plane.app) as client:
+        completed = client.post(
+            base + "/complete",
+            headers=headers,
+            json={
+                "buyer": "complete-buyer",
+                "order_id": "complete-order",
+                "advice_key": "complete-advice",
+                "lease_token": completed_lease["lease_token"],
+                "outcome": "delivered",
+            },
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["state"] == "delivered"
+
+        monkeypatch.setattr(
+            advice_api, "_utc_now", lambda: start + timedelta(minutes=3)
+        )
+        pending = client.get(base + "/pending", headers=headers)
+        assert pending.status_code == 200, pending.text
+        item = next(
+            item for item in pending.json()["items"]
+            if item["buyer"] == "pending-buyer"
+        )
+
+        monkeypatch.setattr(
+            advice_api, "_utc_now",
+            lambda: start + timedelta(minutes=5, seconds=1),
+        )
+        resolved = client.post(
+            base + "/resolve",
+            headers=headers,
+            json={"scope_hash": item["scope_hash"], "confirmed_delivered": False},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["state"] == "released"

@@ -388,3 +388,12 @@ def test_local_and_remote_reconciliation_share_the_opaque_scope_hash():
     assert "TryResolveRemoteUncertainDelivery" in resolve
     assert "string remoteScopeHash" in resolve
     assert "item.ScopeHash, confirmedDelivered" in ui
+
+
+def test_every_conditional_advice_runtime_route_reads_shop_key_from_header():
+    api = read("services/api-control-plane/conditional_business_advice.py")
+    for name in ("runtime_claim", "runtime_renew", "runtime_complete", "runtime_pending", "runtime_resolve"):
+        start = api.index("def " + name + "(")
+        next_route = api.find("\\n@router.", start)
+        body = api[start: next_route if next_route >= 0 else len(api)]
+        assert "x_shop_key: str = Header(default=\"\")" in body, name
