@@ -428,9 +428,37 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var conditionalAdviceReserved = false;
+            if (!string.IsNullOrWhiteSpace(result.ConditionalAdviceKey))
+            {
+                string reserveReason;
+                conditionalAdviceReserved = ConditionalBusinessAdviceService.TryReserveDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    result.ConditionalAdviceImageMessageKey, result.ConditionalAdviceImageKnowledgeId,
+                    out reserveReason);
+                if (!conditionalAdviceReserved)
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + reserveReason);
+                    lifecycleLease.MarkCompleted("conditional_business_advice_duplicate_or_unverified");
+                    ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick, burst.ShopKey);
+                    Log.Info("视觉条件性售后建议被幂等/证据门禁阻止: buyer=" + burst.BuyerNick
+                        + ", orderRef=" + MyWebSocketServer.DiagnosticRef("order", result.ConditionalAdviceOrderId)
+                        + ", reason=" + reserveReason);
+                    return;
+                }
+            }
+
             Func<bool> preSendGuard = () =>
             {
                 if (!lifecycleLease.IsCurrent || lifecycleLease.CancellationToken.IsCancellationRequested)
+                    return false;
+                if (conditionalAdviceReserved
+                    && !ConditionalBusinessAdviceService.IsEvidenceStillValid(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId,
+                        result.ConditionalAdviceImageMessageKey,
+                        result.ConditionalAdviceImageKnowledgeId))
                     return false;
                 var latestWithdrawn = VisionImageCacheService.IsWithdrawn(
                     burst.SellerNick, burst.BuyerNick,
@@ -462,6 +490,10 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
                 ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, false);
                 if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");
                 if (ctl != null) ctl.SetSendResult(false, "未发送：视觉generation已取消");
@@ -470,6 +502,10 @@ namespace Bot.ChromeNs
             var sendCancelled = !sendOk && qn.Rpa != null && qn.Rpa.LastSendWasCancelled;
             if (sendCancelled)
             {
+                if (conditionalAdviceReserved)
+                    ConditionalBusinessAdviceService.CompleteDelivery(
+                        burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                        result.ConditionalAdviceOrderId, result.ConditionalAdviceKey, false, true);
                 ReceptionWorkflowRuntimeService.CancelDecision(workflowDecision);
                 if (lifecycleLease.IsCurrent)
                     lifecycleLease.MarkCompleted("vision_send_cancelled");
@@ -479,6 +515,11 @@ namespace Bot.ChromeNs
                     burst.SellerNick, burst.BuyerNick, "视觉回复发送前会话门禁取消", burst.ShopKey);
                 return;
             }
+            if (conditionalAdviceReserved)
+                ConditionalBusinessAdviceService.CompleteDelivery(
+                    burst.ShopKey, burst.SellerNick, burst.BuyerNick,
+                    result.ConditionalAdviceOrderId, result.ConditionalAdviceKey,
+                    sendOk, sendCancelled);
             ReceptionWorkflowRuntimeService.CompleteDecision(workflowDecision, sendOk);
             if (sendOk)
             {
