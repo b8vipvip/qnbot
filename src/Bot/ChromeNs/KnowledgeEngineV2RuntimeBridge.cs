@@ -197,7 +197,7 @@ namespace Bot.ChromeNs
                     out conditionalAdviceEvidence))
             {
                 var commercePrompt = CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
-                Log.Info("Knowledge Engine V2已让出普通订单直答权；未取得可用于条件性售后建议的通用图片/订单证据: buyer="
+                Log.Info("Knowledge Engine V2已让出终态直答权（普通订单直答权已移交Commerce上下文）；未取得可用于条件性售后建议的通用图片/订单证据: buyer="
                     + burst.BuyerNick
                     + ", phase=" + (commerceAuthority.CommerceContext == null ? string.Empty : commerceAuthority.CommerceContext.PurchasePhase)
                     + ", reason=" + commerceAuthority.Reason);
