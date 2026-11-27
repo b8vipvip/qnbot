@@ -418,3 +418,32 @@ def test_relevance_order_and_recharge_queries_use_explicit_shop_scoped_timelines
     assert "GetRecentTurns(seller, buyer, string.Empty, 24, shopKey)" in order
     assert "GetRecentTurns(seller, buyer, currentQuestion, 24, shopKey)" in recharge
 
+
+
+def test_legacy_fuzzy_local_answer_cannot_bypass_enabled_knowledge_v2_authority():
+    legacy = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    method = legacy[
+        legacy.index("public static bool TryFindLocalAnswer"):
+        legacy.index("private static bool IsShortContextReply")
+    ]
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    runtime_call = pipeline.index("KnowledgeEngineV2RuntimeBridge.TryHandleWithContextAsync(qn, lease)")
+    ai_call = pipeline.index("StreamingBuyerAnswerService.GetAnswerAsync(")
+
+    assert "KnowledgeEngineV2Service.IsEnabled(seller)" in method
+    assert method.index("KnowledgeEngineV2Service.IsEnabled(seller)") < method.index("BotFeatureStore.GetKnowledgeBase()")
+    assert "拒绝legacy本地直答" in method
+    assert runtime_call < ai_call
+    assert "knowledgeV2Result.ContextPromptAddon" in pipeline
+
+
+def test_legacy_local_answer_fails_closed_if_v2_authority_state_cannot_be_resolved():
+    legacy = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    method = legacy[
+        legacy.index("public static bool TryFindLocalAnswer"):
+        legacy.index("private static bool IsShortContextReply")
+    ]
+
+    assert "catch (Exception ex)" in method
+    assert "无法确认Knowledge V2权威状态，拒绝legacy本地直答" in method
+    assert method.index("return false;") < method.index("var policy = BotFeatureStore.GetMessagePolicy();")
