@@ -417,9 +417,39 @@ namespace Bot.ChromeNs
                 return productOutcome;
             }
 
-            var firstDelivered = false;
+            // Priority is deliberate: configured manual/handoff rules own the turn first,
+            // then exact local short replies, then the first-inquiry greeting, then Knowledge/AI.
+            // This prevents a generic first-inquiry template from stealing a message that has
+            // an explicit operator rule or a matching shop-scoped short-reply entry.
+            var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
+            var manualRuleMatched = manualDecision != null && manualDecision.Matched;
+            if (manualRuleMatched)
+            {
+                FirstInquiryFixedReplyService.ReleaseReservation(
+                    item.SellerNick, item.BuyerNick,
+                    "命中人工确认/转接规则，首条咨询固定回复让位于显式规则", item.ShopKey);
+                Log.Info("买家消息命中显式人工规则，跳过首条咨询和本地短消息回复，交由统一规则/转接链路处理: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick);
+            }
+
+            if (allowLocalShortReply && !manualRuleMatched)
+            {
+                string localAnswer;
+                string matchedPhrase;
+                if (LocalShortReplyService.TryResolve(
+                    item.SellerNick, question, out localAnswer, out matchedPhrase))
+                {
+                    var localOutcome = await SendFixedAsync(
+                        qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
+                    Log.Info("本地短消息精确命中: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
+                        + ", outcome=" + localOutcome + ", aiCalled=false");
+                    return localOutcome;
+                }
+            }
+
             string firstReply;
-            var firstReserved = FirstInquiryFixedReplyService.TryResolve(
+            var firstReserved = !manualRuleMatched && FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick, item.BuyerNick, question, out firstReply, item.ShopKey);
             if (firstReserved)
             {
@@ -433,7 +463,6 @@ namespace Bot.ChromeNs
                 if (firstOutcome == CanonicalPreMergeOutcome.Consumed)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(item.SellerNick, item.BuyerNick, item.ShopKey);
-                    firstDelivered = true;
                 }
                 else
                 {
@@ -450,8 +479,9 @@ namespace Bot.ChromeNs
                     if (firstOutcome == CanonicalPreMergeOutcome.Suppressed) return firstOutcome;
 
                     // A pre-send ShopKey/session rejection or an explicit human-takeover cancellation
-                    // proves that the greeting was not sent. Do not let that prelude failure swallow
-                    // the actual buyer question: try its exact short rule, or continue image OCR/AI.
+                    // proves that the greeting was not sent. Continue image OCR/AI only when the
+                    // transport failed before any physical send action; an indeterminate send must
+                    // never fall through to a second answer for the same buyer turn.
                     var failedBeforeSend = firstFailureReason.IndexOf(
                             "发送ShopKey作用域确认", StringComparison.OrdinalIgnoreCase) >= 0
                         || firstFailureReason.IndexOf(
@@ -463,35 +493,9 @@ namespace Bot.ChromeNs
                     var isImageQuestion = string.Equals(question, "[图片]", StringComparison.Ordinal);
                     if (!failedBeforeSend && !isImageQuestion) return firstOutcome;
 
-                    Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续规则/视觉理解: seller="
+                    Log.Info("首条咨询固定回复未确认送达，已释放首条资格并继续当前消息的后续视觉理解/AI: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
                         + ", image=" + isImageQuestion + ", reason=" + firstFailureReason);
-                }
-            }
-
-            if (allowLocalShortReply)
-            {
-                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
-                if (manualDecision == null || !manualDecision.Matched)
-                {
-                    string localAnswer;
-                    string matchedPhrase;
-                    if (LocalShortReplyService.TryResolve(
-                        item.SellerNick, question, out localAnswer, out matchedPhrase))
-                    {
-                        if (firstDelivered)
-                        {
-                            Log.Info("本地短消息已由首条咨询固定回复覆盖，继续同一实际问题普通回复链路: seller="
-                                + item.SellerNick + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase);
-                            return CanonicalPreMergeOutcome.Continue;
-                        }
-                        var localOutcome = await SendFixedAsync(
-                            qn, item, localAnswer, "本地短消息回复", cancellationToken).ConfigureAwait(false);
-                        Log.Info("本地短消息精确命中: seller=" + item.SellerNick
-                            + ", buyer=" + item.BuyerNick + ", phrase=" + matchedPhrase
-                            + ", outcome=" + localOutcome + ", aiCalled=false");
-                        return localOutcome;
-                    }
                 }
             }
 
