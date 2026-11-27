@@ -189,3 +189,18 @@ def test_order_plan_master_switch_is_resolved_from_the_plan_shop_not_global_fall
     master_switch = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
     assert resolve_shop < scope < master_switch
     assert "if (!botEnabledForShop) return false;" in method
+
+
+def test_delivery_watchdog_reads_send_switches_under_resolved_shop_scope():
+    source = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
+    method = source[
+        source.index("public static void ExpectDelivery("):
+        source.index("public static string EnsurePending")
+    ]
+
+    resolve = method.index("var shop = ResolveShop(seller, shopKey);")
+    scope = method.index("using (ShopSettingsScope.Enter(shop, false))")
+    bot = method.index("botEnabledForShop = Params.Robot.CanUseRobotReal;")
+    auto = method.index("autoReplyEnabledForShop = Params.Robot.GetIsAutoReply();")
+    assert resolve < scope < bot < auto
+    assert "if (!botEnabledForShop || (!force && !autoReplyEnabledForShop)) return;" in method
