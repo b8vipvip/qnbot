@@ -21,7 +21,8 @@ def test_native_send_accepts_verified_submission_instead_of_echo_only_retry():
     assert '"发送按钮HWND安全消息", 1800' in native
     assert '"发送按钮左侧UIA安全调用（原生前置）", 1800' in native
     assert "WaitForTextSendConfirmedAsync" not in native
-    assert "禁止重复写入" in native
+    assert "SetSendIndeterminate" in native
+    assert "禁止重试" in native
     assert "禁止因实时回显缺失重新写入同一文本" in platform
     first_empty = platform.index("emptyObserved = true")
     stable_empty = platform.index("稳定清空确认", first_empty)
