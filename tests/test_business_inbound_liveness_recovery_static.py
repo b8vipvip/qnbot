@@ -128,7 +128,7 @@ def test_one_seller_reply_closes_all_unanswered_fragments_in_the_same_buyer_burs
     helper = text.split("private bool HasSellerReplyAfterRecoveredBuyer", 1)[1].split(
         "internal async Task RepairBusinessInboundHookAsync", 1
     )[0]
-    assert "actual quiet-window burst" in helper
+    assert "next distinct burst" in helper
     assert "nextBurstStartTicks" in helper
     assert "QuietDelayMilliseconds(" in helper
     assert "sellerSort >= nextBurstStartTicks" in helper
