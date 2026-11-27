@@ -303,6 +303,8 @@ try {
             var previousBuyerTime = DateTime.MinValue;
             var nextBurstStartTicks = long.MaxValue;
             var targetFound = false;
+            // Recover each candidate against the actual quiet-window burst boundaries used by
+            // live coalescing, so one reply after the burst can acknowledge all of its fragments.
             foreach (var pair in orderedCandidates)
             {
                 if (groupItems.Count == 0)
@@ -344,7 +346,8 @@ try {
 
             // A later seller message only acknowledges this buyer turn if it appears before the
             // next distinct burst. A reply after a later, separately dispatched buyer question
-            // must not suppress recovery of the earlier unanswered question.
+            // must not suppress recovery of the earlier unanswered question. This lets one seller
+            // reply close unanswered buyer messages in the same burst without crossing turns.
             foreach (var message in allMessages ?? new List<QNChatMessage>())
             {
                 if (message == null || !IsSellerMessage(message) || message.toid == null) continue;
