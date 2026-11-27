@@ -197,7 +197,7 @@ namespace Bot.Knowledge
             document.Blocks.Add(HeadingBlock("上线前检查清单"));
             document.Blocks.Add(Bullets(
                 "同一 Subject + Predicate 下没有相互矛盾的 active 答案。",
-                "学习候选已经人工批准或明确驳回，没有让 candidate 直接进入生产。",
+                "只有完整历史、稳定语料指纹和真人消息证据均通过门禁的新增/纠正才会自动发布；无来源ID、Bot-only、高风险或不完整语料不会进入生产。",
                 "退款、赔偿、密码、验证码、银行卡、法律等内容标为 high；高风险知识不会本地直答。",
                 "测试台的常见问法能命中预期知识，近似问题不会误命中。",
                 "已导出当前店铺 V2 完整包；生产切换只针对当前店铺。"));
@@ -234,7 +234,7 @@ namespace Bot.Knowledge
             document.Blocks.Add(LabelBlock("order_rule / after_sale", "订单规则或售后规则。"));
             document.Blocks.Add(LabelBlock("safety_rule", "退款、账号、安全、法律等边界事实。"));
             document.Blocks.Add(LabelBlock("fixed_reply / temporary", "固定话术或临时知识；临时内容应定期复核。"));
-            document.Blocks.Add(LabelBlock("learning_candidate", "自动学习或人工纠正形成的候选；必须在“学习”页批准后才可进入生产。"));
+            document.Blocks.Add(LabelBlock("learning_candidate", "未达到自动发布证据门槛的候选；不参与本地直答。完整真人证据通过门禁的知识由 V2 自动发布，无需人工批准或灰度。"));
             document.Blocks.Add(LabelBlock("风险等级", "normal 或 high。high 以及命中高风险语义的内容不会走本地直答。"));
             document.Blocks.Add(LabelBlock("可信度 / 权威度", "均为 0~1。综合可信度由知识可信度、权威度和真实反馈小幅修正；不要为追求直答率随意全部填 1。"));
             document.Blocks.Add(LabelBlock("Enabled / Status", "生产知识通常为 Enabled=true、Status=active；candidate 不直答，disabled 不进入运行时索引。"));
@@ -293,11 +293,11 @@ namespace Bot.Knowledge
             document.Blocks.Add(TitleBlock("学习、质量、修订与治理"));
             document.Blocks.Add(Callout(
                 "共同安全原则",
-                "自动学习只产生候选或质量证据；没有人工批准，不会自动覆盖、停用、删除或回滚生产知识。"));
+                "Knowledge V2 只在完整历史、稳定语料版本、真实买家问题与真人客服回复证据均通过校验后，才自动新增或修订生产知识；不要求人工批准或灰度。Bot-only、来源不明、高风险和不完整语料均不会自动发布。"));
 
             document.Blocks.Add(HeadingBlock("学习页"));
             document.Blocks.Add(BodyBlock(
-                "接待结束复盘、人工客服最终回复和其他学习来源会生成 Type=learning_candidate、Status=candidate 的记录。候选不会参与本地直答，也会在旧知识兼容镜像中保持禁用。选中并点击“批准入库”后，才转为正式 active 知识。"));
+                "接待结束复盘先完整读取当前 ShopKey 的历史消息，再对 Knowledge V2 全库分批分析并校验源版本指纹。自动新增必须同时关联真实买家问题消息ID和真人客服回复消息ID，且答案通过高置信度、风险、实体与极性校验；通过后直接写入 active 并刷新索引，不进入人工审批或灰度。自动修订仅接受 manual_correction 或 withdrawn_bot_then_manual 等真人纠正证据，并保存可回滚版本。普通AI建议、Bot-only、缺少原始消息ID、全库覆盖不完整或高风险内容只保留候选/跳过，不自动发布。"));
 
             document.Blocks.Add(HeadingBlock("质量入口"));
             document.Blocks.Add(BodyBlock(
@@ -341,9 +341,9 @@ namespace Bot.Knowledge
             document.Blocks.Add(LabelBlock("仅导出结构化知识", "只导出记录，不包含完整 V2 设置，适合审阅或转换。"));
             document.Blocks.Add(LabelBlock("从旧知识重新迁移", "会清空并重建当前店铺 V2 数据；必须先导出完整包，只在确认需要重新迁移时使用。"));
 
-            document.Blocks.Add(HeadingBlock("旧版知识库预览"));
+            document.Blocks.Add(HeadingBlock("单一知识引擎"));
             document.Blocks.Add(BodyBlock(
-                "“设置 → 知识库”（直接进入 Knowledge Center V2）→ 顶部“旧版知识库预览”只读取当前 ShopKey 已保存的旧版问答快照，便于核对分类、问题、答案、关键词、来源和时间。它不挂载旧版管理界面，不提供新增、编辑、删除、导入导出或 AI 优化，也不会启用旧版检索、匹配或自动回复。多店铺环境不会猜测旧全局数据归属；列表为空且仍有旧数据时，请先在“店铺绑定”确认归属。"));
+                "客户端运行时只使用 Knowledge Engine V2：SQLite 是唯一知识事实源，结构化索引、Working Memory、检索、自动学习、修订、反馈、云同步和审计均围绕 V2 工作。旧版知识库页面、旧版检索/自动回复和旧版写入路径已退役；首次迁移只用于把既有数据导入 V2，不会在运行时双写或回退到 V1。"));
 
             document.Blocks.Add(HeadingBlock("为什么没有本地直答"));
             document.Blocks.Add(Numbered(
@@ -358,7 +358,7 @@ namespace Bot.Knowledge
             document.Blocks.Add(Bullets(
                 "先点知识中心顶部“刷新”，再到“设置”点“立即预热索引”。",
                 "确认编辑的是当前店铺，不要只按相似的店铺显示名判断。",
-                "候选知识需要在“学习”页批准；disabled 记录保留用于管理但不进入运行时索引。",
+                "learning_candidate 仅代表未达到自动发布证据门槛的候选；已通过完整真人证据校验的新增/修订会由 V2 自动发布。disabled 记录保留用于管理但不进入运行时索引。",
                 "云同步问题请回到“设置 → 店铺与连接 → 店铺绑定”检查 Token、ShopKey 和本店云同步开关。"));
 
             document.Blocks.Add(HeadingBlock("阈值怎么调"));
