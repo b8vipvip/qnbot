@@ -49,7 +49,9 @@ def test_seller_echo_accepts_only_known_equivalent_buyer_aliases():
 
     assert "BuyerIdentityAliasService.AreEquivalent(sellerNick, echo.Buyer, buyerNick)" in block
     assert "echo.Text == text" in block
-    assert "string.Equals(echo.ShopKey, shopKey, StringComparison.Ordinal)" in block
+    assert "HasRecentSellerEchoLocal(buyerNick, text, since, shopKey)" in block
+    local = source[source.index("private bool HasRecentSellerEchoLocal"):source.index("internal DateTime LastSellerEchoTimeForShop")]
+    assert "string.Equals(echo.ShopKey, expectedShopKey, StringComparison.Ordinal)" in local
 
 
 def test_connection_summary_is_not_overwritten_by_last_send_failure():
@@ -78,7 +80,9 @@ def test_recent_seller_echo_history_is_bounded_and_does_not_lose_other_buyer_con
     assert "client.IsShopIdentityRetired" in record
     assert "_recentSellerEchoes.Any" in lookup
     assert "echo.ReceivedAt >= cutoff" in lookup
-    assert "scopedShop.ShopKey, shopKey" in lookup
+    assert "FindAuthoritativeShopSendOwner(shopKey)" in lookup
+    assert "echo.ShopKey, expectedShopKey, StringComparison.Ordinal" in lookup
+    assert "HasRecentSellerEchoLocal" in lookup
     assert "_lastSellerEcho" not in source
 
 
