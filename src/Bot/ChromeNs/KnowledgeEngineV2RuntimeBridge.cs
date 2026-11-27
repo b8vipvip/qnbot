@@ -312,6 +312,21 @@ namespace Bot.ChromeNs
                 return KnowledgeV2RuntimeResult.Continue(contextPromptAddon);
             }
 
+            // AI-first must still use the V2 retrieval result as grounded context,
+            // but it must not terminate the AI generation path with a local answer.
+            // Local-first is the only mode allowed to take the V2 direct-send fast path.
+            if (!ReplyModeService.IsLocalFirst(burst.SellerNick))
+            {
+                var aiFirstContext = BuildContextPromptAddon(decision);
+                if (conditionalOnly || typedEvidenceGateAttempted)
+                    aiFirstContext += ConditionalBusinessAdviceService.BuildPromptAddon(conditionalAdviceEvidence, false)
+                        + CommerceContextService.BuildPromptAddon(commerceAuthority.CommerceContext);
+                Log.Info("Knowledge Engine V2 AI优先模式：保留已批准知识作为上下文，不截断AI生成: buyer="
+                    + burst.BuyerNick + ", candidates=" + decision.CandidateCount
+                    + ", totalMs=" + decision.TotalMs);
+                return KnowledgeV2RuntimeResult.Continue(aiFirstContext);
+            }
+
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var autoSend = Params.Robot.GetIsAutoReply();
 
