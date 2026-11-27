@@ -612,3 +612,22 @@ def test_specialized_knowledge_and_vision_send_failures_do_not_complete_progress
     assert "else if (sent)" in vision_fallback
     assert "ResponseProgressTracker.Fail(" in vision_fallback
     assert "图片缓存兜底回复发送未确认：" in vision_fallback
+
+
+def test_withdrawn_image_vision_invalid_answer_fails_and_stale_sends_cancel_progress():
+    vision = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+    invalid = vision.split('if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))', 1)[1].split(
+        "if (!lifecycleLease.IsCurrent)", 1
+    )[0]
+    assert "ResponseProgressTracker.Fail(" in invalid
+    assert "ResponseProgressTracker.Complete(" not in invalid
+
+    primary_cancel = vision.split('if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_send_cancelled");', 1)[1].split(
+        "var sendCancelled = !sendOk", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in primary_cancel
+
+    fallback_cancel = vision.split('if (lifecycleLease.IsCurrent) lifecycleLease.MarkFailed("vision_cache_miss_fallback_cancelled");', 1)[1].split(
+        "var sendCancelled = !sent", 1
+    )[0]
+    assert "ResponseProgressTracker.Cancel(" in fallback_cancel
