@@ -190,7 +190,8 @@ namespace Bot.ChromeNs
                             }
                         },
                         burst.ShopKey,
-                        knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon);
+                        knowledgeV2Result == null ? null : knowledgeV2Result.ContextPromptAddon,
+                        knowledgeV2Result == null ? null : knowledgeV2Result.OfflineFallbackDecision);
                     // Legacy synchronous fallbacks may run inside Task.Run and cannot always be force-stopped
                     // after they begin. Race the whole answer task only against the canonical generation
                     // budget. Provider/control-plane timeouts remain upstream concerns and must not be
@@ -944,7 +945,8 @@ namespace Bot.ChromeNs
             CancellationToken token,
             Action<string> partial,
             string shopKey = null,
-            string knowledgeV2ContextAddon = null)
+            string knowledgeV2ContextAddon = null,
+            KnowledgeV2Decision offlineFallbackDecision = null)
         {
             token.ThrowIfCancellationRequested();
 
@@ -1050,7 +1052,12 @@ namespace Bot.ChromeNs
 
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints == null || endpoints.Count < 1)
-                return "错误：没有可用的AI接口；Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库离线兜底。";
+            {
+                var offline = TryResolveV2OfflineFallback(
+                    seller, buyer, question, shopKey, offlineFallbackDecision, "no_enabled_ai_endpoint");
+                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                return "错误：没有可用的AI接口；Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库离线兜底。";
+            }
 
             MessageProcessingTraceService.RecordAiFallbackStarted(
                 seller,
@@ -1112,7 +1119,12 @@ namespace Bot.ChromeNs
 
             var permit = ShopScopedReplyCircuitBreaker.TryEnter(shopKey);
             if (!permit.Allowed)
-                return "错误：当前店铺AI上游处于熔断保护期，Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库离线兜底并建议转人工。";
+            {
+                var offline = TryResolveV2OfflineFallback(
+                    seller, buyer, question, shopKey, offlineFallbackDecision, "shop_ai_circuit_open");
+                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                return "错误：当前店铺AI上游处于熔断保护期，Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库离线兜底并建议转人工。";
+            }
 
             string answer = string.Empty;
             try
@@ -1135,7 +1147,12 @@ namespace Bot.ChromeNs
             }
 
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
-                return "错误：所有AI接口均未返回有效答案；Knowledge V2 未提供可直接发送的批准答案，已阻止旧知识库兜底。";
+            {
+                var offline = TryResolveV2OfflineFallback(
+                    seller, buyer, question, shopKey, offlineFallbackDecision, "ai_upstream_exhausted");
+                if (!string.IsNullOrWhiteSpace(offline)) return offline;
+                return "错误：所有AI接口均未返回有效答案；Knowledge V2 未提供通过实时复核的批准答案，已阻止旧知识库兜底。";
+            }
             answer = ReplyTranscriptSanitizer.Sanitize(answer);
             answer = BotFeatureStore.ApplyOutputPolicy(answer);
             if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer))
@@ -1148,6 +1165,100 @@ namespace Bot.ChromeNs
                 : "AI生成（Knowledge V2上下文）";
             KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, source);
             return answer;
+        }
+
+        private static string TryResolveV2OfflineFallback(
+            string seller,
+            string buyer,
+            string question,
+            string shopKey,
+            KnowledgeV2Decision approvedDecision,
+            string reason)
+        {
+            // This fallback is deliberately V2-only and never reopens the legacy
+            // KnowledgeBaseJson store. It is available only when the V2 runtime
+            // already authorized a direct answer before the AI call began.
+            if (approvedDecision == null || !approvedDecision.CanDirectReply
+                || string.IsNullOrWhiteSpace(approvedDecision.Answer)
+                || !string.IsNullOrWhiteSpace(approvedDecision.ConditionalAdviceKey)
+                || string.IsNullOrWhiteSpace(shopKey))
+                return string.Empty;
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeByShopKey(shopKey);
+                if (shop == null || !shop.HasStableSellerId
+                    || !string.Equals(shop.ShopKey, shopKey.Trim(), StringComparison.Ordinal)
+                    || !string.Equals(shop.SellerNick, (seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+                    return string.Empty;
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    if (!KnowledgeEngineV2Service.IsEnabled(seller)
+                        || !KnowledgeEngineV2Service.IsSnapshotReady(seller))
+                        return string.Empty;
+
+                    var priorMatch = (approvedDecision.Matches ?? new List<KnowledgeV2Match>())
+                        .Where(x => x != null && x.Record != null
+                            && KnowledgeV2AuthorityPolicy.IsProductionApproved(x.Record))
+                        .OrderByDescending(x => x.Score)
+                        .FirstOrDefault();
+                    if (priorMatch == null || priorMatch.Record == null
+                        || string.IsNullOrWhiteSpace(priorMatch.Record.Id))
+                        return string.Empty;
+
+                    // Re-run the exact same V2 query after the outage is known. The
+                    // record ID and answer must still match the original approved
+                    // decision, so a changed/deleted fact cannot be sent from cache.
+                    var latest = KnowledgeEngineV2Service.Resolve(seller, buyer, question);
+                    if (latest == null || !latest.CanDirectReply
+                        || !string.IsNullOrWhiteSpace(latest.ConditionalAdviceKey)
+                        || !string.Equals(latest.Answer, approvedDecision.Answer, StringComparison.Ordinal))
+                        return string.Empty;
+                    var latestMatch = (latest.Matches ?? new List<KnowledgeV2Match>())
+                        .Where(x => x != null && x.Record != null
+                            && KnowledgeV2AuthorityPolicy.IsProductionApproved(x.Record))
+                        .OrderByDescending(x => x.Score)
+                        .FirstOrDefault();
+                    if (latestMatch == null || latestMatch.Record == null
+                        || !string.Equals(latestMatch.Record.Id, priorMatch.Record.Id, StringComparison.Ordinal))
+                        return string.Empty;
+
+                    var persisted = KnowledgeEngineV2Repository.LoadAll(seller)
+                        .FirstOrDefault(x => x != null
+                            && string.Equals(x.Id, latestMatch.Record.Id, StringComparison.Ordinal));
+                    if (persisted == null || !KnowledgeV2AuthorityPolicy.IsProductionApproved(persisted)
+                        || !string.Equals(persisted.Answer, latest.Answer, StringComparison.Ordinal))
+                        return string.Empty;
+
+                    var answer = ReplyTranscriptSanitizer.Sanitize(latest.Answer);
+                    answer = BotFeatureStore.ApplyOutputPolicy(answer);
+                    if (string.IsNullOrWhiteSpace(answer)
+                        || answer.StartsWith("错误：", StringComparison.Ordinal)
+                        || ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer))
+                        return string.Empty;
+
+                    answer = BotMessageSuffixService.Apply(seller, answer);
+                    KnowledgeLearningService.RegisterAnswerSource(
+                        seller, buyer, question, answer, "Knowledge V2 AI故障兜底");
+                    MessageProcessingTraceService.RecordKnowledgeDecision(
+                        seller, buyer, "AI上游不可用，使用已复核的Knowledge V2答案",
+                        "source=KnowledgeV2; reason=" + (reason ?? string.Empty)
+                            + "; knowledgeId=" + latestMatch.Record.Id,
+                        latest.TotalMs);
+                    Log.Info("Knowledge V2 AI故障兜底成功: seller=" + seller
+                        + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty)
+                        + ", knowledgeId=" + latestMatch.Record.Id);
+                    return answer;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("Knowledge V2 AI故障兜底未通过实时复核: seller=" + seller
+                    + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty)
+                    + ", error=" + ex.GetType().Name);
+                return string.Empty;
+            }
         }
 
         private static bool IsRetryableStreamError(string error)
