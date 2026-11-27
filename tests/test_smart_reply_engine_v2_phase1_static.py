@@ -52,14 +52,14 @@ def test_v2_runtime_uses_contextually_rewritten_query_before_knowledge_retrieval
     assert "当前会话状态" in state
 
 def test_rewritten_queries_are_contextual_and_preserve_the_original_buyer_question():
-    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
     runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
     model = read("src/Bot/Knowledge/KnowledgeEngineV2.Models.cs")
 
-    assert "class ContextualQueryResolution" in state
-    assert "ContextualQueryRewriteService.Resolve(" in state
-    assert "contextDependencyScore < 0.30" in state
-    assert "买家当前追问" in state
+    assert "class ContextualQueryResolution" in router
+    assert "ContextualQueryRewriteService.Resolve(" in router
+    assert "contextDependencyScore < 0.30" in router
+    assert "买家当前追问" in router
     assert "retrievalQuestion = contextualResolution.ResolvedQuery;" in runtime
     assert "decision.Query.UserOriginal = currentQuestion;" in runtime
     assert "public string UserOriginal { get; set; }" in model
