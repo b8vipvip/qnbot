@@ -163,6 +163,36 @@ namespace Bot.ChromeNs
             if (!KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
                 return KnowledgeV2RuntimeResult.Continue();
 
+            // Explicit silence and manual/handoff rules own the turn before Knowledge V2.
+            // The normal answer service evaluates them again and performs the configured action.
+            var currentQuestion = string.IsNullOrWhiteSpace(burst.ModelQuestion)
+                ? burst.CombinedQuestion
+                : burst.ModelQuestion;
+            try
+            {
+                string silentReason;
+                if (ReceptionFlowPolicy.TryChooseSilence(
+                    burst.SellerNick, burst.BuyerNick, currentQuestion, out silentReason))
+                {
+                    Log.Info("Knowledge V2让出当前消息：命中接待静默/等待策略，交由统一规则链路处理: buyer="
+                        + burst.BuyerNick + ", reason=" + silentReason);
+                    return KnowledgeV2RuntimeResult.Continue();
+                }
+
+                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(currentQuestion);
+                if (manualDecision != null && manualDecision.Matched)
+                {
+                    Log.Info("Knowledge V2让出当前消息：命中显式人工/自动回复规则，交由统一规则链路处理: buyer="
+                        + burst.BuyerNick);
+                    return KnowledgeV2RuntimeResult.Continue();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("无法确认接待静默/人工规则状态，Knowledge V2拒绝抢先直答: " + ex.Message, 10);
+                return KnowledgeV2RuntimeResult.Continue();
+            }
+
             var sourceClient = qn.CDP;
             var sourceSessionId = sourceClient == null ? string.Empty : sourceClient.SessionId;
             var sourceServer = MyWebSocketServer.WSocketSvrInst;
