@@ -457,6 +457,8 @@ namespace Bot.ChromeNs
                         OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
                     else if (outcome == CanonicalPreMergeOutcome.Failed)
                         OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddSeconds(15);
+                    else if (outcome == CanonicalPreMergeOutcome.Indeterminate)
+                        OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
                     return outcome;
                 }
                 return CanonicalPreMergeOutcome.Consumed;
@@ -1289,6 +1291,13 @@ namespace Bot.ChromeNs
                 _sessionAgent.TryTransition(
                     item.SellerNick, item.BuyerNick, item.SessionGeneration,
                     BuyerSessionAgentState.Cancelled, "canonical_pre_merge_cancelled", item.ShopKey);
+                return;
+            }
+            if (outcome == CanonicalPreMergeOutcome.Indeterminate)
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick, item.BuyerNick, item.SessionGeneration,
+                    BuyerSessionAgentState.Failed, "canonical_pre_merge_send_indeterminate", item.ShopKey);
             }
         }
 
