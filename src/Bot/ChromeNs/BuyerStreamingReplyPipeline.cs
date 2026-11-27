@@ -569,15 +569,6 @@ namespace Bot.ChromeNs
                 else
                     ReplyDeduplicationService.RememberDelivered(
                         burst.SellerNick, burst.BuyerNick, answer, burst.ShopKey);
-                if (workflowDecision == null && string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
-                {
-                    KnowledgeLearningService.QueueLearn(
-                        burst.CombinedQuestion,
-                        answer,
-                        "AI生成",
-                        burst.SellerNick,
-                        burst.BuyerNick);
-                }
             }
             if (sendOk)
                 lease.MarkCompleted("streaming_send_completed");
